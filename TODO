@@ -1,0 +1,9 @@
+Basic Auth is getConnection is not working.- Done
+NoSuchDB Schema - Done
+Add Prepared Statement timeout.
+Add validation ( All and DataSource Only)
+Add Authorization ( Write and Read (filter and columns))
+
+DropWizard and System metrics.
+LogCollection.
+Audit Collection.
