@@ -18,13 +18,40 @@ JDK 17 or 21
 ## Getting started in HTTP Mode
 - Export maven options
   `export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED"`
-- Start the client which will display the result
-  `./mvnw clean compile  exec:java -Dexec.mainClass="io.dazzleduck.sql.http.server.Main"`
- ### Connecting with DuckDB
+- Start the server
+  `cd dazzleduck-sql-http && ../mvnw clean compile  exec:java -Dexec.mainClass="io.dazzleduck.sql.http.server.Main"`
+- On a separate terminal run a sql 
+  ```
+  URL="http://localhost:8080/query?q=select%201"
+  SQL="INSTALL arrow FROM community; LOAD arrow; FROM read_arrow('/dev/stdin') SELECT count(*);"
+  curl -s "$URL" | duckdb -c "$SQL"
+  ```
+
+### Connecting with DuckDB
 - INSTALL arrow FROM community;
 - LOAD arrow;
-- select * from read_arrow(concat('http://localhost:8080/query?q=', url_encode('select 1, 2, 3')));
+- SELECT * FROM read_arrow(concat('http://localhost:8080/query?q=', url_encode('select 1, 2, 3')));
 
+
+### Enabling Authentication.
+- Export maven options <br>
+  ```export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED"```
+- Start the client which will display the result <br>
+  ``cd dazzleduck-sql-http && ../mvnw clean compile  exec:java -Dexec.mainClass="io.dazzleduck.sql.http.server.Main" -Dexec.args="--conf auth=jwt"``
+- Get the jwt token with login <br>
+ ```curl -X POST 'http://localhost:8080/login' -H "Content-Type: application/json" -d '{"username": "admin", "password" : "admin"}'```
+- Run the query with jwt token by setting <br>
+  ```
+  INSTALL arrow FROM community; LOAD arrow;
+  CREATE SECRET http_auth (
+                TYPE http,
+                EXTRA_HTTP_HEADERS MAP {
+                   'Authorization': 'Bearer <jwt-token>'
+                   }
+                );
+  SELECT * FROM read_arrow(concat('http://localhost:8080/query?q=', url_encode('select 1, 2, 3')));
+  ```
+  
 ## Getting started with Docker in Arrow GRPC Mode
 - Build the docker image with
   `./mvnw clean package -DskipTests jib:dockerBuild`
