@@ -1,8 +1,10 @@
 package io.dazzleduck.sql.http.server;
 
 import com.typesafe.config.Config;
+import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.helidon.common.uri.UriQuery;
+import io.helidon.http.HeaderNames;
 import io.helidon.http.Status;
 import io.helidon.webserver.http.HttpRules;
 import io.helidon.webserver.http.HttpService;
@@ -30,6 +32,12 @@ public class IngestionService implements HttpService {
     }
 
     private void handlePost(ServerRequest serverRequest, ServerResponse serverResponse) throws SQLException {
+        var contentType = serverRequest.headers().value(HeaderNames.CONTENT_TYPE);
+        if(contentType.isEmpty() || !contentType.get().equals(ContentTypes.APPLICATION_ARROW)) {
+            serverResponse.status(Status.UNSUPPORTED_MEDIA_TYPE_415);
+            serverResponse.send();
+            return;
+        }
         UriQuery query = serverRequest.query();
         var path = query.get("path");
         final String completePath = warehousePath + "/" + path;
