@@ -5,12 +5,18 @@ import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.helidon.http.HeaderNames;
 import io.helidon.http.HeaderValues;
+import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.arrow.vector.ipc.ArrowStreamReader;
+import org.apache.arrow.vector.ipc.ArrowStreamWriter;
+import org.duckdb.DuckDBConnection;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -20,6 +26,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.security.NoSuchAlgorithmException;
 import java.sql.SQLException;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -27,12 +34,16 @@ public class HttpServerTest {
     static HttpClient client;
     static ObjectMapper objectMapper = new ObjectMapper();
 
+    private static String warehousePath;
+
     @BeforeAll
-    public static void setup() throws IOException, NoSuchAlgorithmException {
-        String[] args1 = {"--conf", "port=8080"};
+    public static void setup() throws NoSuchAlgorithmException {
+        warehousePath = "/tmp/" + UUID.randomUUID();
+        new File(warehousePath).mkdir();
+        String[] args1 = {"--conf", "port=8080",   "--conf", "warehousePath=" + warehousePath };
         Main.main(args1);
         client = HttpClient.newHttpClient();
-        String[] args = {"--conf", "port=8081", "--conf", "auth=jwt"};
+        String[] args = {"--conf", "port=8081", "--conf", "auth=jwt", "--conf", "warehousePath=" + warehousePath };
         Main.main(args);
         String[] sqls = {"INSTALL arrow FROM community", "LOAD arrow"};
         ConnectionPool.executeBatch(sqls);
@@ -67,7 +78,7 @@ public class HttpServerTest {
     }
 
     @Test
-    public void testQueryWithJwtExpectUnauthorized() throws IOException, InterruptedException, SQLException {
+    public void testQueryWithJwtExpectUnauthorized() throws IOException, InterruptedException {
         var query = "select * from generate_series(10) order by 1";
         var body = objectMapper.writeValueAsBytes(new QueryObject(query));
         var request = HttpRequest.newBuilder(URI.create("http://localhost:8081/query"))
@@ -100,7 +111,7 @@ public class HttpServerTest {
     }
 
     @Test
-    public void testWithDuckDB() throws IOException, InterruptedException {
+    public void testWithDuckDB() {
         String viewSql = "select * from read_arrow(concat('http://localhost:8080/query?q=',url_encode('select 1')))";
 
         ConnectionPool.execute(viewSql);
@@ -146,5 +157,29 @@ public class HttpServerTest {
         var inputStreamResponse = client.send(request, HttpResponse.BodyHandlers.ofString());
         var res = objectMapper.readValue(inputStreamResponse.body(), Split[].class);
         assertEquals(1, res.length);
+    }
+
+    @Test
+    public void testIngestion() throws IOException, InterruptedException, SQLException {
+        String query = "select * from generate_series(10)";
+        try(BufferAllocator allocator = new RootAllocator();
+            DuckDBConnection connection = ConnectionPool.getConnection();
+            var reader = ConnectionPool.getReader( connection, allocator, query, 1000 );
+            var byteArrayOutputStream = new ByteArrayOutputStream();
+            var streamWrite = new ArrowStreamWriter(reader.getVectorSchemaRoot(), null, byteArrayOutputStream)) {
+            streamWrite.start();
+            while (reader.loadNextBatch()) {
+                streamWrite.writeBatch();
+            }
+            streamWrite.end();
+            var request = HttpRequest.newBuilder(URI.create("http://localhost:8080/ingest?path=abc.parquet"))
+                    .POST(HttpRequest.BodyPublishers.ofInputStream(() ->
+                            new ByteArrayInputStream(byteArrayOutputStream.toByteArray()))).build();
+            var res = client.send(request, HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, res.statusCode());
+            var testSql = String.format("select count(*) from read_parquet('%s/abc.parquet')", warehousePath);
+            var lines = ConnectionPool.collectFirst(testSql, Long.class);
+            assertEquals(11, lines);
+        }
     }
 }

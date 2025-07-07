@@ -68,6 +68,8 @@ public class Main {
         var appConfig = commandlineConfig.withFallback(ConfigFactory.load().getConfig(Main.CONFIG_PATH));
         var port = Integer.parseInt(appConfig.getString("port"));
         var auth = appConfig.hasPath("auth") ? appConfig.getString("auth") : null;
+        String warehousePath = appConfig.hasPath("warehousePath") ?
+                appConfig.getString("warehousePath") : System.getProperty("user.dir") + "/warehouse";
         var secretKey = Validator.generateRandoSecretKey();
         var allocator = new RootAllocator();
         String location = "http://localhost:" + port;
@@ -76,7 +78,8 @@ public class Main {
                 .routing(routing -> {
                     var b = routing.register("/query", new QueryService(allocator))
                             .register("/login", new LoginService(appConfig, secretKey))
-                            .register("/plan", new PlaningService(location, allocator));
+                            .register("/plan", new PlaningService(location, allocator))
+                            .register("/ingest", new IngestionService(warehousePath, allocator));
                     if ("jwt".equals(auth)) {
                         b.addFilter(new JwtAuthenticationFilter("/query", appConfig, secretKey));
                     }
