@@ -5,6 +5,8 @@ import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.helidon.http.HeaderNames;
 import io.helidon.http.HeaderValues;
+import org.apache.arrow.c.ArrowArrayStream;
+import org.apache.arrow.c.Data;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.ipc.ArrowReader;
@@ -14,10 +16,7 @@ import org.duckdb.DuckDBConnection;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.IOException;
+import java.io.*;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -174,12 +173,54 @@ public class HttpServerTest {
             streamWrite.end();
             var request = HttpRequest.newBuilder(URI.create("http://localhost:8080/ingest?path=abc.parquet"))
                     .POST(HttpRequest.BodyPublishers.ofInputStream(() ->
-                            new ByteArrayInputStream(byteArrayOutputStream.toByteArray()))).build();
+                            new ByteArrayInputStream(byteArrayOutputStream.toByteArray())))
+                    .header("Content-Type", ContentTypes.APPLICATION_ARROW).build();
             var res = client.send(request, HttpResponse.BodyHandlers.ofString());
             assertEquals(200, res.statusCode());
             var testSql = String.format("select count(*) from read_parquet('%s/abc.parquet')", warehousePath);
             var lines = ConnectionPool.collectFirst(testSql, Long.class);
             assertEquals(11, lines);
+        }
+    }
+
+    @Test
+    public void testIngestionFromFile() throws SQLException, IOException, InterruptedException {
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:8080/ingest?path=file1.parquet"))
+                .POST(HttpRequest.BodyPublishers.ofInputStream(() -> {
+                    try {
+                        return new FileInputStream("example/arrow_ipc/file1.arrow");
+                    } catch (FileNotFoundException e) {
+                        throw new RuntimeException(e);
+                    }
+                })).header("Content-Type", ContentTypes.APPLICATION_ARROW).build();
+        var res = client.send(request, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, res.statusCode());
+        var testSql = String.format("select count(*) from read_parquet('%s/file1.parquet')", warehousePath);
+        var lines = ConnectionPool.collectFirst(testSql, Long.class);
+        assertEquals(11, lines);
+    }
+
+    @Test
+    public void writeIPC() throws IOException, InterruptedException, SQLException {
+        String filename = "/tmp/" + UUID.randomUUID() + ".arrow";
+        String query = "select * from generate_series(10)";
+        try(BufferAllocator allocator = new RootAllocator();
+            DuckDBConnection connection = ConnectionPool.getConnection()) {
+            try (var reader = ConnectionPool.getReader(connection, allocator, query, 1000);
+                 var outputStream = new FileOutputStream(filename, false);
+                 var streamWrite = new ArrowStreamWriter(reader.getVectorSchemaRoot(), null, outputStream)) {
+                streamWrite.start();
+                while (reader.loadNextBatch()) {
+                    streamWrite.writeBatch();
+                }
+                streamWrite.end();
+            }
+            try (var reader = new ArrowStreamReader(new FileInputStream(filename), allocator);
+                 final ArrowArrayStream arrow_array_stream = ArrowArrayStream.allocateNew(allocator)) {
+                Data.exportArrayStream(allocator, reader, arrow_array_stream);
+                connection.registerArrowStream("test", arrow_array_stream);
+                ConnectionPool.printResult(connection, allocator, "select * from test");
+            }
         }
     }
 }

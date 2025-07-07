@@ -16,42 +16,64 @@ Requirement
 JDK 17 or 21
 
 ## Getting started in HTTP Mode
-- Export maven options
+- Export maven options <br>
   `export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED"`
-- Start the server
-  `cd dazzleduck-sql-http && ../mvnw clean compile  exec:java -Dexec.mainClass="io.dazzleduck.sql.http.server.Main"`
-- On a separate terminal run a sql 
-  ```
-  URL="http://localhost:8080/query?q=select%201"
-  SQL="INSTALL arrow FROM community; LOAD arrow; FROM read_arrow('/dev/stdin') SELECT count(*);"
-  curl -s "$URL" | duckdb -c "$SQL"
-  ```
+- Create a temporary directory for warehouse <br>
+  `mkdir /tmp/my-warehouse`
+- Start the server <br>
+  `cd dazzleduck-sql-http && ../mvnw clean compile  exec:java -Dexec.mainClass="io.dazzleduck.sql.http.server.Main" -Dexec.args="--conf warehousePath=/tmp/my-warehouse"`
+- On a separate terminal run a sql on server with
+```
+URL="http://localhost:8080/query?q=select%201"
+SQL="INSTALL arrow FROM community; LOAD arrow; FROM read_arrow('/dev/stdin') SELECT count(*);"
+curl -s "$URL" | duckdb -c "$SQL"
+```
+
+- Writing to Server using post <br>
+```
+curl -i -X POST 'http://localhost:8080/ingest?path=file1.parquet' \
+  -H "Content-Type: application/vnd.apache.arrow.stream" \
+  --data-binary "@example/arrow_ipc/file1.arrow"
+```
+- Reading the file written above <br>
+```
+URL="http://localhost:8080/query?q=select%20%2A%20from%20read_parquet%28%27%2Ftmp%2Fmy-warehouse%2Ffile.parquet%27%29%0A"
+curl -s "$URL" | duckdb -c "$SQL"
+```
 
 ### Connecting with DuckDB
-- INSTALL arrow FROM community;
-- LOAD arrow;
-- SELECT * FROM read_arrow(concat('http://localhost:8080/query?q=', url_encode('select 1, 2, 3')));
+```
+D INSTALL arrow FROM community;
+D LOAD arrow;
+D SELECT * FROM read_arrow(concat('http://localhost:8080/query?q=', url_encode('select 1, 2, 3')));
+```
 
 
 ### Enabling Authentication.
-- Export maven options <br>
+Authentication is supported with jwt. Client need to invoke login api with username/password this api would return jwt  token. This jwt token can be used for all subsequent invocation
+- Export maven options<br>
   ```export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED"```
 - Start the client which will display the result <br>
   ``cd dazzleduck-sql-http && ../mvnw clean compile  exec:java -Dexec.mainClass="io.dazzleduck.sql.http.server.Main" -Dexec.args="--conf auth=jwt"``
 - Get the jwt token with login <br>
  ```curl -X POST 'http://localhost:8080/login' -H "Content-Type: application/json" -d '{"username": "admin", "password" : "admin"}'```
+- Invoke api with jwt token
+```
+URL="http://localhost:8080/query?q=select%201"
+curl -H "Authorization': 'Bearer <jwt-token>" -s "$URL"
+```
 - Run the query with jwt token by setting <br>
-  ```
-  INSTALL arrow FROM community; LOAD arrow;
-  CREATE SECRET http_auth (
-                TYPE http,
-                EXTRA_HTTP_HEADERS MAP {
-                   'Authorization': 'Bearer <jwt-token>'
-                   }
-                );
-  SELECT * FROM read_arrow(concat('http://localhost:8080/query?q=', url_encode('select 1, 2, 3')));
-  ```
-  
+```
+INSTALL arrow FROM community; LOAD arrow;
+CREATE SECRET http_auth (
+              TYPE http,
+              EXTRA_HTTP_HEADERS MAP {
+                 'Authorization': 'Bearer <jwt-token>'
+                 }
+              );
+SELECT * FROM read_arrow(concat('http://localhost:8080/query?q=', url_encode('select 1, 2, 3')));
+```
+
 ## Getting started with Docker in Arrow GRPC Mode
 - Build the docker image with
   `./mvnw clean package -DskipTests jib:dockerBuild`
