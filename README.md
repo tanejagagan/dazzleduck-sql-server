@@ -13,7 +13,7 @@
 
 ## Dev Setup
 Requirement
-JDK 17 or 21
+JDK  21
 
 ## Getting started in HTTP Mode
 - Export maven options <br>
