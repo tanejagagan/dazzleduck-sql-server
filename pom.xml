@@ -119,7 +119,7 @@
                 <version>3.4.4</version>
                 <configuration>
                     <from>
-                        <image>eclipse-temurin:17-jre-jammy</image>
+                        <image>eclipse-temurin:21-jre-jammy</image>
                     </from>
                     <to>
                         <image>flight-sql-duckdb</image>
