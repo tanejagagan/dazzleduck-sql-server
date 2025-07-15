@@ -25,6 +25,8 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.security.NoSuchAlgorithmException;
 import java.sql.SQLException;
+import java.util.Base64;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -90,7 +92,7 @@ public class HttpServerTest {
     @Test
     public void testQueryWithJwtExpect() throws IOException, InterruptedException, SQLException {
         var loginRequest = HttpRequest.newBuilder(URI.create("http://localhost:8081/login"))
-                .POST(HttpRequest.BodyPublishers.ofByteArray(objectMapper.writeValueAsBytes(new LoginObject("admin", "admin"))))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(objectMapper.writeValueAsBytes(new LoginObject("admin", "admin", Map.of()))))
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
         var jwtResponse = client.send(loginRequest, HttpResponse.BodyHandlers.ofString());
         assertEquals(200, jwtResponse.statusCode());
@@ -119,7 +121,7 @@ public class HttpServerTest {
     @Test
     public void testWithDuckDBAuthorized() throws IOException, InterruptedException {
         var loginRequest = HttpRequest.newBuilder(URI.create("http://localhost:8081/login"))
-                .POST(HttpRequest.BodyPublishers.ofByteArray(objectMapper.writeValueAsBytes(new LoginObject("admin", "admin"))))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(objectMapper.writeValueAsBytes(new LoginObject("admin", "admin", Map.of()))))
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
         var jwtResponse = client.send(loginRequest, HttpResponse.BodyHandlers.ofString());
         var httpAuthSql = "CREATE SECRET http_auth (\n" +
@@ -139,7 +141,7 @@ public class HttpServerTest {
     @Test
     public void testLogin() throws IOException, InterruptedException {
         var request = HttpRequest.newBuilder(URI.create("http://localhost:8080/login"))
-                .POST(HttpRequest.BodyPublishers.ofByteArray(objectMapper.writeValueAsBytes(new LoginObject("admin", "admin"))))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(objectMapper.writeValueAsBytes(new LoginObject("admin", "admin", Map.of("claims", "claims")))))
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
         var inputStreamResponse = client.send(request, HttpResponse.BodyHandlers.ofString());
         assertEquals(200, inputStreamResponse.statusCode());

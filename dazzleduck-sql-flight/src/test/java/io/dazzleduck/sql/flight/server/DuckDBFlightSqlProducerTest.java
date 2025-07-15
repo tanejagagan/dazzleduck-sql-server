@@ -100,8 +100,6 @@ public class DuckDBFlightSqlProducerTest {
                         Map.of(Headers.HEADER_DATABASE, TEST_CATALOG,
                                 Headers.HEADER_SCHEMA, TEST_SCHEMA)))
                 .build());
-
-
     }
 
 

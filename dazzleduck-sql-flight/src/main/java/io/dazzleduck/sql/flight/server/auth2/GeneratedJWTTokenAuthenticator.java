@@ -18,6 +18,7 @@ import javax.crypto.SecretKey;
 import java.time.Duration;
 import java.util.Calendar;
 import java.util.Date;
+import java.util.Map;
 
 public class GeneratedJWTTokenAuthenticator extends BearerTokenAuthenticator {
     private final SecretKey key;
@@ -28,7 +29,7 @@ public class GeneratedJWTTokenAuthenticator extends BearerTokenAuthenticator {
         super(initialAuthenticator);
         this.key = key;
         this.jwtParser = Jwts.parser()     // (1)
-                .verifyWith(key)      //     or a constant key used to verify all signed JWTs
+                .verifyWith(key)//     or a constant key used to verify all signed JWTs
                 .build();
         this.timeMinutes = config.getDuration("jwt.token.expiration");
     }
@@ -37,7 +38,7 @@ public class GeneratedJWTTokenAuthenticator extends BearerTokenAuthenticator {
         super(initialAuthenticator);
         this.key = key;
         this.jwtParser = Jwts.parser()     // (1)
-                .verifyWith(key)      //     or a constant key used to verify all signed JWTs
+                .verifyWith(key) //     or a constant key used to verify all signed JWTs
                 .build();
         this.timeMinutes = Duration.ofMinutes(60);
     }
@@ -59,6 +60,7 @@ public class GeneratedJWTTokenAuthenticator extends BearerTokenAuthenticator {
             String jwt = Jwts.builder()
                     .subject(authResult.getPeerIdentity())
                     .expiration(expiration.getTime())
+                    .addClaims(Map.of("claims", Map.of()))
                     .signWith(key).compact();
             authResultWithBearerToken =
                     new AuthResult() {
