@@ -2,6 +2,7 @@ package io.dazzleduck.sql.flight.server.auth2;
 
 import com.google.common.base.Strings;
 import com.typesafe.config.Config;
+import com.typesafe.config.ConfigFactory;
 import io.grpc.Metadata;
 import io.jsonwebtoken.JwtParser;
 import io.jsonwebtoken.Jwts;
@@ -20,10 +21,21 @@ import java.util.Calendar;
 import java.util.Date;
 import java.util.Map;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+
+
 public class GeneratedJWTTokenAuthenticator extends BearerTokenAuthenticator {
     private final SecretKey key;
     private final Duration timeMinutes;
     JwtParser jwtParser;
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final HttpClient httpClient = HttpClient.newHttpClient();
 
     public GeneratedJWTTokenAuthenticator(CallHeaderAuthenticator initialAuthenticator, SecretKey key, Config config) {
         super(initialAuthenticator);
@@ -56,12 +68,25 @@ public class GeneratedJWTTokenAuthenticator extends BearerTokenAuthenticator {
         final AuthResult authResultWithBearerToken;
         if (Strings.isNullOrEmpty(bearerToken)) {
             Calendar expiration = Calendar.getInstance();
-            expiration.add(Calendar.MINUTE, (int)timeMinutes.toMinutes());
-            String jwt = Jwts.builder()
-                    .subject(authResult.getPeerIdentity())
-                    .expiration(expiration.getTime())
-                    .addClaims(Map.of("claims", Map.of()))
-                    .signWith(key).compact();
+            expiration.add(Calendar.MINUTE, (int) timeMinutes.toMinutes());
+            String jwt;
+
+            if (ConfigFactory.load().getBoolean("dazzleduck-flight-server.httpLogin")) {
+                String username = authResult.getPeerIdentity();
+                String password = "admin"; // TODO: fetch securely or inject
+
+                Map<String, Object> claims = Map.of("orgId", "123");
+                jwt = fetchJwtFromHttp(username, password, claims);
+                System.out.println("logging with Http");
+            } else {
+                jwt = Jwts.builder()
+                        .subject(authResult.getPeerIdentity())
+                        .expiration(expiration.getTime())
+                        .claim("claims", Map.of("orgId", "123456"))
+                        .signWith(key).compact();
+                System.out.println("logging with Flight");
+            }
+
             authResultWithBearerToken =
                     new AuthResult() {
                         @Override
@@ -96,6 +121,31 @@ public class GeneratedJWTTokenAuthenticator extends BearerTokenAuthenticator {
             return () -> subject;
         } catch (Exception e) {
             throw CallStatus.UNAUTHENTICATED.toRuntimeException();
+        }
+    }
+
+    private String fetchJwtFromHttp(String username, String password, Map<String, Object> claims) {
+        try {
+            String requestBody = objectMapper.writeValueAsString(Map.of(
+                    "username", username,
+                    "password", password,
+                    "claims", claims
+            ));
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create("http://localhost:8080/login"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(requestBody))
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() != 200) {
+                throw new RuntimeException("Failed to fetch token: " + response.body());
+            }
+            return response.body();
+        } catch (IOException | InterruptedException e) {
+            Thread.currentThread().interrupt(); // restore interrupt flag
+            throw new RuntimeException("Error fetching JWT from HTTP service", e);
         }
     }
 }
