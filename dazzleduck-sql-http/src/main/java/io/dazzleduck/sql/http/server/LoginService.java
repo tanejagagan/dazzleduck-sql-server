@@ -49,7 +49,7 @@ public class LoginService implements HttpService {
             String jwt = Jwts.builder()
                     .subject(loginRequest.username())
                     .expiration(expiration.getTime())
-                    .addClaims(Map.of("claims", loginRequest.claims()))
+                    .claim("claims", loginRequest.claims())
                     .signWith(secretKey).compact();
             serverResponse.send(jwt.getBytes());
         } catch (Exception e ){
