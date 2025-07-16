@@ -33,9 +33,7 @@ import java.net.http.HttpResponse;
 public class GeneratedJWTTokenAuthenticator extends BearerTokenAuthenticator {
     private final SecretKey key;
     private final Duration timeMinutes;
-    JwtParser jwtParser;
-    private final ObjectMapper objectMapper = new ObjectMapper();
-    private final HttpClient httpClient = HttpClient.newHttpClient();
+    private final JwtParser jwtParser;
 
     public GeneratedJWTTokenAuthenticator(CallHeaderAuthenticator initialAuthenticator, SecretKey key, Config config) {
         super(initialAuthenticator);
@@ -63,49 +61,35 @@ public class GeneratedJWTTokenAuthenticator extends BearerTokenAuthenticator {
         // and generate a new bearer token if a bearer token is not present in the header.
         final CallHeaders dummyHeaders = new MetadataAdapter(new Metadata());
         authResult.appendToOutgoingHeaders(dummyHeaders);
-        String bearerToken =
-                AuthUtilities.getValueFromAuthHeader(dummyHeaders, Auth2Constants.BEARER_PREFIX);
-        final AuthResult authResultWithBearerToken;
-        if (Strings.isNullOrEmpty(bearerToken)) {
-            Calendar expiration = Calendar.getInstance();
-            expiration.add(Calendar.MINUTE, (int) timeMinutes.toMinutes());
-            String jwt;
+        String bearerToken = AuthUtilities.getValueFromAuthHeader(dummyHeaders, Auth2Constants.BEARER_PREFIX);
 
-            if (ConfigFactory.load().getBoolean("dazzleduck-flight-server.httpLogin")) {
-                String username = authResult.getPeerIdentity();
-                String password = "admin"; // TODO: fetch securely or inject
+        if (!Strings.isNullOrEmpty(bearerToken)) {
+            return authResult; // Already has JWT from AuthUtils
+        }
 
-                Map<String, Object> claims = Map.of("orgId", "123");
-                jwt = fetchJwtFromHttp(username, password, claims);
-                System.out.println("logging with Http");
-            } else {
-                jwt = Jwts.builder()
-                        .subject(authResult.getPeerIdentity())
-                        .expiration(expiration.getTime())
-                        .claim("claims", Map.of("orgId", "123456"))
-                        .signWith(key).compact();
-                System.out.println("logging with Flight");
+        // Else, generate JWT manually (for Flight-based login)
+        Calendar expiration = Calendar.getInstance();
+        expiration.add(Calendar.MINUTE, (int) timeMinutes.toMinutes());
+
+        String jwt = Jwts.builder()
+                .subject(authResult.getPeerIdentity())
+                .expiration(expiration.getTime())
+                .claim("claims", Map.of("orgId", "1211")) // You can enrich this as needed
+                .signWith(key)
+                .compact();
+
+        return new AuthResult() {
+            @Override
+            public String getPeerIdentity() {
+                return authResult.getPeerIdentity();
             }
 
-            authResultWithBearerToken =
-                    new AuthResult() {
-                        @Override
-                        public String getPeerIdentity() {
-                            return authResult.getPeerIdentity();
-                        }
-
-                        @Override
-                        public void appendToOutgoingHeaders(CallHeaders outgoingHeaders) {
-                            authResult.appendToOutgoingHeaders(outgoingHeaders);
-                            outgoingHeaders.insert(
-                                    Auth2Constants.AUTHORIZATION_HEADER, Auth2Constants.BEARER_PREFIX + jwt);
-                        }
-                    };
-        } else {
-            // Use the bearer token supplied by the original auth result.
-            authResultWithBearerToken = authResult;
-        }
-        return authResultWithBearerToken;
+            @Override
+            public void appendToOutgoingHeaders(CallHeaders outgoingHeaders) {
+                authResult.appendToOutgoingHeaders(outgoingHeaders);
+                outgoingHeaders.insert(Auth2Constants.AUTHORIZATION_HEADER, Auth2Constants.BEARER_PREFIX + jwt);
+            }
+        };
     }
 
     @Override
@@ -121,31 +105,6 @@ public class GeneratedJWTTokenAuthenticator extends BearerTokenAuthenticator {
             return () -> subject;
         } catch (Exception e) {
             throw CallStatus.UNAUTHENTICATED.toRuntimeException();
-        }
-    }
-
-    private String fetchJwtFromHttp(String username, String password, Map<String, Object> claims) {
-        try {
-            String requestBody = objectMapper.writeValueAsString(Map.of(
-                    "username", username,
-                    "password", password,
-                    "claims", claims
-            ));
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create("http://localhost:8080/login"))
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(requestBody))
-                    .build();
-
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
-            if (response.statusCode() != 200) {
-                throw new RuntimeException("Failed to fetch token: " + response.body());
-            }
-            return response.body();
-        } catch (IOException | InterruptedException e) {
-            Thread.currentThread().interrupt(); // restore interrupt flag
-            throw new RuntimeException("Error fetching JWT from HTTP service", e);
         }
     }
 }
