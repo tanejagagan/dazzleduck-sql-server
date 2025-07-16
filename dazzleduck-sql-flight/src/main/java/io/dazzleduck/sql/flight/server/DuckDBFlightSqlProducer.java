@@ -221,7 +221,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         String query = request.getQuery();
         JsonNode tree = null;
         if( parallelize(context) && AccessMode.RESTRICTED != accessMode ) {
-            throw handleInconsistentRequest("parallelization only supported in restricted mode");
+            throw handleInconsistentRequest("parallelization is only supported in restricted mode");
         }
 
         if (AccessMode.RESTRICTED == accessMode) {
@@ -813,6 +813,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         return ContextUtils.getValue(context, Headers.HEADER_PARALLELIZE, false, Boolean.class);
     }
 
+    private String schema(CallContext context) {
+        return ContextUtils.getValue(context, Headers.HEADER_SCHEMA, null, String.class);
+    }
 
 
     private static boolean hasAggregation(JsonNode jsonNode) {

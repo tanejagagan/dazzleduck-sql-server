@@ -540,7 +540,6 @@ public class Transformations {
     public static String getCast(String schema) throws SQLException, JsonProcessingException {
         var query = String.format("select null::struct(%s)", schema);
         var tree = Transformations.parseToTree(query);
-        System.out.println(tree.toPrettyString());
         var statement = Transformations.getFirstStatementNode(tree);
         var selectList = (ArrayNode)statement.get("select_list");
         var firstSelect = selectList.get(0);
@@ -548,7 +547,8 @@ public class Transformations {
         var childType = (ArrayNode) castType.get("type_info").get("child_types");
         List<String> childTypeString = new ArrayList<>();
         for( var c : childType){
-            childTypeString.add(getStructChildTypeString(c));
+            var alias = c.get("first").asText();
+            childTypeString.add(getStructChildTypeString(c) + " " + alias);
         }
         return childTypeString.stream().map( t-> "null::" + t).collect(Collectors.joining(","));
     }
@@ -582,7 +582,7 @@ public class Transformations {
         return String.format("DECIMAL(%s,%s)", width, scale);
     }
 
-    private static String getStructChildTypeString(JsonNode jsonNode){
+    private static String getStructChildTypeString(JsonNode jsonNode) {
         return getTypeString(jsonNode.get("second"));
     }
 

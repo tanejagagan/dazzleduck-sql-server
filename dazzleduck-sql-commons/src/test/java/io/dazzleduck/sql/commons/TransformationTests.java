@@ -41,7 +41,6 @@ public class TransformationTests {
 
     @Test
     public void getCast() throws SQLException, JsonProcessingException {
-        //var schema = "a int, b string, c STRUCT(i  int), d Map(string, string), e Int[]";
         var schema = "a int, b string, c STRUCT(i  int, d STRUCT( x int)), e Int[], f Map(string, string), g decimal(18,3)";
         var sql = Transformations.getCast(schema);
         ConnectionPool.printResult("select " + sql);
