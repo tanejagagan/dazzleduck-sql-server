@@ -1,33 +1,45 @@
 package io.dazzleduck.sql.flight.server;
 
 
+import org.apache.arrow.driver.jdbc.ArrowFlightConnection;
+import org.apache.arrow.driver.jdbc.ArrowFlightJdbcDriver;
+import org.apache.arrow.driver.jdbc.client.ArrowFlightSqlClientHandler;
 import org.apache.arrow.flight.FlightServer;
-import org.apache.arrow.flight.Location;
-import org.apache.arrow.memory.RootAllocator;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
+import java.security.NoSuchAlgorithmException;
 import java.sql.*;
+import java.util.Properties;
+
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 public class DuckDBFlightJDBCTest {
-
-    private static Location serverLocation = Location.forGrpcInsecure("localhost", 55556);
 
     private static final String LONG_RUNNING_QUERY = "with t as " +
             "(select len(split(concat('abcdefghijklmnopqrstuvwxyz:', generate_series), ':')) as len  from generate_series(1, 1000000000) )" +
             " select count(*) from t where len = 10";
     private static FlightServer flightServer ;
+    private static final int port = 55556;
+    static String url = String.format("jdbc:arrow-flight-sql://localhost:%s/?database=memory&useEncryption=0&user=admin&password=admin", port);
     @BeforeAll
-    public static void beforeAll() throws IOException {
-        flightServer = FlightServer.builder(
-                        new RootAllocator(),
-                        serverLocation,
-                        new DuckDBFlightSqlProducer(serverLocation))
-                .build()
-                .start();
+    public static void beforeAll() throws IOException, NoSuchAlgorithmException {
+        String[] args = {"--conf", "port=" + port, "--conf", "useEncryption=false"};
+        flightServer = Main.createServer(args);
+        Thread severThread = new Thread(() -> {
+            try {
+                flightServer.start();
+                System.out.println("S1: Server (Location): Listening on port " + flightServer.getPort());
+                flightServer.awaitTermination();
+            } catch (IOException | InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        });
+        severThread.start();
     }
 
     @AfterAll
@@ -35,13 +47,9 @@ public class DuckDBFlightJDBCTest {
         flightServer.close();
     }
 
-    private static Connection getConnection() throws SQLException {
-        String url = String.format("jdbc:arrow-flight-sql://localhost:%s/?database=memory&useEncryption=0", flightServer.getPort());
-        return DriverManager.getConnection(url);
-    }
 
-    private static Connection getConnectionWithUserPassword() throws SQLException {
-        String url = String.format("jdbc:arrow-flight-sql://localhost:%s/?database=memory&useEncryption=0&user=admin&password=pass", flightServer.getPort());
+
+    private static Connection getConnection() throws SQLException {
         return DriverManager.getConnection(url);
     }
 
@@ -54,7 +62,7 @@ public class DuckDBFlightJDBCTest {
                 while (resultSet.next()){
                     resultSet.getInt(1);
                 }
-            };
+            }
         }
     }
 
@@ -68,32 +76,43 @@ public class DuckDBFlightJDBCTest {
 
     @Test
     public void testExecuteQueryWithUserPassword() throws SQLException {
-        try(Connection connection = getConnectionWithUserPassword();
-            Statement  st = connection.createStatement()) {
-            st.executeQuery("select 1");
-            try ( ResultSet resultSet = st.getResultSet()) {
-                while (resultSet.next()){
-                    resultSet.getInt(1);
+        var numIterator = 1;
+        try(Connection connection = getConnection()) {
+            for (int i = 0 ; i < numIterator; i ++) {
+                try( Statement  st = connection.createStatement()) {
+                    st.executeQuery("select 1");
+                    try (ResultSet resultSet = st.getResultSet()) {
+                        while (resultSet.next()) {
+                            resultSet.getInt(1);
+                        }
+                    }
                 }
-            };
+            }
         }
     }
 
     @Test
-    @Disabled // This is not working because some jdbc issue.
+    public void testExecuteQueryWithClientHandler() throws Exception {
+        var connection = getConnection(url, new Properties());
+        var handler = getPrivateClientHandlerFromConnection(connection);
+        for(int i = 0 ; i < 3 ; i ++) {
+            var info = handler.getInfo("select 1");
+            assertNotNull(info);
+        }
+    }
+
+    @Test
+    @Disabled
     public void cancelAfterExecute() throws SQLException {
         try(Connection connection = getConnection();
             Statement  st = connection.createStatement()) {
-            Thread cancelThread = new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    try {
-                        // Cancel after 1 second.
-                        Thread.sleep(1000);
-                        st.cancel();
-                    } catch (SQLException | InterruptedException e) {
-                        throw new RuntimeException(e);
-                    }
+            Thread cancelThread = new Thread(() -> {
+                try {
+                    // Cancel after 1 second.
+                    Thread.sleep(1000);
+                    st.cancel();
+                } catch (SQLException | InterruptedException e) {
+                    throw new RuntimeException(e);
                 }
             });
             cancelThread.start();
@@ -149,5 +168,17 @@ public class DuckDBFlightJDBCTest {
                 }
             }
         }
+    }
+
+
+    private static ArrowFlightConnection getConnection(String url, Properties properties) throws SQLException {
+        return new ArrowFlightJdbcDriver().connect(url, properties);
+    }
+    private static ArrowFlightSqlClientHandler getPrivateClientHandlerFromConnection(ArrowFlightConnection connection) throws NoSuchFieldException, IllegalAccessException {
+        // The class and field name are the same
+        Field clientHandler = ArrowFlightConnection.class.getDeclaredField("clientHandler");
+        clientHandler.setAccessible(true);
+        // Cast to the real class
+        return (ArrowFlightSqlClientHandler) clientHandler.get(connection);
     }
 }

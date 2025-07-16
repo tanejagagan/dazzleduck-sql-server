@@ -61,6 +61,8 @@ import static org.duckdb.DuckDBConnection.DEFAULT_SCHEMA;
  */
 public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable {
     protected static final Calendar DEFAULT_CALENDAR = JdbcToArrowUtils.getUtcCalendar();
+
+    public static final String  DEFAULT_DATABASE = "memory";
     private final AccessMode accessMode;
     ExecutorService executorService = Executors.newVirtualThreadPerTaskExecutor();
     private final static Logger logger = LoggerFactory.getLogger(DuckDBFlightSqlProducer.class);
@@ -655,7 +657,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
 
     private static DuckDBConnection getConnection(final CallContext context) throws NoSuchCatalogSchemaError {
-        CallHeaders headers = context.getMiddleware(FlightConstants.HEADER_KEY).headers();
         var databaseSchmema = getDatabaseSchema(context);
         String dbSchema = String.format("%s.%s", databaseSchmema.database, databaseSchmema.schema);
         String[] sqls = {String.format("USE %s", dbSchema)};
@@ -673,6 +674,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         String schema = headers.get(Headers.HEADER_SCHEMA);
         if (schema == null) {
             schema = DEFAULT_SCHEMA;
+        }
+        if(database == null) {
+            database = DEFAULT_DATABASE;
         }
         return new DatabaseSchema(database, schema);
     }

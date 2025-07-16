@@ -2,8 +2,6 @@
 package io.dazzleduck.sql.http.server;
 
 
-import com.beust.jcommander.JCommander;
-import com.beust.jcommander.Parameter;
 import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.common.auth.Validator;
 import io.helidon.config.Config;
@@ -12,8 +10,6 @@ import io.helidon.webserver.WebServer;
 import org.apache.arrow.memory.RootAllocator;
 
 import java.security.NoSuchAlgorithmException;
-import java.util.HashMap;
-import java.util.List;
 
 
 /**
@@ -30,10 +26,6 @@ public class Main {
     private Main() {
     }
 
-    public static class Args {
-        @Parameter(names = {"--conf"}, description = "Configurations" )
-        private List<String> configs;
-    }
 
 
     /**
@@ -47,24 +39,7 @@ public class Main {
 
         // initialize global config from default configuration
         Config helidonConfig = Config.create();
-
-        var argv = new Args();
-
-        JCommander.newBuilder()
-                .addObject(argv)
-                .build()
-                .parse(args);
-        var configMap = new HashMap<String, String>();
-        if(argv.configs !=null) {
-            argv.configs.forEach(c -> {
-                var e = c.split("=");
-                var key = e[0];
-                var value = e[1];
-                configMap.put(key, value);
-            });
-        }
-
-        var commandlineConfig = ConfigFactory.parseMap(configMap);
+        var commandlineConfig = io.dazzleduck.sql.common.util.ConfigUtils.loadCommandLineConfig(args);
         var appConfig = commandlineConfig.withFallback(ConfigFactory.load().getConfig(Main.CONFIG_PATH));
         var port = Integer.parseInt(appConfig.getString("port"));
         var auth = appConfig.hasPath("auth") ? appConfig.getString("auth") : null;
