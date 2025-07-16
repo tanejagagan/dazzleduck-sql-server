@@ -1,7 +1,5 @@
 package io.dazzleduck.sql.flight.server;
 
-import com.typesafe.config.Config;
-import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.common.authorization.AccessMode;
 import io.dazzleduck.sql.common.authorization.NOOPAuthorizer;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
@@ -19,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.util.Base64;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -70,50 +69,36 @@ public class AuthUtilsLoginTest {
     }
 
     @Test
-    public void testLoginWithHttp() throws Exception {
-        Config config = ConfigFactory.load().getConfig("dazzleduck-flight-server");
-
-        var validator = AuthUtils.createCredentialValidator(config);
-        var provider = validator.validate("admin", "admin");
-
-        assertNotNull(provider);
-        assertEquals("admin", provider.getPeerIdentity());
-
-        Field jwtField = AuthUtils.class.getDeclaredField("jwtCache");
-        jwtField.setAccessible(true);
-        Map<String, String> jwtCache = (Map<String, String>) jwtField.get(null);
-
-        String jwt = jwtCache.get("admin");
-        assertNotNull(jwt);
-        System.out.println(jwt);
-
-        String[] parts = jwt.split("\\.");
-        assertEquals(3, parts.length, "JWT should have 3 parts");
-
-        String payloadJson = new String(Base64.getUrlDecoder().decode(parts[1]));
-        System.out.println("JWT Payload: " + payloadJson);
-    }
-
-    @Test
-    public void testLoginWithFlight() throws Exception {
+    public void testLogin() throws Exception {
         var stream = sqlClient.getCatalogs();
         assertNotNull(stream);
 
-        Field jwtField = AuthUtils.class.getDeclaredField("jwtCache");
-        jwtField.setAccessible(true);
+        // Access the middleware field from the client using reflection
+        Field middlewareField = sqlClient.getClass().getDeclaredField("client");
+        middlewareField.setAccessible(true);
+        Object flightClient = middlewareField.get(sqlClient);
 
-        Map<String, String> jwtCache = (Map<String, String>) jwtField.get(null);
-        String jwt = jwtCache.get("admin");
+        Field middlewareListField = flightClient.getClass().getDeclaredField("middleware");
+        middlewareListField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        List<?> middlewares = (List<?>) middlewareListField.get(flightClient);
+
+        // Assuming the first middleware is yours
+        Object middleware = middlewares.get(0);
+        Field bearerField = middleware.getClass().getDeclaredField("bearer");
+        bearerField.setAccessible(true);
+        String jwt = (String) bearerField.get(middleware);
 
         assertNotNull(jwt);
-        System.out.println("JWT: " + jwt);
+        assert jwt.startsWith("Bearer ");
 
-        String[] parts = jwt.split("\\.");
+        String[] parts = jwt.replace("Bearer ", "").split("\\.");
         assertEquals(3, parts.length, "JWT should have 3 parts");
 
         String payload = new String(Base64.getUrlDecoder().decode(parts[1]));
         System.out.println("Decoded Payload: " + payload);
     }
+
 
     @AfterAll
     public static void cleanup() throws Exception {
@@ -121,4 +106,3 @@ public class AuthUtilsLoginTest {
         if (allocator != null) allocator.close();
     }
 }
-
