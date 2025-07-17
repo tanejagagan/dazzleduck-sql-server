@@ -92,7 +92,7 @@ public class HttpServerTest {
     @Test
     public void testQueryWithJwtExpect() throws IOException, InterruptedException, SQLException {
         var loginRequest = HttpRequest.newBuilder(URI.create("http://localhost:8081/login"))
-                .POST(HttpRequest.BodyPublishers.ofByteArray(objectMapper.writeValueAsBytes(new LoginObject("admin", "admin", Map.of()))))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(objectMapper.writeValueAsBytes(new LoginObject("admin", "admin"))))
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
         var jwtResponse = client.send(loginRequest, HttpResponse.BodyHandlers.ofString());
         assertEquals(200, jwtResponse.statusCode());
@@ -121,7 +121,7 @@ public class HttpServerTest {
     @Test
     public void testWithDuckDBAuthorized() throws IOException, InterruptedException {
         var loginRequest = HttpRequest.newBuilder(URI.create("http://localhost:8081/login"))
-                .POST(HttpRequest.BodyPublishers.ofByteArray(objectMapper.writeValueAsBytes(new LoginObject("admin", "admin", Map.of()))))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(objectMapper.writeValueAsBytes(new LoginObject("admin", "admin"))))
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
         var jwtResponse = client.send(loginRequest, HttpResponse.BodyHandlers.ofString());
         var httpAuthSql = "CREATE SECRET http_auth (\n" +

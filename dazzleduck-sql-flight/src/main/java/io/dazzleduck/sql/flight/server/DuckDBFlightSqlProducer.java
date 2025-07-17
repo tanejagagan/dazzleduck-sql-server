@@ -26,6 +26,8 @@ import org.apache.arrow.flight.sql.impl.FlightSql;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.util.AutoCloseables;
+import org.apache.arrow.vector.IntVector;
+import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.arrow.vector.ipc.WriteChannel;
 import org.apache.arrow.vector.ipc.message.MessageSerializer;
@@ -37,8 +39,10 @@ import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.net.URLDecoder;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
+import java.nio.charset.StandardCharsets;
 import java.sql.*;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
@@ -46,6 +50,12 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+
+import org.apache.arrow.vector.types.pojo.ArrowType;
+import org.apache.arrow.vector.types.pojo.Field;
+import org.apache.arrow.vector.types.pojo.FieldType;
+import org.apache.arrow.vector.types.FloatingPointPrecision;
+
 
 import static com.google.protobuf.Any.pack;
 import static com.google.protobuf.ByteString.copyFrom;
@@ -284,10 +294,21 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         if (statementContext == null) {
             handleContextNotFound();
         }
+        Schema overrideSchema = null;
+        try {
+            CallHeaders headers = context.getMiddleware(FlightConstants.HEADER_KEY).headers();
+            String encodedSchema = headers.get(Headers.HEADER_SPLIT_SIZE);
+            if (encodedSchema != null && !encodedSchema.isBlank()) {
+                String decoded = URLDecoder.decode(encodedSchema, StandardCharsets.UTF_8);
+                overrideSchema = parseSchemaString(decoded);
+            }
+        } catch (Exception e) {
+            logger.warn("Failed to parse HEADER_SPLIT_SIZE schema override: {}", e.getMessage());
+        }
         final PreparedStatement statement = statementContext.getStatement();
         streamResultSet(executorService, () -> (DuckDBResultSet) statement.executeQuery(),
             allocator, getBatchSize(context),
-            listener, () -> {});
+            listener, () -> {}, overrideSchema);
     }
 
     @Override
@@ -316,6 +337,18 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         }
         var statementContext = new StatementContext<>(statement, statementHandle.query());
         statementLoadingCache.put(statementHandle.queryId(), statementContext);
+        Schema overrideSchema = null;
+        try {
+            CallHeaders headers = context.getMiddleware(FlightConstants.HEADER_KEY).headers();
+            String encodedSchema = headers.get(Headers.HEADER_SPLIT_SIZE);
+            if (encodedSchema != null && !encodedSchema.isBlank()) {
+                String decoded = URLDecoder.decode(encodedSchema, StandardCharsets.UTF_8);
+                overrideSchema = parseSchemaString(decoded);
+            }
+        } catch (Exception e) {
+            logger.warn("Failed to parse schema from HEADER_SPLIT_SIZE: {}", e.getMessage());
+        }
+        Schema finalOverrideSchema = overrideSchema;
         streamResultSet(executorService,
                 () -> {
                     statement.execute(statementContext.getQuery());
@@ -324,7 +357,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                 allocator,
                 getBatchSize(context),
                 listener,
-                () -> statementLoadingCache.invalidate(statementHandle.queryId()));
+                () -> statementLoadingCache.invalidate(statementHandle.queryId()), finalOverrideSchema);
     }
 
 
@@ -701,6 +734,17 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                          Runnable finalBlock) {
         try {
             DuckDBConnection connection = getConnection(context);
+            Schema overrideSchema = null;
+            try {
+                CallHeaders headers = context.getMiddleware(FlightConstants.HEADER_KEY).headers();
+                String encodedSchema = headers.get(Headers.HEADER_SPLIT_SIZE);
+                if (encodedSchema != null && !encodedSchema.isBlank()) {
+                    String decoded = URLDecoder.decode(encodedSchema, StandardCharsets.UTF_8);
+                    overrideSchema = parseSchemaString(decoded);
+                }
+            } catch (Exception e) {
+                logger.warn("Failed to parse HEADER_SPLIT_SIZE schema override: {}", e.getMessage());
+            }
             streamResultSet(executorService,
                     () -> supplier.get(connection),
                     allocator,
@@ -713,7 +757,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                             logger.atError().setCause(e).log("Error closing connection");
                         }
                         finalBlock.run();
-                    });
+                    }, overrideSchema);
         } catch (NoSuchCatalogSchemaError e) {
             handleNoSuchDBSchema(listener, e);
         }
@@ -728,14 +772,48 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                         BufferAllocator allocator,
                                         final int batchSize,
                                         final ServerStreamListener listener,
-                                        Runnable finalBlock) {
+                                        Runnable finalBlock,
+                                        Schema overrideSchema) {
         executorService.submit(() -> {
             var error = false ;
             try (DuckDBResultSet resultSet = supplier.get();
                  ArrowReader reader = (ArrowReader) resultSet.arrowExportStream(allocator, batchSize)) {
-                listener.start(reader.getVectorSchemaRoot());
-                while (reader.loadNextBatch()) {
-                    listener.putNext();
+                VectorSchemaRoot originalRoot = reader.getVectorSchemaRoot();
+
+                if (overrideSchema == null) {
+                    listener.start(originalRoot);
+                    while (reader.loadNextBatch()) {
+                        listener.putNext();
+                    }
+                } else {
+                    try (
+                            VectorSchemaRoot overrideRoot = VectorSchemaRoot.create(overrideSchema, allocator);
+                    ) {
+                        listener.start(overrideRoot);
+                        while (reader.loadNextBatch()) {
+                            VectorSchemaRoot fromRoot = reader.getVectorSchemaRoot();
+
+                            // Do column-wise casting from fromRoot to overrideRoot
+                            for (int i = 0; i < overrideRoot.getFieldVectors().size(); i++) {
+                                var targetVector = overrideRoot.getVector(i);
+                                var sourceVector = fromRoot.getVector(i);
+
+                                for (int j = 0; j < sourceVector.getValueCount(); j++) {
+                                    String stringVal = sourceVector.getObject(j).toString();
+                                    // Support only int casting for now (you can expand this later)
+                                    if (targetVector instanceof IntVector intVector) {
+                                        intVector.setSafe(j, Integer.parseInt(stringVal));
+                                    } else {
+                                        throw new UnsupportedOperationException("Unsupported target type: " + targetVector.getClass());
+                                    }
+                                }
+                                targetVector.setValueCount(sourceVector.getValueCount());
+                            }
+
+                            overrideRoot.setRowCount(fromRoot.getRowCount());
+                            listener.putNext();
+                        }
+                    }
                 }
             }  catch (IOException exception) {
                 handleIOException(listener, exception);
@@ -754,13 +832,25 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     private FlightInfo getFlightInfoStatement(String query,
                                       final CallContext context,
                                       final FlightDescriptor descriptor) {
+        CallHeaders headers = context.getMiddleware(FlightConstants.HEADER_KEY).headers();
+        String encodedSchema = headers.get(Headers.HEADER_SPLIT_SIZE);
+        Schema overrideSchema = null;
+
+        if (encodedSchema != null && !encodedSchema.isBlank()) {
+            try {
+                String decoded = URLDecoder.decode(encodedSchema, StandardCharsets.UTF_8);
+                overrideSchema = parseSchemaString(decoded);
+            } catch (Exception e) {
+                logger.warn("Failed to parse schema from HEADER_SPLIT_SIZE: {}", e.getMessage());
+            }
+        }
         StatementHandle handle = newStatementHandle(query);
         final ByteString serializedHandle =
                 copyFrom(handle.serialize());
         FlightSql.TicketStatementQuery ticket =
                 FlightSql.TicketStatementQuery.newBuilder().setStatementHandle(serializedHandle).build();
         return getFlightInfoForSchema(
-                ticket, descriptor, null);
+                ticket, descriptor, overrideSchema);
     }
     private FlightInfo getFlightInfoStatementSplittable(JsonNode tree,
             final CallContext context,
@@ -941,5 +1031,39 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         if (accessMode == AccessMode.RESTRICTED) {
             throw handleUnauthorized(new UnauthorizedException("Get FlightInfo Prepared Statement"));
         }
+    }
+
+    private static Schema parseSchemaString(String schemaStr) {
+        if (schemaStr == null || schemaStr.isBlank()) {
+            return null;
+        }
+
+        List<Field> fields = new ArrayList<>();
+        String[] parts = schemaStr.split(",");
+
+        for (String part : parts) {
+            String[] tokens = part.trim().split("\\s+");
+            if (tokens.length != 2) {
+                continue;
+            }
+
+            String name = tokens[0];
+            String type = tokens[1].toLowerCase();
+
+            ArrowType arrowType = switch (type) {
+                case "int" -> new ArrowType.Int(32, true);
+                case "bigint" -> new ArrowType.Int(64, true);
+                case "float" -> new ArrowType.FloatingPoint(FloatingPointPrecision.SINGLE);
+                case "double" -> new ArrowType.FloatingPoint(FloatingPointPrecision.DOUBLE);
+                case "string", "varchar", "text" -> new ArrowType.Utf8();
+                case "bool", "boolean" -> new ArrowType.Bool();
+                default -> null;
+            };
+
+            if (arrowType != null) {
+                fields.add(new Field(name, FieldType.nullable(arrowType), null));
+            }
+        }
+        return fields.isEmpty() ? null : new Schema(fields);
     }
 }
