@@ -1,5 +1,6 @@
 package io.dazzleduck.sql.flight.server.auth2;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigObject;
 import io.dazzleduck.sql.common.auth.Validator;
@@ -8,11 +9,17 @@ import org.apache.arrow.flight.auth2.Auth2Constants;
 import org.apache.arrow.flight.auth2.BasicCallHeaderAuthenticator;
 import org.apache.arrow.flight.auth2.CallHeaderAuthenticator;
 
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.security.NoSuchAlgorithmException;
 import java.util.*;
 
 public class AuthUtils {
+    private static final ObjectMapper objectMapper = new ObjectMapper();
+    private static final HttpClient httpClient = HttpClient.newHttpClient();
 
     private static String generateBasicAuthHeader(String username, String password) {
         byte[] up = Base64.getEncoder().encode((username + ":" + password).getBytes(StandardCharsets.UTF_8));
@@ -71,12 +78,51 @@ public class AuthUtils {
     public static BasicCallHeaderAuthenticator.CredentialValidator createCredentialValidator(Config config) {
         List<? extends ConfigObject> users = config.getObjectList("users");
         Map<String, String> passwords = new HashMap<>();
-        users.forEach( o -> {
+        users.forEach(o -> {
             String name = o.toConfig().getString("username");
             String password = o.toConfig().getString("password");
             passwords.put(name, password);
         });
-        return createCredentialValidator(passwords);
+        return config.getBoolean("httpLogin") ?
+                createHttpCredentialValidator(passwords, Map.of("orgId", "123"))
+                : createCredentialValidator(passwords);
+    }
+
+    private static BasicCallHeaderAuthenticator.CredentialValidator createHttpCredentialValidator(Map<String, String> userPassword, Map<String, String> claims) {
+        return new BasicCallHeaderAuthenticator.CredentialValidator() {
+            @Override
+            public CallHeaderAuthenticator.AuthResult validate(String username, String password) throws Exception {
+                String requestBody = objectMapper.writeValueAsString(Map.of(
+                        "username", username,
+                        "password", password,
+                        "claims", claims
+                ));
+
+                HttpRequest request = HttpRequest.newBuilder()
+                        .uri(URI.create("http://localhost:8080/login"))
+                        .header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(requestBody))
+                        .build();
+
+                HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+                if (response.statusCode() != 200) {
+                    throw new RuntimeException("Failed to fetch token: " + response.body());
+                }
+
+                return new CallHeaderAuthenticator.AuthResult() {
+                    @Override
+                    public String getPeerIdentity() {
+                        return username;
+                    }
+
+                    @Override
+                    public void appendToOutgoingHeaders(CallHeaders headers) {
+                        headers.insert(Auth2Constants.AUTHORIZATION_HEADER, "Bearer " + response.body());
+                    }
+                };
+            }
+        };
     }
 
     private static BasicCallHeaderAuthenticator.CredentialValidator createCredentialValidator(Map<String, String> userPassword) {
@@ -86,7 +132,7 @@ public class AuthUtils {
             @Override
             public CallHeaderAuthenticator.AuthResult validate(String username, String password) throws Exception {
                 var storePassword = userHashMap.get(username);
-                if(storePassword != null &&
+                if (storePassword != null &&
                         !password.isEmpty() &&
                         Validator.passwordMatch(storePassword, Validator.hash(password))) {
                     return new CallHeaderAuthenticator.AuthResult() {
