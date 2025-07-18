@@ -102,7 +102,18 @@ public class GeneratedJWTTokenAuthenticator extends BearerTokenAuthenticator {
             if (expiration.before(new Date())) {
                 throw FlightRuntimeExceptionFactory.of(new CallStatus(CallStatus.UNAUTHENTICATED.code(), null, "Expired", null));
             }
-            return () -> subject;
+            return new AuthResult() {
+                @Override
+                public String getPeerIdentity() {
+                    return subject;
+                }
+
+                @Override
+                public void appendToOutgoingHeaders(CallHeaders outgoingHeaders) {
+                    outgoingHeaders.insert(
+                            Auth2Constants.AUTHORIZATION_HEADER, Auth2Constants.BEARER_PREFIX + bearerToken);
+                }
+            };
         } catch (Exception e) {
             throw CallStatus.UNAUTHENTICATED.toRuntimeException();
         }
