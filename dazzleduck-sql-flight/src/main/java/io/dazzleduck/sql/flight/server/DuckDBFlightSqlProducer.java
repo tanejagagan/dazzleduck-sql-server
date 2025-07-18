@@ -210,13 +210,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         if (statementContext == null) {
             handleContextNotFound();
         }
-
-        String overrideSchema = null;
-        try {
-            overrideSchema = getOverrideSchema(context);
-        } catch (Exception e) {
-            logger.warn("Failed to parse HEADER_SPLIT_SIZE schema override: {}", e.getMessage());
-        }
         return getFlightInfoForSchema(command, descriptor, null);
     }
 
@@ -293,14 +286,21 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         if (statementContext == null) {
             handleContextNotFound();
         }
-        String overrideSchema = null;
+
+        PreparedStatement statementToUse = statementContext.getStatement();
         try {
-           overrideSchema = getOverrideSchema(context);
+            Optional<String> overrideQuery = getOverrideSchema(context, statementContext.getQuery());
+            if (overrideQuery.isPresent()) {
+                String newQuery = overrideQuery.get();
+                DuckDBConnection conn = (DuckDBConnection) statementToUse.getConnection();
+                statementToUse = conn.prepareStatement(newQuery);
+            }
         } catch (Exception e) {
             logger.warn("Failed to parse HEADER_SPLIT_SIZE schema override: {}", e.getMessage());
         }
-        final PreparedStatement statement = statementContext.getStatement();
-        streamResultSet(executorService, () -> (DuckDBResultSet) statement.executeQuery(),
+
+        PreparedStatement finalStatementToUse = statementToUse;
+        streamResultSet(executorService, () -> (DuckDBResultSet) finalStatementToUse.executeQuery(),
                 allocator, getBatchSize(context),
                 listener, () -> {});
     }
@@ -323,23 +323,29 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             return;
         }
         Statement statement ;
+        String originalQuery = statementHandle.query();
         try {
             statement = connection.createStatement();
         } catch (SQLException e) {
             handleSqlException(listener, e);
             return;
         }
-        var statementContext = new StatementContext<>(statement, statementHandle.query());
+
+        var statementContext = new StatementContext<>(statement, originalQuery);
         statementLoadingCache.put(statementHandle.queryId(), statementContext);
-        String overrideSchema = null;
+
+        // Attempt to override the query
+        Optional<String> overrideQuery = Optional.empty();
         try {
-            overrideSchema = getOverrideSchema(context);
-        } catch (SQLException | JsonProcessingException e) {
-            throw new RuntimeException(e);
+            overrideQuery = getOverrideSchema(context, originalQuery);
+        } catch (Exception e) {
+            logger.warn("Failed to parse HEADER_SPLIT_SIZE schema override: {}", e.getMessage());
         }
+
+        String queryToExecute = overrideQuery.orElse(originalQuery);
         streamResultSet(executorService,
                 () -> {
-                    statement.execute(statementContext.getQuery());
+                    statement.execute(queryToExecute);
                     return (DuckDBResultSet) statement.getResultSet();
                 },
                 allocator,
@@ -724,7 +730,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                          Runnable finalBlock) {
         try {
             DuckDBConnection connection = getConnection(context);
-            String overrideSchema = getOverrideSchema(context);
             streamResultSet(executorService,
                     () -> supplier.get(connection),
                     allocator,
@@ -740,8 +745,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                     });
         } catch (NoSuchCatalogSchemaError e) {
             handleNoSuchDBSchema(listener, e);
-        } catch (SQLException | JsonProcessingException e) {
-            throw new RuntimeException(e);
         }
     }
 
@@ -780,12 +783,14 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     private FlightInfo getFlightInfoStatement(String query,
                                               final CallContext context,
                                               final FlightDescriptor descriptor) {
-        String overrideSchema = null;
+
+        Optional<String> overrideSchema = Optional.empty();
         try {
-            overrideSchema = getOverrideSchema(context);
+            overrideSchema = getOverrideSchema(context, query);
         } catch (SQLException | JsonProcessingException e) {
             throw new RuntimeException(e);
         }
+
         StatementHandle handle = newStatementHandle(query);
         final ByteString serializedHandle =
                 copyFrom(handle.serialize());
@@ -813,7 +818,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                     throw new RuntimeException(e);
                 }
             }).toList();
-            String overrideSchema = getOverrideSchema(context);
             return getFlightInfoForSchema(list, descriptor, null, getLocation());
         } catch (SQLException e) {
             throw  handleSqlException(e);
@@ -976,19 +980,19 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         }
     }
 
-    private static String getOverrideSchema(CallContext context) throws SQLException, JsonProcessingException {
+    private static Optional<String> getOverrideSchema(CallContext context, String query) throws SQLException, JsonProcessingException {
         if (context == null || context.getMiddleware(FlightConstants.HEADER_KEY) == null) {
             throw new IllegalArgumentException("Invalid context or middleware");
         }
         CallHeaders headers = context.getMiddleware(FlightConstants.HEADER_KEY).headers();
         if (headers == null) {
-            throw new IllegalStateException("Headers not found");
+            return Optional.empty();
         }
-        String encodedSchema = headers.get(Headers.HEADER_SPLIT_SIZE);
+        String encodedSchema = headers.get(Headers.HEADER_DATA_SCHEMA);
         if (encodedSchema == null || encodedSchema.isBlank()) {
             throw new IllegalStateException("Schema header is missing or empty");
         }
         String decodedSchema = URLDecoder.decode(encodedSchema, StandardCharsets.UTF_8);
-        return Transformations.getCast(decodedSchema);
+        return Optional.of("select " + Transformations.getCast(decodedSchema) + " where false " + query);
     }
 }

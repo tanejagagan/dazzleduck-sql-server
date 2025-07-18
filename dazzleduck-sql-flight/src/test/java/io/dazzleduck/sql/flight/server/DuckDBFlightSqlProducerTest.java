@@ -391,7 +391,7 @@ public class DuckDBFlightSqlProducerTest {
         var schema = "one int";
         var encodedSchema = URLEncoder.encode(schema, Charset.defaultCharset());
         var flightCallHeaders = new FlightCallHeaders();
-        flightCallHeaders.insert(Headers.HEADER_SPLIT_SIZE, encodedSchema);
+        flightCallHeaders.insert(Headers.HEADER_DATA_SCHEMA, encodedSchema);
         var headerOption = new HeaderCallOption(flightCallHeaders);
         var info = sqlClient.execute("select '1'", headerOption);
         try (var stream = sqlClient.getStream(info.getEndpoints().get(0).getTicket(), headerOption)) {
