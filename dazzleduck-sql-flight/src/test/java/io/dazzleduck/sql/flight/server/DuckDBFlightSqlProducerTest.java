@@ -396,7 +396,6 @@ public class DuckDBFlightSqlProducerTest {
         var info = sqlClient.execute("select '1'", headerOption);
         try (var stream = sqlClient.getStream(info.getEndpoints().get(0).getTicket(), headerOption)) {
             var root = stream.getRoot();
-            stream.next();
             IntVector vector = (IntVector) root.getVector(0);
             assertEquals(1, vector.get(0));
         }
