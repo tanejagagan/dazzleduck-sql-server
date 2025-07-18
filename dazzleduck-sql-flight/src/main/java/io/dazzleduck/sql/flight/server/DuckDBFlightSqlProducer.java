@@ -452,6 +452,10 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     @Override
     public FlightInfo getFlightInfoSqlInfo(FlightSql.CommandGetSqlInfo request,
                                            CallContext context, FlightDescriptor descriptor) {
+        request.getInfoList().forEach( r -> {
+                    System.out.println (r);
+                }
+        );
         return null;
     }
 

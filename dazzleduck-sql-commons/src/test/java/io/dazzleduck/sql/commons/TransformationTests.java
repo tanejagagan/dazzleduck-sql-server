@@ -10,6 +10,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.sql.SQLException;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
 
@@ -45,6 +46,8 @@ public class TransformationTests {
         var schema = "a int, b string, c STRUCT(i  int, d STRUCT( x int)), e Int[], f Map(string, string), g decimal(18,3)";
         var sql = Transformations.getCast(schema);
         ConnectionPool.printResult("select " + sql);
+        String sqlToCast = "select 1";
+        String result = "select " + sql  + "where false union all " + sqlToCast;
     }
 
     @Test
