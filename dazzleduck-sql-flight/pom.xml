@@ -22,5 +22,11 @@
             <artifactId>dazzleduck-sql-common</artifactId>
             <version>0.0.3</version>
         </dependency>
+        <dependency>
+            <groupId>io.dazzlerduck.sql</groupId>
+            <artifactId>dazzleduck-sql-http</artifactId>
+            <version>0.0.3</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 </project>

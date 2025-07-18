@@ -16,6 +16,7 @@ import javax.crypto.SecretKey;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Calendar;
+import java.util.Map;
 
 public class LoginService implements HttpService {
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -48,7 +49,7 @@ public class LoginService implements HttpService {
             String jwt = Jwts.builder()
                     .subject(loginRequest.username())
                     .expiration(expiration.getTime())
-
+                    .claim("claims", loginRequest.claims())
                     .signWith(secretKey).compact();
             serverResponse.send(jwt.getBytes());
         } catch (Exception e ){
