@@ -39,7 +39,7 @@ public class Main {
 
         // initialize global config from default configuration
         Config helidonConfig = Config.create();
-        var commandlineConfig = io.dazzleduck.sql.common.util.ConfigUtils.loadCommandLineConfig(args);
+        var commandlineConfig = io.dazzleduck.sql.common.util.ConfigUtils.loadCommandLineConfig(args).config();
         var appConfig = commandlineConfig.withFallback(ConfigFactory.load().getConfig(Main.CONFIG_PATH));
         var port = Integer.parseInt(appConfig.getString("port"));
         var auth = appConfig.hasPath("auth") ? appConfig.getString("auth") : null;

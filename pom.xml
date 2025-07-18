@@ -9,8 +9,8 @@
     <packaging>pom</packaging>
     <modules>
         <module>dazzleduck-sql-common</module>
-        <module>dazzleduck-sql-flight</module>
         <module>dazzleduck-sql-http</module>
+        <module>dazzleduck-sql-flight</module>
         <module>dazzleduck-sql-commons</module>
     </modules>
     <properties>

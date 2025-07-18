@@ -2,12 +2,16 @@ package io.dazzleduck.sql.common.util;
 
 import com.beust.jcommander.JCommander;
 import com.beust.jcommander.Parameter;
+import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 
 import java.util.List;
 
 public class ConfigUtils {
-    public static com.typesafe.config.Config loadCommandLineConfig(String[] args) {
+
+    public record ConfigWithMainParameters(Config config, List<String> mainParameters){}
+
+    public static ConfigWithMainParameters loadCommandLineConfig(String[] args) {
         var argv = new Args();
         JCommander.newBuilder()
                 .addObject(argv)
@@ -20,11 +24,15 @@ public class ConfigUtils {
                 buffer.append("\n");
             });
         }
-        return ConfigFactory.parseString(buffer.toString());
+
+        return new ConfigWithMainParameters(ConfigFactory.parseString(buffer.toString()), argv.mainParameters);
     }
 
     public static class Args {
         @Parameter(names = {"--conf"}, description = "Configurations" )
         private List<String> configs;
+
+        @Parameter
+        private List<String>  mainParameters;
     }
 }

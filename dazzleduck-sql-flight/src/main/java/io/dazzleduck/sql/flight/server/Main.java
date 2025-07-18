@@ -36,7 +36,7 @@ public class Main {
     }
 
     public static FlightServer createServer(String[] args) throws NoSuchAlgorithmException, IOException {
-        var commandLineConfig = ConfigUtils.loadCommandLineConfig(args);
+        var commandLineConfig = ConfigUtils.loadCommandLineConfig(args).config();
         var config = commandLineConfig.withFallback(ConfigFactory.load().getConfig(CONFIG_PATH));
         int port = config.getInt("port");
         String host = config.getString("host");
