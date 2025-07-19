@@ -26,6 +26,7 @@ public class Main {
         Thread severThread = new Thread(() -> {
             try {
                 flightServer.start();
+                flightServer.getLocation().getUri().getScheme().equals("grpc+tls");
                 System.out.println("S1: Server (Location): Listening on port " + flightServer.getPort());
                 flightServer.awaitTermination();
             } catch (IOException | InterruptedException e) {
