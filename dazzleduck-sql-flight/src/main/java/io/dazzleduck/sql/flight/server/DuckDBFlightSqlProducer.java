@@ -210,6 +210,14 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         if (statementContext == null) {
             handleContextNotFound();
         }
+
+        String overrideQuery;
+        try {
+            overrideQuery = getOverrideQuery(context, statementHandle.query());
+        } catch (SQLException | JsonProcessingException e) {
+            throw new RuntimeException(e);
+        }
+
         return getFlightInfoForSchema(command, descriptor, null);
     }
 
@@ -289,12 +297,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
         PreparedStatement statementToUse = statementContext.getStatement();
         try {
-            Optional<String> overrideQuery = getOverrideQuery(context, statementContext.getQuery());
-            if (overrideQuery.isPresent()) {
-                String newQuery = overrideQuery.get();
-                DuckDBConnection conn = (DuckDBConnection) statementToUse.getConnection();
-                statementToUse = conn.prepareStatement(newQuery);
-            }
+            String overrideQuery = getOverrideQuery(context, statementContext.getQuery());
+            DuckDBConnection conn = (DuckDBConnection) statementToUse.getConnection();
+            statementToUse = conn.prepareStatement(overrideQuery);
         } catch (Exception e) {
             logger.warn("Failed to parse HEADER_SPLIT_SIZE schema override: {}", e.getMessage());
         }
@@ -333,19 +338,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
         var statementContext = new StatementContext<>(statement, originalQuery);
         statementLoadingCache.put(statementHandle.queryId(), statementContext);
-
-        // Attempt to override the query
-        Optional<String> overrideQuery = Optional.empty();
-        try {
-            overrideQuery = getOverrideQuery(context, originalQuery);
-        } catch (Exception e) {
-            logger.warn("Failed to parse HEADER_SPLIT_SIZE schema override: {}", e.getMessage());
-        }
-
-        String queryToExecute = overrideQuery.orElse(originalQuery);
         streamResultSet(executorService,
                 () -> {
-                    statement.execute(queryToExecute);
+                    statement.execute(originalQuery);
                     return (DuckDBResultSet) statement.getResultSet();
                 },
                 allocator,
@@ -784,14 +779,14 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                               final CallContext context,
                                               final FlightDescriptor descriptor) {
 
-        Optional<String> overrideSchema = Optional.empty();
+        String overrideSchema = null;
         try {
             overrideSchema = getOverrideQuery(context, query);
         } catch (SQLException | JsonProcessingException e) {
             throw new RuntimeException(e);
         }
 
-        StatementHandle handle = newStatementHandle(query);
+        StatementHandle handle = newStatementHandle(overrideSchema);
         final ByteString serializedHandle =
                 copyFrom(handle.serialize());
         FlightSql.TicketStatementQuery ticket =
@@ -980,21 +975,14 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         }
     }
 
-    private static Optional<String> getOverrideQuery(CallContext context, String query)
-            throws SQLException, JsonProcessingException {
-        if (context == null || context.getMiddleware(FlightConstants.HEADER_KEY) == null) {
-            return Optional.empty();
-        }
-        CallHeaders headers = context.getMiddleware(FlightConstants.HEADER_KEY).headers();
-        if (headers == null) {
-            return Optional.empty();
-        }
-        String encodedSchema = headers.get(Headers.HEADER_DATA_SCHEMA);
-        if (encodedSchema == null || encodedSchema.isBlank()) {
-            return Optional.empty();
-        }
-        String decodedSchema = URLDecoder.decode(encodedSchema, StandardCharsets.UTF_8);
-        System.out.println("Final Query Will be: -> " + "select " + Transformations.getCast(decodedSchema) + " where false " + query + ";");
-        return Optional.of("select " + Transformations.getCast(decodedSchema) + " where false " + query + ";");
+    private static String getOverrideQuery(CallContext context, String query) throws SQLException, JsonProcessingException {
+        String encoded = (context == null || context.getMiddleware(FlightConstants.HEADER_KEY) == null || context.getMiddleware(FlightConstants.HEADER_KEY).headers() == null)
+                ? null : context.getMiddleware(FlightConstants.HEADER_KEY).headers().get(Headers.HEADER_DATA_SCHEMA);
+        if (encoded == null || encoded.isBlank()) return query;
+        String decoded = URLDecoder.decode(encoded, StandardCharsets.UTF_8);
+        String cast = Transformations.getCast(decoded);
+        String finalQuery = "select " + cast + " where false union all " + query + ";";
+        System.out.println("Final Query Will be: -> " + finalQuery);
+        return finalQuery;
     }
 }
