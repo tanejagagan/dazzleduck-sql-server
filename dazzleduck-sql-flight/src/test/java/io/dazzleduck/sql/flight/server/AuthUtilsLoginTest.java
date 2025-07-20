@@ -47,7 +47,6 @@ public class AuthUtilsLoginTest {
     }
 
     @Test
-    @Disabled
     public void testLoginWithHttp() {
         var result = sqlClient.execute("select 1");
         assertNotNull(result);
