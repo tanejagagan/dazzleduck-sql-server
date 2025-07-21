@@ -23,7 +23,7 @@
             <version>0.0.3</version>
         </dependency>
         <dependency>
-            <groupId>io.dazzlerduck.sql</groupId>
+            <groupId>io.dazzleduck.sql</groupId> <!-- ✅ fixed -->
             <artifactId>dazzleduck-sql-http</artifactId>
             <version>0.0.3</version>
             <scope>test</scope>
