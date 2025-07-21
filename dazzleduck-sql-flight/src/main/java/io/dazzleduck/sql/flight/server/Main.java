@@ -26,7 +26,7 @@ public class Main {
         Thread severThread = new Thread(() -> {
             try {
                 flightServer.start();
-                System.out.println("S1: Server (Location): Listening on URI and port:  " + flightServer.getLocation().getUri().toString());
+                System.out.println("S1: Server (Location): Listening on URI and port:  " + flightServer.getLocation().getUri());
                 flightServer.awaitTermination();
             } catch (IOException | InterruptedException e) {
                 throw new RuntimeException(e);
