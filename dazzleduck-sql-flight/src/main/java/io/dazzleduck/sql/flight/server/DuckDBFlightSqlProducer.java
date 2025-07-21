@@ -194,7 +194,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                         });
     }
 
-
+    // need to be discussed
     @Override
     public FlightInfo getFlightInfoPreparedStatement(
             final FlightSql.CommandPreparedStatementQuery command,
@@ -295,6 +295,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             handleContextNotFound();
         }
 
+        System.out.println("Query From 'getStreamPreparedStatement' " + statementHandle.query());
         PreparedStatement statementToUse = statementContext.getStatement();
         try {
             String overrideQuery = getOverrideQuery(context, statementContext.getQuery());
@@ -327,20 +328,27 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             handleNoSuchDBSchema(listener, e);
             return;
         }
+
+        System.out.println("Query From 'getStreamStatement' " + statementHandle.query());
+
         Statement statement ;
-        String originalQuery = statementHandle.query();
+        String originalQuery;
         try {
             statement = connection.createStatement();
+            originalQuery = getOverrideQuery(context, statementHandle.query());
         } catch (SQLException e) {
             handleSqlException(listener, e);
             return;
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException(e);
         }
 
         var statementContext = new StatementContext<>(statement, originalQuery);
         statementLoadingCache.put(statementHandle.queryId(), statementContext);
+        String finalOriginalQuery = originalQuery;
         streamResultSet(executorService,
                 () -> {
-                    statement.execute(originalQuery);
+                    statement.execute(finalOriginalQuery);
                     return (DuckDBResultSet) statement.getResultSet();
                 },
                 allocator,
@@ -778,7 +786,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     private FlightInfo getFlightInfoStatement(String query,
                                               final CallContext context,
                                               final FlightDescriptor descriptor) {
-
+        System.out.println("Query from 'getFlightInfoStatement' " + query);
         String overrideSchema = null;
         try {
             overrideSchema = getOverrideQuery(context, query);
