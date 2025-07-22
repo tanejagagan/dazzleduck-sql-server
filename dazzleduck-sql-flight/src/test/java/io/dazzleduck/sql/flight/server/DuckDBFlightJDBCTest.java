@@ -16,7 +16,7 @@ import java.security.NoSuchAlgorithmException;
 import java.sql.*;
 import java.util.Properties;
 
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.*;
 
 public class DuckDBFlightJDBCTest {
 
@@ -80,13 +80,50 @@ public class DuckDBFlightJDBCTest {
         try(Connection connection = getConnection()) {
             for (int i = 0 ; i < numIterator; i ++) {
                 try( Statement  st = connection.createStatement()) {
-                    st.executeQuery("select 1");
+                    var res2 = st.execute("select 1");
                     try (ResultSet resultSet = st.getResultSet()) {
                         while (resultSet.next()) {
                             resultSet.getInt(1);
                         }
                     }
                 }
+            }
+        }
+    }
+
+    @Test
+    public void testExecuteDDLWithUserPassword() throws SQLException {
+        var numIterator = 1;
+        try (Connection connection = getConnection()) {
+            for (int i = 0; i < numIterator; i++) {
+                try (Statement st = connection.createStatement()) {
+                    var schema = "test_schema_" + System.currentTimeMillis();
+                    var res2 = st.execute("create schema " + schema);
+                    assertFalse(res2);
+                    var res3 = st.execute("DROP SCHEMA " + schema);
+                    assertFalse(res3);
+                }
+            }
+        }
+    }
+
+    @Test
+    public void setAndGetParam() throws SQLException {
+        try (Connection connection = getConnection()) {
+            try (Statement statement = connection.createStatement()) {
+                var res = statement.execute("set variable x = 5");
+                assertFalse(res);
+            }
+
+            try (Statement statement = connection.createStatement()) {
+                var res = statement.execute("select getvariable('x')");
+                try (var rs = statement.getResultSet()) {
+                    while (rs.next()) {
+                        var o = rs.getObject(1);
+                        assertNull(o);
+                    }
+                }
+                assertTrue(res);
             }
         }
     }
@@ -123,28 +160,39 @@ public class DuckDBFlightJDBCTest {
 
 
     @Test
-    @Disabled
     public void testSetUnSet() throws SQLException {
-        try(Connection connection = getConnection();
-            Statement  st = connection.createStatement()) {
-            st.executeUpdate("set pivot_limit=9999");
-            st.execute("SELECT current_setting('pivot_limit') AS memlimit");
-            try(ResultSet set  = st.getResultSet()) {
-                while (set.next()){
-                    System.out.println(set.getObject(1, Long.class));
+        try (Connection connection = getConnection()) {
+
+            try (Statement st = connection.createStatement()) {
+                var h = st.executeUpdate("set pivot_limit=9999");
+                assertEquals(0, h);
+            }
+            try (var st2 = connection.createStatement()) {
+                var hasResultSet = st2.execute("SELECT cast(current_setting('pivot_limit') as decimal) AS memlimit");
+                //var hasResultSet = st2.execute("select 1");
+                System.out.println(hasResultSet);
+                try (ResultSet set = st2.getResultSet()) {
+                    while (set.next()) {
+                        System.out.println(set.getObject(1, Long.class));
+                    }
                 }
             }
         }
     }
 
     @Test
-    // These are disabled because the issue with driver which
-    // does not let me troubleshoot the issue as it's a uber jar
-    // and lines do not match.
     public void testMetadata() throws SQLException {
         try(Connection connection = getConnection()) {
             var databaseMetadata = connection.getMetaData();
-            //databaseMetadata.getTables();
+            assertFalse(databaseMetadata.supportsTransactions());
+
+            try (var rs = connection.getMetaData().getTableTypes()) {
+                while (rs.next()) {
+                    System.out.printf("%s\n",
+                            rs.getString(1));
+                }
+            }
+
             try (var rs = databaseMetadata.getSchemas()) {
                 while(rs.next()) {
                     System.out.printf("%s, %s\n",
