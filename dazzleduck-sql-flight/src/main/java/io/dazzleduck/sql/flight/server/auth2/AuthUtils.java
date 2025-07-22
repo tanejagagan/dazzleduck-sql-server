@@ -2,6 +2,7 @@ package io.dazzleduck.sql.flight.server.auth2;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.typesafe.config.Config;
+import com.typesafe.config.ConfigFactory;
 import com.typesafe.config.ConfigObject;
 import io.dazzleduck.sql.common.auth.Validator;
 import org.apache.arrow.flight.*;
