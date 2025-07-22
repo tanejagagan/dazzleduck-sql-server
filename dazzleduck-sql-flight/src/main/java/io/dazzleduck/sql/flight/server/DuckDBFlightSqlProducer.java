@@ -63,6 +63,7 @@ import static org.duckdb.DuckDBConnection.DEFAULT_SCHEMA;
  */
 public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable {
     protected static final Calendar DEFAULT_CALENDAR = JdbcToArrowUtils.getUtcCalendar();
+
     public static final String  DEFAULT_DATABASE = "memory";
     private final AccessMode accessMode;
     ExecutorService executorService = Executors.newVirtualThreadPerTaskExecutor();
@@ -194,7 +195,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                         });
     }
 
-    // need to be discussed
+
     @Override
     public FlightInfo getFlightInfoPreparedStatement(
             final FlightSql.CommandPreparedStatementQuery command,
@@ -209,13 +210,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                 preparedStatementLoadingCache.getIfPresent(statementHandle.queryId());
         if (statementContext == null) {
             handleContextNotFound();
-        }
-
-        String overrideQuery;
-        try {
-            overrideQuery = getOverrideQuery(context, statementHandle.query());
-        } catch (SQLException | JsonProcessingException e) {
-            throw new RuntimeException(e);
         }
 
         return getFlightInfoForSchema(command, descriptor, null);
@@ -281,34 +275,23 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     @Override
     public void getStreamPreparedStatement(FlightSql.CommandPreparedStatementQuery command, CallContext context,
                                            ServerStreamListener listener) {
-        if (checkAccessModeAndRespond(listener)){
-            return;
-        }
+       if (checkAccessModeAndRespond(listener)){
+           return;
+       }
 
         StatementHandle statementHandle = StatementHandle.deserialize(command.getPreparedStatementHandle());
         if (statementHandle.signatureMismatch(secretKey)) {
             handleSignatureMismatch(listener);
         }
         StatementContext<PreparedStatement> statementContext =
-                preparedStatementLoadingCache.getIfPresent(statementHandle.queryId());
+            preparedStatementLoadingCache.getIfPresent(statementHandle.queryId());
         if (statementContext == null) {
             handleContextNotFound();
         }
-
-        System.out.println("Query From 'getStreamPreparedStatement' " + statementHandle.query());
-        PreparedStatement statementToUse = statementContext.getStatement();
-        try {
-            String overrideQuery = getOverrideQuery(context, statementContext.getQuery());
-            DuckDBConnection conn = (DuckDBConnection) statementToUse.getConnection();
-            statementToUse = conn.prepareStatement(overrideQuery);
-        } catch (Exception e) {
-            logger.warn("Failed to parse HEADER_SPLIT_SIZE schema override: {}", e.getMessage());
-        }
-
-        PreparedStatement finalStatementToUse = statementToUse;
-        streamResultSet(executorService, () -> (DuckDBResultSet) finalStatementToUse.executeQuery(),
-                allocator, getBatchSize(context),
-                listener, () -> {});
+        final PreparedStatement statement = statementContext.getStatement();
+        streamResultSet(executorService, () -> (DuckDBResultSet) statement.executeQuery(),
+            allocator, getBatchSize(context),
+            listener, () -> {});
     }
 
     @Override
@@ -328,27 +311,18 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             handleNoSuchDBSchema(listener, e);
             return;
         }
-
-        System.out.println("Query From 'getStreamStatement' " + statementHandle.query());
-
         Statement statement ;
-        String originalQuery;
         try {
             statement = connection.createStatement();
-            originalQuery = getOverrideQuery(context, statementHandle.query());
         } catch (SQLException e) {
             handleSqlException(listener, e);
             return;
-        } catch (JsonProcessingException e) {
-            throw new RuntimeException(e);
         }
-
-        var statementContext = new StatementContext<>(statement, originalQuery);
+        var statementContext = new StatementContext<>(statement, statementHandle.query());
         statementLoadingCache.put(statementHandle.queryId(), statementContext);
-        String finalOriginalQuery = originalQuery;
         streamResultSet(executorService,
                 () -> {
-                    statement.execute(finalOriginalQuery);
+                    statement.execute(statementContext.getQuery());
                     return (DuckDBResultSet) statement.getResultSet();
                 },
                 allocator,
@@ -480,6 +454,10 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     @Override
     public FlightInfo getFlightInfoSqlInfo(FlightSql.CommandGetSqlInfo request,
                                            CallContext context, FlightDescriptor descriptor) {
+        request.getInfoList().forEach( r -> {
+                    System.out.println (r);
+                }
+        );
         return null;
     }
 
@@ -570,7 +548,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         final String[] tableTypes =
                 protocolSize == 0 ? null : protocolStringList.toArray(new String[protocolSize]);
         streamResultSet(executorService, connection ->
-                        DuckDBDatabaseMetadataUtil.getTables(connection, catalog, schemaFilterPattern, tableFilterPattern, tableTypes),
+            DuckDBDatabaseMetadataUtil.getTables(connection, catalog, schemaFilterPattern, tableFilterPattern, tableTypes),
                 context, allocator, listener);
     }
 
@@ -784,17 +762,15 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     }
 
     private FlightInfo getFlightInfoStatement(String query,
-                                              final CallContext context,
-                                              final FlightDescriptor descriptor) {
-        System.out.println("Query from 'getFlightInfoStatement' " + query);
-        String overrideSchema = null;
-        try {
-            overrideSchema = getOverrideQuery(context, query);
+                                      final CallContext context,
+                                      final FlightDescriptor descriptor) {
+        String newQuery = null;
+        try{
+            newQuery = getOverrideQuery(context, query);
         } catch (SQLException | JsonProcessingException e) {
             throw new RuntimeException(e);
         }
-
-        StatementHandle handle = newStatementHandle(overrideSchema);
+        StatementHandle handle = newStatementHandle(newQuery);
         final ByteString serializedHandle =
                 copyFrom(handle.serialize());
         FlightSql.TicketStatementQuery ticket =
