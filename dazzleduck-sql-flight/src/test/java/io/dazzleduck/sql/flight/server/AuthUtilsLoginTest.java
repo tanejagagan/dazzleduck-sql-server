@@ -9,7 +9,6 @@ import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
@@ -29,10 +28,12 @@ public class AuthUtilsLoginTest {
     @BeforeAll
     public static void setup() throws Exception {
         warehousePath = Files.createTempDirectory("duckdb_warehouse_" + AuthUtilsLoginTest.class.getSimpleName()).toString();
+        // Fix path escaping for Windows
+        String escapedWarehousePath = warehousePath.replace("\\", "\\\\");
         // Start the HTTP login service
         Main.main(new String[]{
-                "--conf", "port=" + HTTP_PORT,
-                "--conf", "warehousePath=" + warehousePath
+                "--conf", "port: " + HTTP_PORT,
+                "--conf", "warehousePath: \"" + escapedWarehousePath + "\""
         });
 
         setUpFlightServerAndClient();
@@ -47,7 +48,6 @@ public class AuthUtilsLoginTest {
     }
 
     @Test
-    @Disabled
     public void testLoginWithHttp() {
         var result = sqlClient.execute("select 1");
         assertNotNull(result);
