@@ -8,30 +8,36 @@ import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.RemovalListener;
 import com.google.common.cache.RemovalNotification;
 import com.google.protobuf.*;
+import io.dazzleduck.sql.common.FlightStreamReader;
 import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.common.UnauthorizedException;
 import io.dazzleduck.sql.common.authorization.AccessMode;
 import io.dazzleduck.sql.common.authorization.NOOPAuthorizer;
-import io.dazzleduck.sql.common.FlightStreamReader;
 import io.dazzleduck.sql.common.authorization.SqlAuthorizer;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.FileStatus;
 import io.dazzleduck.sql.commons.Transformations;
 import io.dazzleduck.sql.commons.planner.SplitPlanner;
+import org.apache.arrow.adapter.jdbc.JdbcParameterBinder;
 import org.apache.arrow.adapter.jdbc.JdbcToArrowUtils;
 import org.apache.arrow.flight.*;
 import org.apache.arrow.flight.sql.FlightSqlProducer;
 import org.apache.arrow.flight.sql.FlightSqlUtils;
+import org.apache.arrow.flight.sql.SqlInfoBuilder;
 import org.apache.arrow.flight.sql.impl.FlightSql;
+import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.util.AutoCloseables;
+import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.arrow.vector.ipc.WriteChannel;
 import org.apache.arrow.vector.ipc.message.MessageSerializer;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.duckdb.DuckDBConnection;
 import org.duckdb.DuckDBResultSet;
+import org.duckdb.DuckDBResultSetMetaData;
+import org.duckdb.StatementReturnType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -49,6 +55,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static com.google.protobuf.Any.pack;
 import static com.google.protobuf.ByteString.copyFrom;
+import static java.lang.String.format;
 import static java.util.Collections.singletonList;
 import static java.util.Objects.isNull;
 import static org.duckdb.DuckDBConnection.DEFAULT_SCHEMA;
@@ -61,9 +68,9 @@ import static org.duckdb.DuckDBConnection.DEFAULT_SCHEMA;
  */
 public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable {
     protected static final Calendar DEFAULT_CALENDAR = JdbcToArrowUtils.getUtcCalendar();
-
     public static final String  DEFAULT_DATABASE = "memory";
     private final AccessMode accessMode;
+    private final Set<Integer> supportedSqlInfo;
     ExecutorService executorService = Executors.newVirtualThreadPerTaskExecutor();
     private final static Logger logger = LoggerFactory.getLogger(DuckDBFlightSqlProducer.class);
     private final Location location;
@@ -75,6 +82,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     private final Cache<Long, StatementContext<PreparedStatement>> preparedStatementLoadingCache;
     private final Cache<Long, StatementContext<Statement>> statementLoadingCache;
     private final SqlAuthorizer sqlAuthorizer;
+
+    private final SqlInfoBuilder sqlInfoBuilder;
+
 
     public DuckDBFlightSqlProducer(Location location){
         this(location, UUID.randomUUID().toString());
@@ -111,6 +121,52 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                         .removalListener(new StatementRemovalListener<>())
                         .build();
         this.warehousePath = warehousePath;
+        sqlInfoBuilder = new SqlInfoBuilder();
+        try (final Connection connection = ConnectionPool.getConnection()) {
+            final DatabaseMetaData metaData = connection.getMetaData();
+
+            sqlInfoBuilder
+                    .withFlightSqlServerName(metaData.getDatabaseProductName())
+                    .withFlightSqlServerVersion(metaData.getDatabaseProductVersion())
+                    .withFlightSqlServerArrowVersion(metaData.getDriverVersion())
+                    .withFlightSqlServerReadOnly(metaData.isReadOnly())
+                    .withFlightSqlServerSql(true)
+                    .withFlightSqlServerSubstrait(false)
+                    .withFlightSqlServerTransaction(FlightSql.SqlSupportedTransaction.SQL_SUPPORTED_TRANSACTION_NONE)
+                    .withSqlIdentifierQuoteChar(metaData.getIdentifierQuoteString())
+                    .withSqlDdlCatalog(metaData.supportsCatalogsInDataManipulation())
+                    .withSqlDdlSchema(metaData.supportsSchemasInDataManipulation())
+                    .withSqlDdlTable(metaData.allTablesAreSelectable())
+                    .withSqlIdentifierCase(
+                            metaData.storesMixedCaseIdentifiers()
+                                    ? FlightSql.SqlSupportedCaseSensitivity.SQL_CASE_SENSITIVITY_CASE_INSENSITIVE
+                                    : metaData.storesUpperCaseIdentifiers()
+                                    ? FlightSql.SqlSupportedCaseSensitivity.SQL_CASE_SENSITIVITY_UPPERCASE
+                                    : metaData.storesLowerCaseIdentifiers()
+                                    ? FlightSql.SqlSupportedCaseSensitivity.SQL_CASE_SENSITIVITY_LOWERCASE
+                                    : FlightSql.SqlSupportedCaseSensitivity.SQL_CASE_SENSITIVITY_UNKNOWN)
+                    .withSqlQuotedIdentifierCase(
+                            metaData.storesMixedCaseQuotedIdentifiers()
+                                    ? FlightSql.SqlSupportedCaseSensitivity.SQL_CASE_SENSITIVITY_CASE_INSENSITIVE
+                                    : metaData.storesUpperCaseQuotedIdentifiers()
+                                    ? FlightSql.SqlSupportedCaseSensitivity.SQL_CASE_SENSITIVITY_UPPERCASE
+                                    : metaData.storesLowerCaseQuotedIdentifiers()
+                                    ? FlightSql.SqlSupportedCaseSensitivity.SQL_CASE_SENSITIVITY_LOWERCASE
+                                    : FlightSql.SqlSupportedCaseSensitivity.SQL_CASE_SENSITIVITY_UNKNOWN)
+                    .withSqlAllTablesAreSelectable(true)
+                    .withSqlNullOrdering(FlightSql.SqlNullOrdering.SQL_NULLS_SORTED_AT_END)
+                    .withSqlMaxColumnsInTable(42)
+                    .withFlightSqlServerBulkIngestion(true)
+                    .withFlightSqlServerBulkIngestionTransaction(false)
+                    .withSqlTransactionsSupported(false);
+
+
+            var providerField =  sqlInfoBuilder.getClass().getDeclaredField("providers");
+            providerField.setAccessible(true);
+            supportedSqlInfo = ((HashMap<Integer, ?>)providerField.get(sqlInfoBuilder)).keySet();
+        } catch (SQLException | NoSuchFieldException | IllegalAccessException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Override
@@ -148,26 +204,35 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                 final Schema parameterSchema =
                                         JdbcToArrowUtils.jdbcToArrowSchema(preparedStatement.getParameterMetaData(), DEFAULT_CALENDAR);
 
-                                final ResultSetMetaData metaData = preparedStatement.getMetaData();
-                                final ByteString bytes =
-                                        isNull(metaData)
-                                                ? ByteString.EMPTY
-                                                : ByteString.copyFrom(
-                                                serializeMetadata(JdbcToArrowUtils.jdbcToArrowSchema(metaData, DEFAULT_CALENDAR)));
-                                final FlightSql.ActionCreatePreparedStatementResult result =
+                                final DuckDBResultSetMetaData metaData = (DuckDBResultSetMetaData) preparedStatement.getMetaData();
+                                var builder =
                                         FlightSql.ActionCreatePreparedStatementResult.newBuilder()
-                                                .setDatasetSchema(bytes)
                                                 .setParameterSchema(copyFrom(serializeMetadata(parameterSchema)))
-                                                .setPreparedStatementHandle(serializedHandle)
-                                                .build();
+                                                .setPreparedStatementHandle(serializedHandle);
+                                ByteString bytes;
+                                if (isNull(metaData) || metaData.getReturnType() == StatementReturnType.NOTHING) {
+                                    bytes = ByteString.copyFrom(
+                                            serializeMetadata(new Schema(List.of())));
+                                } else {
+                                    var x = JdbcToArrowUtils.jdbcToArrowSchema(metaData, DEFAULT_CALENDAR);
+                                    bytes = ByteString.copyFrom(
+                                            serializeMetadata(x));
+                                }
+                                builder.setDatasetSchema(bytes);
+                                final FlightSql.ActionCreatePreparedStatementResult result = builder.build();
                                 listener.onNext(new Result(pack(result).toByteArray()));
                             } catch (final SQLException e) {
                                handleSqlException(listener, e);
+                               return;
+                            } catch (Exception e ) {
+                                handleException(listener, e);
+                                return;
                             }
                             listener.onCompleted();
                         });
 
     }
+
 
     @Override
     public void closePreparedStatement(FlightSql.ActionClosePreparedStatementRequest request, CallContext context, StreamListener<Result> listener) {
@@ -286,8 +351,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         if (statementContext == null) {
             handleContextNotFound();
         }
-        final PreparedStatement statement = statementContext.getStatement();
-        streamResultSet(executorService, () -> (DuckDBResultSet) statement.executeQuery(),
+        final PreparedStatement preparedStatement = statementContext.getStatement();
+        streamResultSet(executorService, OptionalResultSetSupplier.of(preparedStatement),
             allocator, getBatchSize(context),
             listener, () -> {});
     }
@@ -318,11 +383,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         }
         var statementContext = new StatementContext<>(statement, statementHandle.query());
         statementLoadingCache.put(statementHandle.queryId(), statementContext);
+
         streamResultSet(executorService,
-                () -> {
-                    statement.execute(statementContext.getQuery());
-                    return (DuckDBResultSet) statement.getResultSet();
-                },
+                OptionalResultSetSupplier.of(statement, statementHandle.query()),
                 allocator,
                 getBatchSize(context),
                 listener,
@@ -334,22 +397,99 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     @Override
     public Runnable acceptPutStatement(FlightSql.CommandStatementUpdate command, CallContext context,
                                        FlightStream flightStream, StreamListener<PutResult> ackStream) {
-        return null;
+
+        final String query = command.getQuery();
+        return () -> {
+            if (checkAccessModeAndRespond(ackStream)) {
+                return;
+            }
+            try (final Connection connection = getConnection(context);
+                 final Statement statement = connection.createStatement()) {
+                statement.execute(query);
+                var result =  statement.getUpdateCount();
+                final FlightSql.DoPutUpdateResult build =
+                        FlightSql.DoPutUpdateResult.newBuilder().setRecordCount(result).build();
+
+                try (final ArrowBuf buffer = allocator.buffer(build.getSerializedSize())) {
+                    buffer.writeBytes(build.toByteArray());
+                    ackStream.onNext(PutResult.metadata(buffer));
+                    ackStream.onCompleted();
+                }
+            } catch (SQLSyntaxErrorException e) {
+                ackStream.onError(
+                        CallStatus.INVALID_ARGUMENT
+                                .withDescription("Failed to execute statement (invalid syntax): " + e)
+                                .toRuntimeException());
+            } catch (SQLException e) {
+                handleSqlException(ackStream, e);
+            } catch (NoSuchCatalogSchemaError e) {
+                handleNoSuchDBSchema(ackStream, e);
+            }
+        };
     }
 
     @Override
     public Runnable acceptPutPreparedStatementUpdate(FlightSql.CommandPreparedStatementUpdate command,
                                                      CallContext context, FlightStream flightStream,
                                                      StreamListener<PutResult> ackStream) {
-        return null;
+        return () -> {
+            if (checkAccessModeAndRespond(ackStream)) {
+                return;
+            }
+            StatementHandle statementHandle = StatementHandle.deserialize(command.getPreparedStatementHandle());
+            if (statementHandle.signatureMismatch(secretKey)) {
+                handleSignatureMismatch(ackStream);
+                return;
+            }
+            StatementContext<PreparedStatement> statementContext =
+                    preparedStatementLoadingCache.getIfPresent(statementHandle.queryId());
+            if (statementContext == null) {
+                handleContextNotFound(ackStream);
+                return;
+            }
+            final PreparedStatement preparedStatement = statementContext.getStatement();
+            try {
+                while (flightStream.next()) {
+                    final VectorSchemaRoot root = flightStream.getRoot();
+
+                    final int rowCount = root.getRowCount();
+                    final int recordCount;
+
+                    if (rowCount == 0) {
+                        recordCount = Math.max(0, preparedStatement.executeUpdate());
+                    } else {
+                        final JdbcParameterBinder binder =
+                                JdbcParameterBinder.builder(preparedStatement, root).bindAll().build();
+                        while (binder.next()) {
+                            preparedStatement.addBatch();
+                        }
+                        final int[] recordCounts = preparedStatement.executeBatch();
+                        recordCount = Arrays.stream(recordCounts).sum();
+                    }
+
+                    final FlightSql.DoPutUpdateResult build =
+                            FlightSql.DoPutUpdateResult.newBuilder().setRecordCount(recordCount).build();
+
+                    try (final ArrowBuf buffer = allocator.buffer(build.getSerializedSize())) {
+                        buffer.writeBytes(build.toByteArray());
+                        ackStream.onNext(PutResult.metadata(buffer));
+                    }
+                }
+            } catch (SQLException e) {
+                handleSqlException(ackStream, e);
+                return;
+            }
+            ackStream.onCompleted();
+        };
     }
 
     @Override
     public Runnable acceptPutPreparedStatementQuery(FlightSql.CommandPreparedStatementQuery command,
                                                     CallContext context, FlightStream flightStream,
                                                     StreamListener<PutResult> ackStream) {
-        return null;
+       return () -> handleUnimplemented(ackStream, "acceptPutPreparedStatementQuery");
     }
+
 
     @Override
     public Runnable acceptPutStatementBulkIngest(
@@ -450,19 +590,23 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     }
 
     @Override
-    public FlightInfo getFlightInfoSqlInfo(FlightSql.CommandGetSqlInfo request,
-                                           CallContext context, FlightDescriptor descriptor) {
-        request.getInfoList().forEach( r -> {
-                    System.out.println (r);
-                }
-        );
-        return null;
+    public FlightInfo getFlightInfoSqlInfo(
+            final FlightSql.CommandGetSqlInfo request,
+            final CallContext context,
+            final FlightDescriptor descriptor) {
+        return getFlightInfoForSchema(request, descriptor, Schemas.GET_SQL_INFO_SCHEMA);
     }
 
     @Override
-    public void getStreamSqlInfo(FlightSql.CommandGetSqlInfo command,
-                                 CallContext context, ServerStreamListener listener) {
-        throwUnimplemented("getStreamSqlInfo");
+    public void getStreamSqlInfo(
+            final FlightSql.CommandGetSqlInfo command,
+            final CallContext context,
+            final ServerStreamListener listener) {
+        List<Integer> infoList = command.getInfoList();
+        if (infoList.isEmpty()) {
+            infoList = supportedSqlInfo.stream().toList();
+        }
+        sqlInfoBuilder.send(infoList, listener);
     }
 
     @Override
@@ -553,12 +697,24 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     @Override
     public FlightInfo getFlightInfoTableTypes(FlightSql.CommandGetTableTypes request, CallContext context,
                                               FlightDescriptor descriptor) {
-        return null;
+        checkAccessModeAndRespond();
+        return getFlightInfoForSchema(request, descriptor, Schemas.GET_TABLE_TYPES_SCHEMA);
     }
+
+
 
     @Override
     public void getStreamTableTypes(CallContext context, ServerStreamListener listener) {
-        throwUnimplemented("getStreamTableTypes");
+        if (checkAccessModeAndRespond(listener)) {
+            return;
+        }
+        try ( var connection = getConnection(context)){
+            streamResultSet(executorService, DuckDBDatabaseMetadataUtil::getTableTypes, context, allocator, listener);
+        } catch (SQLException e) {
+            handleSqlException(listener, e);
+        } catch (NoSuchCatalogSchemaError e) {
+            handleNoSuchDBSchema(listener, e);
+        }
     }
 
     @Override
@@ -576,18 +732,21 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     @Override
     public FlightInfo getFlightInfoExportedKeys(FlightSql.CommandGetExportedKeys request, CallContext context,
                                                 FlightDescriptor descriptor) {
+        throwUnimplemented("getFlightInfoExportedKeys");
         return null;
     }
 
     @Override
     public FlightInfo getFlightInfoImportedKeys(FlightSql.CommandGetImportedKeys request, CallContext context,
                                                 FlightDescriptor descriptor) {
+        throwUnimplemented("getFlightInfoImportedKeys");
         return null;
     }
 
     @Override
     public FlightInfo getFlightInfoCrossReference(FlightSql.CommandGetCrossReference request, CallContext context,
                                                   FlightDescriptor descriptor) {
+        throwUnimplemented("getFlightInfoCrossReference");
         return null;
     }
 
@@ -662,8 +821,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
     private static DuckDBConnection getConnection(final CallContext context) throws NoSuchCatalogSchemaError {
         var databaseSchmema = getDatabaseSchema(context);
-        String dbSchema = String.format("%s.%s", databaseSchmema.database, databaseSchmema.schema);
-        String[] sqls = {String.format("USE %s", dbSchema)};
+        String dbSchema = format("%s.%s", databaseSchmema.database, databaseSchmema.schema);
+        String[] sqls = {format("USE %s", dbSchema)};
         try {
             return ConnectionPool.getConnection(sqls);
         } catch (Exception e ){
@@ -722,7 +881,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                         }
                         finalBlock.run();
                     });
-        } catch (NoSuchCatalogSchemaError e) {
+        } catch (NoSuchCatalogSchemaError  e) {
             handleNoSuchDBSchema(listener, e);
         }
     }
@@ -752,6 +911,41 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                 error = true;
             } finally {
                 if(!error) {
+                    listener.completed();
+                }
+                finalBlock.run();
+            }
+        });
+    }
+
+    private static void streamResultSet(ExecutorService executorService,
+                                        OptionalResultSetSupplier supplier,
+                                        BufferAllocator allocator,
+                                        final int batchSize,
+                                        final ServerStreamListener listener,
+                                        Runnable finalBlock) {
+        executorService.submit(() -> {
+            var error = false;
+            try {
+                supplier.execute();
+                if (supplier.hasResultSet()) {
+                    try (DuckDBResultSet resultSet = supplier.get();
+                         ArrowReader reader = (ArrowReader) resultSet.arrowExportStream(allocator, batchSize)) {
+                        listener.start(reader.getVectorSchemaRoot());
+                        while (reader.loadNextBatch()) {
+                            listener.putNext();
+                        }
+                    }
+                } else {
+                    listener.start(new VectorSchemaRoot(List.of()));
+                }
+            } catch (IOException exception) {
+                handleIOException(listener, exception);
+            } catch (SQLException e) {
+                handleSqlException(listener, e);
+                error = true;
+            } finally {
+                if (!error) {
                     listener.completed();
                 }
                 finalBlock.run();
@@ -842,7 +1036,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         listener.completed();
     }
 
-    private static void handleNoSuchDBSchema(StreamListener<Result> listener, NoSuchCatalogSchemaError exception){
+    private static void handleNoSuchDBSchema(StreamListener<?> listener, NoSuchCatalogSchemaError exception){
         listener.onError(FlightRuntimeExceptionFactory.of(new CallStatus(FlightStatusCode.INVALID_ARGUMENT, null, exception.getMessage(), null)));
         listener.onCompleted();
     }
@@ -866,7 +1060,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                 new CallStatus(CallStatus.UNAUTHORIZED.code(), null, "Signature in the handle do not match", null)));
     }
 
-    private static void handleContextNotFound(StreamListener<CancelStatus> listener) {
+    private static void handleContextNotFound(StreamListener<?> listener) {
         listener.onError(FlightRuntimeExceptionFactory.of(CallStatus.NOT_FOUND));
     }
 
@@ -892,6 +1086,13 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     }
 
     private static<T> void handleSqlException(StreamListener<T> listener, SQLException e) {
+        var exception = CallStatus.INTERNAL
+                .withDescription(e.getMessage())
+                .toRuntimeException();
+        listener.onError(exception);
+    }
+
+    private void handleException(StreamListener<?> listener, Exception e) {
         var exception = CallStatus.INTERNAL
                 .withDescription(e.getMessage())
                 .toRuntimeException();
@@ -949,5 +1150,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         if (accessMode == AccessMode.RESTRICTED) {
             throw handleUnauthorized(new UnauthorizedException("Get FlightInfo Prepared Statement"));
         }
+    }
+
+    private void handleUnimplemented(StreamListener<?> ackStream, String method) {
+        ackStream.onError(FlightRuntimeExceptionFactory.of(new CallStatus(CallStatus.UNIMPLEMENTED.code(), null, method, null)));
     }
 }
