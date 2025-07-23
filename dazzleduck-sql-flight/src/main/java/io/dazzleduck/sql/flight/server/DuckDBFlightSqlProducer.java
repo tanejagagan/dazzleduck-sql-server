@@ -181,7 +181,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         try {
             connection = getConnection(context);
         } catch (Throwable t ) {
-            handleThrowable(listener, t);
+            ErrorHandling.handleThrowable(listener, t);
             return;
         }
 
@@ -223,7 +223,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                 final FlightSql.ActionCreatePreparedStatementResult result = builder.build();
                 listener.onNext(new Result(pack(result).toByteArray()));
             } catch (Throwable e ) {
-                handleThrowable(listener, e);
+                ErrorHandling.handleThrowable(listener, e);
                 return;
             }
             listener.onCompleted();
@@ -238,14 +238,14 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         }
         final StatementHandle statementHandle = StatementHandle.deserialize(request.getPreparedStatementHandle());
         if (statementHandle.signatureMismatch(secretKey)) {
-            handleSignatureMismatch(listener);
+            ErrorHandling.handleSignatureMismatch(listener);
             return;
         }
         Runnable runnable = () -> {
             try {
                 preparedStatementLoadingCache.invalidate(statementHandle.queryId());
             } catch (final Throwable e) {
-                handleThrowable(listener, e);
+                ErrorHandling.handleThrowable(listener, e);
                 return;
             }
             listener.onCompleted();
@@ -262,12 +262,12 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         checkAccessModeAndRespond();
         StatementHandle statementHandle = StatementHandle.deserialize(command.getPreparedStatementHandle());
         if (statementHandle.signatureMismatch(secretKey)) {
-            handleSignatureMismatch();
+            ErrorHandling.handleSignatureMismatch();
         }
         StatementContext<PreparedStatement> statementContext =
                 preparedStatementLoadingCache.getIfPresent(statementHandle.queryId());
         if (statementContext == null) {
-            handleContextNotFound();
+            ErrorHandling.handleContextNotFound();
         }
         return getFlightInfoForSchema(command, descriptor, null);
     }
@@ -288,12 +288,10 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             try {
                 tree = Transformations.parseToTree(query);
                 if (tree.get("error").asBoolean()) {
-                    handleQueryCompilationError(tree);
+                    ErrorHandling.handleQueryCompilationError(tree);
                 }
-            } catch (SQLException s) {
-                throw handleSqlException(s);
-            } catch (JsonProcessingException e) {
-                throw handleJsonProcessingException(e);
+            } catch (Throwable s) {
+                ErrorHandling.handleThrowable(s);
             }
         }
 
@@ -302,7 +300,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             try {
                 newTree = authorize(context, tree);
             } catch (UnauthorizedException e) {
-                throw handleUnauthorized(e);
+                throw ErrorHandling.handleUnauthorized(e);
             }
 
             if (parallelize(context)) {
@@ -312,7 +310,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                     var newSql = Transformations.parseToSql(newTree);
                     return getFlightInfoStatement(newSql, context, descriptor);
                 } catch (SQLException e) {
-                    throw handleSqlException(e);
+                    throw ErrorHandling.handleSqlException(e);
                 }
             }
         } else {
@@ -337,12 +335,12 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
         StatementHandle statementHandle = StatementHandle.deserialize(command.getPreparedStatementHandle());
         if (statementHandle.signatureMismatch(secretKey)) {
-            handleSignatureMismatch(listener);
+            ErrorHandling.handleSignatureMismatch(listener);
         }
         StatementContext<PreparedStatement> statementContext =
             preparedStatementLoadingCache.getIfPresent(statementHandle.queryId());
         if (statementContext == null) {
-            handleContextNotFound();
+            ErrorHandling.handleContextNotFound();
         }
         final PreparedStatement preparedStatement = statementContext.getStatement();
         streamResultSet(executorService, OptionalResultSetSupplier.of(preparedStatement),
@@ -358,7 +356,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             final ServerStreamListener listener) {
         StatementHandle statementHandle = StatementHandle.deserialize(ticketStatementQuery.getStatementHandle());
         if (statementHandle.signatureMismatch(secretKey)) {
-            handleSignatureMismatch(listener);
+            ErrorHandling.handleSignatureMismatch(listener);
             return;
         }
         try {
@@ -373,7 +371,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                     listener,
                     () -> statementLoadingCache.invalidate(statementHandle.queryId()));
         } catch (Throwable e) {
-            handleThrowable(listener, e);
+            ErrorHandling.handleThrowable(listener, e);
         }
     }
 
@@ -400,7 +398,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                     ackStream.onCompleted();
                 }
             } catch (Throwable throwable) {
-                handleThrowable(ackStream, throwable);
+                ErrorHandling.handleThrowable(ackStream, throwable);
             }
         };
     }
@@ -416,13 +414,13 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             }
             StatementHandle statementHandle = StatementHandle.deserialize(command.getPreparedStatementHandle());
             if (statementHandle.signatureMismatch(secretKey)) {
-                handleSignatureMismatch(ackStream);
+                ErrorHandling.handleSignatureMismatch(ackStream);
                 return;
             }
             StatementContext<PreparedStatement> statementContext =
                     preparedStatementLoadingCache.getIfPresent(statementHandle.queryId());
             if (statementContext == null) {
-                handleContextNotFound(ackStream);
+                ErrorHandling.handleContextNotFound(ackStream);
                 return;
             }
             final PreparedStatement preparedStatement = statementContext.getStatement();
@@ -455,7 +453,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                 }
                 ackStream.onCompleted();
             } catch (Throwable e) {
-                handleThrowable(ackStream, e);
+                ErrorHandling.handleThrowable(ackStream, e);
             }
         };
     }
@@ -497,7 +495,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                 ackStream.onNext(PutResult.empty());
                 ackStream.onCompleted();
             } catch (Throwable throwable) {
-                handleThrowable(ackStream, throwable);
+                ErrorHandling.handleThrowable(ackStream, throwable);
             }
         };
     }
@@ -550,14 +548,14 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     @Override
     public FlightInfo getFlightInfoTypeInfo(FlightSql.CommandGetXdbcTypeInfo request,
                                             CallContext context, FlightDescriptor descriptor) {
-        throwUnimplemented("getFlightInfoTypeInfo");
+        ErrorHandling.throwUnimplemented("getFlightInfoTypeInfo");
         return null;
     }
 
     @Override
     public void getStreamTypeInfo(FlightSql.CommandGetXdbcTypeInfo request, CallContext context,
                                   ServerStreamListener listener) {
-        throwUnimplemented("getStreamTypeInfo");
+        ErrorHandling.throwUnimplemented("getStreamTypeInfo");
     }
 
     @Override
@@ -652,21 +650,21 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     @Override
     public FlightInfo getFlightInfoPrimaryKeys(FlightSql.CommandGetPrimaryKeys request, CallContext context,
                                                FlightDescriptor descriptor) {
-        throwUnimplemented("getFlightInfoPrimaryKeys");
+        ErrorHandling.throwUnimplemented("getFlightInfoPrimaryKeys");
         return null;
     }
 
     @Override
     public void getStreamPrimaryKeys(FlightSql.CommandGetPrimaryKeys command, CallContext context,
                                      ServerStreamListener listener) {
-        throwUnimplemented(listener, "getStreamPrimaryKeys");
+        ErrorHandling.throwUnimplemented(listener, "getStreamPrimaryKeys");
     }
 
 
     @Override
     public FlightInfo getFlightInfoExportedKeys(FlightSql.CommandGetExportedKeys request, CallContext context,
                                                 FlightDescriptor descriptor) {
-        throwUnimplemented("getFlightInfoExportedKeys");
+        ErrorHandling.throwUnimplemented("getFlightInfoExportedKeys");
         return null;
     }
 
@@ -674,7 +672,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     @Override
     public FlightInfo getFlightInfoImportedKeys(FlightSql.CommandGetImportedKeys request, CallContext context,
                                                 FlightDescriptor descriptor) {
-        throwUnimplemented("getFlightInfoImportedKeys");
+        ErrorHandling.throwUnimplemented("getFlightInfoImportedKeys");
         return null;
     }
 
@@ -682,7 +680,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     @Override
     public FlightInfo getFlightInfoCrossReference(FlightSql.CommandGetCrossReference request, CallContext context,
                                                   FlightDescriptor descriptor) {
-        throwUnimplemented("getFlightInfoCrossReference");
+        ErrorHandling.throwUnimplemented("getFlightInfoCrossReference");
         return null;
     }
 
@@ -690,21 +688,21 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     @Override
     public void getStreamExportedKeys(FlightSql.CommandGetExportedKeys command, CallContext context,
                                       ServerStreamListener listener) {
-        throwUnimplemented(listener, "getStreamExportedKeys");
+        ErrorHandling.throwUnimplemented(listener, "getStreamExportedKeys");
     }
 
 
     @Override
     public void getStreamImportedKeys(FlightSql.CommandGetImportedKeys command, CallContext context,
                                       ServerStreamListener listener) {
-        throwUnimplemented(listener, "getStreamImportedKeys");
+        ErrorHandling.throwUnimplemented(listener, "getStreamImportedKeys");
     }
 
 
     @Override
     public void getStreamCrossReference(FlightSql.CommandGetCrossReference command, CallContext context,
                                         ServerStreamListener listener) {
-        throwUnimplemented(listener, "getStreamCrossReference");
+        ErrorHandling.throwUnimplemented(listener, "getStreamCrossReference");
     }
 
 
@@ -716,7 +714,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
     @Override
     public void listFlights(CallContext context, Criteria criteria, StreamListener<FlightInfo> listener) {
-        throwUnimplemented(listener, "listFlights");
+        ErrorHandling.throwUnimplemented(listener, "listFlights");
     }
 
 
@@ -743,14 +741,14 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     private void cancel(StatementHandle statementHandle,
                         StreamListener<CancelStatus> listener) {
         if (statementHandle.signatureMismatch(secretKey)) {
-            handleSignatureMismatch(listener);
+            ErrorHandling.handleSignatureMismatch(listener);
             return;
         }
         try {
             StatementContext<Statement> statementContext =
                     statementLoadingCache.getIfPresent(statementHandle.queryId());
             if (statementContext == null) {
-                handleContextNotFound(listener);
+                ErrorHandling.handleContextNotFound(listener);
                 return;
             }
             Statement statement = statementContext.getStatement();
@@ -758,7 +756,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             try {
                 statement.cancel();
             } catch (SQLException e) {
-                handleSqlException(listener, e);
+                ErrorHandling.handleSqlException(listener, e);
             }
             listener.onNext(CancelStatus.CANCELLED);
         } finally {
@@ -767,23 +765,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         }
     }
 
-
-    private void throwUnimplemented(ServerStreamListener listener, String method) {
-        var exception = FlightRuntimeExceptionFactory.of(new CallStatus(CallStatus.UNIMPLEMENTED.code(),
-                null,  method, null));
-        listener.error(exception);
-    }
-
-    private <T> void throwUnimplemented(StreamListener<T> listener, String method) {
-        var exception = FlightRuntimeExceptionFactory.of(new CallStatus(CallStatus.UNIMPLEMENTED.code(),
-                null,  method, null));
-        listener.onError(exception);
-    }
-
-    private void throwUnimplemented(String name) {
-        logger.info("Unimplemented method error {}", name);
-        throw CallStatus.UNIMPLEMENTED.toRuntimeException();
-    }
 
     private static class StatementRemovalListener<T extends Statement>
             implements RemovalListener<Long, StatementContext<T>> {
@@ -882,7 +863,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                         finalBlock.run();
                     });
         } catch (Throwable t) {
-            handleThrowable(listener, t);
+            ErrorHandling.handleThrowable(listener, t);
         }
     }
 
@@ -901,7 +882,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                     listener.putNext();
                 }
             }  catch (Throwable throwable) {
-              handleThrowable(listener, throwable);
+              ErrorHandling.handleThrowable(listener, throwable);
             } finally {
                 if(!error) {
                     listener.completed();
@@ -934,7 +915,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                 }
             } catch (Throwable throwable) {
                 error = true;
-                handleThrowable(listener, throwable);
+                ErrorHandling.handleThrowable(listener, throwable);
             } finally {
                 if (!error) {
                     listener.completed();
@@ -977,7 +958,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             }).toList();
             return getFlightInfoForSchema(list, descriptor, null, getLocation());
         } catch (Throwable throwable) {
-            handleThrowable(throwable);
+            ErrorHandling.handleThrowable(throwable);
             return null;
         }
     }
@@ -1014,197 +995,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         return new StatementHandle(query, sqlIdCounter.incrementAndGet(), producerId).signed(secretKey);
     }
 
-    private <T> void handleThrowable(Throwable t) {
-        switch (t) {
-            case NoSuchCatalogSchemaError e -> handleNoSuchDBSchema(e);
-            case SQLSyntaxErrorException e -> handleSQLSyntaxErrorException( e);
-            case SQLException s -> handleSqlException(s);
-            case IOException io -> handleIOException(io);
-            case Exception e -> {
-                var exception = CallStatus.INTERNAL
-                        .withDescription(e.getMessage())
-                        .toRuntimeException();
-                logger.atError().setCause(e).log("Error processing");
-                throw exception;
-            }
-            case Throwable e -> {
-                var exception = CallStatus.INTERNAL
-                        .withDescription(e.getMessage())
-                        .toRuntimeException();
-                logger.atError().setCause(e).log("Error processing");
-                throw exception;
-            }
-        }
-    }
-    private <T> void handleThrowable(StreamListener<T> listener, Throwable t) {
-        switch (t) {
-            case NoSuchCatalogSchemaError e -> handleNoSuchDBSchema(listener, e);
-            case SQLSyntaxErrorException e -> handleSQLSyntaxErrorException(listener, e);
-            case SQLException s -> handleSqlException(listener, s);
-            case IOException io -> handleIOException(listener, io);
-            case Exception e -> handleException(listener, e);
-            case Throwable e -> {
-                var exception = CallStatus.INTERNAL
-                        .withDescription(e.getMessage())
-                        .toRuntimeException();
-                logger.atError().setCause(e).log("Error processing");
-                listener.onError(exception);
-            }
-        }
-    }
-
-    private static <T> void handleThrowable(ServerStreamListener listener, Throwable t) {
-        switch (t) {
-            case NoSuchCatalogSchemaError e -> handleNoSuchDBSchema(listener, e);
-            case SQLSyntaxErrorException e -> handleSQLSyntaxErrorException(listener, e);
-            case SQLException s -> handleSqlException(listener, s);
-            case IOException io -> handleIOException(listener, io);
-            case Exception e -> handleException(listener, e);
-            case Throwable e -> {
-                var exception = CallStatus.INTERNAL
-                        .withDescription(e.getMessage())
-                        .toRuntimeException();
-                logger.atError().setCause(e).log("Error processing");
-                listener.error(exception);
-            }
-        }
-    }
-
-    private static void handleNoSuchDBSchema(ServerStreamListener listener, NoSuchCatalogSchemaError exception){
-        listener.error(FlightRuntimeExceptionFactory.of(new CallStatus(FlightStatusCode.INVALID_ARGUMENT, null, exception.getMessage(), null)));
-        listener.completed();
-    }
-
-    private static void handleNoSuchDBSchema(NoSuchCatalogSchemaError exception){
-        throw FlightRuntimeExceptionFactory.of(new CallStatus(FlightStatusCode.INVALID_ARGUMENT, null, exception.getMessage(), null));
-    }
-
-    private static void handleNoSuchDBSchema(StreamListener<?> listener, NoSuchCatalogSchemaError exception){
-        listener.onError(FlightRuntimeExceptionFactory.of(new CallStatus(FlightStatusCode.INVALID_ARGUMENT, null, exception.getMessage(), null)));
-        listener.onCompleted();
-    }
-
-    private static void handleContextNotFound() {
-        throw FlightRuntimeExceptionFactory.of(CallStatus.NOT_FOUND);
-    }
-
-    private static <T> void handleSignatureMismatch(StreamListener<T> listener) {
-        listener.onError(FlightRuntimeExceptionFactory.of(
-                new CallStatus(CallStatus.UNAUTHORIZED.code(), null, "Signature in the handle do not match", null)));
-    }
-
-    private static void handleSignatureMismatch() {
-        throw FlightRuntimeExceptionFactory.of(
-                new CallStatus(CallStatus.UNAUTHORIZED.code(), null, "Signature in the handle do not match", null));
-    }
-
-    private static void handleSignatureMismatch(ServerStreamListener listener) {
-        listener.error(FlightRuntimeExceptionFactory.of(
-                new CallStatus(CallStatus.UNAUTHORIZED.code(), null, "Signature in the handle do not match", null)));
-    }
-
-    private static void handleContextNotFound(StreamListener<?> listener) {
-        listener.onError(FlightRuntimeExceptionFactory.of(CallStatus.NOT_FOUND));
-    }
-
-    private static<T> void handleUnauthorized(StreamListener<T> listener, UnauthorizedException unauthorizedException) {
-        var callStatus = new CallStatus(CallStatus.UNAUTHORIZED.code(), null, unauthorizedException.getMessage(), null);
-        listener.onError(FlightRuntimeExceptionFactory.of(callStatus));
-    }
-
-    private static void handleUnauthorized(ServerStreamListener listener, UnauthorizedException unauthorizedException) {
-        var callStatus = new CallStatus(CallStatus.UNAUTHORIZED.code(), null, unauthorizedException.getMessage(), null);
-        listener.error(FlightRuntimeExceptionFactory.of(callStatus));
-    }
-
-    private static FlightRuntimeException handleUnauthorized(UnauthorizedException unauthorizedException) {
-        return FlightRuntimeExceptionFactory.of(new CallStatus(CallStatus.UNAUTHORIZED.code(), null, "Unauthorized access to tableOrPath or columns", null));
-    }
-
-    private static void handleSqlException(ServerStreamListener listener, SQLException e) {
-        var exception = CallStatus.INTERNAL
-                .withDescription(e.getMessage())
-                .toRuntimeException();
-        listener.error(exception);
-    }
-
-    private static<T> void handleSqlException(StreamListener<T> listener, SQLException e) {
-        var exception = CallStatus.INTERNAL
-                .withDescription(e.getMessage())
-                .toRuntimeException();
-        listener.onError(exception);
-    }
-
-
-    private static<T> void handleSQLSyntaxErrorException(StreamListener<T> listener, SQLSyntaxErrorException e) {
-        var exception = CallStatus.INTERNAL
-                .withDescription(e.getMessage())
-                .toRuntimeException();
-        listener.onError(exception);
-    }
-
-    private static<T> void handleSQLSyntaxErrorException(SQLSyntaxErrorException e) {
-        throw CallStatus.INTERNAL
-                .withDescription(e.getMessage())
-                .toRuntimeException();
-    }
-
-    private static<T> void handleSQLSyntaxErrorException(ServerStreamListener listener, SQLSyntaxErrorException e) {
-        var exception = CallStatus.INTERNAL
-                .withDescription(e.getMessage())
-                .toRuntimeException();
-        listener.error(exception);
-    }
-
-    private void handleException(StreamListener<?> listener, Exception e) {
-        var exception = CallStatus.INTERNAL
-                .withDescription(e.getMessage())
-                .toRuntimeException();
-        logger.atError().setCause(e).log("Error processing");
-        listener.onError(exception);
-    }
-
-    private static void handleException(ServerStreamListener listener, Exception e) {
-        var exception = CallStatus.INTERNAL
-                .withDescription(e.getMessage())
-                .toRuntimeException();
-        logger.atError().setCause(e).log("Error processing");
-        listener.error(exception);
-    }
-
-    private static void handleIOException(ServerStreamListener listener, IOException e) {
-        var exception = CallStatus.INTERNAL
-                .withDescription(e.getMessage())
-                .toRuntimeException();
-        listener.error(exception);
-    }
-
-    private static void handleIOException(StreamListener<?> listener, IOException e) {
-        var exception = CallStatus.INTERNAL
-                .withDescription(e.getMessage())
-                .toRuntimeException();
-        listener.onError(exception);
-    }
-
-    private FlightRuntimeException handleSqlException( SQLException e) {
-        throw  CallStatus.INTERNAL
-                .withDescription(e.getMessage())
-                .toRuntimeException();
-    }
-
-    private static FlightRuntimeException handleIOException(IOException e) {
-        throw CallStatus.INTERNAL
-                .withDescription(e.getMessage())
-                .toRuntimeException();
-    }
-
-    private static FlightRuntimeException handleJsonProcessingException(JsonProcessingException e) {
-        return  CallStatus.INTERNAL.withDescription(e.getMessage()).toRuntimeException();
-    }
-
-    private static void handleQueryCompilationError(JsonNode tree) {
-        throw CallStatus.INTERNAL.withDescription(tree.get("error_message").asText()).toRuntimeException();
-    }
 
     private FlightRuntimeException handleInconsistentRequest(String s) {
         return CallStatus.INTERNAL.withDescription(s).toRuntimeException();
@@ -1212,7 +1002,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
     private  boolean checkAccessModeAndRespond(ServerStreamListener listener) {
         if (accessMode == AccessMode.RESTRICTED) {
-            handleUnauthorized(listener, new UnauthorizedException("Close Prepared Statement"));
+            ErrorHandling.handleUnauthorized(listener, new UnauthorizedException("Close Prepared Statement"));
             return true;
         }
         return false;
@@ -1220,7 +1010,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
     private <T> boolean checkAccessModeAndRespond(StreamListener<T> listener) {
         if (accessMode == AccessMode.RESTRICTED) {
-            handleUnauthorized(listener, new UnauthorizedException("Close Prepared Statement"));
+            ErrorHandling.handleUnauthorized(listener, new UnauthorizedException("Close Prepared Statement"));
             return true;
         }
         return false;
@@ -1228,7 +1018,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
     private void checkAccessModeAndRespond() {
         if (accessMode == AccessMode.RESTRICTED) {
-            throw handleUnauthorized(new UnauthorizedException("Get FlightInfo Prepared Statement"));
+            throw ErrorHandling.handleUnauthorized(new UnauthorizedException("Get FlightInfo Prepared Statement"));
         }
     }
 
