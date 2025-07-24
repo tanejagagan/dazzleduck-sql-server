@@ -1,6 +1,7 @@
 package io.dazzleduck.sql.flight.server;
 
 
+import io.dazzleduck.sql.commons.ConnectionPool;
 import org.apache.arrow.driver.jdbc.ArrowFlightConnection;
 import org.apache.arrow.driver.jdbc.ArrowFlightJdbcDriver;
 import org.apache.arrow.driver.jdbc.client.ArrowFlightSqlClientHandler;
@@ -215,6 +216,62 @@ public class DuckDBFlightJDBCTest {
                             rs.getString(1));
                 }
             }
+        }
+    }
+
+    @Test
+    void testBatchInsertionWithPreparedStatement() throws SQLException {
+        var table = "test_table" + System.currentTimeMillis();
+        try (var connection = getConnection();
+             var st = connection.createStatement()) {
+            st.execute(String.format("CREATE TABLE %s(a int)", table));
+            var rowsToInsert = 10;
+            try (var ps = connection.prepareStatement(String.format("INSERT INTO  %s VALUES(?)", table))) {
+                for (int i = 0; i < rowsToInsert; i++) {
+                    ps.setInt(1, i);
+                    ps.addBatch();
+                }
+                ps.executeBatch();
+            }
+            assertEquals(rowsToInsert, ConnectionPool.collectFirst(String.format("select count(*) from %s", table), Long.class));
+        } finally {
+            ConnectionPool.execute(String.format("DROP TABLE IF EXISTS %s", table));
+        }
+    }
+
+    @Test
+    void testInsertionWithPreparedStatement() throws SQLException {
+        var table = "test_table" + System.currentTimeMillis();
+        var valueToInsert = 10;
+        try (var connection = getConnection();
+             var st = connection.createStatement()) {
+            st.execute(String.format("CREATE TABLE %s(a int)", table));
+            try (var ps = connection.prepareStatement(String.format("INSERT INTO  %s VALUES(?)", table))) {
+                ps.setInt(1, valueToInsert);
+                ps.executeUpdate();
+            }
+            assertEquals(valueToInsert, ConnectionPool.collectFirst(String.format("select * from %s", table), Integer.class));
+        } finally {
+            ConnectionPool.execute(String.format("DROP TABLE IF EXISTS %s", table));
+        }
+    }
+
+    @Test
+    void testUpdate() throws SQLException {
+        var table = "test_table" + System.currentTimeMillis();
+        try (var connection = getConnection();
+             var st = connection.createStatement()) {
+            st.execute(String.format("CREATE TABLE %s(a int)", table));
+            try (var ps = connection.prepareStatement(String.format("INSERT INTO  %s VALUES(?)", table))) {
+                ps.setInt(1, 10);
+                ps.executeUpdate();
+            }
+            try (var ps = connection.prepareStatement(String.format("UPDATE %s SET a = ? where a = 10", table))) {
+                ps.setInt(1, 20);
+                ps.executeUpdate();
+            }
+        } finally {
+            ConnectionPool.execute(String.format("DROP TABLE IF EXISTS %s", table));
         }
     }
 
