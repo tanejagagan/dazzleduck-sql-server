@@ -56,7 +56,7 @@ Authentication is supported with jwt. Client need to invoke login api with usern
 - Start the client which will display the result <br>
   ``cd dazzleduck-sql-http && ../mvnw clean compile  exec:java -Dexec.mainClass="io.dazzleduck.sql.http.server.Main" -Dexec.args="--conf auth=jwt"``
 - Get the jwt token with login <br>
- ```curl -X POST 'http://localhost:8080/login' -H "Content-Type: application/json" -d '{"username": "admin", "password" : "admin"}'```
+  ```curl -X POST 'http://localhost:8080/login' -H "Content-Type: application/json" -d '{"username": "admin", "password" : "admin"}'```
 - Invoke api with jwt token
 ```
 URL="http://localhost:8080/query?q=select%201"
@@ -90,11 +90,105 @@ Download the [Apache Arrow Flight SQL JDBC driver](https://search.maven.org/sear
 4. Username and Passwords can be specified in application.conf file.
 
 You can then use the JDBC driver to connect from your host computer to the locally running Docker Flight SQL server with this JDBC string (change the password value to match the value specified for the SQLFLITE_PASSWORD environment variable if you changed it from the example above):
-```bash
-jdbc:arrow-flight-sql://localhost:55559??database=memory&useEncryption=0&user=admin&password=admin
-```
 
-For instructions on setting up the JDBC driver in popular Database IDE tool: [DBeaver Community Edition](https://dbeaver.io) - see this [repo](https://github.com/voltrondata/setup-arrow-jdbc-driver-in-dbeaver).
+# 🧩 Connecting to Apache Arrow Flight SQL with DBeaver (JDBC)
+
+This guide walks you through how to connect **Apache Arrow Flight SQL** with **DBeaver Community Edition** using the official **Flight SQL JDBC driver**.
+
+---
+
+## ✅ Prerequisites
+
+### 1. Run a Flight SQL Server
+
+---
+
+### 2. Install DBeaver Community Edition
+Download and install DBeaver from the official site:  
+👉 [https://dbeaver.io](https://dbeaver.io)
+
+---
+
+### 3. Download the Flight SQL JDBC Driver
+Visit the Maven Central page:  
+👉 [https://search.maven.org/search?q=a:flight-sql-jdbc-driver](https://search.maven.org/search?q=a:flight-sql-jdbc-driver)
+
+> ✅ Choose the **`.jar`** file.
+
+---
+
+## 🚀 Setup Instructions
+
+### 4. Launch DBeaver
+
+Open the DBeaver application.
+
+---
+
+### 5. Open Driver Manager
+
+- In the menu bar, go to **Database → Driver Manager**
+  ![Driver manager menu option](/images/dbeaver_database_driver_manager_menu_option.png?raw=true "Driver manager menu option")
+
+---
+
+### 6. Create a New Driver
+
+- Click the **New** button on the right  
+  ![New button](/images/driver_manager_new_button.png?raw=true)
+
+---
+
+### 7. Add the JDBC `.jar` File
+
+1. Click the **Libraries** tab
+2. Click **Add File**
+3. Select the downloaded file (e.g. `flight-sql-jdbc-driver-11.0.0.jar`)  
+   ![Select jar file](/images/select_driver_jar_file.png?raw=true)
+4. Click **OK** to close the driver editor
+
+---
+
+### 8. Configure Driver Settings
+
+1. Go to the **Settings** tab
+2. Fill in the details:
+    - **Driver Name**:  
+      `Apache Arrow Flight SQL`
+    - **URL Template**:
+      ```
+      jdbc:arrow-flight-sql://{host}:{port}?database={database}&useEncryption={useEncryption}&user={user}&password={password}
+      ```
+    - **Driver Type**:  
+      Choose `SQLite` (used here only as a placeholder)
+3. Your window should look like this:  
+   ![Driver Manager](/images/driver_manager_completed_window.png?raw=true)
+4. Click **OK** to save
+5. Click **Close** to exit Driver Manager
+
+---
+
+### 9. Create a New Database Connection
+
+1. Go to **Database → New Database Connection**  
+   ![New connection](/images/new_database_connection_menu_option.png?raw=true)
+2. In the dialog, search:  
+   ```Flight```
+3. Select:  
+   ```Apache Arrow Flight SQL```  
+   ![Choose driver](/images/database_selection_window.png?raw=true)
+4. Click **Next >**
+
+---
+
+### 10. Enter Connection Details
+
+Fill in your server info:
+
+- **Host**: `localhost`
+- **Port**: `59307`
+- **Username**: `admin`
+- **Password**: `admin`
 
 **Note** - if you stop/restart the Flight SQL Docker container, and attempt to connect via JDBC with the same password - you could get error: "Invalid bearer token provided. Detail: Unauthenticated".  This is because the client JDBC driver caches the bearer token signed with the previous instance's secret key.  Just change the password in the new container by changing the "SQLFLITE_PASSWORD" env var setting - and then use that to connect via JDBC.
 
