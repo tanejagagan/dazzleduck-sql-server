@@ -13,6 +13,8 @@ import org.apache.arrow.flight.sql.FlightSqlClient;
 import org.apache.arrow.flight.sql.impl.FlightSql;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
+import org.apache.arrow.vector.IntVector;
+import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.arrow.vector.ipc.ArrowStreamReader;
@@ -31,6 +33,9 @@ import java.io.ByteArrayInputStream;
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URLEncoder;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.NoSuchAlgorithmException;
@@ -270,7 +275,7 @@ public class DuckDBFlightSqlProducerTest {
             }
             assertEquals(1, count);
         }
-    }                                                                                                                                          
+    }
 
     @Test
     public void testGetSchema() throws Exception {
@@ -346,6 +351,39 @@ public class DuckDBFlightSqlProducerTest {
                          restrictSqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket())) {
                 TestUtils.isEqual(expectedSql, clientAllocator, FlightStreamReader.of(stream, clientAllocator));
             }
+        }
+    }
+
+    @Test
+    public void testWithSchema() throws Exception {
+        var schema = "one int";
+        var encodedSchema = URLEncoder.encode(schema, Charset.defaultCharset());
+        var flightCallHeaders = new FlightCallHeaders();
+        flightCallHeaders.insert(Headers.HEADER_DATA_SCHEMA, encodedSchema);
+        var headerOption = new HeaderCallOption(flightCallHeaders);
+        var info = sqlClient.execute("select '1'", headerOption);
+        try (var stream = sqlClient.getStream(info.getEndpoints().getFirst().getTicket(), headerOption)) {
+            var root = stream.getRoot();
+            stream.next();
+            VarCharVector vector = (VarCharVector) root.getVector(0);
+            String value = new String(vector.get(0), StandardCharsets.UTF_8);
+            assertEquals("1", value);
+        }
+    }
+
+    @Test
+    public void testWithSchema2() throws Exception {
+        var schema = "one int";
+        var encodedSchema = URLEncoder.encode(schema, Charset.defaultCharset());
+        var flightCallHeaders = new FlightCallHeaders();
+        flightCallHeaders.insert(Headers.HEADER_DATA_SCHEMA, encodedSchema);
+        var headerOption = new HeaderCallOption(flightCallHeaders);
+        var info = sqlClient.execute("select 1", headerOption);
+        try (var stream = sqlClient.getStream(info.getEndpoints().getFirst().getTicket(), headerOption)) {
+            var root = stream.getRoot();
+            stream.next();
+            IntVector vector = (IntVector) root.getVector(0);
+            assertEquals(1, vector.get(0));
         }
     }
 

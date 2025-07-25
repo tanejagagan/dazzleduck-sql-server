@@ -43,8 +43,10 @@ import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.net.URLDecoder;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
+import java.nio.charset.StandardCharsets;
 import java.sql.*;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
@@ -928,7 +930,13 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     private FlightInfo getFlightInfoStatement(String query,
                                       final CallContext context,
                                       final FlightDescriptor descriptor) {
-        StatementHandle handle = newStatementHandle(query);
+        String newQuery = null;
+        try{
+            newQuery = getOverrideQuery(context, query);
+        } catch (SQLException | JsonProcessingException e) {
+            throw new RuntimeException(e);
+        }
+        StatementHandle handle = newStatementHandle(newQuery);
         final ByteString serializedHandle =
                 copyFrom(handle.serialize());
         FlightSql.TicketStatementQuery ticket =
@@ -1021,6 +1029,17 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             throw ErrorHandling.handleUnauthorized(new UnauthorizedException("Get FlightInfo Prepared Statement"));
         }
     }
+
+
+    private static String getOverrideQuery(CallContext context, String query) throws SQLException, JsonProcessingException {
+        String encoded = (context == null || context.getMiddleware(FlightConstants.HEADER_KEY) == null || context.getMiddleware(FlightConstants.HEADER_KEY).headers() == null)
+                ? null : context.getMiddleware(FlightConstants.HEADER_KEY).headers().get(Headers.HEADER_DATA_SCHEMA);
+        if (encoded == null || encoded.isBlank()) return query;
+        String decoded = URLDecoder.decode(encoded, StandardCharsets.UTF_8);
+        String cast = Transformations.getCast(decoded);
+        String finalQuery = "select " + cast + " where false union all " + query + ";";
+        System.out.println("Final Query Will be: -> " + finalQuery);
+        return finalQuery;
 
     private void handleUnimplemented(StreamListener<?> ackStream, String method) {
         ackStream.onError(FlightRuntimeExceptionFactory.of(new CallStatus(CallStatus.UNIMPLEMENTED.code(), null, method, null)));
