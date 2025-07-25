@@ -22,6 +22,7 @@ import org.apache.arrow.vector.types.pojo.Schema;
 import org.duckdb.DuckDBConnection;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -105,8 +106,6 @@ public class DuckDBFlightSqlProducerTest {
                         Map.of(Headers.HEADER_DATABASE, TEST_CATALOG,
                                 Headers.HEADER_SCHEMA, TEST_SCHEMA)))
                 .build());
-
-
     }
 
 
@@ -319,39 +318,6 @@ public class DuckDBFlightSqlProducerTest {
                 batches ++;
             }
             assertEquals(11, batches);
-        }
-    }
-
-    @Test
-    // These are disabled because the issue with driver which
-    // does not let me troubleshoot the issue as it's a uber jar
-    // and lines do not match.
-    public void testMetadata() throws SQLException {
-        try(Connection connection = getConnection()) {
-            var databaseMetadata = connection.getMetaData();
-            //databaseMetadata.getTables();
-            try (var rs = databaseMetadata.getSchemas()) {
-                while(rs.next()) {
-                    System.out.printf("%s, %s\n",
-                            rs.getString(1),
-                            rs.getString(2));
-                }
-            }
-
-            //databaseMetadata.getCatalogs();
-            try (var rs = databaseMetadata.getCatalogs()) {
-                while(rs.next()) {
-                    System.out.printf("%s\n",
-                            rs.getString(1));
-                }
-            }
-
-            try( var rs = databaseMetadata.getTables(null, null, null, null)){
-                while(rs.next()) {
-                    System.out.printf("%s",
-                            rs.getString(1));
-                }
-            }
         }
     }
 

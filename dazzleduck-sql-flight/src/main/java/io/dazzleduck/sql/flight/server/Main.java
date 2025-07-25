@@ -26,7 +26,7 @@ public class Main {
         Thread severThread = new Thread(() -> {
             try {
                 flightServer.start();
-                System.out.println("S1: Server (Location): Listening on port " + flightServer.getPort());
+                System.out.println("S1: Server (Location): Listening on URI and port:  " + flightServer.getLocation().getUri());
                 flightServer.awaitTermination();
             } catch (IOException | InterruptedException e) {
                 throw new RuntimeException(e);
@@ -36,7 +36,7 @@ public class Main {
     }
 
     public static FlightServer createServer(String[] args) throws NoSuchAlgorithmException, IOException {
-        var commandLineConfig = ConfigUtils.loadCommandLineConfig(args);
+        var commandLineConfig = ConfigUtils.loadCommandLineConfig(args).config();
         var config = commandLineConfig.withFallback(ConfigFactory.load().getConfig(CONFIG_PATH));
         int port = config.getInt("port");
         String host = config.getString("host");

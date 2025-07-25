@@ -99,11 +99,11 @@ public interface DuckDBDatabaseMetadataUtil {
             stringBuilder.append(tableType);
             stringBuilder.append("'");
             if (first) {
-                stringBuilder.append(" AS 'TABLE_TYPE'");
+                stringBuilder.append(" AS 'table_type'");
                 first = false;
             }
         }
-        stringBuilder.append("\nORDER BY TABLE_TYPE");
+        stringBuilder.append("\nORDER BY table_type");
         Statement statement = conn.createStatement();
         statement.closeOnCompletion();
         return (DuckDBResultSet) statement.executeQuery(stringBuilder.toString());

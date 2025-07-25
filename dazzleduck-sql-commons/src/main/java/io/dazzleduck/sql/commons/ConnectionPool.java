@@ -400,9 +400,6 @@ public enum ConnectionPool {
         INSTANCE.preGetConnectionStatements.remove(sql);
     }
 
-    public ArrayList<String> getPreGetConnectionStatements() {
-        return preGetConnectionStatements;
-    }
 
     private static Properties loadProperties() {
         Properties properties = new Properties();

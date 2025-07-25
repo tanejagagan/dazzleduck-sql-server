@@ -1,6 +1,7 @@
 package io.dazzleduck.sql.flight.server;
 
 
+import io.dazzleduck.sql.commons.ConnectionPool;
 import org.apache.arrow.driver.jdbc.ArrowFlightConnection;
 import org.apache.arrow.driver.jdbc.ArrowFlightJdbcDriver;
 import org.apache.arrow.driver.jdbc.client.ArrowFlightSqlClientHandler;
@@ -16,7 +17,7 @@ import java.security.NoSuchAlgorithmException;
 import java.sql.*;
 import java.util.Properties;
 
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.*;
 
 public class DuckDBFlightJDBCTest {
 
@@ -80,13 +81,50 @@ public class DuckDBFlightJDBCTest {
         try(Connection connection = getConnection()) {
             for (int i = 0 ; i < numIterator; i ++) {
                 try( Statement  st = connection.createStatement()) {
-                    st.executeQuery("select 1");
+                    var res2 = st.execute("select 1");
                     try (ResultSet resultSet = st.getResultSet()) {
                         while (resultSet.next()) {
                             resultSet.getInt(1);
                         }
                     }
                 }
+            }
+        }
+    }
+
+    @Test
+    public void testExecuteDDLWithUserPassword() throws SQLException {
+        var numIterator = 1;
+        try (Connection connection = getConnection()) {
+            for (int i = 0; i < numIterator; i++) {
+                try (Statement st = connection.createStatement()) {
+                    var schema = "test_schema_" + System.currentTimeMillis();
+                    var res2 = st.execute("create schema " + schema);
+                    assertFalse(res2);
+                    var res3 = st.execute("DROP SCHEMA " + schema);
+                    assertFalse(res3);
+                }
+            }
+        }
+    }
+
+    @Test
+    public void setAndGetParam() throws SQLException {
+        try (Connection connection = getConnection()) {
+            try (Statement statement = connection.createStatement()) {
+                var res = statement.execute("set variable x = 5");
+                assertFalse(res);
+            }
+
+            try (Statement statement = connection.createStatement()) {
+                var res = statement.execute("select getvariable('x')");
+                try (var rs = statement.getResultSet()) {
+                    while (rs.next()) {
+                        var o = rs.getObject(1);
+                        assertNull(o);
+                    }
+                }
+                assertTrue(res);
             }
         }
     }
@@ -123,28 +161,39 @@ public class DuckDBFlightJDBCTest {
 
 
     @Test
-    @Disabled
     public void testSetUnSet() throws SQLException {
-        try(Connection connection = getConnection();
-            Statement  st = connection.createStatement()) {
-            st.executeUpdate("set pivot_limit=9999");
-            st.execute("SELECT current_setting('pivot_limit') AS memlimit");
-            try(ResultSet set  = st.getResultSet()) {
-                while (set.next()){
-                    System.out.println(set.getObject(1, Long.class));
+        try (Connection connection = getConnection()) {
+
+            try (Statement st = connection.createStatement()) {
+                var h = st.executeUpdate("set pivot_limit=9999");
+                assertEquals(0, h);
+            }
+            try (var st2 = connection.createStatement()) {
+                var hasResultSet = st2.execute("SELECT cast(current_setting('pivot_limit') as decimal) AS memlimit");
+                //var hasResultSet = st2.execute("select 1");
+                System.out.println(hasResultSet);
+                try (ResultSet set = st2.getResultSet()) {
+                    while (set.next()) {
+                        System.out.println(set.getObject(1, Long.class));
+                    }
                 }
             }
         }
     }
 
     @Test
-    // These are disabled because the issue with driver which
-    // does not let me troubleshoot the issue as it's a uber jar
-    // and lines do not match.
     public void testMetadata() throws SQLException {
         try(Connection connection = getConnection()) {
             var databaseMetadata = connection.getMetaData();
-            //databaseMetadata.getTables();
+            assertFalse(databaseMetadata.supportsTransactions());
+
+            try (var rs = connection.getMetaData().getTableTypes()) {
+                while (rs.next()) {
+                    System.out.printf("%s\n",
+                            rs.getString(1));
+                }
+            }
+
             try (var rs = databaseMetadata.getSchemas()) {
                 while(rs.next()) {
                     System.out.printf("%s, %s\n",
@@ -167,6 +216,62 @@ public class DuckDBFlightJDBCTest {
                             rs.getString(1));
                 }
             }
+        }
+    }
+
+    @Test
+    void testBatchInsertionWithPreparedStatement() throws SQLException {
+        var table = "test_table" + System.currentTimeMillis();
+        try (var connection = getConnection();
+             var st = connection.createStatement()) {
+            st.execute(String.format("CREATE TABLE %s(a int)", table));
+            var rowsToInsert = 10;
+            try (var ps = connection.prepareStatement(String.format("INSERT INTO  %s VALUES(?)", table))) {
+                for (int i = 0; i < rowsToInsert; i++) {
+                    ps.setInt(1, i);
+                    ps.addBatch();
+                }
+                ps.executeBatch();
+            }
+            assertEquals(rowsToInsert, ConnectionPool.collectFirst(String.format("select count(*) from %s", table), Long.class));
+        } finally {
+            ConnectionPool.execute(String.format("DROP TABLE IF EXISTS %s", table));
+        }
+    }
+
+    @Test
+    void testInsertionWithPreparedStatement() throws SQLException {
+        var table = "test_table" + System.currentTimeMillis();
+        var valueToInsert = 10;
+        try (var connection = getConnection();
+             var st = connection.createStatement()) {
+            st.execute(String.format("CREATE TABLE %s(a int)", table));
+            try (var ps = connection.prepareStatement(String.format("INSERT INTO  %s VALUES(?)", table))) {
+                ps.setInt(1, valueToInsert);
+                ps.executeUpdate();
+            }
+            assertEquals(valueToInsert, ConnectionPool.collectFirst(String.format("select * from %s", table), Integer.class));
+        } finally {
+            ConnectionPool.execute(String.format("DROP TABLE IF EXISTS %s", table));
+        }
+    }
+
+    @Test
+    void testUpdate() throws SQLException {
+        var table = "test_table" + System.currentTimeMillis();
+        try (var connection = getConnection();
+             var st = connection.createStatement()) {
+            st.execute(String.format("CREATE TABLE %s(a int)", table));
+            try (var ps = connection.prepareStatement(String.format("INSERT INTO  %s VALUES(?)", table))) {
+                ps.setInt(1, 10);
+                ps.executeUpdate();
+            }
+            try (var ps = connection.prepareStatement(String.format("UPDATE %s SET a = ? where a = 10", table))) {
+                ps.setInt(1, 20);
+                ps.executeUpdate();
+            }
+        } finally {
+            ConnectionPool.execute(String.format("DROP TABLE IF EXISTS %s", table));
         }
     }
 

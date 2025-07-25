@@ -78,7 +78,7 @@ SELECT * FROM read_arrow(concat('http://localhost:8080/query?q=', url_encode('se
 - Build the docker image with
   `./mvnw clean package -DskipTests jib:dockerBuild`
 - Start the container with `example/data` mounted to the container
-  ` docker run -ti -v "$PWD/example/data":/data -p 55559:55559  flight-sql-duckdb`
+  ` docker run -ti -v "$PWD/example/data":/data -p 59307:59307  flight-sql-duckdb --conf useEncryption=false`
 
 ### Connecting to the server via JDBC
 Download the [Apache Arrow Flight SQL JDBC driver](https://search.maven.org/search?q=a:flight-sql-jdbc-driver)
@@ -86,12 +86,12 @@ Download the [Apache Arrow Flight SQL JDBC driver](https://search.maven.org/sear
 ### Supported functionality
 1. Database and schema specified as part of connection url. Passed to server as header database and schema.
 2. Fetch size can be specified. It's passed to the server in header fetch_size.
-3. Bulk write to parquet file using bulk upload functionality. Idea is to to bulk upload and then add those files to metadata.
+3. Bulk write to parquet file using bulk upload functionality. Idea is to bulk upload and then add those files to metadata.
 4. Username and Passwords can be specified in application.conf file.
 
 You can then use the JDBC driver to connect from your host computer to the locally running Docker Flight SQL server with this JDBC string (change the password value to match the value specified for the SQLFLITE_PASSWORD environment variable if you changed it from the example above):
 ```bash
-jdbc:arrow-flight-sql://localhost:55559??database=memory&useEncryption=0&user=admin&password=admin
+jdbc:arrow-flight-sql://localhost:59307?database=memory&useEncryption=0&user=admin&password=admin
 ```
 
 For instructions on setting up the JDBC driver in popular Database IDE tool: [DBeaver Community Edition](https://dbeaver.io) - see this [repo](https://github.com/voltrondata/setup-arrow-jdbc-driver-in-dbeaver).
@@ -126,7 +126,7 @@ import os
 from adbc_driver_flightsql import dbapi as sqlflite, DatabaseOptions
 
 
-with sqlflite.connect(uri="grpc+tls://localhost:55559",
+with sqlflite.connect(uri="grpc+tls://localhost:59307",
                         db_kwargs={"username": os.getenv("SQLFLITE_USERNAME", "admin"),
                                    "password": os.getenv("SQLFLITE_PASSWORD", "admin"),
                                    DatabaseOptions.TLS_SKIP_VERIFY.value: "true"  # Not needed if you use a trusted CA-signed TLS cert
