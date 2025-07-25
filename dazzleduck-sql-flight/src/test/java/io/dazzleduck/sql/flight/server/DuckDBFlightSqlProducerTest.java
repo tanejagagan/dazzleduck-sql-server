@@ -157,41 +157,44 @@ public class DuckDBFlightSqlProducerTest {
         final Location serverLocation = Location.forGrpcInsecure(LOCALHOST, 55559);
         try ( var serverClient = createRestrictedServerClient(new NOOPAuthorizer(), serverLocation )) {
 
-            String query = "select count(*) from read_parquet('example/hive_table', hive_types = {'dt': DATE, 'p': VARCHAR})";
+            String query = "select * from read_parquet('example/hive_table', hive_types = {'dt': DATE, 'p': VARCHAR})";
             try (var splittableClient = splittableAdminClient(serverLocation, serverClient.clientAllocator)) {
                 var flightCallHeaders = new FlightCallHeaders();
                 flightCallHeaders.insert(Headers.HEADER_SPLIT_SIZE, "1");
                 var flightInfo = splittableClient.execute(query, new HeaderCallOption(flightCallHeaders));
                 assertEquals(3, flightInfo.getEndpoints().size());
+                var size = 0;
                 for (var endpoint : flightInfo.getEndpoints()) {
                     try (final FlightStream stream = splittableClient.getStream(endpoint.getTicket(), new HeaderCallOption(flightCallHeaders))) {
                         while (stream.next()) {
-                            stream.getRoot().contentToTSVString();
+                            size+=stream.getRoot().getRowCount();
                         }
                     }
                 }
+                assertEquals(6, size);
             }
         }
     }
 
     @Test
     public void testStatementSplittableDelta() throws Exception {
-
         var serverLocation = Location.forGrpcInsecure(LOCALHOST, 55577);
         try(var clientServer = createRestrictedServerClient(new NOOPAuthorizer(), serverLocation)) {
-            String query = "select count(*) from read_delta('example/delta_table')";
+            String query = "select * from read_delta('example/delta_table')";
             try (var splittableClient = splittableAdminClient(serverLocation, clientServer.clientAllocator)) {
                 var flightCallHeaders = new FlightCallHeaders();
                 flightCallHeaders.insert(Headers.HEADER_SPLIT_SIZE, "1");
                 var flightInfo = splittableClient.execute(query, new HeaderCallOption(flightCallHeaders));
+                var size = 0;
                 assertEquals(8, flightInfo.getEndpoints().size());
                 for (var endpoint : flightInfo.getEndpoints()) {
                     try (final FlightStream stream = splittableClient.getStream(endpoint.getTicket(), new HeaderCallOption(flightCallHeaders))) {
                         while (stream.next()) {
-                            stream.getRoot().contentToTSVString();
+                            size+=stream.getRoot().getRowCount();
                         }
                     }
                 }
+                assertEquals(11, size);
             }
         }
     }
