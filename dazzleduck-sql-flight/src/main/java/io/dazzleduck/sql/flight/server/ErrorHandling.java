@@ -112,6 +112,10 @@ public class ErrorHandling {
         }
     }
 
+    public static void handleUnimplemented(FlightProducer.StreamListener<?> ackStream, String method) {
+        ackStream.onError(FlightRuntimeExceptionFactory.of(new CallStatus(CallStatus.UNIMPLEMENTED.code(), null, method, null)));
+    }
+
     private static void handleNoSuchDBSchema(FlightProducer.ServerStreamListener listener, NoSuchCatalogSchemaError exception){
         listener.error(FlightRuntimeExceptionFactory.of(new CallStatus(FlightStatusCode.INVALID_ARGUMENT, null, exception.getMessage(), null)));
         listener.completed();

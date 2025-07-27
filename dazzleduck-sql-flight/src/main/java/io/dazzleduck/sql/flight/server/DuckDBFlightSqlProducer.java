@@ -298,7 +298,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         }
 
         if (AccessMode.RESTRICTED == accessMode) {
-            JsonNode newTree = null;
+            JsonNode newTree;
             try {
                 newTree = authorize(context, tree);
             } catch (UnauthorizedException e) {
@@ -465,7 +465,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     public Runnable acceptPutPreparedStatementQuery(FlightSql.CommandPreparedStatementQuery command,
                                                     CallContext context, FlightStream flightStream,
                                                     StreamListener<PutResult> ackStream) {
-       return () -> handleUnimplemented(ackStream, "acceptPutPreparedStatementQuery");
+       return () -> ErrorHandling.handleUnimplemented(ackStream, "acceptPutPreparedStatementQuery");
     }
 
 
@@ -930,9 +930,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     private FlightInfo getFlightInfoStatement(String query,
                                       final CallContext context,
                                       final FlightDescriptor descriptor) {
-        String newQuery = null;
+        String newQuery;
         try{
-            newQuery = getOverrideQuery(context, query);
+            newQuery = getSchemaOverrideQuery(context, query);
         } catch (SQLException | JsonProcessingException e) {
             throw new RuntimeException(e);
         }
@@ -1031,17 +1031,12 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     }
 
 
-    private static String getOverrideQuery(CallContext context, String query) throws SQLException, JsonProcessingException {
+    private static String getSchemaOverrideQuery(CallContext context, String query) throws SQLException, JsonProcessingException {
         String encoded = (context == null || context.getMiddleware(FlightConstants.HEADER_KEY) == null || context.getMiddleware(FlightConstants.HEADER_KEY).headers() == null)
                 ? null : context.getMiddleware(FlightConstants.HEADER_KEY).headers().get(Headers.HEADER_DATA_SCHEMA);
         if (encoded == null || encoded.isBlank()) return query;
         String decoded = URLDecoder.decode(encoded, StandardCharsets.UTF_8);
         String cast = Transformations.getCast(decoded);
-        String finalQuery = "select " + cast + " where false union all " + query + ";";
-        System.out.println("Final Query Will be: -> " + finalQuery);
-        return finalQuery;
-
-    private void handleUnimplemented(StreamListener<?> ackStream, String method) {
-        ackStream.onError(FlightRuntimeExceptionFactory.of(new CallStatus(CallStatus.UNIMPLEMENTED.code(), null, method, null)));
+        return "select " + cast + " where false union all " + query + ";";
     }
 }
