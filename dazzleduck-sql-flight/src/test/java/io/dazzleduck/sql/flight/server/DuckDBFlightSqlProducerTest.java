@@ -13,7 +13,6 @@ import org.apache.arrow.flight.sql.FlightSqlClient;
 import org.apache.arrow.flight.sql.impl.FlightSql;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
-import org.apache.arrow.vector.IntVector;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.ipc.ArrowReader;
@@ -359,12 +358,12 @@ public class DuckDBFlightSqlProducerTest {
 
     @Test
     public void testWithSchema() throws Exception {
-        var schema = "one int";
+        var schema = "one string";
         var encodedSchema = URLEncoder.encode(schema, Charset.defaultCharset());
         var flightCallHeaders = new FlightCallHeaders();
         flightCallHeaders.insert(Headers.HEADER_DATA_SCHEMA, encodedSchema);
         var headerOption = new HeaderCallOption(flightCallHeaders);
-        var info = sqlClient.execute("select '1'", headerOption);
+        var info = sqlClient.execute("select 1", headerOption);
         try (var stream = sqlClient.getStream(info.getEndpoints().getFirst().getTicket(), headerOption)) {
             var root = stream.getRoot();
             stream.next();
@@ -375,18 +374,33 @@ public class DuckDBFlightSqlProducerTest {
     }
 
     @Test
-    public void testWithSchema2() throws Exception {
-        var schema = "one int";
+    @Disabled
+    public void testWithSchemaSplittable() throws Exception {
+
+        var serverLocation = Location.forGrpcInsecure(LOCALHOST, 55578);
+        var schema = "one string";
         var encodedSchema = URLEncoder.encode(schema, Charset.defaultCharset());
-        var flightCallHeaders = new FlightCallHeaders();
-        flightCallHeaders.insert(Headers.HEADER_DATA_SCHEMA, encodedSchema);
-        var headerOption = new HeaderCallOption(flightCallHeaders);
-        var info = sqlClient.execute("select 1", headerOption);
-        try (var stream = sqlClient.getStream(info.getEndpoints().getFirst().getTicket(), headerOption)) {
-            var root = stream.getRoot();
-            stream.next();
-            IntVector vector = (IntVector) root.getVector(0);
-            assertEquals(1, vector.get(0));
+
+        try(var clientServer = createRestrictedServerClient(new NOOPAuthorizer(), serverLocation)) {
+            String query = "select * from read_parquet('example/hive_table', hive_types = {'dt': DATE, 'p': VARCHAR})";
+            var flightCallHeaders = new FlightCallHeaders();
+            flightCallHeaders.insert(Headers.HEADER_DATA_SCHEMA, encodedSchema);
+            var headerOption = new HeaderCallOption(flightCallHeaders);
+            try (var splittableClient = splittableAdminClient(serverLocation, clientServer.clientAllocator)) {
+                flightCallHeaders.insert(Headers.HEADER_SPLIT_SIZE, "1");
+                var flightInfo = splittableClient.execute(query, headerOption);
+                var size = 0;
+                assertEquals(8, flightInfo.getEndpoints().size());
+                for (var endpoint : flightInfo.getEndpoints()) {
+                    try (final FlightStream stream = splittableClient.getStream(endpoint.getTicket(), new HeaderCallOption(flightCallHeaders))) {
+                        while (stream.next()) {
+                            size+=stream.getRoot().getRowCount();
+                            System.out.println(stream.getRoot().contentToTSVString());
+                        }
+                    }
+                }
+                assertEquals(11, size);
+            }
         }
     }
 
