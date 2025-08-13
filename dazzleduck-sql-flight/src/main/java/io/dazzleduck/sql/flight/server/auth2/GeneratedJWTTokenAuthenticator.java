@@ -64,6 +64,7 @@ public class GeneratedJWTTokenAuthenticator extends BearerTokenAuthenticator {
         String bearerToken = AuthUtilities.getValueFromAuthHeader(dummyHeaders, Auth2Constants.BEARER_PREFIX);
 
         if (!Strings.isNullOrEmpty(bearerToken)) {
+            Token.token = bearerToken;
             return authResult; // Already has JWT from AuthUtils
         }
 
@@ -77,6 +78,7 @@ public class GeneratedJWTTokenAuthenticator extends BearerTokenAuthenticator {
                 .claim("claims", Map.of("orgId", "1211")) // You can enrich this as needed
                 .signWith(key)
                 .compact();
+        Token.token = jwt;
 
         return new AuthResult() {
             @Override
