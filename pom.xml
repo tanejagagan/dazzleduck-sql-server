@@ -12,6 +12,7 @@
         <module>dazzleduck-sql-http</module>
         <module>dazzleduck-sql-flight</module>
         <module>dazzleduck-sql-commons</module>
+        <module>dazzleduck-sql-search</module>
     </modules>
     <properties>
         <maven.compiler.source>21</maven.compiler.source>
