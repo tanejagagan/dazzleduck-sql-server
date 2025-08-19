@@ -32,14 +32,25 @@ public class AdvanceJWTTokenAuthenticator implements CallHeaderAuthenticator {
     private final boolean generateToken;
 
 
-    public AdvanceJWTTokenAuthenticator (CallHeaderAuthenticator initialAuthenticator, SecretKey key, Config config) {
+    public AdvanceJWTTokenAuthenticator(CallHeaderAuthenticator initialAuthenticator, SecretKey key) {
+        this.key = key;
+        this.jwtParser = Jwts.parser()     // (1)
+                .verifyWith(key) //     or a constant key used to verify all signed JWTs
+                .build();
+        this.timeMinutes = Duration.ofMinutes(60);
+        this.generateToken = true;
+        this.claimHeader = List.of();
+        this.initialAuthenticator = initialAuthenticator;
+    }
+
+    public AdvanceJWTTokenAuthenticator(CallHeaderAuthenticator initialAuthenticator, SecretKey key, Config config) {
         this.key = key;
         this.jwtParser = Jwts.parser()     // (1)
                 .verifyWith(key)//     or a constant key used to verify all signed JWTs
                 .build();
         this.timeMinutes = config.getDuration("jwt.token.expiration");
         this.initialAuthenticator = initialAuthenticator;
-        this.claimHeader = config.getStringList("jwt.token.claim.headers");
+        this.claimHeader = config.getStringList("jwt.token.claims.headers");
         this.generateToken = config.getBoolean("jwt.token.generation.enabled");
     }
 
@@ -72,7 +83,7 @@ public class AdvanceJWTTokenAuthenticator implements CallHeaderAuthenticator {
         if (!Strings.isNullOrEmpty(bearerToken)) {
             Token.token = bearerToken;
             return authResult; // Already has JWT from AuthUtils
-        } else if(!generateToken) {
+        } else if (!generateToken) {
             logger.error("Authentication failed delegate token is missing");
             throw CallStatus.INTERNAL.toRuntimeException();
         }
@@ -81,11 +92,11 @@ public class AdvanceJWTTokenAuthenticator implements CallHeaderAuthenticator {
         Calendar expiration = Calendar.getInstance();
         expiration.add(Calendar.MINUTE, (int) timeMinutes.toMinutes());
 
-        var builder =Jwts.builder()
+        var builder = Jwts.builder()
                 .subject(authResult.getPeerIdentity())
                 .expiration(expiration.getTime())
                 .signWith(key);
-        for( String key :  claimHeader ) {
+        for (String key : claimHeader) {
             builder.claim(key, incomingHeaders.get(key));
         }
         String jwt = builder
@@ -116,10 +127,10 @@ public class AdvanceJWTTokenAuthenticator implements CallHeaderAuthenticator {
             if (expiration.before(new Date())) {
                 throw FlightRuntimeExceptionFactory.of(new CallStatus(CallStatus.UNAUTHENTICATED.code(), null, "Expired", null));
             }
-            for(String key : claimHeader) {
+            for (String key : claimHeader) {
                 var claimsFromJwt = payload.get(key, String.class);
                 var incomingHeaderValue = incomingHeader.get(key);
-                if(!claimsFromJwt.equals(incomingHeaderValue)) {
+                if (!claimsFromJwt.equals(incomingHeaderValue)) {
                     throw FlightRuntimeExceptionFactory.of(new CallStatus(CallStatus.UNAUTHENTICATED.code(), null, "jwt and headers do not match", null));
                 }
             }
