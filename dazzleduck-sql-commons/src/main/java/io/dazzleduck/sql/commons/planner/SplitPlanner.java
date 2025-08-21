@@ -22,10 +22,16 @@ public interface SplitPlanner {
 
     public static List<List<FileStatus>> getSplits(JsonNode tree,
                                                    long maxSplitSize) throws SQLException, IOException {
-        var filterExpression = Transformations.getWhereClause(tree);
-        var catalogSchemaAndTable = Transformations.getTableOrPath(tree, null, null);
-        var tableFunction = Transformations.getTableFunction(tree);
-        var path = catalogSchemaAndTable.tableOrPath();
+        var statement = Transformations.getFirstStatementNode(tree);
+        var filterExpression = Transformations.getWhereClauseForTableFunction(statement);
+        var catalogSchemaAndTables =
+                Transformations.getAllTablesOrPathsFromSelect(Transformations.getFirstStatementNode(tree), null, null);
+
+        if (catalogSchemaAndTables.size() != 1) {
+            throw new SQLException("unsupported number of tables or path in the query");
+        }
+        var path = catalogSchemaAndTables.getFirst().tableOrPath();
+        var tableFunction =  catalogSchemaAndTables.getFirst().functionName();
         List<FileStatus> fileStatuses;
         switch (tableFunction) {
             case "read_parquet" -> {
@@ -61,11 +67,13 @@ public interface SplitPlanner {
         return result;
     }
 
-    public static void replacePathInFromClause(JsonNode tree, String[] paths) {
+    static void replacePathInFromClause(JsonNode tree, String[] paths) {
         var formatToFunction = Map.of("read_delta", "read_parquet");
-        var format = Transformations.getTableFunction(tree);
+        var firstStatement = Transformations.getFirstStatementNode(tree);
+        var tableFunction = Transformations.getTableFunction(firstStatement);
+        var format = tableFunction.get("function_name").asText();
         var functionName = formatToFunction.getOrDefault(format, format);
-        var from = (ObjectNode) Transformations.getFirstStatementNode(tree).get("from_table");
+        var from = (ObjectNode) Transformations.getTableFunctionParent(firstStatement);
         var listChildren = new ArrayNode(JsonNodeFactory.instance);
         for (String path : paths) {
             listChildren.add(ExpressionFactory.constant(path));

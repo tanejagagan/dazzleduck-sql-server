@@ -210,10 +210,6 @@ public class HivePartitionPruning extends PartitionPruning {
                 format;
     }
 
-    private static int getPartitionStart(String basePath) {
-        return basePath.split("/").length + 1;
-    }
-
     public static String unescapePathName(String path) {
         StringBuilder sb = new StringBuilder();
         var i = 0;
@@ -243,7 +239,8 @@ public class HivePartitionPruning extends PartitionPruning {
     }
 
     private static String getFilterSql(JsonNode tree) throws SQLException, JsonProcessingException {
-        var filter = Transformations.getWhereClause(tree);
+        var statement = io.dazzleduck.sql.commons.Transformations.getFirstStatementNode(tree);
+        var filter = Transformations.getWhereClauseForTableFunction(statement);
         var t = Transformations.parseToTree("select * from t");
         var firstStatement = (ObjectNode)Transformations.getFirstStatementNode(t);
         firstStatement.set("where_clause", filter);

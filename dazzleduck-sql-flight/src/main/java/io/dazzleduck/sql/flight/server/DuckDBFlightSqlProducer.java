@@ -1,7 +1,6 @@
 package io.dazzleduck.sql.flight.server;
 
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
@@ -43,10 +42,8 @@ import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.net.URLDecoder;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
-import java.nio.charset.StandardCharsets;
 import java.sql.*;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
@@ -74,7 +71,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     public static final String  DEFAULT_DATABASE = "memory";
     private final AccessMode accessMode;
     private final Set<Integer> supportedSqlInfo;
-    ExecutorService executorService = Executors.newVirtualThreadPerTaskExecutor();
+    private final ExecutorService executorService = Executors.newVirtualThreadPerTaskExecutor();
     private final static Logger logger = LoggerFactory.getLogger(DuckDBFlightSqlProducer.class);
     private final Location location;
     private final String producerId;
@@ -930,13 +927,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     private FlightInfo getFlightInfoStatement(String query,
                                       final CallContext context,
                                       final FlightDescriptor descriptor) {
-        String newQuery;
-        try{
-            newQuery = getSchemaOverrideQuery(context, query);
-        } catch (SQLException | JsonProcessingException e) {
-            throw new RuntimeException(e);
-        }
-        StatementHandle handle = newStatementHandle(newQuery);
+        StatementHandle handle = newStatementHandle(query);
         final ByteString serializedHandle =
                 copyFrom(handle.serialize());
         FlightSql.TicketStatementQuery ticket =
@@ -985,9 +976,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         return ContextUtils.getValue(context, Headers.HEADER_PARALLELIZE, false, Boolean.class);
     }
 
-    private static boolean hasAggregation(JsonNode jsonNode) {
-        return false;
-    }
 
     private static long getSplitSize(JsonNode jsonNode, CallContext callContext) {
         return ContextUtils.getValue(callContext, Headers.HEADER_SPLIT_SIZE, Headers.DEFAULT_SPLIT_SIZE, Long.class);
@@ -1028,15 +1016,5 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         if (accessMode == AccessMode.RESTRICTED) {
             throw ErrorHandling.handleUnauthorized(new UnauthorizedException("Get FlightInfo Prepared Statement"));
         }
-    }
-
-
-    private static String getSchemaOverrideQuery(CallContext context, String query) throws SQLException, JsonProcessingException {
-        String encoded = (context == null || context.getMiddleware(FlightConstants.HEADER_KEY) == null || context.getMiddleware(FlightConstants.HEADER_KEY).headers() == null)
-                ? null : context.getMiddleware(FlightConstants.HEADER_KEY).headers().get(Headers.HEADER_DATA_SCHEMA);
-        if (encoded == null || encoded.isBlank()) return query;
-        String decoded = URLDecoder.decode(encoded, StandardCharsets.UTF_8);
-        String cast = Transformations.getCast(decoded);
-        return "select " + cast + " where false union all " + query + ";";
     }
 }
