@@ -47,7 +47,9 @@ public class PartitionPruning {
         }
         // Parse the filter into a Delta predicate
         JsonNode tree = io.dazzleduck.sql.commons.Transformations.parseToTree(String.format("SELECT * FROM T WHERE %s", filter));
-        return pruneFiles(basePath, io.dazzleduck.sql.commons.Transformations.getWhereClause(tree));
+        var statement = io.dazzleduck.sql.commons.Transformations.getFirstStatementNode(tree);
+        var where = io.dazzleduck.sql.commons.Transformations.getWhereClauseForTableFunction(statement);
+        return pruneFiles(basePath, where);
     }
 
     public static List<io.dazzleduck.sql.commons.FileStatus> pruneFiles(String basePath,

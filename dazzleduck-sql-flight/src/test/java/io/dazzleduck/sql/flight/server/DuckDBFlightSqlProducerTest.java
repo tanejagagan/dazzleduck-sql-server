@@ -5,6 +5,7 @@ import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.common.authorization.*;
 import io.dazzleduck.sql.common.FlightStreamReader;
+import io.dazzleduck.sql.commons.Transformations;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.util.TestUtils;
@@ -13,7 +14,6 @@ import org.apache.arrow.flight.sql.FlightSqlClient;
 import org.apache.arrow.flight.sql.impl.FlightSql;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
-import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.arrow.vector.ipc.ArrowStreamReader;
@@ -21,7 +21,6 @@ import org.apache.arrow.vector.types.pojo.Schema;
 import org.duckdb.DuckDBConnection;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -34,7 +33,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URLEncoder;
 import java.nio.charset.Charset;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.NoSuchAlgorithmException;
@@ -46,6 +44,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import static io.dazzleduck.sql.commons.util.TestConstants.SUPPORTED_DELTA_PATH_QUERY;
+import static io.dazzleduck.sql.commons.util.TestConstants.SUPPORTED_HIVE_PATH_QUERY;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 public class DuckDBFlightSqlProducerTest {
@@ -96,7 +96,7 @@ public class DuckDBFlightSqlProducerTest {
                                 "change me",
                                 serverAllocator, warehousePath, AccessMode.COMPLETE,
                                 new NOOPAuthorizer()))
-                .headerAuthenticator(AuthUtils.getAuthenticator())
+                .headerAuthenticator(AuthUtils.getTestAuthenticator())
                 .build()
                 .start();
         sqlClient = new FlightSqlClient(FlightClient.builder(clientAllocator, serverLocation)
@@ -154,13 +154,12 @@ public class DuckDBFlightSqlProducerTest {
     @Test
     public void testStatementSplittableHive() throws Exception {
         final Location serverLocation = Location.forGrpcInsecure(LOCALHOST, 55559);
-        try ( var serverClient = createRestrictedServerClient(new NOOPAuthorizer(), serverLocation )) {
+        try ( var serverClient = createRestrictedServerClient(new NOOPAuthorizer(), serverLocation, "admin" )) {
 
-            String query = "select * from read_parquet('example/hive_table', hive_types = {'dt': DATE, 'p': VARCHAR})";
             try (var splittableClient = splittableAdminClient(serverLocation, serverClient.clientAllocator)) {
                 var flightCallHeaders = new FlightCallHeaders();
                 flightCallHeaders.insert(Headers.HEADER_SPLIT_SIZE, "1");
-                var flightInfo = splittableClient.execute(query, new HeaderCallOption(flightCallHeaders));
+                var flightInfo = splittableClient.execute(SUPPORTED_HIVE_PATH_QUERY, new HeaderCallOption(flightCallHeaders));
                 assertEquals(3, flightInfo.getEndpoints().size());
                 var size = 0;
                 for (var endpoint : flightInfo.getEndpoints()) {
@@ -178,12 +177,12 @@ public class DuckDBFlightSqlProducerTest {
     @Test
     public void testStatementSplittableDelta() throws Exception {
         var serverLocation = Location.forGrpcInsecure(LOCALHOST, 55577);
-        try(var clientServer = createRestrictedServerClient(new NOOPAuthorizer(), serverLocation)) {
-            String query = "select * from read_delta('example/delta_table')";
+        try(var clientServer = createRestrictedServerClient(new NOOPAuthorizer(), serverLocation, "admin")) {
+
             try (var splittableClient = splittableAdminClient(serverLocation, clientServer.clientAllocator)) {
                 var flightCallHeaders = new FlightCallHeaders();
                 flightCallHeaders.insert(Headers.HEADER_SPLIT_SIZE, "1");
-                var flightInfo = splittableClient.execute(query, new HeaderCallOption(flightCallHeaders));
+                var flightInfo = splittableClient.execute(SUPPORTED_DELTA_PATH_QUERY, new HeaderCallOption(flightCallHeaders));
                 var size = 0;
                 assertEquals(8, flightInfo.getEndpoints().size());
                 for (var endpoint : flightInfo.getEndpoints()) {
@@ -326,80 +325,28 @@ public class DuckDBFlightSqlProducerTest {
     @Test
     public void testRestrictClientServer() throws Exception {
         var newServerLocation = Location.forGrpcInsecure(LOCALHOST, 55557);
-        var r = List.of(new AccessRow("restricted", null, null, "example/hive_table/*/*/*.parquet", "TABLE_FUNCTION", List.of(), "p = '1'", null),
-                new AccessRow("admin", null, null, "example/hive_table", "TABLE_FUNCTION", List.of(), "p = '1'", null));
+        var restrictedUser = "restricted_user";
+        var r = List.of(new AccessRow("restricted", null, null, "example/hive_table/*/*/*.parquet", Transformations.TableType.TABLE_FUNCTION, List.of(), "p = '1'", null, "read_parquet"),
+                new AccessRow("admin", null, null, "example/hive_table/*/*/*.parquet", Transformations.TableType.TABLE_FUNCTION, List.of(), "p = '1'", null, "read_parquet"));
         var conf = ConfigFactory.load().getConfig(Main.CONFIG_PATH);
         var groupMapping = SimpleAuthorization.loadUsrGroupMapping(conf);
         var authorizer = new SimpleAuthorization(groupMapping, r);
-        try (var serverClient = createRestrictedServerClient(authorizer, newServerLocation)) {
-            String query = "select * from read_parquet('example/hive_table/*/*/*.parquet')";
-            String expectedSql = "select * from read_parquet('example/hive_table/*/*/*.parquet', " +
-                    "hive_partitioning = true," +
-                    "hive_types = {'dt': DATE, 'p': VARCHAR}) where p = '1'";
+        try (var serverClient = createRestrictedServerClient(authorizer, newServerLocation, restrictedUser)) {
+            String expectedSql = "%s where p = '1'".formatted(SUPPORTED_HIVE_PATH_QUERY);
+            ConnectionPool.printResult(expectedSql);
             var clientAllocator = serverClient.clientAllocator;
-
-            try (var client = splittableAdminClient( newServerLocation, clientAllocator)) {
-                var newFlightInfo = client.execute("select * from read_parquet('example/hive_table', hive_types = {'dt': DATE, 'p': VARCHAR})");
+            try (var client = splittableClient( newServerLocation, clientAllocator, restrictedUser)) {
+                var newFlightInfo = client.execute(SUPPORTED_HIVE_PATH_QUERY);
                 try (final FlightStream stream =
                              client.getStream(newFlightInfo.getEndpoints().get(0).getTicket())) {
                     TestUtils.isEqual(expectedSql, clientAllocator, FlightStreamReader.of(stream, clientAllocator));
                 }
             }
-
             var restrictSqlClient = serverClient.flightSqlClient;
-            final FlightInfo flightInfo = restrictSqlClient.execute(query);
-
+            final FlightInfo flightInfo = restrictSqlClient.execute(SUPPORTED_HIVE_PATH_QUERY);
             try (final FlightStream stream =
                          restrictSqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket())) {
                 TestUtils.isEqual(expectedSql, clientAllocator, FlightStreamReader.of(stream, clientAllocator));
-            }
-        }
-    }
-
-    @Test
-    public void testWithSchema() throws Exception {
-        var schema = "one string";
-        var encodedSchema = URLEncoder.encode(schema, Charset.defaultCharset());
-        var flightCallHeaders = new FlightCallHeaders();
-        flightCallHeaders.insert(Headers.HEADER_DATA_SCHEMA, encodedSchema);
-        var headerOption = new HeaderCallOption(flightCallHeaders);
-        var info = sqlClient.execute("select 1", headerOption);
-        try (var stream = sqlClient.getStream(info.getEndpoints().getFirst().getTicket(), headerOption)) {
-            var root = stream.getRoot();
-            stream.next();
-            VarCharVector vector = (VarCharVector) root.getVector(0);
-            String value = new String(vector.get(0), StandardCharsets.UTF_8);
-            assertEquals("1", value);
-        }
-    }
-
-    @Test
-    @Disabled
-    public void testWithSchemaSplittable() throws Exception {
-
-        var serverLocation = Location.forGrpcInsecure(LOCALHOST, 55578);
-        var schema = "one string";
-        var encodedSchema = URLEncoder.encode(schema, Charset.defaultCharset());
-
-        try(var clientServer = createRestrictedServerClient(new NOOPAuthorizer(), serverLocation)) {
-            String query = "select * from read_parquet('example/hive_table', hive_types = {'dt': DATE, 'p': VARCHAR})";
-            var flightCallHeaders = new FlightCallHeaders();
-            flightCallHeaders.insert(Headers.HEADER_DATA_SCHEMA, encodedSchema);
-            var headerOption = new HeaderCallOption(flightCallHeaders);
-            try (var splittableClient = splittableAdminClient(serverLocation, clientServer.clientAllocator)) {
-                flightCallHeaders.insert(Headers.HEADER_SPLIT_SIZE, "1");
-                var flightInfo = splittableClient.execute(query, headerOption);
-                var size = 0;
-                assertEquals(8, flightInfo.getEndpoints().size());
-                for (var endpoint : flightInfo.getEndpoints()) {
-                    try (final FlightStream stream = splittableClient.getStream(endpoint.getTicket(), new HeaderCallOption(flightCallHeaders))) {
-                        while (stream.next()) {
-                            size+=stream.getRoot().getRowCount();
-                            System.out.println(stream.getRoot().contentToTSVString());
-                        }
-                    }
-                }
-                assertEquals(11, size);
             }
         }
     }
@@ -418,7 +365,8 @@ public class DuckDBFlightSqlProducerTest {
     }
 
     private ServerClient createRestrictedServerClient(SqlAuthorizer authorizer,
-                                                      Location serverLocation) throws IOException, NoSuchAlgorithmException {
+                                                      Location serverLocation,
+                                                      String user) throws IOException, NoSuchAlgorithmException {
 
         var clientAllocator = new RootAllocator();
         var restrictFlightServer = FlightServer.builder(
@@ -428,13 +376,13 @@ public class DuckDBFlightSqlProducerTest {
                                 UUID.randomUUID().toString(),
                                 "change me",
                                 serverAllocator, warehousePath, AccessMode.RESTRICTED, authorizer))
-                .headerAuthenticator(AuthUtils.getAuthenticator())
+                .headerAuthenticator(AuthUtils.getTestAuthenticator())
                 .build()
                 .start();
 
 
         var restrictSqlClient = new FlightSqlClient(FlightClient.builder(clientAllocator, serverLocation)
-                .intercept(AuthUtils.createClientMiddlewareFactory("restricted_user",
+                .intercept(AuthUtils.createClientMiddlewareFactory(user,
                         PASSWORD,
                         Map.of(Headers.HEADER_DATABASE, TEST_CATALOG,
                                 Headers.HEADER_SCHEMA, TEST_SCHEMA)))
@@ -484,6 +432,16 @@ public class DuckDBFlightSqlProducerTest {
     private FlightSqlClient splittableAdminClient( Location location, BufferAllocator allocator) {
         return new FlightSqlClient(FlightClient.builder(allocator, location)
                 .intercept(AuthUtils.createClientMiddlewareFactory(USER,
+                        PASSWORD,
+                        Map.of(Headers.HEADER_DATABASE, TEST_CATALOG,
+                                Headers.HEADER_SCHEMA, TEST_SCHEMA,
+                                Headers.HEADER_PARALLELIZE, "true")))
+                .build());
+    }
+
+    private FlightSqlClient splittableClient( Location location, BufferAllocator allocator, String user) {
+        return new FlightSqlClient(FlightClient.builder(allocator, location)
+                .intercept(AuthUtils.createClientMiddlewareFactory(user,
                         PASSWORD,
                         Map.of(Headers.HEADER_DATABASE, TEST_CATALOG,
                                 Headers.HEADER_SCHEMA, TEST_SCHEMA,

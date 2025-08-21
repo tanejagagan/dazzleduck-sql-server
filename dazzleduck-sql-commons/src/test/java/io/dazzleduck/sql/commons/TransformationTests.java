@@ -42,18 +42,15 @@ public class TransformationTests {
 
     @Test
     public void getCast() throws SQLException, JsonProcessingException {
-        //var schema = "a int, b string, c STRUCT(i  int), d Map(string, string), e Int[]";
         var schema = "a int, b string, c STRUCT(i  int, d STRUCT( x int)), e Int[], f Map(string, string), g decimal(18,3)";
         var sql = Transformations.getCast(schema);
-        ConnectionPool.printResult("select " + sql);
-        String sqlToCast = "select 1";
-        String result = "select " + sql  + "where false union all " + sqlToCast;
+        ConnectionPool.printResult(sql);
     }
 
     @Test
     public void getPartitionSchema() throws SQLException, JsonProcessingException {
         var query = "select * from read_parquet('abc', hive_types = {a : INT, b : STRING})";
         var hivePartition = Transformations.getHivePartition(Transformations.parseToTree(query));
-        assertEquals(2, hivePartition.length);
+        Assertions.assertEquals(2, hivePartition.length);
     }
 }

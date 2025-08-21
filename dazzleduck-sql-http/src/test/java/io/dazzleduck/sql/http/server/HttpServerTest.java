@@ -2,6 +2,7 @@ package io.dazzleduck.sql.http.server;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.dazzleduck.sql.commons.ConnectionPool;
+import io.dazzleduck.sql.commons.util.TestConstants;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.helidon.http.HeaderNames;
 import io.helidon.http.HeaderValues;
@@ -25,7 +26,6 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.security.NoSuchAlgorithmException;
 import java.sql.SQLException;
-import java.util.Base64;
 import java.util.Map;
 import java.util.UUID;
 
@@ -34,6 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 public class HttpServerTest {
     static HttpClient client;
     static ObjectMapper objectMapper = new ObjectMapper();
+
 
     private static String warehousePath;
 
@@ -150,8 +151,7 @@ public class HttpServerTest {
 
     @Test
     public void testPlanning() throws IOException, InterruptedException {
-        String query = "select count(*) from read_parquet('example/hive_table/*/*/*.parquet', hive_types = {'dt': DATE, 'p': VARCHAR})";
-        var body = objectMapper.writeValueAsBytes(new QueryObject(query));
+        var body = objectMapper.writeValueAsBytes(new QueryObject(TestConstants.SUPPORTED_HIVE_PATH_QUERY));
         var request = HttpRequest.newBuilder(URI.create("http://localhost:8080/plan"))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();

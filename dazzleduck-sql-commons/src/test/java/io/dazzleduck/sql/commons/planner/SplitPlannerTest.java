@@ -6,27 +6,21 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.sql.SQLException;
 
+import static io.dazzleduck.sql.commons.util.TestConstants.SUPPORTED_DELTA_PATH_QUERY;
+import static io.dazzleduck.sql.commons.util.TestConstants.SUPPORTED_HIVE_PATH_QUERY;
 import static org.junit.Assert.assertEquals;
 
 public class SplitPlannerTest {
-
-
     @Test
     public void testSplitHive() throws SQLException, IOException {
-
-        var path = "example/hive_table";
-        var sql = String.format("select * from read_parquet('%s', hive_partitioning = true, hive_types = {'dt': DATE, 'p': VARCHAR})", path);
-        var splits = SplitPlanner.getSplits(Transformations.parseToTree(sql), 1024 * 1024 * 1024);
+        var splits = SplitPlanner.getSplits(Transformations.parseToTree(SUPPORTED_HIVE_PATH_QUERY), 1024 * 1024 * 1024);
         assertEquals(1, splits.size());
         assertEquals(3, splits.get(0).size());
     }
 
     @Test
     public void testSplitDelta() throws SQLException, IOException {
-
-        var path = "example/delta_table";
-        var sql = String.format("select * from read_delta('%s')", path);
-        var splits = SplitPlanner.getSplits(Transformations.parseToTree(sql),
+        var splits = SplitPlanner.getSplits(Transformations.parseToTree(SUPPORTED_DELTA_PATH_QUERY),
                 1024 * 1024 * 1024);
         assertEquals(1, splits.size());
         assertEquals(8, splits.get(0).size());

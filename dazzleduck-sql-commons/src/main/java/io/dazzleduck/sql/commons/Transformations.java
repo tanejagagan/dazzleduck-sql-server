@@ -13,13 +13,19 @@ import java.sql.SQLException;
 import java.util.*;
 import java.util.function.Consumer;
 import java.util.function.Function;
-import java.util.stream.Collectors;
 
 import static io.dazzleduck.sql.commons.ExpressionConstants.*;
 
 public class Transformations {
 
-    public record CatalogSchemaTable(String catalog, String schema, String tableOrPath, String type) { }
+    public enum TableType {
+        TABLE_FUNCTION, BASE_TABLE
+    }
+    public record CatalogSchemaTable(String catalog, String schema, String tableOrPath, TableType type, String functionName) {
+        public CatalogSchemaTable(String catalog, String schema, String tableOrPath, TableType type) {
+            this(catalog, schema, tableOrPath, type, null);
+        }
+    }
     private static final ObjectMapper objectMapper = new ObjectMapper();
 
     public static final String JSON_SERIALIZE_SQL = "SELECT  cast(json_serialize_sql('%s') as string)";
@@ -460,9 +466,10 @@ public class Transformations {
         return results;
     }
 
-    public static JsonNode getWhereClause(JsonNode jsonNode) {
-        var statementNode = getFirstStatementNode(jsonNode);
-        return statementNode.get("where_clause");
+    public static List<CatalogSchemaTable> getAllTablesOrPathsFromSelect(JsonNode statement, String catalogName, String schemaName) {
+        var  result = new ArrayList<CatalogSchemaTable>();
+        getAllTablesOrPathsFromSelect(statement, catalogName, schemaName, result);
+        return result;
     }
 
     public static JsonNode getFirstStatementNode(JsonNode jsonNode) {
@@ -471,24 +478,62 @@ public class Transformations {
         return statement.get("node");
     }
 
-    public static CatalogSchemaTable getTableOrPath(JsonNode query, String catalogName, String schemaName) {
-        var statement = (ObjectNode) Transformations.getFirstStatementNode(query);
-        var fromNode = statement.get("from_table");
+    public static JsonNode getTableFunction(JsonNode tree) {
+        var fromNode = tree.get("from_table");
         var fromTableType = fromNode.get("type").asText();
         switch (fromTableType) {
             case "BASE_TABLE" -> {
-                var schemaFromQuery = fromNode.get("schema_name").asText();
-                var catalogFromQuery = fromNode.get("catalog_name").asText();
-                var s = schemaFromQuery == null || schemaFromQuery.isEmpty() ? schemaName : schemaFromQuery;
-                var c = catalogFromQuery == null || catalogFromQuery.isEmpty() ? catalogName : catalogFromQuery;
-                return new CatalogSchemaTable(c, s, fromNode.get("table_name").asText(), "BASE_TABLE");
+                throw new IllegalStateException("Reached BASE_TABLE");
             }
             case "TABLE_FUNCTION" -> {
-                var function = fromNode.get("function");
-                var functionName = function.get("function_name");
-                var functionChildren = function.get("children");
-                var firstChild = functionChildren.get(0);
-                return new CatalogSchemaTable(null, null, firstChild.get("value").get("value").asText(), "TABLE_FUNCTION");
+                return fromNode.get("function");
+            }
+            case "SUBQUERY" -> {
+                var node = fromNode.get("subquery").get("node");
+                var type = node.get("type").asText();
+                if (type.equals("SET_OPERATION_NODE")) {
+                    return getTableFunction(node.get("right"));
+                } else if (type.equals("SELECT_NODE")) {
+                    getTableFunction(node);
+                }
+                return null;
+            }
+        }
+        return null;
+    }
+
+    public static JsonNode getTableFunctionParent(JsonNode tree) {
+        var fromNode = tree.get("from_table");
+        var fromTableType = fromNode.get("type").asText();
+        switch (fromTableType) {
+            case "BASE_TABLE" -> {
+                throw new IllegalStateException("Reached BASE_TABLE");
+            }
+            case "TABLE_FUNCTION" -> {
+                return fromNode;
+            }
+            case "SUBQUERY" -> {
+                var node = fromNode.get("subquery").get("node");
+                var type = node.get("type").asText();
+                if (type.equals("SET_OPERATION_NODE")) {
+                    return getTableFunctionParent(node.get("right"));
+                } else if (type.equals("SELECT_NODE")) {
+                    getTableFunctionParent(node);
+                }
+                return null;
+            }
+        }
+        return null;
+    }
+
+    public static JsonNode getSelectForBaseTable(JsonNode statementNode) {
+        var fromTable = statementNode.get("from_table");
+        switch (fromTable.get("type").asText()) {
+            case "BASE_TABLE" -> {
+                return statementNode;
+            }
+            case "SUBQUERY" -> {
+                return getSelectForBaseTable(fromTable.get("subquery").get("node"));
             }
             default -> {
                 return null;
@@ -496,15 +541,48 @@ public class Transformations {
         }
     }
 
-    public static String getTableFunction(JsonNode tree) {
-        var fromTable = getFirstStatementNode(tree).get("from_table");
-        var tableFunction = fromTable.get("function");
-        return tableFunction.get("function_name").asText();
+    public static JsonNode getSelectForTableFunction(JsonNode statementNode) {
+        var fromTable = statementNode.get("from_table");
+        var type = fromTable.get("type").asText();
+        switch (type) {
+            case "BASE_TABLE" -> {
+                return statementNode;
+            }
+            case "SUBQUERY" -> {
+                var subQueryNode = fromTable.get("subquery").get("node");
+                var subQueryNodeType = subQueryNode.get("type").asText();
+                switch (subQueryNodeType) {
+                    case "SELECT_NODE" -> {
+                        return getSelectForTableFunction(subQueryNode);
+                    }
+                    case "SET_OPERATION_NODE" -> {
+                        if(subQueryNode.get("right").get("from_table").get("type").asText().equals("TABLE_FUNCTION")) {
+                            return statementNode;
+                        }
+                        return null;
+                    }
+                    default -> {
+                        return null;
+                    }
+                }
+            }
+            default -> {
+                return null;
+            }
+        }
+    }
+
+    public static JsonNode getWhereClauseForBaseTable(JsonNode statementNode) {
+        return getSelectForBaseTable(statementNode).get("where_clause");
+    }
+
+    public static JsonNode getWhereClauseForTableFunction(JsonNode statementNode) {
+        return getSelectForTableFunction(statementNode).get("where_clause");
     }
 
     public static String[][]  getHivePartition(JsonNode tree){
-        var fromTable = getFirstStatementNode(tree).get("from_table");
-        var tableFunction = fromTable.get("function");
+        var select = getFirstStatementNode(tree);
+        var tableFunction = Transformations.getTableFunction(select);
         var children = (ArrayNode) tableFunction.get("children");
         JsonNode partition = null;
         for( var c :  children){
@@ -514,6 +592,46 @@ public class Transformations {
             }
         }
         return extractPartition(partition);
+    }
+
+
+    private static void getAllTablesOrPathsFromSelect(JsonNode statement, String catalogName, String schemaName, List<CatalogSchemaTable> collector) {
+        var fromNode = statement.get("from_table");
+        var fromTableType = fromNode.get("type").asText();
+        switch (fromTableType) {
+            case "BASE_TABLE" -> {
+                var schemaFromQuery = fromNode.get("schema_name").asText();
+                var catalogFromQuery = fromNode.get("catalog_name").asText();
+                var s = schemaFromQuery == null || schemaFromQuery.isEmpty() ? schemaName : schemaFromQuery;
+                var c = catalogFromQuery == null || catalogFromQuery.isEmpty() ? catalogName : catalogFromQuery;
+                collector.add(new CatalogSchemaTable(c, s, fromNode.get("table_name").asText(), TableType.BASE_TABLE));
+            }
+            case "TABLE_FUNCTION" -> {
+                var function = fromNode.get("function");
+                var functionName = function.get("function_name").asText();
+                var functionChildren = function.get("children");
+                var firstChild = functionChildren.get(0);
+                collector.add(new CatalogSchemaTable(null, null, firstChild.get("value").get("value").asText(), TableType.TABLE_FUNCTION, functionName));
+            }
+            case "SUBQUERY" -> {
+                var node = fromNode.get("subquery").get("node");
+                if(node.get("type").asText().equals("SET_OPERATION_NODE")) {
+                    getAllTablesOrPathsFromSetOperationNode(node, catalogName, schemaName, collector);
+                } else {
+                    getAllTablesOrPathsFromSelect(fromNode.get("subquery").get("node"), catalogName, schemaName, collector);
+                }
+            }
+
+            case "SET_OPERATION_NODE" -> {
+                getAllTablesOrPathsFromSelect(fromNode.get("left"), catalogName, schemaName, collector);
+                getAllTablesOrPathsFromSelect(fromNode.get("right"), catalogName, schemaName, collector);
+            }
+        }
+    }
+
+    private static void getAllTablesOrPathsFromSetOperationNode(JsonNode setOperation, String catalogName, String schemaName, List<CatalogSchemaTable> collector) {
+        getAllTablesOrPathsFromSelect(setOperation.get("left"), catalogName, schemaName, collector);
+        getAllTablesOrPathsFromSelect(setOperation.get("right"), catalogName, schemaName, collector);
     }
 
     private static boolean isHivePartition(JsonNode node) {
@@ -539,19 +657,19 @@ public class Transformations {
 
     public static String getCast(String schema) throws SQLException, JsonProcessingException {
         var query = String.format("select null::struct(%s)", schema);
-        var tree = Transformations.parseToTree(query);
-        System.out.println(tree.toPrettyString());
-        var statement = Transformations.getFirstStatementNode(tree);
+        var statement = Transformations.getFirstStatementNode(Transformations.parseToTree(query));
         var selectList = (ArrayNode)statement.get("select_list");
         var firstSelect = selectList.get(0);
         var castType= firstSelect.get("cast_type");
         var childType = (ArrayNode) castType.get("type_info").get("child_types");
         List<String> childTypeString = new ArrayList<>();
         for( var c : childType){
-            childTypeString.add(getStructChildTypeString(c));
+            var exp = "null::%s as %s".formatted(getStructChildTypeString(c), getStrcutChildNameString(c));
+            childTypeString.add(exp);
         }
-        return childTypeString.stream().map( t-> "null::" + t).collect(Collectors.joining(","));
+        return "select "  + String.join(",", childTypeString) + " where false";
     }
+
 
     private static String structCast(JsonNode node) {
         var typeInfo = (ArrayNode) node.get("type_info").get("child_types");
@@ -584,6 +702,10 @@ public class Transformations {
 
     private static String getStructChildTypeString(JsonNode jsonNode){
         return getTypeString(jsonNode.get("second"));
+    }
+
+    private static String getStrcutChildNameString(JsonNode jsonNode) {
+        return jsonNode.get("first").asText();
     }
 
     private static String getTypeString(JsonNode jsonNode){
