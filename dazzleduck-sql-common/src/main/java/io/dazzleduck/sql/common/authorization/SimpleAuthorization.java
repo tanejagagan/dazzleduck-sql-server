@@ -7,7 +7,6 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.NullNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.typesafe.config.Config;
-import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.commons.ExpressionFactory;
 import io.dazzleduck.sql.commons.Transformations;
 import io.dazzleduck.sql.common.UnauthorizedException;
@@ -49,7 +48,7 @@ public class SimpleAuthorization implements SqlAuthorizer {
                 var _accessRows = groupAccessRowMap.get(group);
                 if(_accessRows != null) {
                     _accessRows.forEach(accessRow -> {
-                        var key = new Transformations.CatalogSchemaTable(accessRow.database(), accessRow.schema(), accessRow.tableOrPath(), accessRow.type());
+                        var key = new Transformations.CatalogSchemaTable(accessRow.database(), accessRow.schema(), accessRow.tableOrPath(), accessRow.tableType(), accessRow.functionName());
                         map.compute(key, (k, oldValue) -> {
                             if (oldValue == null) {
                                 return collapse(accessRow);
@@ -111,7 +110,8 @@ public class SimpleAuthorization implements SqlAuthorizer {
         } catch (SQLException | JsonProcessingException e) {
             throw new RuntimeException(e);
         }
-        return Transformations.getWhereClause(tree);
+        var statement = Transformations.getFirstStatementNode(tree);
+        return Transformations.getWhereClauseForBaseTable(statement);
     }
 
     private List<String> collapseColumns(AccessRow r1, List<String> columns) {
@@ -128,12 +128,17 @@ public class SimpleAuthorization implements SqlAuthorizer {
         if (superUsers.contains(user)) {
             return query;
         }
-        validateForAuthorization(query);
-        var catalogSchemaTable = Transformations.getTableOrPath(query, database, schema);
-        if (catalogSchemaTable == null) {
-            throw new UnauthorizedException("No tableOrPath/Path found");
+        //validateForAuthorization(query);
+        var catalogSchemaTables =
+                Transformations.getAllTablesOrPathsFromSelect(Transformations.getFirstStatementNode(query), database, schema);
+
+        if (catalogSchemaTables.size() != 1) {
+            throw new UnauthorizedException("%s TableOrPath/Path found: Only one table or path is supported".formatted(catalogSchemaTables.size()));
         }
-        var a = accessMap.get(new AccessKey(user, catalogSchemaTable));
+        var catalogSchemaTable = catalogSchemaTables.getFirst();
+
+        var key = new AccessKey(user, catalogSchemaTable);
+        var a = accessMap.get(key);
         if (a == null) {
             throw new UnauthorizedException(database + "." + schema);
         }
@@ -141,12 +146,61 @@ public class SimpleAuthorization implements SqlAuthorizer {
         if (!columnAccess) {
             throw new UnauthorizedException("No access to columns specified columns");
         }
-        return addFilerToQuery(query, a.filter());
+
+        switch (catalogSchemaTable.type()) {
+            case TABLE_FUNCTION -> {
+                return addFilterToTableFunction(query, a.filter);
+            }
+            case BASE_TABLE -> {
+                return addFilterToBaseTable(query, a.filter);
+            }
+            default -> {
+                return null;
+            }
+        }
+    }
+
+    public static JsonNode addFilterToTableFunction(JsonNode query, JsonNode toAdd) {
+        var statement = Transformations.getFirstStatementNode(query);
+        var selectOrig = Transformations.getSelectForTableFunction(statement);
+        var qWhereClause = selectOrig.get("where_clause");
+
+        JsonNode allWhere ;
+        if(qWhereClause == null || qWhereClause instanceof NullNode ) {
+            allWhere = toAdd;
+        } else {
+            allWhere = ExpressionFactory.andFilters(qWhereClause, toAdd);
+        }
+        var res = query.deepCopy();
+        ObjectNode select = (ObjectNode)Transformations.getSelectForTableFunction(Transformations.getFirstStatementNode(res));
+        if(select != null) {
+            select.set("where_clause", allWhere);
+            return res;
+        }
+        return null;
+    }
+
+    public static JsonNode addFilterToBaseTable(JsonNode query, JsonNode toAdd) {
+        var statement = Transformations.getFirstStatementNode(query);
+        var qWhereClause = Transformations.getWhereClauseForBaseTable(statement);
+        JsonNode allWhere ;
+        if(qWhereClause == null || qWhereClause instanceof NullNode ) {
+            allWhere = toAdd;
+        } else {
+            allWhere = ExpressionFactory.andFilters(qWhereClause, toAdd);
+        }
+        var res = query.deepCopy();
+        ObjectNode select = (ObjectNode)Transformations.getSelectForBaseTable(Transformations.getFirstStatementNode(res));
+        if(select != null) {
+            select.set("where_clause", allWhere);
+            return res;
+        }
+        return null;
     }
 
     public static void validateForAuthorization(JsonNode jsonNode) throws UnauthorizedException {
 
-        var supportedFromType = Set.of("TABLE_FUNCTION", "BASE_TABLE");
+        var supportedFromType = Set.of("TABLE_FUNCTION", "BASE_TABLE", "SUBQUERY");
         var supportedTableFunction = Set.of("generate_series", "read_parquet", "read_delta");
         var statements = (ArrayNode) jsonNode.get("statements");
         if (statements.size() != 1) {
@@ -211,18 +265,15 @@ public class SimpleAuthorization implements SqlAuthorizer {
         return result;
     }
 
-    public static JsonNode addFilerToQuery(JsonNode query, JsonNode toAdd) {
-        var qWhereClause = Transformations.getWhereClause(query);
-        JsonNode allWhere ;
-        if(qWhereClause == null || qWhereClause instanceof NullNode ) {
-            allWhere = toAdd;
-        } else {
-            allWhere = ExpressionFactory.andFilters(qWhereClause, toAdd);
-        }
-        return replaceWhereClause(query, allWhere);
+
+    //TODO change this to support nested queries
+    private static JsonNode sadfddsareplaceWhereClauseFromTable(JsonNode query, JsonNode newWhereClause) {
+        var statementNode = (ObjectNode) Transformations.getFirstStatementNode(query);
+        statementNode.set("where_clause", newWhereClause);
+        return query;
     }
 
-    private static JsonNode replaceWhereClause(JsonNode query, JsonNode newWhereClause) {
+    private static JsonNode sadfddsareplaceWhereClauseFromSetOperation(JsonNode query, JsonNode newWhereClause) {
         var statementNode = (ObjectNode) Transformations.getFirstStatementNode(query);
         statementNode.set("where_clause", newWhereClause);
         return query;

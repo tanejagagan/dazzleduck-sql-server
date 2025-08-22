@@ -18,6 +18,5 @@ public class Headers {
     public static final String HEADER_SCHEMA = "schema";
     public static final String HEADER_SPLIT_SIZE = "split_size";
     public static final String HEADER_PARALLELIZE = "parallelize";
-    public static final String HEADER_DATA_SCHEMA = "data_schema";
 
 }

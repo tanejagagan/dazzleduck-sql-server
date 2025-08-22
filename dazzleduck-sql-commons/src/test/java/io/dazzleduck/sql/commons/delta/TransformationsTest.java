@@ -3,10 +3,13 @@ package io.dazzleduck.sql.commons.delta;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import io.delta.kernel.expressions.Expression;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.sql.SQLException;
+
+import static org.junit.Assert.assertNotNull;
 
 public class TransformationsTest {
     @Test
@@ -17,8 +20,8 @@ public class TransformationsTest {
         ArrayNode statements = (ArrayNode)tree.get("statements");
         JsonNode firstStatement =  statements.get(0);
         JsonNode whereClause = firstStatement.get("node").get("where_clause");
-        System.out.println(whereClause.toPrettyString());
+        Assertions.assertNotNull(whereClause);
         Expression predicate = Transformations.toDeltaPredicate(whereClause);
-        System.out.println(predicate);
+        Assertions.assertNotNull(predicate);
     }
 }
