@@ -83,12 +83,13 @@ public class AuthUtils {
             passwords.put(name, password);
         });
         return config.getBoolean("httpLogin") ?
-                createHttpCredentialValidator(config.getStringList("jwt.token.claims.headers"))
+                createHttpCredentialValidator(config)
                 : createCredentialValidator(passwords);
     }
 
-    private static AdvanceBasicCallHeaderAuthenticator.AdvanceCredentialValidator createHttpCredentialValidator(List<String> jwtClaims) {
+    private static AdvanceBasicCallHeaderAuthenticator.AdvanceCredentialValidator createHttpCredentialValidator(Config conf) {
         return (username, password, callHeaders) -> {
+            List<String> jwtClaims = conf.getStringList("jwt.token.claims.headers");
             var claimMap = new HashMap<>();
             for (String claim : jwtClaims) {
                 claimMap.put(claim, callHeaders.get(claim));
@@ -101,7 +102,7 @@ public class AuthUtils {
             ));
 
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create("http://localhost:8080/login"))
+                    .uri(URI.create(conf.getString("login.url")))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(requestBody))
                     .build();
