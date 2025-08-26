@@ -4,6 +4,7 @@ import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.common.authorization.AccessMode;
 import io.dazzleduck.sql.common.authorization.NOOPAuthorizer;
 import io.dazzleduck.sql.common.util.ConfigUtils;
+import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
 import org.apache.arrow.flight.FlightServer;
 import org.apache.arrow.flight.Location;
@@ -56,6 +57,8 @@ public class Main {
         var producer = new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, new NOOPAuthorizer());
         var certStream =  getInputStreamForResource(serverCertLocation);
         var keyStream = getInputStreamForResource(keystoreLocation);
+
+
         var builder = FlightServer.builder(allocator, location, producer)
                 .headerAuthenticator(authenticator);
         if (useEncryption) {

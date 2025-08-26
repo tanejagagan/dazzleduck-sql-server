@@ -941,12 +941,11 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             final FlightDescriptor descriptor) {
         try {
             var splitSize = getSplitSize(tree, context);
-            var splits = SplitPlanner.getSplits(tree, splitSize);
+            var splits = SplitPlanner.getSplitTreeAndSize(tree, splitSize);
+
             var list = splits.stream().map(split -> {
-                var copy = tree.deepCopy();
-                SplitPlanner.replacePathInFromClause(copy, split.stream().map(FileStatus::fileName).toArray(String[]::new));
                 try {
-                    var sql = Transformations.parseToSql(copy);
+                    var sql = Transformations.parseToSql(split.tree());
                     StatementHandle handle = newStatementHandle(sql);
                     final ByteString serializedHandle =
                             copyFrom(handle.serialize());

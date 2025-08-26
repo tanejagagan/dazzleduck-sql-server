@@ -130,6 +130,7 @@ public class DuckDBFlightSqlProducerTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"SELECT * FROM generate_series(10)",
+            "select [1, 2, 3] as \"array\"",
             "SELECT * from " + TEST_CATALOG + "." + TEST_SCHEMA + "." + TEST_TABLE
     })
     public void testStatement(String query) throws Exception {

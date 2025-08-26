@@ -13,16 +13,16 @@ import static org.junit.Assert.assertEquals;
 public class SplitPlannerTest {
     @Test
     public void testSplitHive() throws SQLException, IOException {
-        var splits = SplitPlanner.getSplits(Transformations.parseToTree(SUPPORTED_HIVE_PATH_QUERY), 1024 * 1024 * 1024);
+        var splits = SplitPlanner.getSplitTreeAndSize(Transformations.parseToTree(SUPPORTED_HIVE_PATH_QUERY), 1024 * 1024 * 1024);
         assertEquals(1, splits.size());
-        assertEquals(3, splits.get(0).size());
+        assertEquals(762, splits.get(0).size());
     }
 
     @Test
     public void testSplitDelta() throws SQLException, IOException {
-        var splits = SplitPlanner.getSplits(Transformations.parseToTree(SUPPORTED_DELTA_PATH_QUERY),
+        var splits = SplitPlanner.getSplitTreeAndSize(Transformations.parseToTree(SUPPORTED_DELTA_PATH_QUERY),
                 1024 * 1024 * 1024);
         assertEquals(1, splits.size());
-        assertEquals(8, splits.get(0).size());
+        assertEquals(5378, splits.get(0).size());
     }
 }
