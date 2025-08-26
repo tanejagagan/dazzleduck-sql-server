@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.dazzleduck.sql.commons.TreeAndSize;
 import io.dazzleduck.sql.commons.delta.PartitionPruning;
 import io.dazzleduck.sql.commons.ExpressionFactory;
 import io.dazzleduck.sql.commons.FileStatus;
@@ -20,8 +21,8 @@ public interface SplitPlanner {
 
 
 
-    public static List<List<FileStatus>> getSplits(JsonNode tree,
-                                                   long maxSplitSize) throws SQLException, IOException {
+    public static List<List<FileStatus>> getSplitStatus(JsonNode tree,
+                                                        long maxSplitSize) throws SQLException, IOException {
         var statement = Transformations.getFirstStatementNode(tree);
         var filterExpression = Transformations.getWhereClauseForTableFunction(statement);
         var catalogSchemaAndTables =
@@ -45,10 +46,10 @@ public interface SplitPlanner {
         }
 
         fileStatuses.sort(Comparator.comparing(FileStatus::lastModified));
-        return getSplits(maxSplitSize, fileStatuses);
+        return getSplitStatus(maxSplitSize, fileStatuses);
     }
 
-    private static ArrayList<List<FileStatus>> getSplits(long maxSplitSize, List<FileStatus> fileStatuses) {
+    private static ArrayList<List<FileStatus>> getSplitStatus(long maxSplitSize, List<FileStatus> fileStatuses) {
         var result = new ArrayList<List<FileStatus>>();
         var current = new ArrayList<FileStatus>();
         long currentSize = 0;
@@ -67,7 +68,7 @@ public interface SplitPlanner {
         return result;
     }
 
-    static void replacePathInFromClause(JsonNode tree, String[] paths) {
+    private static void replacePathInFromClause(JsonNode tree, String[] paths) {
         var formatToFunction = Map.of("read_delta", "read_parquet");
         var firstStatement = Transformations.getFirstStatementNode(tree);
         var tableFunction = Transformations.getTableFunction(firstStatement);
@@ -78,10 +79,44 @@ public interface SplitPlanner {
         for (String path : paths) {
             listChildren.add(ExpressionFactory.constant(path));
         }
+
+        JsonNode hiveTypes = null;
+        JsonNode unionByName = null;
+        for( var child :  (ArrayNode)from.get("function").get("children")) {
+            var left = child.get("left");
+            if(left != null) {
+                var columnNames = (ArrayNode)left.get("column_names");
+                if(columnNames != null) {
+                    var t = columnNames.get(0).asText();
+                    if(t.equals("hive_types")) {
+                        hiveTypes = child;
+                    } else if(t.equals("union_by_name")) {
+                        unionByName = child;
+                    }
+                }
+            }
+        }
+
         var listFunction = createFunction("list_value", "main", "", listChildren);
         var parquetChildren = new ArrayNode(JsonNodeFactory.instance);
         parquetChildren.add(listFunction);
+        if(hiveTypes  != null) {
+            parquetChildren.add(hiveTypes);
+        }
+        if(unionByName  != null) {
+            parquetChildren.add(unionByName);
+        }
         var readParquetFunction = createFunction(functionName, "", "", parquetChildren);
         from.set("function", readParquetFunction);
+    }
+
+    public static List<TreeAndSize> getSplitTreeAndSize(JsonNode tree,
+                                                        long maxSplitSize) throws SQLException, IOException {
+        var splits = getSplitStatus(tree, maxSplitSize);
+        return splits.stream().map(split -> {
+            var copy = tree.deepCopy();
+            SplitPlanner.replacePathInFromClause(copy, split.stream().map(FileStatus::fileName).toArray(String[]::new));
+            return new TreeAndSize(copy, split.stream().mapToLong(FileStatus::size).sum());
+        }).toList();
     }
 }

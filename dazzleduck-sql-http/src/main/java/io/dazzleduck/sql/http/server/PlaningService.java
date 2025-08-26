@@ -2,7 +2,6 @@ package io.dazzleduck.sql.http.server;
 
 import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.commons.ConnectionPool;
-import io.dazzleduck.sql.commons.FileStatus;
 import io.dazzleduck.sql.commons.Transformations;
 import io.dazzleduck.sql.commons.planner.SplitPlanner;
 import io.helidon.http.HeaderNames;
@@ -30,17 +29,11 @@ public class PlaningService extends AbstractQueryBasedService {
         try (var connection = ConnectionPool.getConnection()) {
             var tree = Transformations.parseToTree(connection, query);
             long splitSize = getSplitSize(request.headers());
-            var splits = SplitPlanner.getSplits(tree, splitSize);
+            var splits = SplitPlanner.getSplitTreeAndSize(tree, splitSize);
             var result = new ArrayList<Split>();
-            for (var split : splits) {
-                var copy = tree.deepCopy();
-                SplitPlanner.replacePathInFromClause(copy, split.stream().map(FileStatus::fileName).toArray(String[]::new));
-                var sql = Transformations.parseToSql(copy);
-                long size = 0;
-                for (var s : split) {
-                    size += s.size();
-                }
-                result.add(new Split(location, sql, size));
+            for (var treeAndSize : splits) {
+                var sql = Transformations.parseToSql(treeAndSize.tree());
+                result.add(new Split(location, sql, treeAndSize.size()));
             }
             response.headers().set(HeaderValues.CONTENT_TYPE_JSON);
             var outputStream = response.outputStream();
