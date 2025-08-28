@@ -11,14 +11,14 @@ import org.apache.arrow.memory.RootAllocator;
 
 import java.security.NoSuchAlgorithmException;
 
+import static io.dazzleduck.sql.common.util.ConfigUtils.CONFIG_PATH;
+
 
 /**
  * The application main class.
  */
 public class Main {
 
-
-    private static final String CONFIG_PATH = "dazzleduck-http-server";
 
     /**
      * Cannot be instantiated.
@@ -40,14 +40,15 @@ public class Main {
         // initialize global config from default configuration
         Config helidonConfig = Config.create();
         var commandlineConfig = io.dazzleduck.sql.common.util.ConfigUtils.loadCommandLineConfig(args).config();
-        var appConfig = commandlineConfig.withFallback(ConfigFactory.load().getConfig(Main.CONFIG_PATH));
-        var port = Integer.parseInt(appConfig.getString("port"));
+        var appConfig = commandlineConfig.withFallback(ConfigFactory.load().getConfig(CONFIG_PATH));
+        var port = appConfig.getInt("http.port");
+        var host = appConfig.getString("http.host");
         var auth = appConfig.hasPath("auth") ? appConfig.getString("auth") : null;
         String warehousePath = appConfig.hasPath("warehousePath") ?
                 appConfig.getString("warehousePath") : System.getProperty("user.dir") + "/warehouse";
         var secretKey = Validator.generateRandoSecretKey();
         var allocator = new RootAllocator();
-        String location = "http://localhost:" + port;
+        String location = "http://%s:%s".formatted(host, port);
         WebServer server = WebServer.builder()
                 .config(helidonConfig.get("flight-sql"))
                 .routing(routing -> {
@@ -62,11 +63,7 @@ public class Main {
                 .port(port)
                 .build()
                 .start();
-
-        var builder = new StringBuilder();
         String url = "http://localhost:" + server.port();
-        String msg = "WEB server is up! " + url;
-        builder.append(msg);
-        System.out.println(builder.toString());
+        System.out.println("Flight Server is up: Listening on URL: " + url);
     }
 }

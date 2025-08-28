@@ -18,6 +18,22 @@
     </properties>
     <dependencies>
         <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-jdbc</artifactId>
+            <version>${arrow.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>flight-core</artifactId>
+            <version>${arrow.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>flight-sql</artifactId>
+            <version>${arrow.version}</version>
+        </dependency>
+
+        <dependency>
             <groupId>io.dazzleduck.sql</groupId>
             <artifactId>dazzleduck-sql-common</artifactId>
             <version>0.0.4</version>
@@ -26,6 +42,24 @@
             <groupId>io.dazzleduck.sql</groupId> <!-- ✅ fixed -->
             <artifactId>dazzleduck-sql-http</artifactId>
             <version>0.0.4</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>flight-sql-jdbc-core</artifactId>
+            <version>${arrow.version}</version>
+            <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.apache.calcite.avatica</groupId>
+                    <artifactId>avatica</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.calcite.avatica</groupId>
+            <artifactId>avatica-core</artifactId>
+            <version>${calcite.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

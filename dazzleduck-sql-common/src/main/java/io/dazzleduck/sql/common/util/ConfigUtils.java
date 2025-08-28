@@ -9,6 +9,7 @@ import java.util.List;
 
 public class ConfigUtils {
 
+    public static final String CONFIG_PATH = "dazzleduck-server";
     public record ConfigWithMainParameters(Config config, List<String> mainParameters){}
 
     public static ConfigWithMainParameters loadCommandLineConfig(String[] args) {

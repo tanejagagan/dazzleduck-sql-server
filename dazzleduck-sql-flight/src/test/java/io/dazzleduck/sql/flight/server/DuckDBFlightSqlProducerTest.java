@@ -4,8 +4,8 @@ package io.dazzleduck.sql.flight.server;
 import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.common.authorization.*;
-import io.dazzleduck.sql.common.FlightStreamReader;
 import io.dazzleduck.sql.commons.Transformations;
+import io.dazzleduck.sql.flight.FlightStreamReader;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.util.TestUtils;
@@ -31,8 +31,6 @@ import java.io.ByteArrayInputStream;
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.URLEncoder;
-import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.NoSuchAlgorithmException;
@@ -44,6 +42,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import static io.dazzleduck.sql.common.util.ConfigUtils.CONFIG_PATH;
 import static io.dazzleduck.sql.commons.util.TestConstants.SUPPORTED_DELTA_PATH_QUERY;
 import static io.dazzleduck.sql.commons.util.TestConstants.SUPPORTED_HIVE_PATH_QUERY;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -329,9 +328,9 @@ public class DuckDBFlightSqlProducerTest {
         var restrictedUser = "restricted_user";
         var r = List.of(new AccessRow("restricted", null, null, "example/hive_table/*/*/*.parquet", Transformations.TableType.TABLE_FUNCTION, List.of(), "p = '1'", null, "read_parquet"),
                 new AccessRow("admin", null, null, "example/hive_table/*/*/*.parquet", Transformations.TableType.TABLE_FUNCTION, List.of(), "p = '1'", null, "read_parquet"));
-        var conf = ConfigFactory.load().getConfig(Main.CONFIG_PATH);
-        var groupMapping = SimpleAuthorization.loadUsrGroupMapping(conf);
-        var authorizer = new SimpleAuthorization(groupMapping, r);
+        var conf = ConfigFactory.load().getConfig(CONFIG_PATH);
+        var groupMapping = SimpleAuthorizer.loadUsrGroupMapping(conf);
+        var authorizer = new SimpleAuthorizer(groupMapping, r);
         try (var serverClient = createRestrictedServerClient(authorizer, newServerLocation, restrictedUser)) {
             String expectedSql = "%s where p = '1'".formatted(SUPPORTED_HIVE_PATH_QUERY);
             ConnectionPool.printResult(expectedSql);
