@@ -56,8 +56,10 @@ public class Main {
         }
         AccessMode accessMode = config.hasPath("accessMode") ? AccessMode.valueOf(config.getString("accessMode").toUpperCase()) : AccessMode.COMPLETE;
         String startUpFile = config.getString("startUpFile");
-        String startUpFileContent = Files.readString(Paths.get(startUpFile));
-        ConnectionPool.execute(startUpFileContent);
+        if (startUpFile != null && !startUpFile.isBlank()) {
+            String startUpFileContent = Files.readString(Paths.get(startUpFile));
+            ConnectionPool.execute(startUpFileContent);
+        }
         BufferAllocator allocator = new RootAllocator();
         var producer = new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, new NOOPAuthorizer());
         var certStream =  getInputStreamForResource(serverCertLocation);
