@@ -7,16 +7,15 @@ import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.RemovalListener;
 import com.google.common.cache.RemovalNotification;
 import com.google.protobuf.*;
-import io.dazzleduck.sql.common.FlightStreamReader;
 import io.dazzleduck.sql.common.Headers;
-import io.dazzleduck.sql.common.UnauthorizedException;
+import io.dazzleduck.sql.common.auth.UnauthorizedException;
 import io.dazzleduck.sql.common.authorization.AccessMode;
 import io.dazzleduck.sql.common.authorization.NOOPAuthorizer;
 import io.dazzleduck.sql.common.authorization.SqlAuthorizer;
 import io.dazzleduck.sql.commons.ConnectionPool;
-import io.dazzleduck.sql.commons.FileStatus;
 import io.dazzleduck.sql.commons.Transformations;
 import io.dazzleduck.sql.commons.planner.SplitPlanner;
+import io.dazzleduck.sql.flight.FlightStreamReader;
 import org.apache.arrow.adapter.jdbc.JdbcParameterBinder;
 import org.apache.arrow.adapter.jdbc.JdbcToArrowUtils;
 import org.apache.arrow.flight.*;
@@ -295,12 +294,15 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         }
 
         if (AccessMode.RESTRICTED == accessMode) {
-            JsonNode newTree;
+            JsonNode newTree = null;
             try {
                 newTree = authorize(context, tree);
             } catch (UnauthorizedException e) {
-                throw ErrorHandling.handleUnauthorized(e);
+                ErrorHandling.handleUnauthorized(e);
+            } catch (Throwable e) {
+                ErrorHandling.handleThrowable(e);
             }
+
 
             if (parallelize(context)) {
                 return getFlightInfoStatementSplittable(newTree, context, descriptor);

@@ -42,10 +42,10 @@ public class HttpServerTest {
     public static void setup() throws NoSuchAlgorithmException {
         warehousePath = "/tmp/" + UUID.randomUUID();
         new File(warehousePath).mkdir();
-        String[] args1 = {"--conf", "port=8080",   "--conf", "warehousePath=" + warehousePath };
+        String[] args1 = {"--conf", "http.port=8080",   "--conf", "warehousePath=" + warehousePath };
         Main.main(args1);
         client = HttpClient.newHttpClient();
-        String[] args = {"--conf", "port=8081", "--conf", "auth=jwt", "--conf", "warehousePath=" + warehousePath };
+        String[] args = {"--conf", "http.port=8081", "--conf", "auth=jwt", "--conf", "warehousePath=" + warehousePath };
         Main.main(args);
         String[] sqls = {"INSTALL arrow FROM community", "LOAD arrow"};
         ConnectionPool.executeBatch(sqls);

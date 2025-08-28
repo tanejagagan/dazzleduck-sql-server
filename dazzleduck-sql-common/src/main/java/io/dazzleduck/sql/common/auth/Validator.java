@@ -2,7 +2,6 @@ package io.dazzleduck.sql.common.auth;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigObject;
-import io.helidon.http.UnauthorizedException;
 import io.jsonwebtoken.security.Keys;
 
 import javax.crypto.SecretKey;
@@ -52,7 +51,7 @@ public interface Validator {
                 Validator.passwordMatch(storePassword, Validator.hash(password));
     }
 
-    boolean validate(String username, String password) throws Exception;
+    boolean validate(String username, String password) throws UnauthorizedException;
 
     public static Validator load(Config config) {
         List<? extends ConfigObject> users = config.getObjectList("users");
@@ -64,7 +63,7 @@ public interface Validator {
         });
         return new Validator() {
             @Override
-            public boolean validate(String username, String password) throws Exception {
+            public boolean validate(String username, String password) throws UnauthorizedException {
                 if( !validatePassword(username, password, passwords)) {
                     throw new UnauthorizedException(username);
                 };

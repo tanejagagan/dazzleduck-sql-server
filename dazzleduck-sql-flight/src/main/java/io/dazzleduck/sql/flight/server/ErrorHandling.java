@@ -3,7 +3,7 @@ package io.dazzleduck.sql.flight.server;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.google.protobuf.InvalidProtocolBufferException;
-import io.dazzleduck.sql.common.UnauthorizedException;
+import io.dazzleduck.sql.common.auth.UnauthorizedException;
 import org.apache.arrow.flight.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -164,7 +164,7 @@ public class ErrorHandling {
     }
 
     static FlightRuntimeException handleUnauthorized(UnauthorizedException unauthorizedException) {
-        return FlightRuntimeExceptionFactory.of(new CallStatus(CallStatus.UNAUTHORIZED.code(), null, unauthorizedException.getMessage(), null));
+        throw  FlightRuntimeExceptionFactory.of(new CallStatus(CallStatus.UNAUTHORIZED.code(), null, unauthorizedException.getMessage(), null));
     }
 
     private static void handleSqlException(FlightProducer.ServerStreamListener listener, SQLException e) {

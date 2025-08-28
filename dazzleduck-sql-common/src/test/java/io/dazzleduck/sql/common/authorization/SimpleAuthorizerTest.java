@@ -2,7 +2,7 @@ package io.dazzleduck.sql.common.authorization;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
-import io.dazzleduck.sql.common.UnauthorizedException;
+import io.dazzleduck.sql.common.auth.UnauthorizedException;
 import io.dazzleduck.sql.commons.Transformations;
 import io.dazzleduck.sql.commons.Transformations.CatalogSchemaTable;
 import org.junit.jupiter.api.Test;
@@ -19,7 +19,7 @@ import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-public class SimpleAuthorizationTest {
+public class SimpleAuthorizerTest {
 
     static Stream<Arguments> provideParametersForPaths() {
         return Stream.of(
@@ -59,7 +59,7 @@ public class SimpleAuthorizationTest {
         var query = Transformations.parseToTree(sql);
         var toAddQuery = Transformations.parseToTree(filterToCombiner);
         var toAddFilter = Transformations.getWhereClauseForBaseTable(Transformations.getFirstStatementNode(toAddQuery));
-        var newQuery = SimpleAuthorization.addFilterToBaseTable(query, toAddFilter);
+        var newQuery = SimpleAuthorizer.addFilterToBaseTable(query, toAddFilter);
         var newQueryString = Transformations.parseToSql(newQuery);
         assertTrue(newQueryString.contains("x") && newQueryString.contains("y"));
     }
@@ -72,7 +72,7 @@ public class SimpleAuthorizationTest {
         var query = Transformations.parseToTree(sql);
         var toAddQuery = Transformations.parseToTree(filterToCombiner);
         var toAddFilter = Transformations.getWhereClauseForBaseTable(Transformations.getFirstStatementNode(toAddQuery));
-        var newQuery = SimpleAuthorization.addFilterToTableFunction(query, toAddFilter);
+        var newQuery = SimpleAuthorizer.addFilterToTableFunction(query, toAddFilter);
         var newQueryString = Transformations.parseToSql(newQuery);
         System.out.println(newQueryString);
         assertTrue(newQueryString.contains("x") && newQueryString.contains("abcdy"));
@@ -86,7 +86,7 @@ public class SimpleAuthorizationTest {
     })
     public void validateForAuthorizationPositiveTest(String sql) throws SQLException, JsonProcessingException, UnauthorizedException {
         JsonNode parsedQuery = Transformations.parseToTree(sql);
-        SimpleAuthorization.validateForAuthorization(parsedQuery);
+        SimpleAuthorizer.validateForAuthorization(parsedQuery);
     }
 
     @ParameterizedTest()
@@ -101,7 +101,7 @@ public class SimpleAuthorizationTest {
         JsonNode parsedQuery = Transformations.parseToTree(sql);
         var thrown = assertThrows(
                 UnauthorizedException.class,
-                () -> SimpleAuthorization.validateForAuthorization(parsedQuery),
+                () -> SimpleAuthorizer.validateForAuthorization(parsedQuery),
                 "Expected doThing() to throw, but it didn't");
     }
 
@@ -111,7 +111,7 @@ public class SimpleAuthorizationTest {
         var accessRows = List.of(
                 new AccessRow("g1", "d1", "s1", "t1", Transformations.TableType.BASE_TABLE, List.of(), "a = 1", new Date(0), null),
                 new AccessRow("g2", "d1", "s1", "t1", Transformations.TableType.BASE_TABLE, List.of(), "a = 2", new Date(0), null ));
-        var s = new SimpleAuthorization(userGroupMapping, accessRows);
+        var s = new SimpleAuthorizer(userGroupMapping, accessRows);
         var q = Transformations.parseToTree("select * from t1  where t = x");
         var result = s.authorize("u1", "d1", "s1", q);
         var sql = Transformations.parseToSql(result);

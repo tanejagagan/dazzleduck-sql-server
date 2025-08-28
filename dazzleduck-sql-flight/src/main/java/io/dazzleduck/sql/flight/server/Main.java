@@ -4,7 +4,6 @@ import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.common.authorization.AccessMode;
 import io.dazzleduck.sql.common.authorization.NOOPAuthorizer;
 import io.dazzleduck.sql.common.util.ConfigUtils;
-import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
 import org.apache.arrow.flight.FlightServer;
 import org.apache.arrow.flight.Location;
@@ -17,17 +16,17 @@ import java.io.InputStream;
 import java.security.NoSuchAlgorithmException;
 import java.util.UUID;
 
+import static io.dazzleduck.sql.common.util.ConfigUtils.CONFIG_PATH;
 
 
 public class Main {
-    public static final String CONFIG_PATH = "dazzleduck-flight-server";
 
     public static void main(String[] args) throws IOException, NoSuchAlgorithmException {
         var flightServer = createServer(args);
         Thread severThread = new Thread(() -> {
             try {
                 flightServer.start();
-                System.out.println("S1: Server (Location): Listening on URI and port:  " + flightServer.getLocation().getUri());
+                System.out.println("Flight Server is up: Listening on URI: " + flightServer.getLocation().getUri());
                 flightServer.awaitTermination();
             } catch (IOException | InterruptedException e) {
                 throw new RuntimeException(e);
@@ -39,8 +38,8 @@ public class Main {
     public static FlightServer createServer(String[] args) throws NoSuchAlgorithmException, IOException {
         var commandLineConfig = ConfigUtils.loadCommandLineConfig(args).config();
         var config = commandLineConfig.withFallback(ConfigFactory.load().getConfig(CONFIG_PATH));
-        int port = config.getInt("port");
-        String host = config.getString("host");
+        int port = config.getInt("flight-sql.port");
+        String host = config.getString("flight-sql.host");
         CallHeaderAuthenticator authenticator = AuthUtils.getAuthenticator(config);
         boolean useEncryption = config.getBoolean("useEncryption");
         Location location = useEncryption ? Location.forGrpcTls(host, port) : Location.forGrpcInsecure(host, port);
