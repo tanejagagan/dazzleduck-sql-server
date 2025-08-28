@@ -348,10 +348,11 @@ public class DuckDBFlightSqlProducerTest {
         }
     }
 
-    @Test public void startUpTest() throws IOException, NoSuchAlgorithmException {
+    @Test
+    public void startUpTest() throws IOException, NoSuchAlgorithmException {
         File startUpFile = File.createTempFile("/temp/startup/startUpFile", ".sql");
         startUpFile.deleteOnExit();
-        String startUpFileContent = "CREATE TABLE a (key string); INSERT INTO a VALUES('k'); -- This is a single-line comment INSERT INTO a VALUES('k2');/* this is comment */ INSERT INTO a VALUES('k3');";
+        String startUpFileContent = "CREATE TABLE a (key string); INSERT INTO a VALUES('k');\n-- This is a single-line comment \nINSERT INTO a VALUES('k2');\n-- this  is comment \nINSERT INTO a VALUES('k3')";
         try (var writer = new FileWriter(startUpFile)) {
             writer.write(startUpFileContent);
         }
