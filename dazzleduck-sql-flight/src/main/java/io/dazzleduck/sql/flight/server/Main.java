@@ -56,12 +56,14 @@ public class Main {
             System.out.printf("Warehouse dir does not exist %s. Create the dir to proceed", warehousePath);
         }
         AccessMode accessMode = config.hasPath("accessMode") ? AccessMode.valueOf(config.getString("accessMode").toUpperCase()) : AccessMode.COMPLETE;
-        String startUpFile = config.getString("startUpFile");
-        if (startUpFile != null && !startUpFile.isBlank()) {
+        String startUpFile = config.hasPathOrNull("startUpFile") ? config.getString("startUpFile") : null;
+        if (startUpFile != null) {
             Path path = Paths.get(startUpFile);
             if (Files.isRegularFile(path)) {
-                String startUpFileContent = Files.readString(path);
-                ConnectionPool.execute(startUpFileContent);
+                String startUpFileContent = Files.readString(path).trim();
+                if (!startUpFileContent.isEmpty()) {
+                    ConnectionPool.execute(startUpFileContent);
+                }
             }
         }
         BufferAllocator allocator = new RootAllocator();
