@@ -55,6 +55,9 @@
             <version>0.12.6</version>
         </dependency>
     </dependencies>
+    <dependencyManagement>
+        <dependencies></dependencies>
+    </dependencyManagement>
     <build>
         <plugins>
             <plugin>
@@ -74,10 +77,10 @@
                         <image>eclipse-temurin:21-jre-jammy</image>
                     </from>
                     <to>
-                        <image>flight-sql-duckdb</image>
+                        <image>dazzleduck-sql</image>
                     </to>
                     <container>
-                        <mainClass>io.dazzleduck.sql.flight.server.Main</mainClass>
+                        <mainClass>io.dazzleduck.sql.runtime.Main</mainClass>
                         <jvmFlags>
                             <jvmFlag>-Xms512m</jvmFlag>
                             <jvmFlag>--add-opens=java.base/sun.nio.ch=ALL-UNNAMED</jvmFlag>

@@ -10,6 +10,14 @@ import java.util.List;
 public class ConfigUtils {
 
     public static final String CONFIG_PATH = "dazzleduck-server";
+
+    public static final String WAREHOUSE_CONFIG_KEY  = "warehouse";
+    public static final String AUTHENTICATION_KEY =  "authentication";
+
+    public static final String  PORT_KEY = "port";
+
+    public static final String  HOST_KEY =  "host";
+
     public record ConfigWithMainParameters(Config config, List<String> mainParameters){}
 
     public static ConfigWithMainParameters loadCommandLineConfig(String[] args) {
@@ -35,5 +43,9 @@ public class ConfigUtils {
 
         @Parameter
         private List<String>  mainParameters;
+    }
+
+    public static String getWarehousePath(Config config) {
+        return config.hasPath(WAREHOUSE_CONFIG_KEY) ? config.getString(WAREHOUSE_CONFIG_KEY) : System.getProperty("user.dir") + "/warehouse";
     }
 }
