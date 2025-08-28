@@ -4,6 +4,7 @@ package io.dazzleduck.sql.http.server;
 
 import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.common.auth.Validator;
+import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.helidon.config.Config;
 import io.helidon.logging.common.LogConfig;
 import io.helidon.webserver.WebServer;
@@ -41,11 +42,11 @@ public class Main {
         Config helidonConfig = Config.create();
         var commandlineConfig = io.dazzleduck.sql.common.util.ConfigUtils.loadCommandLineConfig(args).config();
         var appConfig = commandlineConfig.withFallback(ConfigFactory.load().getConfig(CONFIG_PATH));
-        var port = appConfig.getInt("http.port");
-        var host = appConfig.getString("http.host");
-        var auth = appConfig.hasPath("auth") ? appConfig.getString("auth") : null;
-        String warehousePath = appConfig.hasPath("warehousePath") ?
-                appConfig.getString("warehousePath") : System.getProperty("user.dir") + "/warehouse";
+        var httpConfig =  appConfig.getConfig("http");
+        var port = httpConfig.getInt(ConfigUtils.PORT_KEY);
+        var host = httpConfig.getString(ConfigUtils.HOST_KEY);
+        var auth = httpConfig.hasPath(ConfigUtils.AUTHENTICATION_KEY) ? httpConfig.getString(ConfigUtils.AUTHENTICATION_KEY) : "none";
+        String warehousePath = ConfigUtils.getWarehousePath(appConfig);
         var secretKey = Validator.generateRandoSecretKey();
         var allocator = new RootAllocator();
         String location = "http://%s:%s".formatted(host, port);
@@ -64,6 +65,6 @@ public class Main {
                 .build()
                 .start();
         String url = "http://localhost:" + server.port();
-        System.out.println("Flight Server is up: Listening on URL: " + url);
+        System.out.println("Http Server is up: Listening on URL: " + url);
     }
 }

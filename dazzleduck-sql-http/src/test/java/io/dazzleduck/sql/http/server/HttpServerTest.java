@@ -1,6 +1,7 @@
 package io.dazzleduck.sql.http.server;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.util.TestConstants;
 import io.dazzleduck.sql.commons.util.TestUtils;
@@ -42,10 +43,10 @@ public class HttpServerTest {
     public static void setup() throws NoSuchAlgorithmException {
         warehousePath = "/tmp/" + UUID.randomUUID();
         new File(warehousePath).mkdir();
-        String[] args1 = {"--conf", "http.port=8080",   "--conf", "warehousePath=" + warehousePath };
+        String[] args1 = {"--conf", "http.port=8080",   "--conf", "%s=%s".formatted(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath)};
         Main.main(args1);
         client = HttpClient.newHttpClient();
-        String[] args = {"--conf", "http.port=8081", "--conf", "auth=jwt", "--conf", "warehousePath=" + warehousePath };
+        String[] args = {"--conf", "http.port=8081", "--conf", "http.%s=jwt".formatted(ConfigUtils.AUTHENTICATION_KEY), "--conf", "%s=%s".formatted(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath) };
         Main.main(args);
         String[] sqls = {"INSTALL arrow FROM community", "LOAD arrow"};
         ConnectionPool.executeBatch(sqls);
@@ -78,6 +79,18 @@ public class HttpServerTest {
             TestUtils.isEqual(query, allocator, reader);
         }
     }
+
+    @Test
+    public void testSetWithGet() throws IOException, InterruptedException, SQLException {
+        var query = "SET enable_progress_bar = true;";
+        var urlEncode = URLEncoder.encode(query, StandardCharsets.UTF_8);
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:8080/query?q=" + urlEncode))
+                .GET()
+                .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
+        var inputStreamResponse = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+        assertEquals(200, inputStreamResponse.statusCode());
+    }
+
 
     @Test
     public void testQueryWithJwtExpectUnauthorized() throws IOException, InterruptedException {

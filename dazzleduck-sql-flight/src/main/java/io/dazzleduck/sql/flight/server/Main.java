@@ -45,7 +45,7 @@ public class Main {
         Location location = useEncryption ? Location.forGrpcTls(host, port) : Location.forGrpcInsecure(host, port);
         String keystoreLocation = config.getString("keystore");
         String serverCertLocation = config.getString("serverCert");
-        String warehousePath = config.hasPath("warehousePath") ? config.getString("warehousePath") : System.getProperty("user.dir") + "/warehouse";
+        String warehousePath = ConfigUtils.getWarehousePath(config);
         String secretKey = config.getString("secretKey");
         String producerId = config.hasPath("producerId") ? config.getString("producerId") : UUID.randomUUID().toString();
         if(!checkWarehousePath(warehousePath)) {
