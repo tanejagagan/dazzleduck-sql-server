@@ -15,6 +15,7 @@ import org.apache.arrow.memory.RootAllocator;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.NoSuchAlgorithmException;
 import java.util.UUID;
@@ -57,8 +58,11 @@ public class Main {
         AccessMode accessMode = config.hasPath("accessMode") ? AccessMode.valueOf(config.getString("accessMode").toUpperCase()) : AccessMode.COMPLETE;
         String startUpFile = config.getString("startUpFile");
         if (startUpFile != null && !startUpFile.isBlank()) {
-            String startUpFileContent = Files.readString(Paths.get(startUpFile));
-            ConnectionPool.execute(startUpFileContent);
+            Path path = Paths.get(startUpFile);
+            if (Files.isRegularFile(path)) {
+                String startUpFileContent = Files.readString(path);
+                ConnectionPool.execute(startUpFileContent);
+            }
         }
         BufferAllocator allocator = new RootAllocator();
         var producer = new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, new NOOPAuthorizer());

@@ -31,10 +31,8 @@ import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.NoSuchAlgorithmException;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.SQLException;
-import java.sql.Statement;
+import java.sql.*;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -349,7 +347,7 @@ public class DuckDBFlightSqlProducerTest {
     }
 
     @Test
-    public void startUpTest() throws IOException, NoSuchAlgorithmException {
+    public void startUpTest() throws IOException, NoSuchAlgorithmException, SQLException {
         File startUpFile = File.createTempFile("/temp/startup/startUpFile", ".sql");
         startUpFile.deleteOnExit();
         String startUpFileContent = "CREATE TABLE a (key string); INSERT INTO a VALUES('k');\n-- This is a single-line comment \nINSERT INTO a VALUES('k2');\n-- this  is comment \nINSERT INTO a VALUES('k3')";
@@ -358,7 +356,19 @@ public class DuckDBFlightSqlProducerTest {
         }
         String startUpFileLocation = startUpFile.getAbsolutePath();
         Main.main(new String[]{"--conf", "startUpFile=\"" + startUpFileLocation.replace("\\", "\\\\") + "\""});
-        ConnectionPool.printResult("select * from a");
+        List<String> expected = new ArrayList<>();
+        try (Connection conn = ConnectionPool.getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT key FROM a")) {
+            while (rs.next()) {
+                expected.add(rs.getString("key"));
+            }
+        }
+        assertEquals(List.of("k", "k2", "k3"), expected);
+        try (Connection conn = ConnectionPool.getConnection();
+             Statement stmt = conn.createStatement()) {
+            stmt.execute("DROP TABLE a");
+        }
     }
 
     record ServerClient(FlightServer flightServer, FlightSqlClient flightSqlClient, RootAllocator clientAllocator) implements Closeable {
