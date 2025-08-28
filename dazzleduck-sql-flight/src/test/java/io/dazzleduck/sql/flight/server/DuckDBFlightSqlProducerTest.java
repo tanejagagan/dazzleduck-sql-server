@@ -27,10 +27,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.ByteArrayInputStream;
-import java.io.Closeable;
-import java.io.IOException;
-import java.io.InputStream;
+import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.NoSuchAlgorithmException;
@@ -349,6 +346,18 @@ public class DuckDBFlightSqlProducerTest {
                 TestUtils.isEqual(expectedSql, clientAllocator, FlightStreamReader.of(stream, clientAllocator));
             }
         }
+    }
+
+    @Test public void startUpTest() throws IOException, NoSuchAlgorithmException {
+        File startUpFile = File.createTempFile("/temp/startup/startUpFile", ".sql");
+        startUpFile.deleteOnExit();
+        String startUpFileContent = "CREATE TABLE a (key string); INSERT INTO a VALUES('k'); -- This is a single-line comment INSERT INTO a VALUES('k2');/* this is comment */ INSERT INTO a VALUES('k3');";
+        try (var writer = new FileWriter(startUpFile)) {
+            writer.write(startUpFileContent);
+        }
+        String startUpFileLocation = startUpFile.getAbsolutePath();
+        Main.main(new String[]{"--conf", "startUpFile=\"" + startUpFileLocation.replace("\\", "\\\\") + "\""});
+        ConnectionPool.printResult("select * from a");
     }
 
     record ServerClient(FlightServer flightServer, FlightSqlClient flightSqlClient, RootAllocator clientAllocator) implements Closeable {
