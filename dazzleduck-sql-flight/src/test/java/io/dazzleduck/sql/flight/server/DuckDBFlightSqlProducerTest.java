@@ -3,6 +3,8 @@ package io.dazzleduck.sql.flight.server;
 
 import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.common.Headers;
+import io.dazzleduck.sql.common.LocalStartupConfigProvider;
+import io.dazzleduck.sql.common.StartupScriptProvider;
 import io.dazzleduck.sql.common.authorization.*;
 import io.dazzleduck.sql.commons.Transformations;
 import io.dazzleduck.sql.flight.FlightStreamReader;
@@ -37,6 +39,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import static io.dazzleduck.sql.common.LocalStartupConfigProvider.SCRIPT_LOCATION_KEY;
 import static io.dazzleduck.sql.common.util.ConfigUtils.CONFIG_PATH;
 import static io.dazzleduck.sql.commons.util.TestConstants.SUPPORTED_DELTA_PATH_QUERY;
 import static io.dazzleduck.sql.commons.util.TestConstants.SUPPORTED_HIVE_PATH_QUERY;
@@ -347,7 +350,7 @@ public class DuckDBFlightSqlProducerTest {
     }
 
     @Test
-    public void startUpTest() throws IOException, NoSuchAlgorithmException, SQLException {
+    public void startUpTest() throws Exception {
         File startUpFile = File.createTempFile("/temp/startup/startUpFile", ".sql");
         startUpFile.deleteOnExit();
         String startUpFileContent = "CREATE TABLE a (key string); INSERT INTO a VALUES('k');\n-- This is a single-line comment \nINSERT INTO a VALUES('k2');\n-- this  is comment \nINSERT INTO a VALUES('k3')";
@@ -355,7 +358,10 @@ public class DuckDBFlightSqlProducerTest {
             writer.write(startUpFileContent);
         }
         String startUpFileLocation = startUpFile.getAbsolutePath();
-        Main.main(new String[]{"--conf", "startUpFile=\"" + startUpFileLocation.replace("\\", "\\\\") + "\""});
+        var classConfig = "%s.%s=%s".formatted(StartupScriptProvider.STARTUP_SCRIPT_CONFIG_PREFIX, StartupScriptProvider.STARTUP_SCRIPT_CONFIG_PROVIDER_CLASS_KEY, LocalStartupConfigProvider.class.getName());
+        var locationConfig = "%s.%s=%s".formatted(StartupScriptProvider.STARTUP_SCRIPT_CONFIG_PREFIX, SCRIPT_LOCATION_KEY, startUpFileLocation);
+
+        Main.main(new String[]{"--conf", classConfig, "--conf", locationConfig});
         List<String> expected = new ArrayList<>();
         try (Connection conn = ConnectionPool.getConnection();
              Statement stmt = conn.createStatement();

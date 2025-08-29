@@ -1,6 +1,7 @@
 package io.dazzleduck.sql.flight.server;
 
 import com.typesafe.config.ConfigFactory;
+import io.dazzleduck.sql.common.StartupScriptProvider;
 import io.dazzleduck.sql.common.authorization.AccessMode;
 import io.dazzleduck.sql.common.authorization.NOOPAuthorizer;
 import io.dazzleduck.sql.common.util.ConfigUtils;
@@ -25,7 +26,7 @@ import static io.dazzleduck.sql.common.util.ConfigUtils.CONFIG_PATH;
 
 public class Main {
 
-    public static void main(String[] args) throws IOException, NoSuchAlgorithmException {
+    public static void main(String[] args) throws Exception {
         var flightServer = createServer(args);
         Thread severThread = new Thread(() -> {
             try {
@@ -39,7 +40,7 @@ public class Main {
         severThread.start();
     }
 
-    public static FlightServer createServer(String[] args) throws NoSuchAlgorithmException, IOException {
+    public static FlightServer createServer(String[] args) throws Exception {
         var commandLineConfig = ConfigUtils.loadCommandLineConfig(args).config();
         var config = commandLineConfig.withFallback(ConfigFactory.load().getConfig(CONFIG_PATH));
         int port = config.getInt("flight-sql.port");
@@ -56,16 +57,11 @@ public class Main {
             System.out.printf("Warehouse dir does not exist %s. Create the dir to proceed", warehousePath);
         }
         AccessMode accessMode = config.hasPath("accessMode") ? AccessMode.valueOf(config.getString("accessMode").toUpperCase()) : AccessMode.COMPLETE;
-        String startUpFile = config.hasPathOrNull("startUpFile") ? config.getString("startUpFile") : null;
-        if (startUpFile != null) {
-            Path path = Paths.get(startUpFile);
-            if (Files.isRegularFile(path)) {
-                String startUpFileContent = Files.readString(path).trim();
-                if (!startUpFileContent.isEmpty()) {
-                    ConnectionPool.execute(startUpFileContent);
-                }
-            }
+        var startupContent = StartupScriptProvider.load(config).getStartupScript();
+        if (startupContent != null) {
+            ConnectionPool.execute(startupContent);
         }
+
         BufferAllocator allocator = new RootAllocator();
         var producer = new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, new NOOPAuthorizer());
         var certStream =  getInputStreamForResource(serverCertLocation);
