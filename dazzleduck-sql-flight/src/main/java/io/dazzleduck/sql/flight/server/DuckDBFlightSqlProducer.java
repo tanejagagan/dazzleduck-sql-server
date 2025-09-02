@@ -7,16 +7,15 @@ import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.RemovalListener;
 import com.google.common.cache.RemovalNotification;
 import com.google.protobuf.*;
-import io.dazzleduck.sql.common.FlightStreamReader;
 import io.dazzleduck.sql.common.Headers;
-import io.dazzleduck.sql.common.UnauthorizedException;
+import io.dazzleduck.sql.common.auth.UnauthorizedException;
 import io.dazzleduck.sql.common.authorization.AccessMode;
 import io.dazzleduck.sql.common.authorization.NOOPAuthorizer;
 import io.dazzleduck.sql.common.authorization.SqlAuthorizer;
 import io.dazzleduck.sql.commons.ConnectionPool;
-import io.dazzleduck.sql.commons.FileStatus;
 import io.dazzleduck.sql.commons.Transformations;
 import io.dazzleduck.sql.commons.planner.SplitPlanner;
+import io.dazzleduck.sql.flight.FlightStreamReader;
 import org.apache.arrow.adapter.jdbc.JdbcParameterBinder;
 import org.apache.arrow.adapter.jdbc.JdbcToArrowUtils;
 import org.apache.arrow.flight.*;
@@ -71,7 +70,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     public static final String  DEFAULT_DATABASE = "memory";
     private final AccessMode accessMode;
     private final Set<Integer> supportedSqlInfo;
-    private final ExecutorService executorService = Executors.newVirtualThreadPerTaskExecutor();
+    private final ExecutorService executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
     private final static Logger logger = LoggerFactory.getLogger(DuckDBFlightSqlProducer.class);
     private final Location location;
     private final String producerId;
@@ -295,12 +294,15 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         }
 
         if (AccessMode.RESTRICTED == accessMode) {
-            JsonNode newTree;
+            JsonNode newTree = null;
             try {
                 newTree = authorize(context, tree);
             } catch (UnauthorizedException e) {
-                throw ErrorHandling.handleUnauthorized(e);
+                ErrorHandling.handleUnauthorized(e);
+            } catch (Throwable e) {
+                ErrorHandling.handleThrowable(e);
             }
+
 
             if (parallelize(context)) {
                 return getFlightInfoStatementSplittable(newTree, context, descriptor);
@@ -706,8 +708,10 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
 
     @Override
-    public void close() throws Exception {
-        AutoCloseables.close(this.allocator, this.executorService);
+    public void close()  {
+        executorService.shutdown();
+        allocator.close();
+
     }
 
 
@@ -941,12 +945,11 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             final FlightDescriptor descriptor) {
         try {
             var splitSize = getSplitSize(tree, context);
-            var splits = SplitPlanner.getSplits(tree, splitSize);
+            var splits = SplitPlanner.getSplitTreeAndSize(tree, splitSize);
+
             var list = splits.stream().map(split -> {
-                var copy = tree.deepCopy();
-                SplitPlanner.replacePathInFromClause(copy, split.stream().map(FileStatus::fileName).toArray(String[]::new));
                 try {
-                    var sql = Transformations.parseToSql(copy);
+                    var sql = Transformations.parseToSql(split.tree());
                     StatementHandle handle = newStatementHandle(sql);
                     final ByteString serializedHandle =
                             copyFrom(handle.serialize());

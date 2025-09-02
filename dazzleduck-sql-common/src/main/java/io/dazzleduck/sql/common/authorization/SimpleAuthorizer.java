@@ -9,7 +9,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.typesafe.config.Config;
 import io.dazzleduck.sql.commons.ExpressionFactory;
 import io.dazzleduck.sql.commons.Transformations;
-import io.dazzleduck.sql.common.UnauthorizedException;
+import io.dazzleduck.sql.common.auth.UnauthorizedException;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -18,7 +18,7 @@ import java.io.InputStreamReader;
 import java.sql.SQLException;
 import java.util.*;
 
-public class SimpleAuthorization implements SqlAuthorizer {
+public class SimpleAuthorizer implements SqlAuthorizer {
     private record AccessKey(String user, Transformations.CatalogSchemaTable catalogSchemaTable) { }
     private record AccessValue(JsonNode filter, List<String> columns) { }
     Map<AccessKey, AccessValue> accessMap = new HashMap<>();
@@ -26,8 +26,8 @@ public class SimpleAuthorization implements SqlAuthorizer {
 
     public static final String ACCESS_FILE = "simple-access.json";
 
-    public SimpleAuthorization(Map<String, List<String>> userGroupMapping,
-                               List<AccessRow> accessRows) {
+    public SimpleAuthorizer(Map<String, List<String>> userGroupMapping,
+                            List<AccessRow> accessRows) {
         var groupAccessRowMap = new HashMap<String, List<AccessRow>>();
         for (var row : accessRows) {
             groupAccessRowMap.compute(row.group(), (key, oldValue) -> {
@@ -67,12 +67,12 @@ public class SimpleAuthorization implements SqlAuthorizer {
     public static SqlAuthorizer load(Config config) throws IOException {
         var userGroupMapping = loadUsrGroupMapping(config);
         var accessRows = loadAccessRows();
-        return new SimpleAuthorization(userGroupMapping, accessRows);
+        return new SimpleAuthorizer(userGroupMapping, accessRows);
     }
 
     public static List<AccessRow> loadAccessRows() throws IOException {
         var result = new ArrayList<AccessRow>();
-        try (InputStream inputStream = SimpleAuthorization.class.getResourceAsStream("/" + ACCESS_FILE);
+        try (InputStream inputStream = SimpleAuthorizer.class.getResourceAsStream("/" + ACCESS_FILE);
              BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream))) {
             ObjectMapper mapper = new ObjectMapper();
             var line = reader.readLine();
@@ -135,7 +135,7 @@ public class SimpleAuthorization implements SqlAuthorizer {
         if (catalogSchemaTables.size() != 1) {
             throw new UnauthorizedException("%s TableOrPath/Path found: Only one table or path is supported".formatted(catalogSchemaTables.size()));
         }
-        var catalogSchemaTable = catalogSchemaTables.getFirst();
+        var catalogSchemaTable = catalogSchemaTables.get(0);
 
         var key = new AccessKey(user, catalogSchemaTable);
         var a = accessMap.get(key);
@@ -199,7 +199,6 @@ public class SimpleAuthorization implements SqlAuthorizer {
     }
 
     public static void validateForAuthorization(JsonNode jsonNode) throws UnauthorizedException {
-
         var supportedFromType = Set.of("TABLE_FUNCTION", "BASE_TABLE", "SUBQUERY");
         var supportedTableFunction = Set.of("generate_series", "read_parquet", "read_delta");
         var statements = (ArrayNode) jsonNode.get("statements");
@@ -252,7 +251,7 @@ public class SimpleAuthorization implements SqlAuthorizer {
         String resourceName = "simple-access.json";
         ObjectMapper mapper = new ObjectMapper();
         List<AccessRow> result = new ArrayList<>();
-        try (InputStream is = SimpleAuthorization.class.getClassLoader().getResourceAsStream(resourceName)) {
+        try (InputStream is = SimpleAuthorizer.class.getClassLoader().getResourceAsStream(resourceName)) {
             assert is != null;
             try (BufferedReader br = new BufferedReader(new InputStreamReader(is))) {
                 String line;
@@ -263,19 +262,5 @@ public class SimpleAuthorization implements SqlAuthorizer {
             }
         }
         return result;
-    }
-
-
-    //TODO change this to support nested queries
-    private static JsonNode sadfddsareplaceWhereClauseFromTable(JsonNode query, JsonNode newWhereClause) {
-        var statementNode = (ObjectNode) Transformations.getFirstStatementNode(query);
-        statementNode.set("where_clause", newWhereClause);
-        return query;
-    }
-
-    private static JsonNode sadfddsareplaceWhereClauseFromSetOperation(JsonNode query, JsonNode newWhereClause) {
-        var statementNode = (ObjectNode) Transformations.getFirstStatementNode(query);
-        statementNode.set("where_clause", newWhereClause);
-        return query;
     }
 }

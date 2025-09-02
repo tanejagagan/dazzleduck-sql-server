@@ -28,8 +28,8 @@ public class DuckDBFlightJDBCTest {
     private static final int port = 55556;
     static String url = String.format("jdbc:arrow-flight-sql://localhost:%s/?database=memory&useEncryption=0&user=admin&password=admin", port);
     @BeforeAll
-    public static void beforeAll() throws IOException, NoSuchAlgorithmException {
-        String[] args = {"--conf", "port=" + port, "--conf", "useEncryption=false"};
+    public static void beforeAll() throws Exception {
+        String[] args = {"--conf", "flight-sql.port=" + port, "--conf", "useEncryption=false"};
         flightServer = Main.createServer(args);
         Thread severThread = new Thread(() -> {
             try {

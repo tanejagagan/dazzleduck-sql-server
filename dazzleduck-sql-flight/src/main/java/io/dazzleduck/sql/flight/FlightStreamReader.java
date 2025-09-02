@@ -1,4 +1,4 @@
-package io.dazzleduck.sql.common;
+package io.dazzleduck.sql.flight;
 
 import org.apache.arrow.flight.FlightStream;
 import org.apache.arrow.memory.BufferAllocator;

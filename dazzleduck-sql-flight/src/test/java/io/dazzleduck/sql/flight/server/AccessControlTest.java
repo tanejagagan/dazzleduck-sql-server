@@ -1,9 +1,9 @@
 package io.dazzleduck.sql.flight.server;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
-import io.dazzleduck.sql.common.UnauthorizedException;
+import io.dazzleduck.sql.common.auth.UnauthorizedException;
 import io.dazzleduck.sql.common.authorization.AccessRow;
-import io.dazzleduck.sql.common.authorization.SimpleAuthorization;
+import io.dazzleduck.sql.common.authorization.SimpleAuthorizer;
 import io.dazzleduck.sql.common.authorization.SqlAuthorizer;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.Transformations;
@@ -22,7 +22,7 @@ public class AccessControlTest {
     String filter = "key = 'k1'";
     AccessRow pathAccessRow = new AccessRow("test_group", null, null, "example/hive_table/*/*/*.parquet", Transformations.TableType.TABLE_FUNCTION, List.of(), filter, new Date(System.currentTimeMillis() + Duration.ofHours(1).toMillis()), "read_parquet");
     AccessRow tableAccessRow = new AccessRow("test_group", "test_db", "test_schema", "test_table", Transformations.TableType.BASE_TABLE, List.of(), filter, new Date(System.currentTimeMillis() + Duration.ofHours(1).toMillis()), null);
-    SqlAuthorizer sqlAuthorizer = new SimpleAuthorization(Map.of("test_user", List.of("test_group")),
+    SqlAuthorizer sqlAuthorizer = new SimpleAuthorizer(Map.of("test_user", List.of("test_group")),
             List.of(pathAccessRow, tableAccessRow));
 
     String aggregateSql(String inner) {

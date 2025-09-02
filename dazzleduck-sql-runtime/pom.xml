@@ -9,37 +9,34 @@
         <version>0.0.4</version>
     </parent>
 
-    <artifactId>dazzleduck-sql-flight</artifactId>
+    <groupId>org.example</groupId>
+    <artifactId>dazzleduck-sql-runtime</artifactId>
 
     <properties>
+        <testcontainer.version>1.21.2</testcontainer.version>
     </properties>
     <dependencies>
         <dependency>
-            <groupId>org.apache.arrow</groupId>
-            <artifactId>arrow-jdbc</artifactId>
-            <version>${arrow.version}</version>
+            <groupId>io.dazzleduck.sql</groupId>
+            <artifactId>dazzleduck-sql-flight</artifactId>
+            <version>0.0.4</version>
         </dependency>
-        <dependency>
-            <groupId>org.apache.arrow</groupId>
-            <artifactId>flight-core</artifactId>
-            <version>${arrow.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.arrow</groupId>
-            <artifactId>flight-sql</artifactId>
-            <version>${arrow.version}</version>
-        </dependency>
-
         <dependency>
             <groupId>io.dazzleduck.sql</groupId>
-            <artifactId>dazzleduck-sql-common</artifactId>
+            <artifactId>dazzleduck-sql-http</artifactId>
             <version>0.0.4</version>
         </dependency>
         <dependency>
-            <groupId>io.dazzleduck.sql</groupId> <!-- ✅ fixed -->
-            <artifactId>dazzleduck-sql-http</artifactId>
-            <version>0.0.4</version>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <version>${testcontainer.version}</version>
             <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>slf4j-api</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.apache.arrow</groupId>

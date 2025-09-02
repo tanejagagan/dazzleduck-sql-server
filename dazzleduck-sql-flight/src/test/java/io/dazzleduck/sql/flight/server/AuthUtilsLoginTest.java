@@ -38,7 +38,7 @@ public class AuthUtilsLoginTest {
         String escapedWarehousePath = warehousePath.replace("\\", "\\\\");
         // Start the HTTP login service
         Main.main(new String[]{
-                "--conf", "port: " + HTTP_PORT,
+                "--conf", "http.port: " + HTTP_PORT,
                 "--conf", "warehousePath: \"" + escapedWarehousePath + "\""
         });
 
@@ -46,7 +46,7 @@ public class AuthUtilsLoginTest {
     }
 
     private static void setUpFlightServerAndClient() throws Exception {
-        io.dazzleduck.sql.flight.server.Main.main(new String[]{"--conf", "port=55556", "--conf", "httpLogin=true", "--conf", "useEncryption=false", "--conf", "jwt.token.claims.headers=[%s]".formatted(CLUSTER_HEADER_KEY)});
+        io.dazzleduck.sql.flight.server.Main.main(new String[]{"--conf", "flight-sql.port=55556", "--conf", "httpLogin=true", "--conf", "useEncryption=false", "--conf", "jwt.token.claims.headers=[%s]".formatted(CLUSTER_HEADER_KEY)});
 
         sqlClient = new FlightSqlClient(FlightClient.builder(clientAllocator, serverLocation)
                 .intercept(AuthUtils.createClientMiddlewareFactory(USER, PASSWORD, Map.of(CLUSTER_HEADER_KEY, TEST_CLUSTER)))
