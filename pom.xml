@@ -26,7 +26,6 @@
         <slf4j.version>2.0.16</slf4j.version>
     </properties>
     <dependencies>
-
         <dependency>
             <groupId>org.jcommander</groupId>
             <artifactId>jcommander</artifactId>
@@ -99,7 +98,7 @@
                         <image>eclipse-temurin:21-jre-jammy</image>
                     </from>
                     <to>
-                        <image>dazzleduck</image>
+                        <image>docker.io/dazzleduck/dazzleduck</image>
                         <tags>
                             <tag>${project.version}</tag> <!-- Tags the image with your project version -->
                             <tag>latest</tag> <!-- Adds a 'latest' tag -->

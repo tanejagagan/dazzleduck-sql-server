@@ -32,6 +32,7 @@ import java.util.UUID;
 
 import static io.dazzleduck.sql.common.Headers.HEADER_SPLIT_SIZE;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 public class HttpServerTest {
     static HttpClient client;
@@ -188,6 +189,32 @@ public class HttpServerTest {
         var inputStreamResponse = client.send(request, HttpResponse.BodyHandlers.ofString());
         var res = objectMapper.readValue(inputStreamResponse.body(), Split[].class);
         assertEquals(3, res.length);
+    }
+
+    @Test
+    public void testPlanningWithFilter() throws IOException, InterruptedException {
+        var filter = "WHERE dt = '2025-01-01'";
+        var body = objectMapper.writeValueAsBytes(new QueryObject(TestConstants.SUPPORTED_HIVE_PATH_QUERY + filter));
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:8080/plan"))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+                .header(HEADER_SPLIT_SIZE, "1")
+                .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
+        var inputStreamResponse = client.send(request, HttpResponse.BodyHandlers.ofString());
+        var res = objectMapper.readValue(inputStreamResponse.body(), Split[].class);
+        assertEquals(2, res.length);
+    }
+
+    @Test
+    public void testPlanningWithError() throws IOException, InterruptedException {
+        var errorFilter = "WHEREdt = '2025-01-01'";
+        var body = objectMapper.writeValueAsBytes(new QueryObject(TestConstants.SUPPORTED_HIVE_PATH_QUERY + errorFilter));
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:8080/plan"))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+                .header(HEADER_SPLIT_SIZE, "1")
+                .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
+        var inputStreamResponse = client.send(request, HttpResponse.BodyHandlers.ofString());
+        assertEquals(500, inputStreamResponse.statusCode());
+        assertNotNull(inputStreamResponse.body());
     }
 
     @Test
