@@ -20,7 +20,7 @@ JDK  21
   `./mvnw clean package -DskipTests jib:dockerBuild`
 - Start the container with `example/data` mounted to the container
   ``` 
-  docker run -ti -p 59307:59307 -p 8080:8080 dazzleduck --conf warehouse=/data
+  docker run -ti -p 59307:59307 -p 8080:8080 dazzleduck/dazzleduck:latest --conf warehouse=/data
   Warehouse Path :/data
   Http Server is up: Listening on URL: http://localhost:8080
   Flight Server is up: Listening on URI: grpc+tcp://0.0.0.0:59307
