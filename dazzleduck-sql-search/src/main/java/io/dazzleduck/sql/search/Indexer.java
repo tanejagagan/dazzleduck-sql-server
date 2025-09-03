@@ -1,6 +1,5 @@
 package io.dazzleduck.sql.search;
 
-import com.google.common.annotations.VisibleForTesting;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.MappedReader;
 import org.apache.arrow.memory.RootAllocator;
@@ -22,7 +21,7 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 public interface Indexer {
-    @VisibleForTesting
+
     static MappedReader.Function createMapperFunction(Map<String, TokenizationFunction> tokenizationFunctions) {
         return (sourceList, target) -> {
             target.setInitialCapacity(10);
@@ -63,7 +62,7 @@ public interface Indexer {
         return "SELECT '%s' AS prefix, substring(filename, len('%s') + 2) as filename, file_row_number as row_num, %s, %s FROM read_parquet([%s])".formatted(sourcePrefix, sourcePrefix, timeField, selectCols, source);
     }
 
-    @VisibleForTesting
+
     static String constructWriteSql(List<String> fieldsForIndexing,
                                     String inputStructName,
                                     String inputTable) {
