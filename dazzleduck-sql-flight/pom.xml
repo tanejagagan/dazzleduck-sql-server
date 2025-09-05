@@ -10,7 +10,7 @@
     </parent>
 
     <artifactId>dazzleduck-sql-flight</artifactId>
-
+    <name>DazzleDuck Project Flight Sql</name>
     <properties>
     </properties>
     <dependencies>
