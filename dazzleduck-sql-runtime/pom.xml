@@ -10,6 +10,7 @@
     </parent>
 
     <groupId>org.example</groupId>
+    <name>DazzleDuck Project Runtime</name>
     <artifactId>dazzleduck-sql-runtime</artifactId>
 
     <properties>

@@ -9,6 +9,7 @@
         <version>0.0.4</version>
     </parent>
     <artifactId>dazzleduck-sql-commons</artifactId>
+    <name>DazzleDuck Project Commons</name>
     <properties>
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
