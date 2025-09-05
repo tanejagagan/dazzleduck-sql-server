@@ -8,8 +8,6 @@
         <artifactId>dazzleduck-parent</artifactId>
         <version>0.0.4</version>
     </parent>
-
-    <groupId>org.example</groupId>
     <name>DazzleDuck Project Runtime</name>
     <artifactId>dazzleduck-sql-runtime</artifactId>
 
