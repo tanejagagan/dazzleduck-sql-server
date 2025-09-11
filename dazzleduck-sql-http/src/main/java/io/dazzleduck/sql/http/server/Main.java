@@ -49,8 +49,6 @@ public class Main {
         String warehousePath = ConfigUtils.getWarehousePath(appConfig);
         var secretKey = Validator.generateRandoSecretKey();
         var allocator = new RootAllocator();
-        var serverConfig = helidonConfig.get("dazzleduck-server");
-        boolean tlsEnabled = serverConfig.get("tls.enabled").asBoolean().orElse(false);
         String location = "http://%s:%s".formatted(host, port);
         WebServer server = WebServer.builder()
                 .config(helidonConfig.get("dazzleduck-server"))
