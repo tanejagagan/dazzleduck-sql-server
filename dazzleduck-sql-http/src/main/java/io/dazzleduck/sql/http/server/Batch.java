@@ -8,4 +8,5 @@ public record Batch<T>(String[] sortOrder,
                        String producerId,
                        long producerBatchId,
                        long totalSize,
+                       String format,
                        Instant receivedTime) { }

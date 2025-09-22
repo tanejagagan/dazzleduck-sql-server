@@ -47,10 +47,12 @@ public abstract class BulkIngestQueue<T, R> {
     }
 
     public synchronized Future<R> addToQueue(Batch<T> batch) {
-        var progressBatch = inProgressBatchIds.get(batch.producerId());
-        if (progressBatch != null && progressBatch >= batch.producerBatchId()) {
-            return CompletableFuture.failedFuture(
-                    new BadRequestException(400, "In progress batch id %s. Current batch id %s".formatted(progressBatch, batch.producerBatchId())));
+        if (batch.producerId() != null) {
+            var progressBatch = inProgressBatchIds.get(batch.producerId());
+            if (progressBatch != null && progressBatch >= batch.producerBatchId()) {
+                return CompletableFuture.failedFuture(
+                        new BadRequestException(400, "In progress batch id %s. Current batch id %s".formatted(progressBatch, batch.producerBatchId())));
+            }
         }
         var result = new CompletableFuture<R>();
         currentBucket.add(batch, result);
