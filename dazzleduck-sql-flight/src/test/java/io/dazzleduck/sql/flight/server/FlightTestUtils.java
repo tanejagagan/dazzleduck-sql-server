@@ -30,7 +30,7 @@ public interface FlightTestUtils {
         return PASSWORD;
     }
 
-    public default ServerClient createRestrictedServerClient(Location serverLocation, SqlAuthorizer authorizer) throws IOException, NoSuchAlgorithmException {
+    default ServerClient createRestrictedServerClient(Location serverLocation, SqlAuthorizer authorizer) throws IOException, NoSuchAlgorithmException {
         var warehousePath = Files.createTempDirectory("duckdb_warehouse_" + DuckDBFlightSqlProducerTest.class.getName()).toString();
         var clientAllocator = new RootAllocator();
         var serverAllocator = new RootAllocator();

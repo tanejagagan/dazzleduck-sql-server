@@ -824,6 +824,11 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         return new DatabaseSchema(database, schema);
     }
 
+    //TODO Need to provide implementation
+    private static Map<String, String> getVerifiedClaims(CallContext context){
+        return Map.of();
+    }
+
     private static int getBatchSize(final CallContext context) {
         return ContextUtils.getValue(context, Headers.HEADER_FETCH_SIZE, Headers.DEFAULT_ARROW_FETCH_SIZE, Integer.class);
     }
@@ -987,7 +992,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     private JsonNode authorize(CallContext callContext, JsonNode sql) throws UnauthorizedException {
         String peerIdentity = callContext.peerIdentity();
         var databaseSchema = getDatabaseSchema(callContext);
-        return sqlAuthorizer.authorize(peerIdentity, databaseSchema.database, databaseSchema.schema, sql);
+        var verifiedClaims =  getVerifiedClaims(callContext);
+        return sqlAuthorizer.authorize(peerIdentity, databaseSchema.database, databaseSchema.schema, sql, verifiedClaims);
     }
 
     protected StatementHandle newStatementHandle(String query) {
