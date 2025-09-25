@@ -4,6 +4,7 @@ import java.time.Instant;
 
 public record Batch<T>(String[] sortOrder,
                        String[] transformations,
+                       String[] partitions,
                        T record,
                        String producerId,
                        long producerBatchId,

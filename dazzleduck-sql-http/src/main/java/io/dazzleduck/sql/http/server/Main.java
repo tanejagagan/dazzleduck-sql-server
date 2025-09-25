@@ -56,7 +56,7 @@ public class Main {
                     var b = routing.register("/query", new QueryService(allocator))
                             .register("/login", new LoginService(appConfig, secretKey))
                             .register("/plan", new PlaningService(location, allocator))
-                            .register("/ingest", new IngestionService(warehousePath, allocator));
+                            .register("/ingest", new IngestionService(warehousePath, appConfig));
                     if ("jwt".equals(auth)) {
                         b.addFilter(new JwtAuthenticationFilter("/query", appConfig, secretKey));
                     }

@@ -1,5 +1,9 @@
 package io.dazzleduck.sql.http.server;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.typesafe.config.Config;
+import io.dazzleduck.sql.commons.ConnectionPool;
 import io.helidon.common.uri.UriQuery;
 import io.helidon.http.HeaderNames;
 import io.helidon.http.Status;
@@ -7,23 +11,29 @@ import io.helidon.webserver.http.HttpRules;
 import io.helidon.webserver.http.HttpService;
 import io.helidon.webserver.http.ServerRequest;
 import io.helidon.webserver.http.ServerResponse;
-import org.apache.arrow.memory.BufferAllocator;
 
-import java.sql.SQLException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Arrays;
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.stream.Collectors;
 
 import static io.dazzleduck.sql.common.Headers.*;
 
-public class IngestionService implements HttpService, ParameterUtils{
+public class IngestionService implements HttpService, ParameterUtils {
     private final String warehousePath;
-    private final BufferAllocator allocator;
+    private final Config config;
 
     private static final Duration DEFAULT_MAX_DELAY = Duration.ofSeconds(1);
 
@@ -34,9 +44,9 @@ public class IngestionService implements HttpService, ParameterUtils{
     private final ConcurrentHashMap<String, BulkIngestQueue<String, Result >> ingestionQueueMap =
             new ConcurrentHashMap<>();
 
-    public IngestionService(String warehousePath, BufferAllocator allocator) {
+    public IngestionService(String warehousePath, Config config) {
         this.warehousePath = warehousePath;
-        this.allocator = allocator;
+        this.config = config;
     }
 
     @Override
@@ -44,7 +54,7 @@ public class IngestionService implements HttpService, ParameterUtils{
         rules.post("/", this::handlePost);
     }
 
-    private void handlePost(ServerRequest serverRequest, ServerResponse serverResponse) throws SQLException {
+    private void handlePost(ServerRequest serverRequest, ServerResponse serverResponse) throws ExecutionException, InterruptedException, IOException {
         var contentType = serverRequest.headers().value(HeaderNames.CONTENT_TYPE);
         if (contentType.isEmpty() || !contentType.get().equals(ContentTypes.APPLICATION_ARROW)) {
             serverResponse.status(Status.UNSUPPORTED_MEDIA_TYPE_415);
@@ -58,34 +68,48 @@ public class IngestionService implements HttpService, ParameterUtils{
         String format = ParameterUtils.getParameterValue(HEADER_DATA_FORMAT, serverRequest, "parquet", String.class);
         var partitions = ParameterUtils.getParameterValue(HEADER_DATA_PARTITION, serverRequest, null, String.class);
         var tranformationString = ParameterUtils.getParameterValue(HEADER_DATA_TRANSFORMATION, serverRequest, null, String.class);
-        List<String> partitionList = partitions == null ? List.of() : Arrays.asList(partitions.split(","));
-        String producerId = null;
-        long producerBatchId = -1L;
+        var producerId = ParameterUtils.getParameterValue(HEADER_PRODUCER_ID, serverRequest, null, String.class);
+        var producerBatchId = ParameterUtils.getParameterValue(HEADER_PRODUCER_BATCH_ID, serverRequest, -1L, Long.class);
+        var sortOrder = ParameterUtils.getParameterValue(HEADER_SORT_ORDER, serverRequest, null, String.class);
         int totalSize = 1024;
-        String tempFile = null;
+        // Ensure the temp directory exists
+        Path tempDir = Paths.get(TEMP_LOCATION);
+        if (!Files.exists(tempDir)) {
+            Files.createDirectories(tempDir);
+        }
 
-        // Write a temp file and write it at temp file location.
-        //
-        //var reader = new ArrowStreamReader(serverRequest.content().inputStream(), allocator);
-        //ConnectionPool.bulkIngestToFile(reader, allocator, completePath, partitionList, format, tranformationString);
+        // Create a unique temp file inside TEMP_LOCATION with UUID
+        String uniqueFileName = "ingestion_" + UUID.randomUUID() + ".arrow";
+        Path tempFilePath = tempDir.resolve(uniqueFileName);
 
-        var batch = new Batch<String>(new String[0],
-                tranformationString.split(","),
+        // Read request body and write it to temp file
+        try (InputStream in = serverRequest.content().inputStream();
+             OutputStream out = Files.newOutputStream(tempFilePath, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
+            in.transferTo(out);
+        }
+
+        String tempFile = tempFilePath.toAbsolutePath().toString();
+        var batch = new Batch<>(
+                splitParam(sortOrder),
+                splitParam(tranformationString),
+                splitParam(partitions),
                 tempFile,
-                null,
+                producerId,
                 producerBatchId,
                 totalSize,
                 format,
-                Instant.now());
+                Instant.now()
+        );
         var ingestionQueue = ingestionQueueMap.computeIfAbsent(completePath, p -> new ParquetIngestionQueue(p, p, DEFAULT_MAX_BUCKET_SIZE, DEFAULT_MAX_DELAY, Executors.newSingleThreadScheduledExecutor(), Clock.systemDefaultZone()));
         var result = ingestionQueue.addToQueue(batch);
-        // Serialize the result
-        //serverResponse.status(Status.OK_200);
-        //serverResponse.send();
+        var futureResult = result.get(); // blocks until batch processed
+        ObjectMapper mapper = new ObjectMapper();
+        ObjectNode jsonNode = mapper.valueToTree(futureResult);
+        jsonNode.put("completionTime", Instant.now().toString());
+        serverResponse.status(Status.OK_200).header(HeaderNames.CONTENT_TYPE, ContentTypes.APPLICATION_JSON).send(jsonNode.toString());
     }
 
-    public static class Result {
-
+    public record Result(String fileName) {
     }
     public static class ParquetIngestionQueue extends BulkIngestQueue<String, Result> {
 
@@ -106,8 +130,32 @@ public class IngestionService implements HttpService, ParameterUtils{
 
         @Override
         protected void write(WriteTask<String, Result> writeTask) {
-            // Provide the  implementation
-            // Read the files and write to destination
+            var batches = writeTask.bucket().batches();
+            // All Arrow files
+            var arrowFiles = batches.stream().map(Batch::record).map("'%s'"::formatted).collect(Collectors.joining(","));
+            // Last transformation
+            var lastTransformation = batches.stream().map(Batch::transformations).filter(Objects::nonNull).flatMap(Arrays::stream).map(String::trim).filter(s -> !s.isEmpty()).distinct().toList().stream().reduce((a, b) -> b).orElse("");
+            // Last sort order
+            var lastSortOrder = batches.stream().map(Batch::sortOrder).filter(Objects::nonNull).flatMap(Arrays::stream).map(String::trim).filter(s -> !s.isEmpty()).distinct().reduce((a, b) -> b).map(s -> " ORDER BY " + s).orElse("");
+            // Last partition
+            var lastPartition = batches.stream().map(Batch::partitions).filter(Objects::nonNull).flatMap(Arrays::stream).map(String::trim).filter(s -> !s.isEmpty()).distinct().reduce((a, b) -> b).map(s -> ", PARTITION_BY (" + s + ")").orElse("");
+            // Select clause
+            var selectClause = lastTransformation.isEmpty() ? "*" : "*, " + lastTransformation;
+            // Last format
+            var format = batches.isEmpty() ? "" : batches.get(batches.size() - 1).format();
+            // Build SQL
+            var sql = """
+                COPY
+                    (SELECT %s FROM read_arrow([%s])%s)
+                    TO '%s'
+                    (FORMAT %s %s);
+                """.formatted(selectClause, arrowFiles, lastSortOrder, this.path, format, lastPartition);
+            ConnectionPool.execute(sql);
+            writeTask.bucket().futures().forEach(action -> action.complete(new Result(this.path)));
         }
+    }
+
+    private static String[] splitParam(String value) {
+        return (value == null || value.isBlank()) ? new String[0] : value.split(",");
     }
 }
