@@ -44,6 +44,10 @@ public interface Validator {
         return Keys.hmacShaKeyFor(secureRandomBytes);
     }
 
+    public static SecretKey fromString(String input) {
+        return Keys.hmacShaKeyFor(input.getBytes());
+    }
+
     public static boolean validatePassword(String username, String password, Map<String, byte[]> userHashMap) {
         var storePassword = userHashMap.get(username);
         return storePassword != null &&
@@ -61,14 +65,11 @@ public interface Validator {
             String password = o.toConfig().getString("password");
             passwords.put(name, hash(password));
         });
-        return new Validator() {
-            @Override
-            public boolean validate(String username, String password) throws UnauthorizedException {
-                if( !validatePassword(username, password, passwords)) {
-                    throw new UnauthorizedException(username);
-                };
-                return true;
-            }
+        return (username, password) -> {
+            if( !validatePassword(username, password, passwords)) {
+                throw new UnauthorizedException(username);
+            };
+            return true;
         };
     }
 }
