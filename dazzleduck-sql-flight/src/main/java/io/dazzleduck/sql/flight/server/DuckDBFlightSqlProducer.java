@@ -481,7 +481,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         String path = optionMap.get("path");
         final String completePath = warehousePath + "/" + path;
         String format = optionMap.getOrDefault("format", "parquet");
-        String partitionColumnString = optionMap.get("partition");
+        String partitionColumnString = optionMap.get("partitions");
         List<String> partitionColumns;
         if(partitionColumnString != null) {
             partitionColumns = Arrays.stream(partitionColumnString.split(",")).toList();

@@ -27,8 +27,12 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.security.NoSuchAlgorithmException;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
 
 import static io.dazzleduck.sql.common.Headers.*;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -267,17 +271,19 @@ public class HttpServerTest {
                 streamWrite.writeBatch();
             }
             streamWrite.end();
-            var request = HttpRequest.newBuilder(URI.create("http://localhost:8080/ingest?path=table"))
+            var table = "table-single";
+            var request = HttpRequest.newBuilder(URI.create("http://localhost:8080/ingest?path=%s".formatted(table)))
                     .POST(HttpRequest.BodyPublishers.ofInputStream(() ->
                             new ByteArrayInputStream(byteArrayOutputStream.toByteArray())))
                     .header("Content-Type", ContentTypes.APPLICATION_ARROW)
                     .header(HEADER_DATA_PARTITION, "a")
-                    .headers(HEADER_DATA_TRANSFORMATION, "(a + 1) as b")
+                    .header(HEADER_DATA_TRANSFORMATION, "(a + 1) as b")
+                    .header(HEADER_SORT_ORDER, "b desc")
                     .build();
             var res = client.send(request, HttpResponse.BodyHandlers.ofString());
             assertEquals(200, res.statusCode());
-            var testSql = String.format("select generate_series, a, b from read_parquet('%s/table/*/*.parquet')", warehousePath);
-            var expected = "select generate_series, generate_series a, (a+1) as b from generate_series(10)";
+            var testSql = "select generate_series, a, b from read_parquet('%s/%s/*/*.parquet')".formatted(warehousePath, table);
+            var expected = "select generate_series, generate_series a, (a+1) as b from generate_series(10) order by b desc";
             TestUtils.isEqual(expected, testSql);
         }
     }
@@ -318,6 +324,52 @@ public class HttpServerTest {
             try (var reader = new ArrowStreamReader(new FileInputStream(filename), allocator)) {
                 TestUtils.isEqual(query, allocator, reader);
             }
+        }
+    }
+
+    @Test
+    public void testIngestionPostConcurrent() throws IOException, SQLException {
+        final int totalRequests = 100;
+        final int parallelism = 100;
+        String query = "select generate_series, generate_series a from generate_series(10)";
+        // Prepare Arrow payload once
+        try (BufferAllocator allocator = new RootAllocator();
+             DuckDBConnection connection = ConnectionPool.getConnection();
+             var reader = ConnectionPool.getReader(connection, allocator, query, 1000);
+             var byteArrayOutputStream = new ByteArrayOutputStream();
+             var streamWrite = new ArrowStreamWriter(reader.getVectorSchemaRoot(), null, byteArrayOutputStream)) {
+            streamWrite.start();
+            while (reader.loadNextBatch()) {
+                streamWrite.writeBatch();
+            }
+            streamWrite.end();
+            // Executor for parallel requests
+            var executor = Executors.newFixedThreadPool(parallelism);
+            List<CompletableFuture<Void>> futures = new ArrayList<>();
+
+            for (int i = 0; i < totalRequests; i++) {
+                int final1 = i;
+                CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+                    try {
+                        var request = HttpRequest.newBuilder(URI.create("http://localhost:8080/ingest?path=table"))
+                                .POST(HttpRequest.BodyPublishers.ofInputStream(() ->
+                                        new ByteArrayInputStream(byteArrayOutputStream.toByteArray())))
+                                .header("Content-Type", ContentTypes.APPLICATION_ARROW)
+                                .header(HEADER_DATA_PARTITION, "a")
+                                .header(HEADER_DATA_TRANSFORMATION, "a + " + final1 + " as b")
+                                .header(HEADER_SORT_ORDER, "b desc")
+                                .build();
+
+                        HttpResponse<String> res = client.send(request, HttpResponse.BodyHandlers.ofString());
+                        assertEquals(200, res.statusCode());
+                    } catch (IOException | InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
+                }, executor);
+                futures.add(future);
+            }
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+            executor.shutdown();
         }
     }
 }
