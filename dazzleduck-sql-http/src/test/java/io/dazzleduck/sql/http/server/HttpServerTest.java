@@ -271,7 +271,8 @@ public class HttpServerTest {
                 streamWrite.writeBatch();
             }
             streamWrite.end();
-            var request = HttpRequest.newBuilder(URI.create("http://localhost:8080/ingest?path=table"))
+            var table = "table-single";
+            var request = HttpRequest.newBuilder(URI.create("http://localhost:8080/ingest?path=%s".formatted(table)))
                     .POST(HttpRequest.BodyPublishers.ofInputStream(() ->
                             new ByteArrayInputStream(byteArrayOutputStream.toByteArray())))
                     .header("Content-Type", ContentTypes.APPLICATION_ARROW)
@@ -281,7 +282,7 @@ public class HttpServerTest {
                     .build();
             var res = client.send(request, HttpResponse.BodyHandlers.ofString());
             assertEquals(200, res.statusCode());
-            var testSql = String.format("select generate_series, a, b from read_parquet('%s/table/*/*.parquet')", warehousePath);
+            var testSql = "select generate_series, a, b from read_parquet('%s/%s/*/*.parquet')".formatted(warehousePath, table);
             var expected = "select generate_series, generate_series a, (a+1) as b from generate_series(10) order by b desc";
             TestUtils.isEqual(expected, testSql);
         }

@@ -59,7 +59,7 @@ public class SimpleAuthorizerTest {
         var query = Transformations.parseToTree(sql);
         var toAddQuery = Transformations.parseToTree(filterToCombiner);
         var toAddFilter = Transformations.getWhereClauseForBaseTable(Transformations.getFirstStatementNode(toAddQuery));
-        var newQuery = SimpleAuthorizer.addFilterToBaseTable(query, toAddFilter);
+        var newQuery = SqlAuthorizer.addFilterToBaseTable(query, toAddFilter);
         var newQueryString = Transformations.parseToSql(newQuery);
         assertTrue(newQueryString.contains("x") && newQueryString.contains("y"));
     }
@@ -72,7 +72,7 @@ public class SimpleAuthorizerTest {
         var query = Transformations.parseToTree(sql);
         var toAddQuery = Transformations.parseToTree(filterToCombiner);
         var toAddFilter = Transformations.getWhereClauseForBaseTable(Transformations.getFirstStatementNode(toAddQuery));
-        var newQuery = SimpleAuthorizer.addFilterToTableFunction(query, toAddFilter);
+        var newQuery = SqlAuthorizer.addFilterToTableFunction(query, toAddFilter);
         var newQueryString = Transformations.parseToSql(newQuery);
         System.out.println(newQueryString);
         assertTrue(newQueryString.contains("x") && newQueryString.contains("abcdy"));
@@ -86,7 +86,7 @@ public class SimpleAuthorizerTest {
     })
     public void validateForAuthorizationPositiveTest(String sql) throws SQLException, JsonProcessingException, UnauthorizedException {
         JsonNode parsedQuery = Transformations.parseToTree(sql);
-        SimpleAuthorizer.validateForAuthorization(parsedQuery);
+        SqlAuthorizer.validateForAuthorization(parsedQuery);
     }
 
     @ParameterizedTest()
@@ -101,7 +101,7 @@ public class SimpleAuthorizerTest {
         JsonNode parsedQuery = Transformations.parseToTree(sql);
         var thrown = assertThrows(
                 UnauthorizedException.class,
-                () -> SimpleAuthorizer.validateForAuthorization(parsedQuery),
+                () -> SqlAuthorizer.validateForAuthorization(parsedQuery),
                 "Expected doThing() to throw, but it didn't");
     }
 
@@ -113,7 +113,7 @@ public class SimpleAuthorizerTest {
                 new AccessRow("g2", "d1", "s1", "t1", Transformations.TableType.BASE_TABLE, List.of(), "a = 2", new Date(0), null ));
         var s = new SimpleAuthorizer(userGroupMapping, accessRows);
         var q = Transformations.parseToTree("select * from t1  where t = x");
-        var result = s.authorize("u1", "d1", "s1", q);
+        var result = s.authorize("u1", "d1", "s1", q, Map.of());
         var sql = Transformations.parseToSql(result);
         assertEquals("SELECT * FROM t1 WHERE ((t = x) AND ((a = 2) OR (a = 1)))", sql);
     }
@@ -121,8 +121,6 @@ public class SimpleAuthorizerTest {
     @ParameterizedTest
     @MethodSource("provideParametersForPaths")
     void testGetTableForPaths(String sql, String expectedTablePath, Transformations.TableType tableType, String functionName) throws SQLException, JsonProcessingException {
-
-
         var tree = Transformations.parseToTree(sql);
         var tableOrPaths =
         Transformations.getAllTablesOrPathsFromSelect(Transformations.getFirstStatementNode(tree), "c", "s");

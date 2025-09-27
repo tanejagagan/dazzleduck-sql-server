@@ -16,11 +16,9 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-public class AuthUtilsLoginTest {
+public class HttpLoginTest {
     private static final String USER = "admin";
     private static final String PASSWORD = "admin"; // for httpLogin
-    private static final String LOCALHOST = "localhost";
-
     private static final String CLUSTER_HEADER_KEY = "cluster_id";
     private static final String TEST_CLUSTER = "TEST_CLUSTER";
     private static final BufferAllocator clientAllocator = new RootAllocator(Integer.MAX_VALUE);
@@ -32,7 +30,7 @@ public class AuthUtilsLoginTest {
 
     @BeforeAll
     public static void setup() throws Exception {
-        String warehousePath = Files.createTempDirectory("duckdb_warehouse_" + AuthUtilsLoginTest.class.getSimpleName()).toString();
+        String warehousePath = Files.createTempDirectory("duckdb_warehouse_" + HttpLoginTest.class.getSimpleName()).toString();
         // Fix path escaping for Windows
         String escapedWarehousePath = warehousePath.replace("\\", "\\\\");
         // Start the HTTP login service
@@ -40,7 +38,12 @@ public class AuthUtilsLoginTest {
                 "--conf", "http.port: " + HTTP_PORT,
                 "--conf", "warehousePath: \"" + escapedWarehousePath + "\""
         });
-        var confOverload = new String[]{"--conf", "flight-sql.port=55559", "--conf", "httpLogin=true", "--conf", "useEncryption=false", "--conf", "jwt.token.claims.headers=[%s]".formatted(CLUSTER_HEADER_KEY)};
+        var confOverload = new String[]{"--conf", "flight-sql.port=55559",
+                "--conf", "login.url=\"http://localhost:8080/login\"",
+                "--conf", "useEncryption=false",
+                "--conf", "jwt.token.generation=false",
+                "--conf", "jwt.token.claims.generate.headers=[%s]".formatted(CLUSTER_HEADER_KEY),
+                "--conf", "jwt.token.claims.validate.headers=[%s]".formatted(CLUSTER_HEADER_KEY)};
         serverClient = FlightTestUtils.setUpFlightServerAndClient(confOverload, USER, PASSWORD, Map.of(CLUSTER_HEADER_KEY, TEST_CLUSTER));
         sqlClient = serverClient.flightSqlClient();
         serverLocation = serverClient.flightServer().getLocation();
