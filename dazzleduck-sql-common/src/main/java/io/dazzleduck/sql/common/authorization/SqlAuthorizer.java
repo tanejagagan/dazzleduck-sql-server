@@ -112,4 +112,22 @@ public interface SqlAuthorizer {
     JsonNode authorize(String user, String database, String schema, JsonNode query,
                        Map<String, String> verifiedClaims
     ) throws UnauthorizedException;
+
+    static boolean hasAccessToPath(String authorizedPath, String queriedPath) {
+        var authorizedSplits = authorizedPath.split("/");
+        var queriedSplits = queriedPath.split("/");
+        for(int i = 0 ; i < authorizedSplits.length; i ++){
+            if(!authorizedSplits[i].equals(queriedSplits[i])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    static boolean hasAccessToTable(String database, String schema, String table, Transformations.CatalogSchemaTable queried) {
+        return table.equals(queried.tableOrPath()) &&
+                schema.equals(queried.schema()) &&
+                database.equals(queried.catalog()) &&
+                queried.type() == Transformations.TableType.BASE_TABLE;
+    }
 }

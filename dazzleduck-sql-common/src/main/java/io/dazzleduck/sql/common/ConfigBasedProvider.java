@@ -4,7 +4,7 @@ import com.typesafe.config.Config;
 
 public interface ConfigBasedProvider {
 
-    public static final String CLASS_KEY = "class";
+    String CLASS_KEY = "class";
     static <T> T load(Config config, String prefixKey, T defaultObject) throws Exception {
         if( config.hasPath(prefixKey)) {
             var innerConfig = config.getConfig(prefixKey);

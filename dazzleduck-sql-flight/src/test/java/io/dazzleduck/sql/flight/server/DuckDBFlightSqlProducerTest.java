@@ -45,6 +45,7 @@ import static io.dazzleduck.sql.common.util.ConfigUtils.CONFIG_PATH;
 import static io.dazzleduck.sql.commons.util.TestConstants.SUPPORTED_DELTA_PATH_QUERY;
 import static io.dazzleduck.sql.commons.util.TestConstants.SUPPORTED_HIVE_PATH_QUERY;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 public class DuckDBFlightSqlProducerTest {
     protected static final String LOCALHOST = "localhost";
@@ -132,22 +133,14 @@ public class DuckDBFlightSqlProducerTest {
             "SELECT * from " + TEST_CATALOG + "." + TEST_SCHEMA + "." + TEST_TABLE
     })
     public void testStatement(String query) throws Exception {
-        final FlightInfo flightInfo = sqlClient.execute(query);
-        try (final FlightStream stream =
-                     sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket())) {
-            TestUtils.isEqual(query, clientAllocator, FlightStreamReader.of(stream, clientAllocator));
-        }
+        FlightTestUtils.testQuery(query, sqlClient, clientAllocator);
     }
 
     @ParameterizedTest
     @ValueSource(strings = {"SELECT * FROM generate_series(" + Headers.DEFAULT_ARROW_FETCH_SIZE * 3 + ")"
     })
     public void testStatementMultiBatch(String query) throws Exception {
-        final FlightInfo flightInfo = sqlClient.execute(query);
-        try (final FlightStream stream =
-                     sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket())) {
-            TestUtils.isEqual(query, clientAllocator, FlightStreamReader.of(stream, clientAllocator));
-        }
+        FlightTestUtils.testQuery(query, sqlClient, clientAllocator);
     }
 
     @Test
@@ -198,15 +191,15 @@ public class DuckDBFlightSqlProducerTest {
 
     @Test
     public void testBadStatement() throws Exception {
-        String query = "SELECT x FROM generate_series(10)";
-        final FlightInfo flightInfo = sqlClient.execute(query);
-        try (final FlightStream stream =
-                     sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket())) {
-            stream.next();
-            throw new RuntimeException("It should not come here");
-        } catch (FlightRuntimeException flightRuntimeException){
-            // All good. Its expected to have this exception
-        }
+
+        assertThrows(FlightRuntimeException.class, () -> {
+            String query = "SELECT x FROM generate_series(10)";
+            final FlightInfo flightInfo = sqlClient.execute(query);
+            try (final FlightStream stream =
+                         sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket())) {
+                stream.next();
+            }
+        });
     }
 
     @Test
@@ -257,10 +250,9 @@ public class DuckDBFlightSqlProducerTest {
     @Test
     public void testGetCatalogsResults() throws Exception {
         String expectedSql = "select distinct(database_name) as TABLE_CAT from duckdb_columns() order by database_name";
-        try (final FlightStream stream =
-                     sqlClient.getStream(sqlClient.getCatalogs().getEndpoints().get(0).getTicket())) {
-            TestUtils.isEqual(expectedSql, clientAllocator, FlightStreamReader.of(stream, clientAllocator));
-        }
+        FlightTestUtils.testStream(expectedSql,
+                () -> sqlClient.getStream(sqlClient.getCatalogs().getEndpoints().get(0).getTicket()),
+                clientAllocator);
     }
 
     @Test

@@ -2,19 +2,20 @@ package io.dazzleduck.sql.flight.server.auth2;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.typesafe.config.Config;
-import com.typesafe.config.ConfigObject;
 import io.dazzleduck.sql.common.auth.Validator;
-import org.apache.arrow.flight.*;
+import io.dazzleduck.sql.common.util.ConfigUtils;
+import org.apache.arrow.flight.CallHeaders;
+import org.apache.arrow.flight.CallInfo;
+import org.apache.arrow.flight.CallStatus;
+import org.apache.arrow.flight.FlightClientMiddleware;
 import org.apache.arrow.flight.auth2.Auth2Constants;
 import org.apache.arrow.flight.auth2.CallHeaderAuthenticator;
 
-import java.net.URI;
 import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.security.NoSuchAlgorithmException;
-import java.util.*;
+import java.util.Base64;
+import java.util.Map;
 
 public class AuthUtils {
     private static final ObjectMapper objectMapper = new ObjectMapper();
@@ -26,14 +27,14 @@ public class AuthUtils {
                 new String(up);
     }
 
-    public static CallHeaderAuthenticator getAuthenticator(Config config) throws NoSuchAlgorithmException {
+    public static AdvanceJWTTokenAuthenticator getAuthenticator(Config config) throws NoSuchAlgorithmException {
         var validator = createCredentialValidator(config);
         var authenticator = new AdvanceBasicCallHeaderAuthenticator(validator);
-        var secretKey = Validator.generateRandoSecretKey();
-        return new AdvanceJWTTokenAuthenticator( authenticator, secretKey, config);
+        var secretKey = Validator.fromString(config.getString(ConfigUtils.SECRET_KEY_KEY));
+        return new AdvanceJWTTokenAuthenticator(authenticator, secretKey, config);
     }
 
-    public static CallHeaderAuthenticator getTestAuthenticator() throws NoSuchAlgorithmException {
+    public static AdvanceJWTTokenAuthenticator getTestAuthenticator() throws NoSuchAlgorithmException {
         var authenticator = new AdvanceBasicCallHeaderAuthenticator(NO_AUTH_CREDENTIAL_VALIDATOR);
         var secretKey = Validator.generateRandoSecretKey();
         return new AdvanceJWTTokenAuthenticator(authenticator, secretKey);
@@ -75,73 +76,10 @@ public class AuthUtils {
     }
 
     public static AdvanceBasicCallHeaderAuthenticator.AdvanceCredentialValidator createCredentialValidator(Config config) {
-        List<? extends ConfigObject> users = config.getObjectList("users");
-        Map<String, String> passwords = new HashMap<>();
-        users.forEach(o -> {
-            String name = o.toConfig().getString("username");
-            String password = o.toConfig().getString("password");
-            passwords.put(name, password);
-        });
-        return config.getBoolean("httpLogin") ?
-                createHttpCredentialValidator(config)
-                : createCredentialValidator(passwords);
+        return config.hasPath("login.url") ?
+                new HttpCredentialValidator(config)
+                : new ConfBasedCredentialValidator(config);
     }
-
-    private static AdvanceBasicCallHeaderAuthenticator.AdvanceCredentialValidator createHttpCredentialValidator(Config conf) {
-        return (username, password, callHeaders) -> {
-            List<String> jwtClaims = conf.getStringList("jwt.token.claims.headers");
-            var claimMap = new HashMap<>();
-            for (String claim : jwtClaims) {
-                claimMap.put(claim, callHeaders.get(claim));
-            }
-
-            String requestBody = objectMapper.writeValueAsString(Map.of(
-                    "username", username,
-                    "password", password,
-                    "claims", claimMap
-            ));
-
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(conf.getString("login.url")))
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(requestBody))
-                    .build();
-
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
-            if (response.statusCode() != 200) {
-                throw new RuntimeException("Failed to fetch token: " + response.body());
-            }
-
-            return new CallHeaderAuthenticator.AuthResult() {
-                @Override
-                public String getPeerIdentity() {
-                    return username;
-                }
-
-                @Override
-                public void appendToOutgoingHeaders(CallHeaders headers) {
-                    headers.insert(Auth2Constants.AUTHORIZATION_HEADER, "Bearer " + response.body());
-                }
-            };
-        };
-    }
-
-    private static AdvanceBasicCallHeaderAuthenticator.AdvanceCredentialValidator createCredentialValidator(Map<String, String> userPassword) {
-        Map<String, byte[]> userHashMap = new HashMap<>();
-        userPassword.forEach((u, p) -> userHashMap.put(u, Validator.hash(p)));
-        return (username, password, callHeaders) -> {
-            var storePassword = userHashMap.get(username);
-            if (storePassword != null &&
-                    !password.isEmpty() &&
-                    Validator.passwordMatch(storePassword, Validator.hash(password))) {
-                return (CallHeaderAuthenticator.AuthResult) () -> username;
-            } else {
-                throw new RuntimeException("Authentication failure");
-            }
-        };
-    }
-
 
     private static final AdvanceBasicCallHeaderAuthenticator.AdvanceCredentialValidator NO_AUTH_CREDENTIAL_VALIDATOR = (username, password, callHeaders) -> {
         if(!password.isEmpty()) {

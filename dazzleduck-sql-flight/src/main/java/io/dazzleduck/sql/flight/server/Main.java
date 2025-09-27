@@ -1,25 +1,22 @@
 package io.dazzleduck.sql.flight.server;
 
+import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.common.AuthorizerProvider;
 import io.dazzleduck.sql.common.StartupScriptProvider;
 import io.dazzleduck.sql.common.authorization.AccessMode;
-import io.dazzleduck.sql.common.authorization.NOOPAuthorizer;
 import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.commons.ConnectionPool;
+import io.dazzleduck.sql.flight.server.auth2.AdvanceJWTTokenAuthenticator;
+import io.dazzleduck.sql.flight.server.auth2.AdvanceServerCallHeaderAuthMiddleware;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
 import org.apache.arrow.flight.FlightServer;
 import org.apache.arrow.flight.Location;
-import org.apache.arrow.flight.auth2.CallHeaderAuthenticator;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.security.NoSuchAlgorithmException;
 import java.util.UUID;
 
 import static io.dazzleduck.sql.common.util.ConfigUtils.CONFIG_PATH;
@@ -46,13 +43,13 @@ public class Main {
         var config = commandLineConfig.withFallback(ConfigFactory.load().getConfig(CONFIG_PATH));
         int port = config.getInt("flight-sql.port");
         String host = config.getString("flight-sql.host");
-        CallHeaderAuthenticator authenticator = AuthUtils.getAuthenticator(config);
+        AdvanceJWTTokenAuthenticator authenticator = AuthUtils.getAuthenticator(config);
         boolean useEncryption = config.getBoolean("useEncryption");
         Location location = useEncryption ? Location.forGrpcTls(host, port) : Location.forGrpcInsecure(host, port);
         String keystoreLocation = config.getString("keystore");
         String serverCertLocation = config.getString("serverCert");
         String warehousePath = ConfigUtils.getWarehousePath(config);
-        String secretKey = config.getString("secretKey");
+        String secretKey = config.getString(ConfigUtils.SECRET_KEY_KEY);
         String producerId = config.hasPath("producerId") ? config.getString("producerId") : UUID.randomUUID().toString();
         if(!checkWarehousePath(warehousePath)) {
             System.out.printf("Warehouse dir does not exist %s. Create the dir to proceed", warehousePath);
@@ -70,7 +67,8 @@ public class Main {
 
 
         var builder = FlightServer.builder(allocator, location, producer)
-                .headerAuthenticator(authenticator);
+                .middleware(AdvanceServerCallHeaderAuthMiddleware.KEY,
+                        new AdvanceServerCallHeaderAuthMiddleware.Factory(authenticator));
         if (useEncryption) {
             builder.useTls(certStream, keyStream);
         }
