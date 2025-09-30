@@ -16,6 +16,7 @@ import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.Transformations;
 import io.dazzleduck.sql.commons.planner.SplitPlanner;
 import io.dazzleduck.sql.flight.FlightStreamReader;
+import io.dazzleduck.sql.flight.server.auth2.AdvanceServerCallHeaderAuthMiddleware;
 import org.apache.arrow.adapter.jdbc.JdbcParameterBinder;
 import org.apache.arrow.adapter.jdbc.JdbcToArrowUtils;
 import org.apache.arrow.flight.*;
@@ -26,7 +27,6 @@ import org.apache.arrow.flight.sql.impl.FlightSql;
 import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
-import org.apache.arrow.util.AutoCloseables;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.arrow.vector.ipc.WriteChannel;
@@ -481,7 +481,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         String path = optionMap.get("path");
         final String completePath = warehousePath + "/" + path;
         String format = optionMap.getOrDefault("format", "parquet");
-        String partitionColumnString = optionMap.get("partition");
+        String partitionColumnString = optionMap.get("partitions");
         List<String> partitionColumns;
         if(partitionColumnString != null) {
             partitionColumns = Arrays.stream(partitionColumnString.split(",")).toList();
@@ -824,6 +824,15 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         return new DatabaseSchema(database, schema);
     }
 
+    //TODO Need to provide implementation
+    private static Map<String, String> getVerifiedClaims(CallContext context){
+        AdvanceServerCallHeaderAuthMiddleware middleware = context.getMiddleware(AdvanceServerCallHeaderAuthMiddleware.KEY);
+        if (middleware == null) {
+            return Map.of();
+        }
+        return middleware.getAuthResultWithClaims().verifiedClaims();
+    }
+
     private static int getBatchSize(final CallContext context) {
         return ContextUtils.getValue(context, Headers.HEADER_FETCH_SIZE, Headers.DEFAULT_ARROW_FETCH_SIZE, Integer.class);
     }
@@ -987,7 +996,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     private JsonNode authorize(CallContext callContext, JsonNode sql) throws UnauthorizedException {
         String peerIdentity = callContext.peerIdentity();
         var databaseSchema = getDatabaseSchema(callContext);
-        return sqlAuthorizer.authorize(peerIdentity, databaseSchema.database, databaseSchema.schema, sql);
+        var verifiedClaims = getVerifiedClaims(callContext);
+        return sqlAuthorizer.authorize(peerIdentity, databaseSchema.database, databaseSchema.schema, sql, verifiedClaims);
     }
 
     protected StatementHandle newStatementHandle(String query) {

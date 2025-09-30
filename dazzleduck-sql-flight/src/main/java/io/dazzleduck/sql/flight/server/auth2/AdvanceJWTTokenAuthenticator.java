@@ -2,6 +2,7 @@ package io.dazzleduck.sql.flight.server.auth2;
 
 import com.google.common.base.Strings;
 import com.typesafe.config.Config;
+import com.typesafe.config.ConfigFactory;
 import io.grpc.Metadata;
 import io.jsonwebtoken.JwtParser;
 import io.jsonwebtoken.Jwts;
@@ -17,9 +18,7 @@ import org.slf4j.LoggerFactory;
 
 import javax.crypto.SecretKey;
 import java.time.Duration;
-import java.util.Calendar;
-import java.util.Date;
-import java.util.List;
+import java.util.*;
 
 public class AdvanceJWTTokenAuthenticator implements CallHeaderAuthenticator {
 
@@ -30,33 +29,39 @@ public class AdvanceJWTTokenAuthenticator implements CallHeaderAuthenticator {
     private final CallHeaderAuthenticator initialAuthenticator;
     private final List<String> claimHeader;
     private final boolean generateToken;
+    private final Set<String> validateHeaders;
 
 
     public AdvanceJWTTokenAuthenticator(CallHeaderAuthenticator initialAuthenticator, SecretKey key) {
-        this.key = key;
-        this.jwtParser = Jwts.parser()     // (1)
-                .verifyWith(key) //     or a constant key used to verify all signed JWTs
-                .build();
-        this.timeMinutes = Duration.ofMinutes(60);
-        this.generateToken = true;
-        this.claimHeader = List.of();
-        this.initialAuthenticator = initialAuthenticator;
+        this(initialAuthenticator, key,  defaulConfig());
     }
+
 
     public AdvanceJWTTokenAuthenticator(CallHeaderAuthenticator initialAuthenticator, SecretKey key, Config config) {
         this.key = key;
         this.jwtParser = Jwts.parser()     // (1)
                 .verifyWith(key)//     or a constant key used to verify all signed JWTs
                 .build();
-        this.timeMinutes = config.getDuration("jwt.token.expiration");
         this.initialAuthenticator = initialAuthenticator;
-        this.claimHeader = config.getStringList("jwt.token.claims.headers");
-        this.generateToken = config.getBoolean("jwt.token.generation.enabled");
+        this.timeMinutes = config.getDuration("jwt.token.expiration");
+        this.claimHeader = config.getStringList("jwt.token.claims.generate.headers");
+        this.validateHeaders = new HashSet<>(config.getStringList("jwt.token.claims.validate.headers"));
+        this.generateToken = config.getBoolean("jwt.token.generation");
+    }
+
+    private static Config defaulConfig() {
+        String defaultConfig = """
+                jwt.token.expiration = 1h
+                jwt.token.claims.generate.headers = []
+                jwt.token.claims.validate.headers = []
+                jwt.token.generation = true
+                """;
+        return ConfigFactory.parseString(defaultConfig);
     }
 
 
     @Override
-    public AuthResult authenticate(CallHeaders incomingHeaders) {
+    public AuthResultWithClaims authenticate(CallHeaders incomingHeaders) {
         // Check if headers contain a bearer token and if so, validate the token.
         final String bearerToken =
                 AuthUtilities.getValueFromAuthHeader(incomingHeaders, Auth2Constants.BEARER_PREFIX);
@@ -71,7 +76,7 @@ public class AdvanceJWTTokenAuthenticator implements CallHeaderAuthenticator {
     }
 
 
-    protected AuthResult getAuthResultWithBearerToken(AuthResult authResult, CallHeaders incomingHeaders) {
+    protected AuthResultWithClaims getAuthResultWithBearerToken(AuthResult authResult, CallHeaders incomingHeaders) {
 
         // We generate a dummy header and call appendToOutgoingHeaders with it.
         // We then inspect the dummy header and parse the bearer token if present in the header
@@ -81,8 +86,7 @@ public class AdvanceJWTTokenAuthenticator implements CallHeaderAuthenticator {
         String bearerToken = AuthUtilities.getValueFromAuthHeader(dummyHeaders, Auth2Constants.BEARER_PREFIX);
 
         if (!Strings.isNullOrEmpty(bearerToken)) {
-            Token.token = bearerToken;
-            return authResult; // Already has JWT from AuthUtils
+            return validateBearer(bearerToken, incomingHeaders);
         } else if (!generateToken) {
             logger.error("Authentication failed delegate token is missing");
             throw CallStatus.INTERNAL.toRuntimeException();
@@ -96,29 +100,21 @@ public class AdvanceJWTTokenAuthenticator implements CallHeaderAuthenticator {
                 .subject(authResult.getPeerIdentity())
                 .expiration(expiration.getTime())
                 .signWith(key);
+
+        var verifiedClaims =  new HashMap<String, String >();
         for (String key : claimHeader) {
-            builder.claim(key, incomingHeaders.get(key));
+            var value = incomingHeaders.get(key);
+            builder.claim(key, value);
+            verifiedClaims.put(key, value);
         }
         String jwt = builder
                 .compact();
-        Token.token = jwt;
 
-        return new AuthResult() {
-            @Override
-            public String getPeerIdentity() {
-                return authResult.getPeerIdentity();
-            }
-
-            @Override
-            public void appendToOutgoingHeaders(CallHeaders outgoingHeaders) {
-                authResult.appendToOutgoingHeaders(outgoingHeaders);
-                outgoingHeaders.insert(Auth2Constants.AUTHORIZATION_HEADER, Auth2Constants.BEARER_PREFIX + jwt);
-            }
-        };
+        return new AuthResultWithClaims(authResult.getPeerIdentity(), jwt, verifiedClaims);
     }
 
 
-    protected AuthResult validateBearer(String bearerToken, CallHeaders incomingHeader) {
+    protected AuthResultWithClaims validateBearer(String bearerToken, CallHeaders incomingHeader) {
         try {
             var jwt = jwtParser.parseSignedClaims(bearerToken);
             var payload = jwt.getPayload();
@@ -127,25 +123,22 @@ public class AdvanceJWTTokenAuthenticator implements CallHeaderAuthenticator {
             if (expiration.before(new Date())) {
                 throw FlightRuntimeExceptionFactory.of(new CallStatus(CallStatus.UNAUTHENTICATED.code(), null, "Expired", null));
             }
-            for (String key : claimHeader) {
-                var claimsFromJwt = payload.get(key, String.class);
-                var incomingHeaderValue = incomingHeader.get(key);
-                if (!claimsFromJwt.equals(incomingHeaderValue)) {
+
+            for(var validateKey : validateHeaders) {
+                var incomingHeaderValue = incomingHeader.get(validateKey);
+                var claimFromJwt = payload.get(validateKey, String.class);
+                if (!claimFromJwt.equals(incomingHeaderValue)) {
                     throw FlightRuntimeExceptionFactory.of(new CallStatus(CallStatus.UNAUTHENTICATED.code(), null, "jwt and headers do not match", null));
                 }
             }
-            return new AuthResult() {
-                @Override
-                public String getPeerIdentity() {
-                    return subject;
-                }
 
-                @Override
-                public void appendToOutgoingHeaders(CallHeaders outgoingHeaders) {
-                    outgoingHeaders.insert(
-                            Auth2Constants.AUTHORIZATION_HEADER, Auth2Constants.BEARER_PREFIX + bearerToken);
-                }
-            };
+            var allClaimsFromJWT = new HashMap<String, String>();
+            for (String key : claimHeader) {
+                var claimFromJwt = payload.get(key, String.class);
+                allClaimsFromJWT.put(key, claimFromJwt);
+            }
+            return new AuthResultWithClaims(subject, bearerToken, allClaimsFromJWT);
+
         } catch (Exception e) {
             throw CallStatus.UNAUTHENTICATED.toRuntimeException();
         }

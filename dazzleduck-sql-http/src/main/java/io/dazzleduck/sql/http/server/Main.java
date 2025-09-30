@@ -47,7 +47,7 @@ public class Main {
         var host = httpConfig.getString(ConfigUtils.HOST_KEY);
         var auth = httpConfig.hasPath(ConfigUtils.AUTHENTICATION_KEY) ? httpConfig.getString(ConfigUtils.AUTHENTICATION_KEY) : "none";
         String warehousePath = ConfigUtils.getWarehousePath(appConfig);
-        var secretKey = Validator.generateRandoSecretKey();
+        var secretKey = Validator.fromString(appConfig.getString(ConfigUtils.SECRET_KEY_KEY));
         var allocator = new RootAllocator();
         String location = "http://%s:%s".formatted(host, port);
         WebServer server = WebServer.builder()
@@ -57,7 +57,7 @@ public class Main {
                     var b = routing.register("/query", new QueryService(allocator))
                             .register("/login", new LoginService(appConfig, secretKey))
                             .register("/plan", new PlaningService(location, allocator))
-                            .register("/ingest", new IngestionService(warehousePath, allocator));
+                            .register("/ingest", new IngestionService(warehousePath, appConfig));
                     if ("jwt".equals(auth)) {
                         b.addFilter(new JwtAuthenticationFilter("/query", appConfig, secretKey));
                     }

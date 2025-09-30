@@ -18,6 +18,8 @@ public class ConfigUtils {
 
     public static final String  HOST_KEY =  "host";
 
+    public static final String SECRET_KEY_KEY = "secret-key";
+
     public record ConfigWithMainParameters(Config config, List<String> mainParameters){}
 
     public static ConfigWithMainParameters loadCommandLineConfig(String[] args) {

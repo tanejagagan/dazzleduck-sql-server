@@ -11,6 +11,7 @@ import io.dazzleduck.sql.commons.util.TestConstants;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.dazzleduck.sql.flight.FlightStreamReader;
 import org.apache.arrow.flight.Location;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -42,7 +43,7 @@ public class AccessControlTest {
         return "SELECT key, count(*), count(distinct value) FROM (%s) GROUP BY key".formatted(innerSql);
     }
 
-    static Location TEST_LOCATION = Location.forGrpcInsecure("localhost", 38888);
+    static Location SERVER_TEST_LOCATION = Location.forGrpcInsecure("localhost", 38888);
 
     static ServerClient SERVER_CLIENT;
 
@@ -66,7 +67,7 @@ public class AccessControlTest {
         };
 
         var  tableName = "%s.%s.%s".formatted(TEST_CATALOG, TEST_SCHEMA, TEST_TABLE);
-        SERVER_CLIENT = flightTestUtils.createRestrictedServerClient(TEST_LOCATION, sqlAuthorizer);
+        SERVER_CLIENT = flightTestUtils.createRestrictedServerClient(SERVER_TEST_LOCATION, sqlAuthorizer);
         var warehousePath = SERVER_CLIENT.warehousePath();
         var setupSql = new String[]{
                 "ATTACH '%s/%s.duckdb' AS %s".formatted(warehousePath, TEST_CATALOG, TEST_CATALOG),
@@ -75,6 +76,13 @@ public class AccessControlTest {
                 "INSERT INTO %s VALUES('k1', 'v1'), ('k2', 'v2'), ('k3', 'v3')".formatted(tableName)
         };
         ConnectionPool.executeBatch(setupSql);
+    }
+
+    @AfterAll
+    public static void cleanup() throws InterruptedException {
+        SERVER_CLIENT.flightServer().close();
+        ConnectionPool.execute("DROP SCHEMA %s.%s CASCADE".formatted(TEST_CATALOG, TEST_SCHEMA));
+        ConnectionPool.execute("DETACH %s".formatted(TEST_CATALOG));
     }
 
     @Test
@@ -91,7 +99,7 @@ public class AccessControlTest {
     @Test
     public void rowLevelFilterForPath() throws SQLException, JsonProcessingException, UnauthorizedException {
         var query = Transformations.parseToTree(TestConstants.SUPPORTED_HIVE_PATH_QUERY);
-        var authorizedQuery = sqlAuthorizer.authorize(AccessControlTest.TEST_USER, null, null, query);
+        var authorizedQuery = sqlAuthorizer.authorize(AccessControlTest.TEST_USER, null, null, query, Map.of());
         var result = Transformations.parseToSql(authorizedQuery);
         ConnectionPool.execute(result);
     }
@@ -100,7 +108,7 @@ public class AccessControlTest {
     public void rowLevelFilterForPathAggregation() throws SQLException, JsonProcessingException, UnauthorizedException {
         var aggregateSql = aggregateSql(TestConstants.SUPPORTED_HIVE_PATH_QUERY);
         var query = Transformations.parseToTree(aggregateSql);
-        var authorizedQuery = sqlAuthorizer.authorize(AccessControlTest.TEST_USER, null, null, query);
+        var authorizedQuery = sqlAuthorizer.authorize(AccessControlTest.TEST_USER, null, null, query, Map.of());
         var result = Transformations.parseToSql(authorizedQuery);
         ConnectionPool.execute(result);
     }
@@ -108,7 +116,7 @@ public class AccessControlTest {
     @Test
     public void rowLevelFilterForTable() throws SQLException, JsonProcessingException, UnauthorizedException {
         var query = Transformations.parseToTree(supportedTableQuery);
-        var authorizedQuery = sqlAuthorizer.authorize(TEST_USER, TEST_CATALOG, TEST_SCHEMA, query);
+        var authorizedQuery = sqlAuthorizer.authorize(TEST_USER, TEST_CATALOG, TEST_SCHEMA, query, Map.of());
         Transformations.parseToSql(authorizedQuery);
     }
 
@@ -116,7 +124,7 @@ public class AccessControlTest {
     public void rowLevelFilterForTableAggregation() throws SQLException, JsonProcessingException, UnauthorizedException {
         var aggregateSql = aggregateSql(supportedTableQuery);
         var query = Transformations.parseToTree(aggregateSql);
-        var authorizedQuery = sqlAuthorizer.authorize(AccessControlTest.TEST_USER, TEST_CATALOG, AccessControlTest.TEST_SCHEMA, query);
+        var authorizedQuery = sqlAuthorizer.authorize(AccessControlTest.TEST_USER, TEST_CATALOG, AccessControlTest.TEST_SCHEMA, query, Map.of());
         Transformations.parseToSql(authorizedQuery);
     }
 
