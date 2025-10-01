@@ -3,6 +3,8 @@ package io.dazzleduck.sql.http.server;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.typesafe.config.Config;
+import io.dazzleduck.sql.common.authorization.NOOPAuthorizer;
+import io.dazzleduck.sql.common.authorization.SqlAuthorizer;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.helidon.common.uri.UriQuery;
 import io.helidon.http.HeaderNames;
@@ -43,10 +45,15 @@ public class IngestionService implements HttpService, ParameterUtils {
 
     private final ConcurrentHashMap<String, BulkIngestQueue<String, Result >> ingestionQueueMap =
             new ConcurrentHashMap<>();
+    private final SqlAuthorizer sqlAuthorizer;
 
     public IngestionService(String warehousePath, Config config) {
+        this(warehousePath, config, new NOOPAuthorizer());
+    }
+    public IngestionService(String warehousePath, Config config, SqlAuthorizer sqlAuthorizer) {
         this.warehousePath = warehousePath;
         this.config = config;
+        this.sqlAuthorizer = sqlAuthorizer;
     }
 
     @Override

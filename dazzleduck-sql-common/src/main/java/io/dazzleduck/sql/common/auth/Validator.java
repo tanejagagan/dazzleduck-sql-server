@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.Map;
 
 public interface Validator {
-    public static byte[] hash(String originalString) {
+    static byte[] hash(String originalString) {
         MessageDigest digest;
         try {
             digest = MessageDigest.getInstance("SHA-256");
@@ -25,7 +25,7 @@ public interface Validator {
         }
     }
 
-    public static boolean passwordMatch(byte[] aArray, byte[] bArray) {
+    static boolean passwordMatch(byte[] aArray, byte[] bArray) {
         var len = Math.min(aArray.length, bArray.length);
         var diff = 0;
         for(int i = 0 ; i < len; i ++){
@@ -37,18 +37,18 @@ public interface Validator {
         return diff == 0;
     }
 
-    public static SecretKey generateRandoSecretKey() throws NoSuchAlgorithmException {
+    static SecretKey generateRandoSecretKey() throws NoSuchAlgorithmException {
         var secureKeySize = 32;
         byte[] secureRandomBytes = new byte[secureKeySize];
         SecureRandom.getInstanceStrong().nextBytes(secureRandomBytes);
         return Keys.hmacShaKeyFor(secureRandomBytes);
     }
 
-    public static SecretKey fromString(String input) {
+    static SecretKey fromString(String input) {
         return Keys.hmacShaKeyFor(input.getBytes());
     }
 
-    public static boolean validatePassword(String username, String password, Map<String, byte[]> userHashMap) {
+    static boolean validatePassword(String username, String password, Map<String, byte[]> userHashMap) {
         var storePassword = userHashMap.get(username);
         return storePassword != null &&
                 !password.isEmpty() &&
