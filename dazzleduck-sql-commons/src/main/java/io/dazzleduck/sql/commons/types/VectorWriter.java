@@ -1,0 +1,90 @@
+package io.dazzleduck.sql.commons.types;
+
+import org.apache.arrow.vector.IntVector;
+import org.apache.arrow.vector.VarCharVector;
+import org.apache.arrow.vector.complex.ListVector;
+import org.apache.arrow.vector.complex.MapVector;
+import org.apache.arrow.vector.complex.impl.UnionListWriter;
+import org.apache.arrow.vector.complex.impl.UnionMapWriter;
+
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Map;
+
+
+public interface VectorWriter<V> {
+    void write(V listVector, int index, Object value);
+
+
+    class VarCharVectorWriter implements VectorWriter<VarCharVector> {
+        @Override
+        public void write(VarCharVector varCharVector, int index, Object value) {
+            if (value == null) {
+                varCharVector.setNull(index);
+            }
+            var v = (String) value;
+            varCharVector.set(index, v.getBytes(StandardCharsets.UTF_8));
+        }
+    }
+
+    class IntVectorWriter implements VectorWriter<IntVector> {
+        @Override
+        public void write(IntVector intVector, int index, Object value) {
+            if (value == null) {
+                intVector.setNull(index);
+            }
+            var v = (Integer) value;
+            intVector.set(index, v);
+        }
+    }
+
+    class ListVectorWriter implements VectorWriter<ListVector> {
+        private final ElementWriteFunction elementWriteFunction;
+
+        public ListVectorWriter(ElementWriteFunction elementWriteFunction) {
+            this.elementWriteFunction = elementWriteFunction;
+        }
+
+        public void write(ListVector listVector, int index, Object value) {
+            UnionListWriter writer = listVector.getWriter();
+            if (value == null) {
+                writer.writeNull();
+                return;
+            }
+            writer.setPosition(index);
+            writer.startList();
+            @SuppressWarnings("unchecked")
+            var v = (List<Object>) value;
+            for (Object object : v) {
+                elementWriteFunction.apply(writer, object);
+            }
+            writer.endList();
+        }
+    }
+
+    class MapVectorWriter implements VectorWriter<MapVector> {
+        private final ElementWriteFunction keyWrite;
+        private final ElementWriteFunction valueWrite;
+
+        public MapVectorWriter(ElementWriteFunction keyWrite, ElementWriteFunction valueWrite) {
+            this.keyWrite = keyWrite;
+            this.valueWrite = valueWrite;
+        }
+
+        @Override
+        public void write(MapVector mapVector, int index, Object value) {
+            UnionMapWriter mapWriter = new UnionMapWriter(mapVector);
+            mapWriter.setPosition(index);
+            mapWriter.startMap();
+            @SuppressWarnings("unchecked")
+            var m = (Map<Object, Object>) value;
+            for (var e : m.entrySet()) {
+                mapWriter.startEntry();
+                keyWrite.apply(mapWriter.key(), e.getKey());
+                valueWrite.apply(mapWriter.value(), e.getValue());
+                mapWriter.endEntry();
+            }
+            mapWriter.endMap();
+        }
+    }
+}

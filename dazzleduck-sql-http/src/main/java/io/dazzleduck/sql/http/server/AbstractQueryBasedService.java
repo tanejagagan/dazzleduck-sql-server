@@ -1,6 +1,7 @@
 package io.dazzleduck.sql.http.server;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.dazzleduck.sql.common.authorization.SqlAuthorizer;
 import io.helidon.http.HeaderNames;
 import io.helidon.http.HeaderValues;
 import io.helidon.http.Status;
@@ -17,6 +18,11 @@ public abstract class AbstractQueryBasedService implements HttpService {
 
     protected static final ObjectMapper MAPPER = new ObjectMapper();
 
+    protected final SqlAuthorizer sqlAuthorizer;
+
+    public AbstractQueryBasedService(SqlAuthorizer sqlAuthorizer) {
+        this.sqlAuthorizer = sqlAuthorizer;
+    }
     protected static final Logger logger = LoggerFactory.getLogger(AbstractQueryBasedService.class);
 
     protected void handle(ServerRequest request,

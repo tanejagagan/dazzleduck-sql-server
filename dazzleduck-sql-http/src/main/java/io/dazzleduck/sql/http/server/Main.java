@@ -3,6 +3,7 @@ package io.dazzleduck.sql.http.server;
 
 
 import com.typesafe.config.ConfigFactory;
+import io.dazzleduck.sql.common.AuthorizerProvider;
 import io.dazzleduck.sql.common.auth.Validator;
 import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.helidon.config.Config;
@@ -33,7 +34,7 @@ public class Main {
      * Application main entry point.
      * @param args command line arguments.
      */
-    public static void main(String[] args) throws NoSuchAlgorithmException {
+    public static void main(String[] args) throws Exception {
         
         // load logging configuration
         LogConfig.configureRuntime();
@@ -48,15 +49,16 @@ public class Main {
         var auth = httpConfig.hasPath(ConfigUtils.AUTHENTICATION_KEY) ? httpConfig.getString(ConfigUtils.AUTHENTICATION_KEY) : "none";
         String warehousePath = ConfigUtils.getWarehousePath(appConfig);
         var secretKey = Validator.fromString(appConfig.getString(ConfigUtils.SECRET_KEY_KEY));
+        var authorizer = AuthorizerProvider.load(appConfig);
         var allocator = new RootAllocator();
         String location = "http://%s:%s".formatted(host, port);
         WebServer server = WebServer.builder()
                 .config(helidonConfig.get("flight-sql"))
                 .routing(routing -> {
-                    var b = routing.register("/query", new QueryService(allocator))
+                    var b = routing.register("/query", new QueryService(allocator, authorizer))
                             .register("/login", new LoginService(appConfig, secretKey))
-                            .register("/plan", new PlaningService(location, allocator))
-                            .register("/ingest", new IngestionService(warehousePath, appConfig));
+                            .register("/plan", new PlaningService(location, allocator, authorizer))
+                            .register("/ingest", new IngestionService(warehousePath, appConfig, authorizer));
                     if ("jwt".equals(auth)) {
                         b.addFilter(new JwtAuthenticationFilter("/query", appConfig, secretKey));
                     }

@@ -1,32 +1,35 @@
 package io.dazzleduck.sql.http.server;
 
 import io.dazzleduck.sql.common.Headers;
+import io.dazzleduck.sql.common.authorization.NOOPAuthorizer;
+import io.dazzleduck.sql.common.authorization.SqlAuthorizer;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.helidon.http.HeaderNames;
 import io.helidon.http.Status;
 import io.helidon.webserver.http.ServerRequest;
 import io.helidon.webserver.http.ServerResponse;
 import org.apache.arrow.memory.BufferAllocator;
-import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.arrow.vector.ipc.ArrowStreamWriter;
 import org.duckdb.DuckDBResultSet;
 
 import java.nio.channels.Channels;
 import java.sql.SQLException;
-import java.util.List;
 
 public class QueryService extends AbstractQueryBasedService {
 
     private final BufferAllocator allocator;
 
     public QueryService(BufferAllocator allocator) {
+        this(allocator, new NOOPAuthorizer());
+    }
+    public QueryService(BufferAllocator allocator, SqlAuthorizer sqlAuthorizer) {
+        super(sqlAuthorizer);
         this.allocator = allocator;
     }
 
     protected void handleInternal(ServerRequest request,
                                 ServerResponse response, String query) {
-
         var fetchSizeHeader = request.headers().value(HeaderNames.create(Headers.HEADER_FETCH_SIZE));
         int fetchSize = fetchSizeHeader.map(Integer::parseInt).orElse(Headers.DEFAULT_ARROW_FETCH_SIZE);
         try (var connection = ConnectionPool.getConnection();
