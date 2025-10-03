@@ -11,6 +11,8 @@ import io.helidon.logging.common.LogConfig;
 import io.helidon.webserver.WebServer;
 import org.apache.arrow.memory.RootAllocator;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.NoSuchAlgorithmException;
 
 import static io.dazzleduck.sql.common.util.ConfigUtils.CONFIG_PATH;
@@ -52,13 +54,17 @@ public class Main {
         var authorizer = AuthorizerProvider.load(appConfig);
         var allocator = new RootAllocator();
         String location = "http://%s:%s".formatted(host, port);
+        var tempWriteDir = Path.of(appConfig.getString("temp-write-location"));
+        if (Files.exists(tempWriteDir)) {
+            Files.createDirectories(tempWriteDir);
+        }
         WebServer server = WebServer.builder()
                 .config(helidonConfig.get("flight-sql"))
                 .routing(routing -> {
                     var b = routing.register("/query", new QueryService(allocator, authorizer))
                             .register("/login", new LoginService(appConfig, secretKey))
                             .register("/plan", new PlaningService(location, allocator, authorizer))
-                            .register("/ingest", new IngestionService(warehousePath, appConfig, authorizer));
+                            .register("/ingest", new IngestionService(warehousePath, appConfig, authorizer, tempWriteDir));
                     if ("jwt".equals(auth)) {
                         b.addFilter(new JwtAuthenticationFilter("/query", appConfig, secretKey));
                     }

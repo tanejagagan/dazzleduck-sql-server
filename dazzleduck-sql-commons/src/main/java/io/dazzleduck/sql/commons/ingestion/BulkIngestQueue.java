@@ -1,5 +1,11 @@
-package io.dazzleduck.sql.http.server;
+package io.dazzleduck.sql.commons.ingestion;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -51,7 +57,7 @@ public abstract class BulkIngestQueue<T, R> {
             var progressBatch = inProgressBatchIds.get(batch.producerId());
             if (progressBatch != null && progressBatch >= batch.producerBatchId()) {
                 return CompletableFuture.failedFuture(
-                        new BadRequestException(400, "In progress batch id %s. Current batch id %s".formatted(progressBatch, batch.producerBatchId())));
+                        new OutOfSequenceBatch(progressBatch, batch.producerBatchId()));
             }
         }
         var result = new CompletableFuture<R>();
@@ -120,7 +126,7 @@ public abstract class BulkIngestQueue<T, R> {
         totalTimeSpentWriting += timeSpentWriting;
     }
 
-    private void updateStatsWithNewBatch(Batch batch) {
+    private void updateStatsWithNewBatch(Batch<T> batch) {
         inProgressBatchIds.put(batch.producerId(), batch.producerBatchId());
         awaitingWriteMemorySize += batch.totalSize();
         var n = batch.receivedTime().plus(maxDelay);
@@ -159,6 +165,15 @@ public abstract class BulkIngestQueue<T, R> {
         private void cancel() {
             this.canceled = true;
         }
+    }
+
+    public static String writeAndValidateTempFile(Path tempDir, InputStream inputStream) throws IOException {
+        String uniqueFileName = "ingestion_" + UUID.randomUUID() + ".arrow";
+        Path tempFilePath = tempDir.resolve(uniqueFileName);
+        try (OutputStream out = Files.newOutputStream(tempFilePath, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
+            inputStream.transferTo(out);
+        }
+        return tempFilePath.toAbsolutePath().toString();
     }
 }
 
