@@ -7,6 +7,7 @@ import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.complex.ListVector;
 import org.apache.arrow.vector.complex.MapVector;
+import org.apache.arrow.vector.types.pojo.Schema;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -26,22 +27,14 @@ public class VectorSchemaRootWriteTest {
         });
         var intListWriteFunction = new VectorWriter.ListVectorWriter(ElementWriteFunction.INT);
         var varcharListWriteFunction = new VectorWriter.ListVectorWriter(ElementWriteFunction.VARCHAR);
-        VectorWriter[] functions = {intListWriteFunction, varcharListWriteFunction};
         JavaRow[] testRows = {row1, row2};
-
+        Schema schema = null;
+        var vectorSchemaRootWriter = new VectorSchemaRootWriter(schema, intListWriteFunction, varcharListWriteFunction);
         try (var allocator = new RootAllocator()) {
             ListVector listVector = ListVector.empty("myIntList", allocator);
             ListVector varcharListVector = ListVector.empty("myCharVector", allocator);
             try (var root = VectorSchemaRoot.of(listVector, varcharListVector)) {
-                root.allocateNew();
-                for (int i = 0; i < testRows.length; i++) {
-                    for (int j = 0; j < functions.length; j++) {
-                        var function = functions[j];
-                        var vector = root.getVector(j);
-                        function.write(vector, i, testRows[i].get(j));
-                    }
-                }
-                root.setRowCount(testRows.length);
+                vectorSchemaRootWriter.writeToVector(testRows, root);
                 System.out.println(root.contentToTSVString());
             }
         }
@@ -49,26 +42,16 @@ public class VectorSchemaRootWriteTest {
 
     @Test
     public void testMap() {
-
         var row1 = new JavaRow(new Object[]{Map.of("one", 1, "two", 2)});
         var row2 = new JavaRow(new Object[]{Map.of("six", 6, "seven", 7)});
         JavaRow[] testRows = {row1, row2};
         var mapWriteFunction = new VectorWriter.MapVectorWriter(ElementWriteFunction.VARCHAR, ElementWriteFunction.INT);
-        VectorWriter[] functions = {mapWriteFunction};
-
+        Schema schema = null;
+        var vectorSchemaRootWriter = new VectorSchemaRootWriter(schema, mapWriteFunction);
         try (var allocator = new RootAllocator()) {
             MapVector mapVector = MapVector.empty("myMap", allocator, false);
-
             try (var root = VectorSchemaRoot.of(mapVector)) {
-                root.allocateNew();
-                for (int i = 0; i < testRows.length; i++) {
-                    for (int j = 0; j < functions.length; j++) {
-                        var function = functions[j];
-                        var vector = root.getVector(j);
-                        function.write(vector, i, testRows[i].get(j));
-                    }
-                }
-                root.setRowCount(testRows.length);
+                vectorSchemaRootWriter.writeToVector(testRows, root);
                 System.out.println(root.contentToTSVString());
             }
         }
@@ -103,23 +86,14 @@ public class VectorSchemaRootWriteTest {
             var intListWriteFunction = new VectorWriter.ListVectorWriter(ElementWriteFunction.INT);
             var varcharListWriteFunction = new VectorWriter.ListVectorWriter(ElementWriteFunction.VARCHAR);
             var mapWriteFunction = new VectorWriter.MapVectorWriter(ElementWriteFunction.VARCHAR, ElementWriteFunction.INT);
-            VectorWriter[] functions = {
-                    intWriteFunction,
+            Schema schema = null;
+            var vectorSchemaRootWriter = new VectorSchemaRootWriter(schema, intWriteFunction,
                     varcharWriteFunction,
                     intListWriteFunction,
                     varcharListWriteFunction,
-                    mapWriteFunction
-            };
+                    mapWriteFunction);
             try (var root = VectorSchemaRoot.of(intVector, varcharVector, listVector, varcharListVector, mapVector)) {
-                root.allocateNew();
-                for (int i = 0; i < testRows.length; i++) {
-                    for (int j = 0; j < functions.length; j++) {
-                        var function = functions[j];
-                        var vector = root.getVector(j);
-                        function.write(vector, i, testRows[i].get(j));
-                    }
-                }
-                root.setRowCount(testRows.length);
+                vectorSchemaRootWriter.writeToVector(testRows, root);
                 System.out.println(root.contentToTSVString());
             }
         }
