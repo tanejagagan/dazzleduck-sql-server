@@ -1,5 +1,7 @@
 package io.dazzleduck.sql.http.server;
 
+import io.dazzleduck.sql.commons.ingestion.BulkIngestQueue;
+
 import java.time.Clock;
 import java.time.Duration;
 import java.util.concurrent.ScheduledExecutorService;

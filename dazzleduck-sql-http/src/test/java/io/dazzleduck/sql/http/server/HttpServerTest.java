@@ -46,7 +46,7 @@ public class HttpServerTest {
     private static String warehousePath;
 
     @BeforeAll
-    public static void setup() throws NoSuchAlgorithmException {
+    public static void setup() throws Exception {
         warehousePath = "/tmp/" + UUID.randomUUID();
         new File(warehousePath).mkdir();
         String[] args1 = {"--conf", "http.port=8080",   "--conf", "%s=%s".formatted(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath)};

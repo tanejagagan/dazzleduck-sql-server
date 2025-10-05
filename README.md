@@ -17,7 +17,8 @@ JDK  21
 
 ## Getting started with Docker
 - Build the docker image.
-  `./mvnw clean package -DskipTests jib:dockerBuild`
+  `./mvnw clean package -DskipTests`
+- `./mvnw package -DskipTests jib:dockerBuild -pl dazzleduck-sql-runtime`
 - Start the container with `example/data` mounted to the container
   ``` 
   docker run -ti -p 59307:59307 -p 8080:8080 dazzleduck/dazzleduck:latest --conf warehouse=/data

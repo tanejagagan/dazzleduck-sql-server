@@ -1,6 +1,8 @@
 package io.dazzleduck.sql.http.server;
 
 import io.dazzleduck.sql.common.Headers;
+import io.dazzleduck.sql.common.authorization.NOOPAuthorizer;
+import io.dazzleduck.sql.common.authorization.SqlAuthorizer;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.Transformations;
 import io.dazzleduck.sql.commons.planner.SplitPlanner;
@@ -18,8 +20,14 @@ public class PlaningService extends AbstractQueryBasedService implements Paramet
     String location;
 
     public PlaningService(String location, BufferAllocator allocator) {
+        this(location, allocator, new NOOPAuthorizer());
+    }
+
+    public PlaningService(String location, BufferAllocator allocator, SqlAuthorizer sqlAuthorizer) {
+        super(sqlAuthorizer);
         this.allocator = allocator;
         this.location = location;
+
     }
     @Override
     protected void handleInternal(ServerRequest request, ServerResponse response, String query) {

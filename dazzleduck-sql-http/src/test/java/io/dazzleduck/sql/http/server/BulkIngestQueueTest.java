@@ -1,6 +1,6 @@
 package io.dazzleduck.sql.http.server;
 
-import org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
+import io.dazzleduck.sql.commons.ingestion.Batch;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
