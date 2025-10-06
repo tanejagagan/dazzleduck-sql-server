@@ -134,11 +134,11 @@ class ArrowMicroMeterRegistryTest {
         DistributionSummary summary = DistributionSummary.builder("test.summary").register(registry);
         summary.record(5);
         summary.record(15);
+        Thread.sleep(2000);
 
         File tempFile = File.createTempFile("test-metrics-", ".arrow");
         try {
             ArrowFileWriterUtil.writeMetersToFile(new ArrayList<>(registry.getMeters()), tempFile.getAbsolutePath());
-
             TestUtils.isEqual(
                     "select unnest(['test.summary']) as name",
                     "select name from read_arrow('%s')".formatted(tempFile.getAbsolutePath())
