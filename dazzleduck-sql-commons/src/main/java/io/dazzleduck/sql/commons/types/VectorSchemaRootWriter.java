@@ -41,9 +41,6 @@ public class VectorSchemaRootWriter {
         for (var field : schema.getFields()) {
             listOfFunctions.add(createWriter(field));
         }
-        for (var r: listOfFunctions) {
-            System.out.println("==> " + r);
-        }
         return new VectorSchemaRootWriter(schema, listOfFunctions.toArray(new VectorWriter[0]));
     }
 
