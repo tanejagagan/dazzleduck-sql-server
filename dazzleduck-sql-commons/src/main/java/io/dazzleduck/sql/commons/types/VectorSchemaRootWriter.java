@@ -1,8 +1,13 @@
 package io.dazzleduck.sql.commons.types;
 
 import org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Schema;
-import org.apache.hadoop.shaded.org.apache.commons.lang3.NotImplementedException;
+import org.apache.arrow.vector.types.pojo.Field;
+
+import java.util.ArrayList;
+import java.util.List;
+
 
 public class VectorSchemaRootWriter {
 
@@ -32,6 +37,81 @@ public class VectorSchemaRootWriter {
 
     //TODO
     public static VectorSchemaRootWriter of(Schema schema) {
-        throw new NotImplementedException("Need to provide an implementation");
+        List<VectorWriter<?>> listOfFunctions = new ArrayList<>();
+        for (var field : schema.getFields()) {
+            listOfFunctions.add(createWriter(field));
+        }
+        for (var r: listOfFunctions) {
+            System.out.println("==> " + r);
+        }
+        return new VectorSchemaRootWriter(schema, listOfFunctions.toArray(new VectorWriter[0]));
+    }
+
+    private static VectorWriter<?> createWriter(Field field) {
+        var type = field.getType();
+        // ---------- Primitive types ----------
+        if (type instanceof ArrowType.Int intType) {
+            if (intType.getBitWidth() == 32) return new VectorWriter.IntVectorWriter();
+            else if (intType.getBitWidth() == 64) return new VectorWriter.BigVectorWriter();
+            else throw new UnsupportedOperationException("Unsupported int bit width: " + intType.getBitWidth());
+        } else if (type instanceof ArrowType.FloatingPoint) {
+            return new VectorWriter.FloatVectorWriter();
+        } else if (type instanceof ArrowType.Utf8) {
+            return new VectorWriter.VarCharVectorWriter();
+        }
+        // ---------- List type ----------
+        else if (type instanceof ArrowType.List) {
+            var elementField = field.getChildren().get(0);
+            var elementType = elementField.getType();
+
+            ElementWriteFunction elementFunc;
+
+            if (elementType instanceof ArrowType.Int intType) {
+                elementFunc = intType.getBitWidth() == 32 ? ElementWriteFunction.INT : ElementWriteFunction.BIGINT;
+            } else if (elementType instanceof ArrowType.FloatingPoint) {
+                elementFunc = ElementWriteFunction.DOUBLE;
+            } else if (elementType instanceof ArrowType.Utf8) {
+                elementFunc = ElementWriteFunction.VARCHAR;
+            } else {
+                throw new UnsupportedOperationException("Unsupported List element type: " + elementType);
+            }
+
+            return new VectorWriter.ListVectorWriter(elementFunc);
+        }
+
+        // ---------- Map type ----------
+        else if (type instanceof ArrowType.Map) {
+            var structField = field.getChildren().get(0); // Struct inside Map
+            var keyField = structField.getChildren().get(0);
+            var valueField = structField.getChildren().get(1);
+
+            // Key function
+            ElementWriteFunction keyFunc;
+            var keyType = keyField.getType();
+            if (keyType instanceof ArrowType.Int intType) {
+                keyFunc = intType.getBitWidth() == 32 ? ElementWriteFunction.INT : ElementWriteFunction.BIGINT;
+            } else if (keyType instanceof ArrowType.Utf8) {
+                keyFunc = ElementWriteFunction.VARCHAR;
+            } else {
+                throw new UnsupportedOperationException("Unsupported Map key type: " + keyType);
+            }
+
+            // Value function
+            ElementWriteFunction valueFunc;
+            var valueType = valueField.getType();
+            if (valueType instanceof ArrowType.Int intType) {
+                valueFunc = intType.getBitWidth() == 32 ? ElementWriteFunction.INT : ElementWriteFunction.BIGINT;
+            } else if (valueType instanceof ArrowType.FloatingPoint) {
+                valueFunc = ElementWriteFunction.DOUBLE;
+            } else if (valueType instanceof ArrowType.Utf8) {
+                valueFunc = ElementWriteFunction.VARCHAR;
+            } else {
+                throw new UnsupportedOperationException("Unsupported Map value type: " + valueType);
+            }
+            return new VectorWriter.MapVectorWriter(keyFunc, valueFunc);
+        }
+        else {
+            throw new UnsupportedOperationException("Unsupported ArrowType: " + type);
+        }
     }
 }
