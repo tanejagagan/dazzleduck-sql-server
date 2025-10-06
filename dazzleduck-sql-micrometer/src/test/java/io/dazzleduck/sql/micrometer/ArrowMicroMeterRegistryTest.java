@@ -67,7 +67,6 @@ class ArrowMicroMeterRegistryTest {
 
         // Create temp file for Arrow data
         File tempFile = File.createTempFile("test-metrics", ".arrow");
-        System.out.println(tempFile.getAbsolutePath());
         try {
             // Write metrics to the Arrow file
             ArrowFileWriterUtil.writeMetersToFile(new ArrayList<>(registry.getMeters()), tempFile.getAbsolutePath());
@@ -137,7 +136,6 @@ class ArrowMicroMeterRegistryTest {
         summary.record(15);
 
         File tempFile = File.createTempFile("test-metrics-", ".arrow");
-        System.out.println(tempFile.getAbsolutePath());
         try {
             ArrowFileWriterUtil.writeMetersToFile(new ArrayList<>(registry.getMeters()), tempFile.getAbsolutePath());
 

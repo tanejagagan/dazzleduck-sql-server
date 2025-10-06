@@ -121,6 +121,7 @@ public final class ArrowFileWriterUtil {
                     min = 0.0;
                     max = ds.max();
                     mean = ds.mean();
+                    System.out.println("---> " + value + " " + mean);
                 } else if (meter instanceof LongTaskTimer ltt) {
                     value = ltt.activeTasks();
                     double totalTime = ltt.duration(TimeUnit.SECONDS);
