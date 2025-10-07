@@ -3,6 +3,7 @@ package io.dazzleduck.sql.http.server;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.typesafe.config.Config;
+import io.dazzleduck.sql.common.authorization.AccessMode;
 import io.dazzleduck.sql.common.authorization.SqlAuthorizer;
 import io.dazzleduck.sql.commons.ingestion.Batch;
 import io.dazzleduck.sql.commons.ingestion.BulkIngestQueue;
@@ -41,10 +42,10 @@ public class IngestionService implements HttpService, ParameterUtils {
     private final SqlAuthorizer sqlAuthorizer;
     private final Path tempDir;
 
-    public IngestionService(String warehousePath, Config config, SqlAuthorizer sqlAuthorizer, Path tempDir)  {
+    public IngestionService(String warehousePath, Config config, AccessMode accessMode, Path tempDir)  {
         this.warehousePath = warehousePath;
         this.config = config;
-        this.sqlAuthorizer = sqlAuthorizer;
+        this.sqlAuthorizer = accessMode == AccessMode.COMPLETE? SqlAuthorizer.NOOP_AUTHORIZER : SqlAuthorizer.JWT_AUTHORIZER;
         this.tempDir = tempDir;
     }
 

@@ -14,6 +14,11 @@ import java.util.Map;
 import java.util.Set;
 
 public interface SqlAuthorizer {
+
+    public static SqlAuthorizer NOOP_AUTHORIZER = NOOPAuthorizer.INSTANCE;
+
+    public static SqlAuthorizer JWT_AUTHORIZER = JwtClaimBasedAuthorizer.INSTANCE;
+
     static JsonNode addFilterToTableFunction(JsonNode query, JsonNode toAdd) {
         var statement = Transformations.getFirstStatementNode(query);
         var selectOrig = Transformations.getSelectForTableFunction(statement);

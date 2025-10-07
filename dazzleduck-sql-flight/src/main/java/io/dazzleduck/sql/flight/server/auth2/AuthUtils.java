@@ -40,6 +40,12 @@ public class AuthUtils {
         return new AdvanceJWTTokenAuthenticator(authenticator, secretKey);
     }
 
+    public static AdvanceJWTTokenAuthenticator getTestAuthenticator(Config config) throws NoSuchAlgorithmException {
+        var authenticator = new AdvanceBasicCallHeaderAuthenticator(NO_AUTH_CREDENTIAL_VALIDATOR);
+        var secretKey = Validator.generateRandoSecretKey();
+        return new AdvanceJWTTokenAuthenticator(authenticator, secretKey, config);
+    }
+
     public static FlightClientMiddleware.Factory createClientMiddlewareFactory(String username,
                                                                                String password,
                                                                                Map<String, String> headers) {

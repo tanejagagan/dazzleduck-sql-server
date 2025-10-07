@@ -28,6 +28,7 @@ public class DuckDBFlightJDBCTest {
             " select count(*) from t where len = 10";
     private static final int port = 55556;
     static String url = String.format("jdbc:arrow-flight-sql://localhost:%s/?database=memory&useEncryption=0&user=admin&password=admin", port);
+    static String urlWithS3Path = String.format("jdbc:arrow-flight-sql://localhost:%s/?database=memory&useEncryption=0&user=admin&password=admin&path=s3://bucket/my/folder", port);
     @BeforeAll
     public static void beforeAll() throws Exception {
         String[] args = {"--conf", "flight-sql.port=" + port, "--conf", "useEncryption=false"};
@@ -263,6 +264,14 @@ public class DuckDBFlightJDBCTest {
             }
         } finally {
             ConnectionPool.execute(String.format("DROP TABLE IF EXISTS %s", table));
+        }
+    }
+
+    @Test
+    public void testS3BucketConnection() throws SQLException {
+        try(var connection = getConnection(urlWithS3Path, new Properties());
+            var statement = connection.createStatement()) {
+            System.out.println(statement);
         }
     }
 
