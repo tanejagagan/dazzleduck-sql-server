@@ -1,7 +1,6 @@
 package io.dazzleduck.sql.commons.types;
 
-import org.apache.arrow.vector.IntVector;
-import org.apache.arrow.vector.VarCharVector;
+import org.apache.arrow.vector.*;
 import org.apache.arrow.vector.complex.ListVector;
 import org.apache.arrow.vector.complex.MapVector;
 import org.apache.arrow.vector.complex.impl.UnionListWriter;
@@ -35,6 +34,28 @@ public interface VectorWriter<V> {
             }
             var v = (Integer) value;
             intVector.set(index, v);
+        }
+    }
+
+    class BigVectorWriter implements VectorWriter<BigIntVector> {
+        @Override
+        public void write(BigIntVector bigIntVector, int index, Object value) {
+            if (value == null) {
+                bigIntVector.setNull(index);
+            }
+            var v = (Long) value;
+            bigIntVector.set(index, v);
+        }
+    }
+
+    class FloatVectorWriter implements VectorWriter<Float8Vector> {
+        @Override
+        public void write(Float8Vector float8Vector, int index, Object value) {
+            if (value == null) {
+                float8Vector.setNull(index);
+            }
+            var v = (Double) value;
+            float8Vector.set(index, v);
         }
     }
 
