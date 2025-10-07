@@ -7,6 +7,7 @@ import org.apache.arrow.vector.complex.impl.UnionListWriter;
 import org.apache.arrow.vector.complex.impl.UnionMapWriter;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -20,6 +21,7 @@ public interface VectorWriter<V> {
         public void write(VarCharVector varCharVector, int index, Object value) {
             if (value == null) {
                 varCharVector.setNull(index);
+                return;
             }
             var v = (String) value;
             varCharVector.set(index, v.getBytes(StandardCharsets.UTF_8));
@@ -31,6 +33,7 @@ public interface VectorWriter<V> {
         public void write(IntVector intVector, int index, Object value) {
             if (value == null) {
                 intVector.setNull(index);
+                return;
             }
             var v = (Integer) value;
             intVector.set(index, v);
@@ -42,6 +45,7 @@ public interface VectorWriter<V> {
         public void write(BigIntVector bigIntVector, int index, Object value) {
             if (value == null) {
                 bigIntVector.setNull(index);
+                return;
             }
             var v = (Long) value;
             bigIntVector.set(index, v);
@@ -53,9 +57,22 @@ public interface VectorWriter<V> {
         public void write(Float8Vector float8Vector, int index, Object value) {
             if (value == null) {
                 float8Vector.setNull(index);
+                return;
             }
             var v = (Double) value;
             float8Vector.set(index, v);
+        }
+    }
+
+    class TimeStampMilliVectorWriter implements VectorWriter<TimeStampMilliVector> {
+        @Override
+        public void write(TimeStampMilliVector timeStampMilliVector, int index, Object value) {
+            if (value == null) {
+                timeStampMilliVector.setNull(index);
+                return;
+            }
+            var v = (Long) value;
+            timeStampMilliVector.set(index, v);
         }
     }
 

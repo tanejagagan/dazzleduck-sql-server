@@ -35,7 +35,6 @@ public class VectorSchemaRootWriter {
         return root;
     }
 
-    //TODO
     public static VectorSchemaRootWriter of(Schema schema) {
         List<VectorWriter<?>> listOfFunctions = new ArrayList<>();
         for (var field : schema.getFields()) {
@@ -55,6 +54,8 @@ public class VectorSchemaRootWriter {
             return new VectorWriter.FloatVectorWriter();
         } else if (type instanceof ArrowType.Utf8) {
             return new VectorWriter.VarCharVectorWriter();
+        } else if (type instanceof ArrowType.Timestamp) {
+            return new VectorWriter.TimeStampMilliVectorWriter();
         }
         // ---------- List type ----------
         else if (type instanceof ArrowType.List) {

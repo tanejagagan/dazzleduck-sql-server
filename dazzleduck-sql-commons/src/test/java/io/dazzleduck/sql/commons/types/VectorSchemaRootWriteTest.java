@@ -5,15 +5,19 @@ import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.*;
 import org.apache.arrow.vector.complex.ListVector;
 import org.apache.arrow.vector.complex.MapVector;
+import org.apache.arrow.vector.types.TimeUnit;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.FieldType;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.junit.jupiter.api.Test;
 import org.apache.arrow.vector.types.pojo.Field;
+
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import static java.util.Arrays.asList;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.util.Map;
 
@@ -129,18 +133,21 @@ public class VectorSchemaRootWriteTest {
         Field valueField = new Field("value", FieldType.nullable(new ArrowType.Int(32, true)), null);
         Field mapStruct = new Field("entries", FieldType.nullable(new ArrowType.Struct()), asList(keyField, valueField));
         Field mapField = new Field("scores", FieldType.nullable(new ArrowType.Map(false)), Collections.singletonList(mapStruct));
-        Schema schema = new Schema(asList(name, age, points, mapField));
+        Field dateField = new Field("date", FieldType.nullable(new ArrowType.Timestamp(TimeUnit.MILLISECOND, "UTC")), null);
+        Schema schema = new Schema(asList(name, age, points, mapField, dateField));
         // --- Create rows ---
         JavaRow row1 = new JavaRow(new Object[]{
-                "Alice", 25,
+                "John", 25,
                 List.of(10, 20, 30),
-                Map.of("math", 90, "english", 85)
+                Map.of("math", 90, "english", 85),
+                Instant.now().toEpochMilli()
         });
 
         JavaRow row2 = new JavaRow(new Object[]{
-                "Bob", 30,
+                "David", 30,
                 List.of(40, 50),
-                Map.of("math", 75, "english", 95)
+                Map.of("math", 75, "english", 95),
+                Instant.now().toEpochMilli()
         });
 
         JavaRow[] rows = {row1, row2};
@@ -151,14 +158,25 @@ public class VectorSchemaRootWriteTest {
             var ageVector = new IntVector("age", allocator);
             var pointsVector = ListVector.empty("points", allocator);
             var scoresVector = MapVector.empty("scores", allocator, false);
+            var dateVector = new TimeStampMilliVector("date", allocator);
 
-            try (VectorSchemaRoot root = VectorSchemaRoot.of(nameVector, ageVector, pointsVector, scoresVector)) {
+            try (VectorSchemaRoot root = VectorSchemaRoot.of(nameVector, ageVector, pointsVector, scoresVector, dateVector)) {
                 // --- Use the factory ---
                 VectorSchemaRootWriter writer = VectorSchemaRootWriter.of(schema);
                 // --- Write rows ---
                 writer.writeToVector(rows, root);
-                // --- Print for visual verification ---
-                System.out.println(root.contentToTSVString());
+
+                VarCharVector nameVectorActual = (VarCharVector) root.getVector("name");
+                List<String> actual = new ArrayList<>();
+                for (int i = 0; i < nameVectorActual.getValueCount(); i++) {
+                    if (!nameVectorActual.isNull(i)) {
+                        actual.add(nameVectorActual.getObject(i).toString());
+                    }
+                }
+
+                // --- Assertions ---
+                assertEquals(List.of("John", "David"), actual);
+                assertEquals(2, root.getRowCount());
             }
         }
     }
