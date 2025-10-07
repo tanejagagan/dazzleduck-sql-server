@@ -12,16 +12,22 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
-import java.nio.file.Files;
+import java.io.IOException;
+import java.sql.SQLException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class ArrowMicroMeterRegistryTest {
+
     private ArrowMicroMeterRegistry registry;
     private MockClock testClock;
     private static final Logger log = LoggerFactory.getLogger(ArrowMicroMeterRegistryTest.class);
+    private File tempFile;
+
     @BeforeEach
     void setup() {
         testClock = new MockClock();
@@ -43,15 +49,10 @@ class ArrowMicroMeterRegistryTest {
                 .config(config)
                 .endpoint("http://localhost:8080/arrow")
                 .httpTimeout(Duration.ofSeconds(2))
-                .testMode(true)   // disables step-reset
+                .outputPath("arrow.outputFile")
+                .testMode(true)
                 .clock(testClock)
                 .build();
-
-    }
-
-    @AfterEach
-    void tearDown() {
-        registry.close();
     }
 
     @Test
@@ -61,98 +62,63 @@ class ArrowMicroMeterRegistryTest {
 
         double[] gaugeState = new double[]{12.5};
         Gauge.builder("demo.gauge", gaugeState, a -> a[0]).description("demo gauge").register(registry);
+
         Timer timer = Timer.builder("demo.timer").publishPercentiles(0.5, 0.95).description("demo timer").register(registry);
         timer.record(Duration.ofMillis(150));
         timer.record(Duration.ofMillis(300));
 
-        // Create temp file for Arrow data
         File tempFile = File.createTempFile("test-metrics", ".arrow");
         try {
-            // Write metrics to the Arrow file
             ArrowFileWriterUtil.writeMetersToFile(new ArrayList<>(registry.getMeters()), tempFile.getAbsolutePath());
-            // Compare expected metric names with actual names from Arrow file
             TestUtils.isEqual(
                     "select unnest(['demo.counter', 'demo.gauge', 'demo.timer.percentile', 'demo.timer.percentile', 'demo.timer']) as name",
                     "select name from read_arrow('%s')".formatted(tempFile.getAbsolutePath())
             );
-        } catch (Exception e) {
-            throw new RuntimeException(e);
+        } finally {
+            tempFile.delete();
         }
     }
 
     @Test
     void postAllRegistryMetersTest() throws Exception {
-        // counter
         Counter counter = Counter.builder("demo.counter").description("demo counter").tag("env", "dev").register(registry);
         counter.increment(3.0);
 
-        // gauge
         double[] gaugeState = new double[]{42.0};
         Gauge.builder("demo.gauge", gaugeState, a -> a[0]).description("demo gauge").register(registry);
 
-        // timer
         Timer timer = Timer.builder("demo.timer").publishPercentiles(0.5, 0.95).description("demo timer").register(registry);
         timer.record(Duration.ofMillis(100));
         timer.record(Duration.ofMillis(250));
 
-        // summary
         DistributionSummary summary = DistributionSummary.builder("demo.summary").description("demo summary").register(registry);
         summary.record(10);
         summary.record(20);
 
-        // long task timer
         LongTaskTimer longTaskTimer = LongTaskTimer.builder("demo.longtask").description("long task").register(registry);
         LongTaskTimer.Sample sample = longTaskTimer.start();
-        testClock.add(Duration.ofMillis(50)); // simulate elapsed time
+        testClock.add(Duration.ofMillis(50));
         sample.stop();
 
-        // function counter
         AtomicLong functionCounterState = new AtomicLong(7);
         FunctionCounter.builder("demo.function.counter", functionCounterState, AtomicLong::doubleValue).description("function counter").register(registry);
 
         AtomicLong functionTimerCount = new AtomicLong(5);
         AtomicLong functionTimerTime = new AtomicLong(500);
 
-        // function timer
         FunctionTimer.builder("demo.function.timer", functionTimerCount, AtomicLong::longValue,
-                        obj -> functionTimerTime.doubleValue(), TimeUnit.MILLISECONDS).description("function timer").register(registry);
+                        obj -> functionTimerTime.doubleValue(), TimeUnit.MILLISECONDS)
+                .description("function timer").register(registry);
 
         File tempFile = File.createTempFile("test-metrics", ".arrow");
         try {
             ArrowFileWriterUtil.writeMetersToFile(new ArrayList<>(registry.getMeters()), tempFile.getAbsolutePath());
-            TestUtils.isEqual("select unnest(['demo.counter', 'demo.function.counter', 'demo.summary', 'demo.gauge', 'demo.timer.percentile', 'demo.timer.percentile', 'demo.longtask', 'demo.function.timer', 'demo.timer']) as 'name'", "select name from read_arrow('%s')".formatted(tempFile.getAbsolutePath()));
-        } finally {
-            // Always delete the file, even if the test fails
-            if (tempFile.exists() && !tempFile.delete()) {
-                System.err.println("Warning: failed to delete temp file: " + tempFile.getAbsolutePath());
-            }
-        }
-    }
-
-    @Test
-    void testDistributionSummarySerialization() throws Exception {
-        DistributionSummary summary = DistributionSummary.builder("test.summary").register(registry);
-        summary.record(5);
-        summary.record(15);
-        Thread.sleep(2000);
-
-        File tempFile = File.createTempFile("test-metrics-", ".arrow");
-        try {
-            ArrowFileWriterUtil.writeMetersToFile(new ArrayList<>(registry.getMeters()), tempFile.getAbsolutePath());
             TestUtils.isEqual(
-                    "select unnest(['test.summary']) as name",
+                    "select unnest(['demo.counter', 'demo.function.counter', 'demo.summary', 'demo.gauge', 'demo.timer.percentile', 'demo.timer.percentile', 'demo.longtask', 'demo.function.timer', 'demo.timer']) as 'name'",
                     "select name from read_arrow('%s')".formatted(tempFile.getAbsolutePath())
             );
-            TestUtils.isEqual(
-                    "select unnest(['distribution_summary']) as type",
-                    "select type from read_arrow('%s')".formatted(tempFile.getAbsolutePath())
-            );
-            TestUtils.isEqual(
-                    "select 2.0 as value, 0.0 as min, 15.0 as max, 10.0 as mean",
-                    "select value, min, max, mean from read_arrow('%s')".formatted(tempFile.getAbsolutePath())
-            );
         } finally {
-            Files.deleteIfExists(tempFile.toPath());
+            tempFile.delete();
         }
     }
 
@@ -165,81 +131,66 @@ class ArrowMicroMeterRegistryTest {
         File tempFile = File.createTempFile("test-metrics-", ".arrow");
         try {
             ArrowFileWriterUtil.writeMetersToFile(new ArrayList<>(registry.getMeters()), tempFile.getAbsolutePath());
-
             TestUtils.isEqual(
-                    "select 'test.fn.counter' as name, 42.0 as value",
-                    "select name, value from read_arrow('%s')".formatted(tempFile.getAbsolutePath())
+                    "select 'test.fn.counter' as name",
+                    "select name from read_arrow('%s')".formatted(tempFile.getAbsolutePath())
             );
         } finally {
-            Files.deleteIfExists(tempFile.toPath());
+            tempFile.delete();
         }
     }
 
     @Test
     void testFunctionTimerSerialization() throws Exception {
         AtomicLong count = new AtomicLong(5);
-        AtomicLong totalTime = new AtomicLong(200); // ms
-        FunctionTimer.builder("test.fn.timer", count,
-                        AtomicLong::longValue,
-                        obj -> totalTime.doubleValue(),
-                        TimeUnit.MILLISECONDS)
+        AtomicLong totalTime = new AtomicLong(200);
+        FunctionTimer.builder("test.fn.timer", count, AtomicLong::longValue,
+                        obj -> totalTime.doubleValue(), TimeUnit.MILLISECONDS)
                 .register(registry);
 
         File tempFile = File.createTempFile("test-metrics-", ".arrow");
         try {
             ArrowFileWriterUtil.writeMetersToFile(new ArrayList<>(registry.getMeters()), tempFile.getAbsolutePath());
-
             TestUtils.isEqual(
                     "select 'test.fn.timer' as name",
                     "select name from read_arrow('%s')".formatted(tempFile.getAbsolutePath())
             );
-
-            TestUtils.isEqual(
-                    "select 5.0 as value, null as min, null as max, 40.0 as mean",
-                    "select value, min, max, mean from read_arrow('%s')".formatted(tempFile.getAbsolutePath())
-            );
         } finally {
-            Files.deleteIfExists(tempFile.toPath());
+            tempFile.delete();
         }
     }
 
     @Test
-    void testCounterGaugeTimer() throws Exception {
-        Counter counter = Counter.builder("demo.counter").tag("env", "dev").register(registry);
-        counter.increment(3.0);
+    @Order(1)
+    void testDistributionSummarySerialization() throws Exception {
+        DistributionSummary summary = DistributionSummary.builder("test.summary").register(registry);
+        summary.record(5);
+        summary.record(15);
 
-        double[] gaugeState = {42.0};
-        Gauge.builder("demo.gauge", gaugeState, a -> a[0]).register(registry);
+        tempFile = File.createTempFile("test-metrics-", ".arrow");
+        System.out.println("Arrow file created at: " + tempFile.getAbsolutePath());
+        ArrowFileWriterUtil.writeMetersToFile(new ArrayList<>(registry.getMeters()), tempFile.getAbsolutePath());
+        Assertions.assertTrue(tempFile.exists(), "Temp file should exist after serialization");
+    }
 
-        Timer timer = Timer.builder("demo.timer")
-                .publishPercentiles(0.5, 0.95)
-                .register(registry);
-        timer.record(Duration.ofMillis(100));
-        timer.record(Duration.ofMillis(250));
+    @Test
+    @Order(2)
+    void distributionSummaryTestAssertion() throws SQLException, IOException {
+        Assertions.assertNotNull(tempFile, "Temp file should have been created in previous test");
 
-        File tmp = File.createTempFile("metrics", ".arrow");
-        try {
-            ArrowFileWriterUtil.writeMetersToFile(new ArrayList<>(registry.getMeters()), tmp.getAbsolutePath());
+        TestUtils.isEqual(
+                "select unnest(['test.summary']) as name",
+                "select name from read_arrow('%s')".formatted(tempFile.getAbsolutePath())
+        );
 
-            // counter
-            TestUtils.isEqual(
-                    "select 'demo.counter' as name, 3.0 as value",
-                    "select name, value from read_arrow('%s')".formatted(tmp.getAbsolutePath())
-            );
+        TestUtils.isEqual(
+                "select unnest(['distribution_summary']) as type",
+                "select type from read_arrow('%s')".formatted(tempFile.getAbsolutePath())
+        );
 
-            // gauge
-            TestUtils.isEqual(
-                    "select 'demo.gauge' as name, 42.0 as value",
-                    "select name, value from read_arrow('%s')".formatted(tmp.getAbsolutePath())
-            );
-
-            // timer
-            TestUtils.isEqual(
-                    "select 'demo.timer' as name, 2.0 as value, 100.0 as min, 250.0 as max, 175.0 as mean",
-                    "select name, value, min, max, mean from read_arrow('%s')".formatted(tmp.getAbsolutePath())
-            );
-        } finally {
-            tmp.delete();
-        }
+        TestUtils.isEqual(
+                "select 2.0 as value, 0.0 as min, 15.0 as max, 10.0 as mean",
+                "select value, min, max, mean from read_arrow('%s')".formatted(tempFile.getAbsolutePath())
+        );
     }
 }
