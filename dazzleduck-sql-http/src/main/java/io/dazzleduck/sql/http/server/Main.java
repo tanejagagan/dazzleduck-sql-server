@@ -3,8 +3,8 @@ package io.dazzleduck.sql.http.server;
 
 
 import com.typesafe.config.ConfigFactory;
-import io.dazzleduck.sql.common.AuthorizerProvider;
 import io.dazzleduck.sql.common.auth.Validator;
+import io.dazzleduck.sql.common.authorization.AccessMode;
 import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.helidon.config.Config;
 import io.helidon.logging.common.LogConfig;
@@ -13,7 +13,6 @@ import org.apache.arrow.memory.RootAllocator;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.NoSuchAlgorithmException;
 
 import static io.dazzleduck.sql.common.util.ConfigUtils.CONFIG_PATH;
 
@@ -51,10 +50,10 @@ public class Main {
         var auth = httpConfig.hasPath(ConfigUtils.AUTHENTICATION_KEY) ? httpConfig.getString(ConfigUtils.AUTHENTICATION_KEY) : "none";
         String warehousePath = ConfigUtils.getWarehousePath(appConfig);
         var secretKey = Validator.fromString(appConfig.getString(ConfigUtils.SECRET_KEY_KEY));
-        var authorizer = AuthorizerProvider.load(appConfig);
         var allocator = new RootAllocator();
         String location = "http://%s:%s".formatted(host, port);
         var tempWriteDir = Path.of(appConfig.getString("temp-write-location"));
+        var accessMode = AccessMode.COMPLETE;
         if (Files.exists(tempWriteDir)) {
             Files.createDirectories(tempWriteDir);
         }
@@ -62,10 +61,10 @@ public class Main {
                 .config(helidonConfig.get("dazzleduck-server"))
                 .config(helidonConfig.get("flight-sql"))
                 .routing(routing -> {
-                    var b = routing.register("/query", new QueryService(allocator, authorizer))
+                    var b = routing.register("/query", new QueryService(allocator, accessMode))
                             .register("/login", new LoginService(appConfig, secretKey))
-                            .register("/plan", new PlaningService(location, allocator, authorizer))
-                            .register("/ingest", new IngestionService(warehousePath, appConfig, authorizer, tempWriteDir));
+                            .register("/plan", new PlaningService(location, allocator, accessMode))
+                            .register("/ingest", new IngestionService(warehousePath, appConfig, accessMode, tempWriteDir));
                     if ("jwt".equals(auth)) {
                         b.addFilter(new JwtAuthenticationFilter("/query", appConfig, secretKey));
                     }

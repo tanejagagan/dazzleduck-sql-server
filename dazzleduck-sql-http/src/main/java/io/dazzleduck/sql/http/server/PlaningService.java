@@ -1,6 +1,7 @@
 package io.dazzleduck.sql.http.server;
 
 import io.dazzleduck.sql.common.Headers;
+import io.dazzleduck.sql.common.authorization.AccessMode;
 import io.dazzleduck.sql.common.authorization.NOOPAuthorizer;
 import io.dazzleduck.sql.common.authorization.SqlAuthorizer;
 import io.dazzleduck.sql.commons.ConnectionPool;
@@ -19,12 +20,8 @@ public class PlaningService extends AbstractQueryBasedService implements Paramet
     BufferAllocator allocator;
     String location;
 
-    public PlaningService(String location, BufferAllocator allocator) {
-        this(location, allocator, new NOOPAuthorizer());
-    }
-
-    public PlaningService(String location, BufferAllocator allocator, SqlAuthorizer sqlAuthorizer) {
-        super(sqlAuthorizer);
+    public PlaningService(String location, BufferAllocator allocator, AccessMode accessMode) {
+        super(accessMode);
         this.allocator = allocator;
         this.location = location;
 

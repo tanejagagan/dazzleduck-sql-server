@@ -1,16 +1,11 @@
 package io.dazzleduck.sql.flight.server;
 
-import com.typesafe.config.ConfigFactory;
-import io.dazzleduck.sql.common.authorization.JwtClaimBasedAuthorizer;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.util.TestConstants;
-import io.dazzleduck.sql.commons.util.TestUtils;
-import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
 import org.apache.arrow.flight.FlightRuntimeException;
 import org.apache.arrow.flight.Location;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -55,15 +50,8 @@ public class JwtClaimBasedAuthorizerTest {
 
         var  tableName = "%s.%s.%s".formatted(TEST_CATALOG, TEST_SCHEMA, TEST_TABLE);
         var  unauthorizedTableName = "%s.%s.%s".formatted(TEST_CATALOG, TEST_SCHEMA, UNAUTHORIZED_TABLE);
-        var jwtGenerateConfigString = """
-                jwt.token.claims.generate.headers=[database,schema,table,filter,path,function]
-                jwt.token.claims.validate.headers=[database,schema]
-                """;
-        var jwtConfig = ConfigFactory.parseString(jwtGenerateConfigString);
-        var config = jwtConfig.withFallback(ConfigFactory.load().getConfig("dazzleduck-server"));
-        var authenticator = AuthUtils.getAuthenticator(config);
-        SERVER_CLIENT = flightTestUtils.createRestrictedServerClient(SERVER_TEST_LOCATION, new JwtClaimBasedAuthorizer(), authenticator,
-                Map.of("table", TEST_TABLE,
+
+        SERVER_CLIENT = flightTestUtils.createRestrictedServerClient(SERVER_TEST_LOCATION,  Map.of("table", TEST_TABLE,
                         "filter", "key = 'k2'",
                         "path", "example/hive_table"));
         var setupSql = getSetupSql(tableName, unauthorizedTableName);

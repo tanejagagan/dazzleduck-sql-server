@@ -10,7 +10,6 @@ import com.google.protobuf.*;
 import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.common.auth.UnauthorizedException;
 import io.dazzleduck.sql.common.authorization.AccessMode;
-import io.dazzleduck.sql.common.authorization.NOOPAuthorizer;
 import io.dazzleduck.sql.common.authorization.SqlAuthorizer;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.Transformations;
@@ -90,7 +89,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     }
 
     public DuckDBFlightSqlProducer(Location location, String producerId) {
-        this(location, producerId, "change me", new RootAllocator(),  System.getProperty("user.dir") + "/warehouse", AccessMode.COMPLETE, new NOOPAuthorizer());
+        this(location, producerId, "change me", new RootAllocator(),  System.getProperty("user.dir") + "/warehouse", AccessMode.COMPLETE);
     }
 
     public DuckDBFlightSqlProducer(Location location,
@@ -98,14 +97,18 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                    String secretKey,
                                    BufferAllocator allocator,
                                    String warehousePath,
-                                   AccessMode accessMode,
-                                   SqlAuthorizer sqlAuthorizer) {
+                                   AccessMode accessMode) {
         this.location = location;
         this.producerId = producerId;
         this.allocator = allocator;
         this.secretKey = secretKey;
         this.accessMode = accessMode;
-        this.sqlAuthorizer = sqlAuthorizer;
+        if(AccessMode.RESTRICTED ==  accessMode) {
+            this.sqlAuthorizer = SqlAuthorizer.JWT_AUTHORIZER;
+        } else {
+            this.sqlAuthorizer = SqlAuthorizer.NOOP_AUTHORIZER;
+        }
+
 
         preparedStatementLoadingCache =
                 CacheBuilder.newBuilder()
@@ -177,7 +180,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         // Running on another thread
         final Connection connection;
         try {
-            connection = getConnection(context);
+            connection = getConnection(context, accessMode);
         } catch (Throwable t ) {
             ErrorHandling.handleThrowable(listener, t);
             return;
@@ -361,7 +364,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             return;
         }
         try {
-            var connection = getConnection(context);
+            var connection = getConnection(context, accessMode);
             Statement statement = connection.createStatement();
             var statementContext = new StatementContext<>(statement, statementHandle.query());
             statementLoadingCache.put(statementHandle.queryId(), statementContext);
@@ -386,7 +389,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             if (checkAccessModeAndRespond(ackStream)) {
                 return;
             }
-            try (final Connection connection = getConnection(context);
+            try (final Connection connection = getConnection(context, accessMode);
                  final Statement statement = connection.createStatement()) {
                 statement.execute(query);
                 var result =  statement.getUpdateCount();
@@ -573,7 +576,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         if (checkAccessModeAndRespond(listener)) {
             return;
         }
-        streamResultSet(executorService, DuckDBDatabaseMetadataUtil::getCatalogs, context, allocator, listener);
+        streamResultSet(executorService, DuckDBDatabaseMetadataUtil::getCatalogs, context, accessMode, allocator, listener);
     }
 
     @Override
@@ -593,7 +596,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                 command.hasDbSchemaFilterPattern() ? command.getDbSchemaFilterPattern() : null;
         streamResultSet(executorService, connection ->
                         DuckDBDatabaseMetadataUtil.getSchemas(connection, catalog, schemaFilterPattern),
-                context, allocator, listener);
+                context, accessMode, allocator, listener);
     }
 
     @Override
@@ -629,7 +632,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                 protocolSize == 0 ? null : protocolStringList.toArray(new String[protocolSize]);
         streamResultSet(executorService, connection ->
             DuckDBDatabaseMetadataUtil.getTables(connection, catalog, schemaFilterPattern, tableFilterPattern, tableTypes),
-                context, allocator, listener);
+                context, accessMode, allocator, listener);
     }
 
     @Override
@@ -645,7 +648,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         if (checkAccessModeAndRespond(listener)) {
             return;
         }
-        streamResultSet(executorService, DuckDBDatabaseMetadataUtil::getTableTypes, context, allocator, listener);
+        streamResultSet(executorService, DuckDBDatabaseMetadataUtil::getTableTypes, context, accessMode, allocator, listener);
     }
 
     @Override
@@ -800,8 +803,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         return new FlightInfo(schema, descriptor, endpoints, -1, -1);
     }
 
-    private static DuckDBConnection getConnection(final CallContext context) throws NoSuchCatalogSchemaError {
-        var databaseSchema = getDatabaseSchema(context);
+    private static DuckDBConnection getConnection(final CallContext context, AccessMode accessMode) throws NoSuchCatalogSchemaError {
+        var databaseSchema = getDatabaseSchema(context, accessMode);
         String dbSchema = format("%s.%s", databaseSchema.database, databaseSchema.schema);
         String[] sqls = {format("USE %s", dbSchema)};
         try {
@@ -811,10 +814,18 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         }
     }
 
-    private static DatabaseSchema getDatabaseSchema(CallContext context){
+    private static DatabaseSchema getDatabaseSchema(CallContext context, AccessMode accessMode){
+        var verifiedClaims = getVerifiedClaims(context);
+        if (accessMode == AccessMode.RESTRICTED) {
+            return makeDatabaseSchema(verifiedClaims.get(Headers.HEADER_DATABASE),
+                    verifiedClaims.get(Headers.HEADER_SCHEMA));
+        }
         CallHeaders headers = context.getMiddleware(FlightConstants.HEADER_KEY).headers();
-        String database = headers.get(Headers.HEADER_DATABASE);
-        String schema = headers.get(Headers.HEADER_SCHEMA);
+        return makeDatabaseSchema(headers.get(Headers.HEADER_DATABASE),
+                headers.get(Headers.HEADER_SCHEMA));
+    }
+
+    private static DatabaseSchema makeDatabaseSchema(String database, String schema) {
         if (schema == null) {
             schema = DEFAULT_SCHEMA;
         }
@@ -823,7 +834,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         }
         return new DatabaseSchema(database, schema);
     }
-
     //TODO Need to provide implementation
     private static Map<String, String> getVerifiedClaims(CallContext context){
         AdvanceServerCallHeaderAuthMiddleware middleware = context.getMiddleware(AdvanceServerCallHeaderAuthMiddleware.KEY);
@@ -847,20 +857,21 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
     private static void streamResultSet(ExecutorService executorService,
                                         ResultSetSupplierFromConnection supplier,
-                                        CallContext context,
+                                        CallContext context, AccessMode accessMode,
                                         BufferAllocator allocator,
                                         final ServerStreamListener listener) {
 
-        streamResultSet(executorService, supplier, context, allocator, listener, () -> {});
+        streamResultSet(executorService, supplier, context, accessMode, allocator, listener, () -> {});
     }
     private static void streamResultSet( ExecutorService executorService,
                                          ResultSetSupplierFromConnection supplier,
                                          CallContext context,
+                                         AccessMode  accessMode,
                                          BufferAllocator allocator,
                                          final ServerStreamListener listener,
                                          Runnable finalBlock) {
         try {
-            DuckDBConnection connection = getConnection(context);
+            DuckDBConnection connection = getConnection(context, accessMode );
             streamResultSet(executorService,
                     () -> supplier.get(connection),
                     allocator,
@@ -995,8 +1006,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
     private JsonNode authorize(CallContext callContext, JsonNode sql) throws UnauthorizedException {
         String peerIdentity = callContext.peerIdentity();
-        var databaseSchema = getDatabaseSchema(callContext);
         var verifiedClaims = getVerifiedClaims(callContext);
+        var databaseSchema = getDatabaseSchema(callContext, accessMode);
         return sqlAuthorizer.authorize(peerIdentity, databaseSchema.database, databaseSchema.schema, sql, verifiedClaims);
     }
 
