@@ -1,8 +1,7 @@
 package io.dazzleduck.sql.http.server;
 
 import io.dazzleduck.sql.common.Headers;
-import io.dazzleduck.sql.common.authorization.NOOPAuthorizer;
-import io.dazzleduck.sql.common.authorization.SqlAuthorizer;
+import io.dazzleduck.sql.common.authorization.AccessMode;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.helidon.http.HeaderNames;
 import io.helidon.http.Status;
@@ -20,11 +19,8 @@ public class QueryService extends AbstractQueryBasedService {
 
     private final BufferAllocator allocator;
 
-    public QueryService(BufferAllocator allocator) {
-        this(allocator, new NOOPAuthorizer());
-    }
-    public QueryService(BufferAllocator allocator, SqlAuthorizer sqlAuthorizer) {
-        super(sqlAuthorizer);
+    public QueryService(BufferAllocator allocator, AccessMode accessMode) {
+        super(accessMode);
         this.allocator = allocator;
     }
 

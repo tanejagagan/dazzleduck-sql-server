@@ -1,10 +1,9 @@
 package io.dazzleduck.sql.flight.server;
 
+import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.common.authorization.AccessMode;
-import io.dazzleduck.sql.common.authorization.SqlAuthorizer;
 import io.dazzleduck.sql.common.util.ConfigUtils;
-import io.dazzleduck.sql.commons.MappedReader;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.dazzleduck.sql.flight.FlightStreamReader;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceJWTTokenAuthenticator;
@@ -25,10 +24,10 @@ import java.util.function.Supplier;
 
 public interface FlightTestUtils {
 
-    String testSchema();
-    String testCatalog();
     String USER = "admin";
     String PASSWORD = "password";
+    String testSchema();
+    String testCatalog();
     default String testUser() {
         return USER;
     }
@@ -36,21 +35,32 @@ public interface FlightTestUtils {
         return PASSWORD;
     }
 
-    default ServerClient createRestrictedServerClient(Location serverLocation, SqlAuthorizer authorizer) throws IOException, NoSuchAlgorithmException {
-        return createRestrictedServerClient(serverLocation, authorizer, AuthUtils.getTestAuthenticator(), Map.of());
+    default ServerClient createRestrictedServerClient(Location serverLocation,
+                                                      Map<String, String> additionalClientHeaders) throws IOException, NoSuchAlgorithmException {
+        return createRestrictedServerClient(serverLocation, additionalClientHeaders, getTestJWTTokenAuthenticator());
     }
-    default ServerClient createRestrictedServerClient(Location serverLocation, SqlAuthorizer authorizer, AdvanceJWTTokenAuthenticator testAuthenticator, Map<String, String> additionalHeader) throws IOException, NoSuchAlgorithmException {
+
+    default ServerClient createRestrictedServerClient(ProducerFactory producerFactory,
+                                                      Location serverLocation,
+                                                      Map<String, String> additionalClientHeaders) throws IOException, NoSuchAlgorithmException {
+        return createRestrictedServerClient(producerFactory, serverLocation, additionalClientHeaders, getTestJWTTokenAuthenticator());
+    }
+
+
+    interface ProducerFactory {
+        FlightProducer create(BufferAllocator bufferAllocator, String warehousePath);
+    }
+
+    default ServerClient createRestrictedServerClient(ProducerFactory factory,
+                                                      Location serverLocation,
+                                                      Map<String, String> additionalClientHeaders,
+                                                      AdvanceJWTTokenAuthenticator testAuthenticator) throws IOException, NoSuchAlgorithmException {
         var warehousePath = Files.createTempDirectory("duckdb_warehouse_" + DuckDBFlightSqlProducerTest.class.getName()).toString();
         var clientAllocator = new RootAllocator();
         var serverAllocator = new RootAllocator();
-
         var restrictFlightServer = FlightServer.builder(
                         serverAllocator,
-                        serverLocation,
-                        new DuckDBFlightSqlProducer(serverLocation,
-                                UUID.randomUUID().toString(),
-                                "change me",
-                                serverAllocator, warehousePath, AccessMode.RESTRICTED, authorizer))
+                        serverLocation, factory.create(serverAllocator, warehousePath))
                 .middleware(AdvanceServerCallHeaderAuthMiddleware.KEY,
                         new AdvanceServerCallHeaderAuthMiddleware.Factory(testAuthenticator))
                 .build()
@@ -59,13 +69,33 @@ public interface FlightTestUtils {
         var allHeader = new HashMap<String, String >();
         allHeader.putAll(Map.of(Headers.HEADER_DATABASE, testCatalog(),
                 Headers.HEADER_SCHEMA, testSchema()));
-        allHeader.putAll(additionalHeader);
+        allHeader.putAll(additionalClientHeaders);
         var restrictSqlClient = new FlightSqlClient(FlightClient.builder(clientAllocator, serverLocation)
                 .intercept(AuthUtils.createClientMiddlewareFactory(testUser(),
                         testUserPassword(),
                         allHeader))
                 .build());
         return new ServerClient(restrictFlightServer, restrictSqlClient, clientAllocator, warehousePath);
+    }
+    default ServerClient createRestrictedServerClient(Location serverLocation,
+                                                      Map<String, String> additionalClientHeaders,
+                                                      AdvanceJWTTokenAuthenticator testAuthenticator) throws IOException, NoSuchAlgorithmException {
+
+        return createRestrictedServerClient((allocator, warehousePath) ->
+            new DuckDBFlightSqlProducer(serverLocation,
+                    UUID.randomUUID().toString(),
+                    "change me",
+                    allocator, warehousePath, AccessMode.RESTRICTED), serverLocation, additionalClientHeaders, testAuthenticator);
+    }
+
+    public  default AdvanceJWTTokenAuthenticator getTestJWTTokenAuthenticator() throws NoSuchAlgorithmException {
+        var jwtGenerateConfigString = """
+                jwt.token.claims.generate.headers=[database,catalog,schema,table,filter,path,function]
+                jwt.token.claims.validate.headers=[database,schema]
+                """;
+        var jwtConfig = ConfigFactory.parseString(jwtGenerateConfigString);
+        var config = jwtConfig.withFallback(ConfigFactory.load().getConfig("dazzleduck-server"));
+        return AuthUtils.getTestAuthenticator(config);
     }
 
     static ServerClient setUpFlightServerAndClient(String[] confOverload,

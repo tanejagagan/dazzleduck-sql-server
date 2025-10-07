@@ -18,6 +18,13 @@ import java.util.Map;
  *  identifier = catalog.schema.table
  */
 public class JwtClaimBasedAuthorizer implements SqlAuthorizer {
+
+    public static SqlAuthorizer INSTANCE = new JwtClaimBasedAuthorizer();
+
+    private JwtClaimBasedAuthorizer() {
+
+    }
+
     @Override
     public JsonNode authorize(String user, String database, String schema, JsonNode query, Map<String, String> verifiedClaims) throws UnauthorizedException {
 
