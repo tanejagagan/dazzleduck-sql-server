@@ -76,6 +76,18 @@ public interface VectorWriter<V> {
         }
     }
 
+    class DateMilliVectorVectorWriter implements VectorWriter<DateMilliVector> {
+        @Override
+        public void write(DateMilliVector dateMilliVector, int index, Object value) {
+            if (value == null) {
+                dateMilliVector.setNull(index);
+                return;
+            }
+            var v = (Long) value;
+            dateMilliVector.set(index, v);
+        }
+    }
+
     class ListVectorWriter implements VectorWriter<ListVector> {
         private final ElementWriteFunction elementWriteFunction;
 

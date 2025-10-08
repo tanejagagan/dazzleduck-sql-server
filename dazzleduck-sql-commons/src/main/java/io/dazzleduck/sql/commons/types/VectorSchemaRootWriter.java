@@ -56,6 +56,8 @@ public class VectorSchemaRootWriter {
             return new VectorWriter.VarCharVectorWriter();
         } else if (type instanceof ArrowType.Timestamp) {
             return new VectorWriter.TimeStampMilliVectorWriter();
+        } else if (type instanceof ArrowType.Date) {
+            return new VectorWriter.DateMilliVectorVectorWriter();
         }
         // ---------- List type ----------
         else if (type instanceof ArrowType.List) {
