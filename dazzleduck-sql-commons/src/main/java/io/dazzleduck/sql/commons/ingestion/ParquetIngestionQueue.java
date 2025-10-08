@@ -12,6 +12,7 @@ import java.util.stream.Collectors;
 public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResult> {
 
     private final String path;
+    private final PostIngestionTaskFactory postIngestionTaskFactory;
 
     /**
      * Thw write will be performed as soon as bucket is full or after the maxDelay is exported since the first batch is inserted
@@ -22,9 +23,15 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
      * @param executorService Executor service.
      * @param clock
      */
-    public ParquetIngestionQueue(String path, String identifier, long maxBucketSize, Duration maxDelay, ScheduledExecutorService executorService, Clock clock) {
+    public ParquetIngestionQueue(String path, String identifier,
+                                 long maxBucketSize,
+                                 Duration maxDelay,
+                                 PostIngestionTaskFactory postIngestionTaskFactory,
+                                 ScheduledExecutorService executorService,
+                                 Clock clock) {
         super(identifier, maxBucketSize, maxDelay, executorService, clock);
         this.path = path;
+        this.postIngestionTaskFactory = postIngestionTaskFactory;
     }
 
     @Override
@@ -50,6 +57,9 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
                     (FORMAT %s %s);
                 """.formatted(selectClause, arrowFiles, lastSortOrder, this.path, format, lastPartition);
         ConnectionPool.execute(sql);
+        var ingestionResult = new IngestionResult(this.path);
+        var postIngestionTask = postIngestionTaskFactory.create(ingestionResult);
+        postIngestionTask.execute();
         writeTask.bucket().futures().forEach(action -> action.complete(new IngestionResult(this.path)));
     }
 }
