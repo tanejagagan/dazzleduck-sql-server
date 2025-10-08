@@ -5,10 +5,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.typesafe.config.Config;
 import io.dazzleduck.sql.common.authorization.AccessMode;
 import io.dazzleduck.sql.common.authorization.SqlAuthorizer;
-import io.dazzleduck.sql.commons.ingestion.Batch;
-import io.dazzleduck.sql.commons.ingestion.BulkIngestQueue;
-import io.dazzleduck.sql.commons.ingestion.IngestionResult;
-import io.dazzleduck.sql.commons.ingestion.ParquetIngestionQueue;
+import io.dazzleduck.sql.commons.ingestion.*;
 import io.helidon.common.uri.UriQuery;
 import io.helidon.http.HeaderNames;
 import io.helidon.http.Status;
@@ -33,6 +30,8 @@ public class IngestionService implements HttpService, ParameterUtils {
     private final String warehousePath;
     private final Config config;
 
+    private final PostIngestionTaskFactory postIngestionTaskFactory;
+
     private static final Duration DEFAULT_MAX_DELAY = Duration.ofSeconds(1);
 
     private static final long DEFAULT_MAX_BUCKET_SIZE = 16 * 1024 * 1024;
@@ -47,6 +46,7 @@ public class IngestionService implements HttpService, ParameterUtils {
         this.config = config;
         this.sqlAuthorizer = accessMode == AccessMode.COMPLETE? SqlAuthorizer.NOOP_AUTHORIZER : SqlAuthorizer.JWT_AUTHORIZER;
         this.tempDir = tempDir;
+        this.postIngestionTaskFactory = connectionResult -> (PostIngestionTask) () -> {/*do nothing*/};
     }
 
     @Override
@@ -90,7 +90,11 @@ public class IngestionService implements HttpService, ParameterUtils {
                 format,
                 Instant.now()
         );
-        var ingestionQueue = ingestionQueueMap.computeIfAbsent(completePath, p -> new ParquetIngestionQueue(p, p, DEFAULT_MAX_BUCKET_SIZE, DEFAULT_MAX_DELAY, Executors.newSingleThreadScheduledExecutor(), Clock.systemDefaultZone()));
+        var ingestionQueue = ingestionQueueMap.computeIfAbsent(completePath, p -> {
+            return new ParquetIngestionQueue(p, p, DEFAULT_MAX_BUCKET_SIZE, DEFAULT_MAX_DELAY,
+                    postIngestionTaskFactory,
+                    Executors.newSingleThreadScheduledExecutor(), Clock.systemDefaultZone());
+        });
         var result = ingestionQueue.addToQueue(batch);
         var futureResult = result.get(); // blocks until batch processed
         ObjectMapper mapper = new ObjectMapper();

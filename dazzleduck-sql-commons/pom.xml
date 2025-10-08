@@ -81,6 +81,7 @@
             </exclusions>
         </dependency>
 
+
         <dependency>
             <groupId>org.apache.hadoop</groupId>
             <artifactId>hadoop-client-api</artifactId>
@@ -98,6 +99,11 @@
             <artifactId>minio</artifactId>
             <version>8.5.11</version>
             <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.dazzleduck.sql</groupId>
+            <artifactId>dazzleduck-sql-common</artifactId>
+            <version>0.0.8</version>
         </dependency>
     </dependencies>
 </project>
