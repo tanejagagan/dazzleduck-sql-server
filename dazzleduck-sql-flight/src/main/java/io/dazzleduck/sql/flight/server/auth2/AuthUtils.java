@@ -32,7 +32,7 @@ public class AuthUtils {
     public static AdvanceJWTTokenAuthenticator getAuthenticator(Config config) throws NoSuchAlgorithmException {
         var validator = createCredentialValidator(config);
         var authenticator = new AdvanceBasicCallHeaderAuthenticator(validator);
-        String base64Key = config.getString(ConfigUtils.SECRET_KEY_KEY);
+        var base64Key = config.getString(ConfigUtils.SECRET_KEY_KEY);
         var secretKey = Keys.hmacShaKeyFor(Decoders.BASE64.decode(base64Key));
         return new AdvanceJWTTokenAuthenticator(authenticator, secretKey, config);
     }
