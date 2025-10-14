@@ -49,7 +49,7 @@ public class Main {
         var host = httpConfig.getString(ConfigUtils.HOST_KEY);
         var auth = httpConfig.hasPath(ConfigUtils.AUTHENTICATION_KEY) ? httpConfig.getString(ConfigUtils.AUTHENTICATION_KEY) : "none";
         String warehousePath = ConfigUtils.getWarehousePath(appConfig);
-        var secretKey = Validator.fromString(appConfig.getString(ConfigUtils.SECRET_KEY_KEY));
+        var secretKey = Validator.fromBase64String(appConfig.getString(ConfigUtils.SECRET_KEY_KEY));
         var allocator = new RootAllocator();
         String location = "http://%s:%s".formatted(host, port);
         var tempWriteDir = Path.of(appConfig.getString("temp-write-location"));

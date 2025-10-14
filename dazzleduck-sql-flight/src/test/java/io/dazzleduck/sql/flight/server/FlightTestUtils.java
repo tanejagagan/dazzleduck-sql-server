@@ -5,7 +5,7 @@ import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.commons.util.TestUtils;
-import io.dazzleduck.sql.flight.FlightStreamReader;
+import io.dazzleduck.sql.flight.stream.FlightStreamReader;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceJWTTokenAuthenticator;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceServerCallHeaderAuthMiddleware;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
