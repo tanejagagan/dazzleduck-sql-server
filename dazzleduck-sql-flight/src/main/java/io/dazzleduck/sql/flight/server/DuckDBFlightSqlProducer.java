@@ -14,7 +14,7 @@ import io.dazzleduck.sql.commons.authorization.SqlAuthorizer;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.Transformations;
 import io.dazzleduck.sql.commons.planner.SplitPlanner;
-import io.dazzleduck.sql.flight.FlightStreamReader;
+import io.dazzleduck.sql.flight.stream.FlightStreamReader;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceServerCallHeaderAuthMiddleware;
 import org.apache.arrow.adapter.jdbc.JdbcParameterBinder;
 import org.apache.arrow.adapter.jdbc.JdbcToArrowUtils;
