@@ -9,12 +9,8 @@ export default function DisplayCharts({ logs, view }) {
     }
 
     const keys = Object.keys(logs[0] || {});
-    console.log("logs -> ", logs)
-    console.log(keys)
     const xKey = keys[0];
-    console.log("xKey -> ", xKey)
     let yKey = keys.find((k) => typeof logs[0][k] === "number");
-    console.log("yKey -> ", yKey)
     if (!yKey && keys.length > 1) yKey = keys[1];
     if (!yKey) yKey = keys[0]; 
 
