@@ -8,20 +8,17 @@
         <artifactId>dazzleduck-parent</artifactId>
         <version>0.0.11</version>
     </parent>
-    <artifactId>dazzleduck-sql-http</artifactId>
-    <name>DazzleDuck Project Http Sql</name>
+    <artifactId>dazzleduck-sql-login</artifactId>
+
     <properties>
-        <helidon.version>4.2.3</helidon.version>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
     <dependencies>
         <dependency>
             <groupId>io.dazzleduck.sql</groupId>
             <artifactId>dazzleduck-sql-commons</artifactId>
-            <version>0.0.11</version>
-        </dependency>
-        <dependency>
-            <groupId>io.dazzleduck.sql</groupId>
-            <artifactId>dazzleduck-sql-login</artifactId>
             <version>0.0.11</version>
         </dependency>
         <dependency>
