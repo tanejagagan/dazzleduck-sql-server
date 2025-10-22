@@ -167,13 +167,13 @@ public abstract class BulkIngestQueue<T, R> {
         }
     }
 
-    public static String writeAndValidateTempFile(Path tempDir, InputStream inputStream) throws IOException {
+    public static Path writeAndValidateTempFile(Path tempDir, InputStream inputStream) throws IOException {
         String uniqueFileName = "ingestion_" + UUID.randomUUID() + ".arrow";
         Path tempFilePath = tempDir.resolve(uniqueFileName);
         try (OutputStream out = Files.newOutputStream(tempFilePath, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
             inputStream.transferTo(out);
         }
-        return tempFilePath.toAbsolutePath().toString();
+        return tempFilePath;
     }
 }
 

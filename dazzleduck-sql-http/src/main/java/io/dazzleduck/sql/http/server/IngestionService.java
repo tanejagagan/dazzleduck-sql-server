@@ -16,10 +16,14 @@ import io.helidon.webserver.http.ServerResponse;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
@@ -27,6 +31,22 @@ import java.util.concurrent.Executors;
 import static io.dazzleduck.sql.common.Headers.*;
 
 public class IngestionService implements HttpService, ParameterUtils {
+
+    public record IngestionParameters(String completePath, String format, String[] partitions, String[] transformations, String[] sortOrder, String producerId, Long producerBatchId, Map<String, String> parameters) {
+        public Batch<String> constructBatch(long size, String tempFile) {
+            return new Batch<>(
+                    sortOrder,
+                    transformations,
+                    partitions,
+                    tempFile,
+                    producerId,
+                    producerBatchId,
+                    size,
+                    format,
+                    Instant.now()
+            );
+        }
+    }
     private final String warehousePath;
     private final Config config;
 
@@ -54,43 +74,45 @@ public class IngestionService implements HttpService, ParameterUtils {
         rules.post("/", this::handlePost);
     }
 
-    private void handlePost(ServerRequest serverRequest, ServerResponse serverResponse) throws ExecutionException, InterruptedException, IOException {
+    protected boolean handleMismatchContentType(ServerRequest serverRequest, ServerResponse serverResponse){
         var contentType = serverRequest.headers().value(HeaderNames.CONTENT_TYPE);
         if (contentType.isEmpty() || !contentType.get().equals(ContentTypes.APPLICATION_ARROW)) {
             serverResponse.status(Status.UNSUPPORTED_MEDIA_TYPE_415);
             serverResponse.send();
-            return;
+            return true;
         }
+        return false;
+    }
+
+    protected IngestionParameters parseIngestionParameters(ServerRequest serverRequest) {
         UriQuery query = serverRequest.query();
         var path = query.get("path");
         final String completePath = warehousePath + "/" + path;
-
         String format = ParameterUtils.getParameterValue(HEADER_DATA_FORMAT, serverRequest, "parquet", String.class);
-        var partitions = ParameterUtils.getParameterValue(HEADER_DATA_PARTITION, serverRequest, null, String.class);
+        var partitionString = ParameterUtils.getParameterValue(HEADER_DATA_PARTITION, serverRequest, null, String.class);
         var tranformationString = ParameterUtils.getParameterValue(HEADER_DATA_TRANSFORMATION, serverRequest, null, String.class);
         var producerId = ParameterUtils.getParameterValue(HEADER_PRODUCER_ID, serverRequest, null, String.class);
         var producerBatchId = ParameterUtils.getParameterValue(HEADER_PRODUCER_BATCH_ID, serverRequest, -1L, Long.class);
-        var sortOrder = ParameterUtils.getParameterValue(HEADER_SORT_ORDER, serverRequest, null, String.class);
-        int totalSize = 1024;
+        var sortOrderString = ParameterUtils.getParameterValue(HEADER_SORT_ORDER, serverRequest, null, String.class);
+        return new IngestionParameters(completePath, format, getArray(partitionString),
+                getArray(tranformationString), getArray(sortOrderString), producerId, producerBatchId, Map.of());
+    }
 
+    private String[] getArray(String stringValue) {
+        return stringValue == null? new String[0]: stringValue.split(",");
+    }
 
-        // Read request body and write it to temp file
-        String tempFile;
+    private void handlePost(ServerRequest serverRequest, ServerResponse serverResponse) throws ExecutionException, InterruptedException, IOException {
+        if (handleMismatchContentType(serverRequest, serverResponse)) {
+            return;
+        }
+        var ingestionParameters = parseIngestionParameters(serverRequest);
+        Path tempFile;
         try (InputStream in = serverRequest.content().inputStream()){
             tempFile = BulkIngestQueue.writeAndValidateTempFile(tempDir, in);
         }
-        var batch = new Batch<>(
-                splitParam(sortOrder),
-                splitParam(tranformationString),
-                splitParam(partitions),
-                tempFile,
-                producerId,
-                producerBatchId,
-                totalSize,
-                format,
-                Instant.now()
-        );
-        var ingestionQueue = ingestionQueueMap.computeIfAbsent(completePath, p -> {
+        var batch = ingestionParameters.constructBatch(Files.size(tempFile), tempFile.toAbsolutePath().toString());
+        var ingestionQueue = ingestionQueueMap.computeIfAbsent(ingestionParameters.completePath, p -> {
             return new ParquetIngestionQueue(p, p, DEFAULT_MAX_BUCKET_SIZE, DEFAULT_MAX_DELAY,
                     postIngestionTaskFactory,
                     Executors.newSingleThreadScheduledExecutor(), Clock.systemDefaultZone());

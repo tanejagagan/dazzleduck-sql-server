@@ -24,10 +24,13 @@ public class QueryService extends AbstractQueryBasedService {
         this.allocator = allocator;
     }
 
+    public int getFetchSize(ServerRequest request) {
+        return ParameterUtils.getParameterValue(Headers.HEADER_FETCH_SIZE, request, Headers.DEFAULT_ARROW_FETCH_SIZE, Integer.class);
+    }
+
     protected void handleInternal(ServerRequest request,
                                 ServerResponse response, String query) {
-        var fetchSizeHeader = request.headers().value(HeaderNames.create(Headers.HEADER_FETCH_SIZE));
-        int fetchSize = fetchSizeHeader.map(Integer::parseInt).orElse(Headers.DEFAULT_ARROW_FETCH_SIZE);
+        int fetchSize = getFetchSize(request);
         try (var connection = ConnectionPool.getConnection();
              var statement =  connection.createStatement()) {
             var hssResultSet = statement.execute(query);

@@ -6,6 +6,7 @@ import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.common.auth.Validator;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.common.util.ConfigUtils;
+import io.dazzleduck.sql.login.LoginService;
 import io.helidon.config.Config;
 import io.helidon.logging.common.LogConfig;
 import io.helidon.webserver.WebServer;
@@ -59,6 +60,7 @@ public class Main {
         if (Files.exists(tempWriteDir)) {
             Files.createDirectories(tempWriteDir);
         }
+        var jwtExpiration = appConfig.getDuration("jwt.token.expiration");
         var cors = CorsSupport.builder()
                 .addCrossOrigin(CrossOriginConfig.builder()
                         .allowOrigins("http://localhost:5173")
@@ -72,7 +74,7 @@ public class Main {
                 .routing(routing -> {
                     routing.register(cors);
                     var b = routing.register("/query", new QueryService(allocator, accessMode))
-                            .register("/login", new LoginService(appConfig, secretKey))
+                            .register("/login", new LoginService(appConfig, secretKey, jwtExpiration))
                             .register("/plan", new PlaningService(location, allocator, accessMode))
                             .register("/ingest", new IngestionService(warehousePath, appConfig, accessMode, tempWriteDir));
                     if ("jwt".equals(auth)) {
