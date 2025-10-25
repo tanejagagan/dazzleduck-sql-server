@@ -70,3 +70,27 @@ An integrated project combining **DazzleDuck SQL HTTP Server** and a modern **Ar
 
 **DazzleDuck http:** Java 21 • Helidon 4.x • Apache Arrow • DazzleDuck SQL  
 **Frontend:** React 18 • Vite • Tailwind CSS • Arrow JS Client
+
+---
+
+## Frontend Testing with Vitest
+
+The Arrow JS frontend uses [Vitest](https://vitest.dev/) for unit and integration testing.
+
+### Run All Tests
+
+```bash
+npm run test 
+```
+or 
+```bash
+npm test
+```
+This will execute all test files under `ui/arrow-js-frontend/tests/` using Vitest.
+
+### Run a Specific Test File
+
+```bash
+npm test Logging.test.jsx
+```
+This will run Logging.test.jsx, to run another change with your specific file name instead.
