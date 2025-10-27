@@ -1,8 +1,13 @@
 package io.dazzleduck.sql.commons.ingestion;
 
+import org.apache.arrow.vector.ipc.ArrowReader;
+import org.apache.arrow.vector.ipc.ArrowStreamWriter;
+
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.channels.Channels;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
@@ -172,6 +177,19 @@ public abstract class BulkIngestQueue<T, R> {
         Path tempFilePath = tempDir.resolve(uniqueFileName);
         try (OutputStream out = Files.newOutputStream(tempFilePath, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
             inputStream.transferTo(out);
+        }
+        return tempFilePath;
+    }
+
+    public static Path writeAndValidateTempFile(Path tempDir, ArrowReader reader) throws IOException {
+        String uniqueFileName = "ingestion_" + UUID.randomUUID() + ".arrow";
+        Path tempFilePath = tempDir.resolve(uniqueFileName);
+        try (FileOutputStream fos = new FileOutputStream(String.valueOf(tempFilePath));
+             ArrowStreamWriter writer = new ArrowStreamWriter(reader.getVectorSchemaRoot(), null, Channels.newChannel(fos))) {
+            while (reader.loadNextBatch()){
+                writer.writeBatch();
+            }
+            writer.end();
         }
         return tempFilePath;
     }
