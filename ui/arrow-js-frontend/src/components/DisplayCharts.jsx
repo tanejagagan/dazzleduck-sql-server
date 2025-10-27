@@ -8,63 +8,93 @@ export default function DisplayCharts({ logs, view }) {
         return <p className="text-gray-500 text-center p-6">No data to visualize.</p>;
     }
 
-    const keys = Object.keys(logs[0] || {});
-    const xKey = keys[0];
-    let yKey = keys.find((k) => typeof logs[0][k] === "number");
-    if (!yKey && keys.length > 1) yKey = keys[1];
-    if (!yKey) yKey = keys[0]; 
-
-    const groupKey = keys.find((k) => ["dataset", "group", "series"].includes(k)) || null;
-
-
-    const chartData = [];
-    if (groupKey) {
-        logs.forEach((row) =>
-            chartData.push({
-                x: row[xKey],
-                value: Number(row[yKey]) || 0,
-                dataset: String(row[groupKey]),
-                __raw: row,
-            })
-        );
-    } else {
-        logs.forEach((row, idx) =>
-            chartData.push({
-                x: row[xKey],
-                value: Number(row[yKey]) || 0,
-                dataset: "series",
-                __raw: row,
-            })
-        );
+    // -------------------------- detect keys --------------------------
+    const keys = Object.keys(logs[0]);
+    if (keys.length === 0) {
+        return <p className="text-gray-500">No valid data columns.</p>;
     }
 
+    const xKey = keys[0]; // first column → x-axis
+    const yKeys = keys.slice(1); // remaining columns → y-axis datasets
+
+    // -------------------------- normalize data --------------------------
+    const formatted = logs.map((row, i) => {
+        const xValue = row[xKey];
+        let formattedX = xValue;
+
+        // Convert timestamp → readable date
+        if (typeof xValue === "number" && String(xValue).length >= 12) {
+            try {
+                formattedX = new Date(xValue).toLocaleDateString();
+            } catch {
+                formattedX = String(xValue);
+            }
+        }
+
+        // Make it unique per row (optional: include another field even if duplicates)
+        const uniqueX = `${formattedX} #${i + 1}`;
+
+        return {
+            x: uniqueX,
+            ...Object.fromEntries(
+                yKeys.map(k => [k, isNaN(row[k]) ? row[k] : Number(row[k])])
+            ),
+        };
+    });
+
+    // -------------------------- reshape data for different types of charts --------------------------
+    const chartData = [];
+
+    formatted.forEach(row => {
+        yKeys.forEach(k => {
+            const val = row[k];
+            if (val !== null && val !== undefined && val !== "") {
+                chartData.push({
+                    x: row.x,
+                    value: typeof val === "number" ? val : 1, // numeric for chart
+                    label: val,                               // original value for display
+                    dataset: k,
+                    __raw: row,
+                });
+            }
+        });
+    });
+
+    // -------------------------- chart design --------------------------
     const design = {
-        width: 900,
-        height: 360,
+        width: 1200,
+        height: 430,
         xAxisField: "x",
         yAxisField: "value",
         xAxisLabel: xKey,
-        yAxisLabel: yKey,
+        yAxisLabel: yKeys.join(", "),
         showGrid: true,
         legendPosition: "top",
         fontFamily: "Inter, Helvetica, Arial",
         animation: true,
     };
 
-    
-    if (view === "pie") {
-        const map = new Map();
-        chartData.forEach((d) => {
-            const key = d.x ?? "unknown";
-            map.set(key, (map.get(key) || 0) + (Number(d.value) || 0));
-        });
-        const pieData = Array.from(map.entries()).map(([label, value]) => ({ label, value }));
-        return <PieChartD3 data={pieData} design={{ width: 600, height: 400 }} />;
-    }
-
+    // -------------------------- render chart type --------------------------
     if (view === "line") return <LineChartD3 data={chartData} design={design} />;
     if (view === "area") return <AreaChartD3 data={chartData} design={design} />;
     if (view === "bar") return <BarChartD3 data={chartData} design={design} />;
+
+     if (view === "pie") {
+        const labelKey = xKey;
+        const valueKeys = yKeys;
+
+        // Flatten all values into { label, value, key }
+        const pieData = logs.flatMap(row =>
+            valueKeys.map(k => ({
+                label: row[labelKey],
+                key: k,
+                value: Number(row[k]) || 0, // can set default(0) to 1 or > if want to display non numaric data too
+                defValue: row[k],
+            }))
+        );
+
+        return <PieChartD3 data={pieData} design={{ width: 600, height: 400 }} />;
+    }
 
     return <p className="text-gray-500">Unsupported visualization</p>;
 }
