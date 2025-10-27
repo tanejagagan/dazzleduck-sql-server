@@ -1,11 +1,7 @@
 package io.dazzleduck.sql.http.server;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.typesafe.config.Config;
-import io.dazzleduck.sql.commons.authorization.AccessMode;
-import io.dazzleduck.sql.commons.authorization.SqlAuthorizer;
-import io.dazzleduck.sql.commons.ingestion.*;
+import io.dazzleduck.sql.flight.ingestion.IngestionParameters;
+import io.dazzleduck.sql.flight.server.SimpleBulkIngestConsumer;
 import io.helidon.common.uri.UriQuery;
 import io.helidon.http.HeaderNames;
 import io.helidon.http.Status;
@@ -13,60 +9,33 @@ import io.helidon.webserver.http.HttpRules;
 import io.helidon.webserver.http.HttpService;
 import io.helidon.webserver.http.ServerRequest;
 import io.helidon.webserver.http.ServerResponse;
+import org.apache.arrow.flight.FlightClient;
+import org.apache.arrow.flight.PutResult;
+import org.apache.arrow.memory.BufferAllocator;
+import org.apache.arrow.vector.ipc.ArrowReader;
+import org.apache.arrow.vector.ipc.ArrowStreamReader;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.time.Clock;
-import java.time.Duration;
-import java.time.Instant;
-import java.util.Arrays;
-import java.util.List;
+import java.nio.channels.Channels;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Executors;
 
 import static io.dazzleduck.sql.common.Headers.*;
 
-public class IngestionService implements HttpService, ParameterUtils {
+public class IngestionService implements HttpService, ParameterUtils, ControllerService {
 
-    public record IngestionParameters(String completePath, String format, String[] partitions, String[] transformations, String[] sortOrder, String producerId, Long producerBatchId, Map<String, String> parameters) {
-        public Batch<String> constructBatch(long size, String tempFile) {
-            return new Batch<>(
-                    sortOrder,
-                    transformations,
-                    partitions,
-                    tempFile,
-                    producerId,
-                    producerBatchId,
-                    size,
-                    format,
-                    Instant.now()
-            );
-        }
-    }
     private final String warehousePath;
-    private final Config config;
 
-    private final PostIngestionTaskFactory postIngestionTaskFactory;
+    private final SimpleBulkIngestConsumer bulkIngestConsumer;
 
-    private static final Duration DEFAULT_MAX_DELAY = Duration.ofSeconds(1);
+    private final BufferAllocator bufferAllocator;
 
-    private static final long DEFAULT_MAX_BUCKET_SIZE = 16 * 1024 * 1024;
-
-    private final ConcurrentHashMap<String, BulkIngestQueue<String, IngestionResult>> ingestionQueueMap =
-            new ConcurrentHashMap<>();
-    private final SqlAuthorizer sqlAuthorizer;
-    private final Path tempDir;
-
-    public IngestionService(String warehousePath, Config config, AccessMode accessMode, Path tempDir)  {
+    public IngestionService(SimpleBulkIngestConsumer bulkIngestConsumer,
+                            String warehousePath, BufferAllocator allocator)  {
         this.warehousePath = warehousePath;
-        this.config = config;
-        this.sqlAuthorizer = accessMode == AccessMode.COMPLETE? SqlAuthorizer.NOOP_AUTHORIZER : SqlAuthorizer.JWT_AUTHORIZER;
-        this.tempDir = tempDir;
-        this.postIngestionTaskFactory = connectionResult -> (PostIngestionTask) () -> {/*do nothing*/};
+        this.bulkIngestConsumer = bulkIngestConsumer;
+        this.bufferAllocator = allocator;
     }
 
     @Override
@@ -106,26 +75,37 @@ public class IngestionService implements HttpService, ParameterUtils {
         if (handleMismatchContentType(serverRequest, serverResponse)) {
             return;
         }
+        var context = ControllerService.createContext(serverRequest);
         var ingestionParameters = parseIngestionParameters(serverRequest);
-        Path tempFile;
-        try (InputStream in = serverRequest.content().inputStream()){
-            tempFile = BulkIngestQueue.writeAndValidateTempFile(tempDir, in);
-        }
-        var batch = ingestionParameters.constructBatch(Files.size(tempFile), tempFile.toAbsolutePath().toString());
-        var ingestionQueue = ingestionQueueMap.computeIfAbsent(ingestionParameters.completePath, p -> {
-            return new ParquetIngestionQueue(p, p, DEFAULT_MAX_BUCKET_SIZE, DEFAULT_MAX_DELAY,
-                    postIngestionTaskFactory,
-                    Executors.newSingleThreadScheduledExecutor(), Clock.systemDefaultZone());
-        });
-        var result = ingestionQueue.addToQueue(batch);
-        var futureResult = result.get(); // blocks until batch processed
-        ObjectMapper mapper = new ObjectMapper();
-        ObjectNode jsonNode = mapper.valueToTree(futureResult);
-        jsonNode.put("completionTime", Instant.now().toString());
-        serverResponse.status(Status.OK_200).header(HeaderNames.CONTENT_TYPE, ContentTypes.APPLICATION_JSON).send(jsonNode.toString());
+        var runnable = bulkIngestConsumer.acceptPutStatementBulkIngest(context, ingestionParameters,
+                createStream(serverRequest.content().inputStream()), new FlightClient.PutListener() {
+                    @Override
+                    public void getResult() {
+
+                    }
+
+                    @Override
+                    public void onNext(PutResult val) {
+
+                    }
+
+                    @Override
+                    public void onError(Throwable t) {
+
+                    }
+
+                    @Override
+                    public void onCompleted() {
+                        //serverResponse.status(Status.OK_200);
+                    }
+                });
+        runnable.run();
+        serverResponse.status(Status.OK_200);
+        serverResponse.send();
     }
 
-    private static String[] splitParam(String value) {
-        return (value == null || value.isBlank()) ? new String[0] : value.split(",");
+    private ArrowReader createStream(InputStream inputStream){
+        var readableByteChannel = Channels.newChannel(inputStream);
+        return new ArrowStreamReader(readableByteChannel, bufferAllocator);
     }
 }

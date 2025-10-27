@@ -16,12 +16,12 @@
     <dependencies>
         <dependency>
             <groupId>io.dazzleduck.sql</groupId>
-            <artifactId>dazzleduck-sql-commons</artifactId>
+            <artifactId>dazzleduck-sql-login</artifactId>
             <version>0.0.11</version>
         </dependency>
         <dependency>
             <groupId>io.dazzleduck.sql</groupId>
-            <artifactId>dazzleduck-sql-login</artifactId>
+            <artifactId>dazzleduck-sql-flight</artifactId>
             <version>0.0.11</version>
         </dependency>
         <dependency>

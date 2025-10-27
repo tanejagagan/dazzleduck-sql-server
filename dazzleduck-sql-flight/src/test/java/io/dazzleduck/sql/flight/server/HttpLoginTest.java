@@ -36,7 +36,7 @@ public class HttpLoginTest {
         io.dazzleduck.sql.login.Main.main(new String[]{
                 "--conf", "dazzleduck-login-service.http.port: " + HTTP_PORT,
         });
-        var confOverload = new String[]{"--conf", "flight-sql.port=55559",
+        var confOverload = new String[]{"--conf", "flight-sql.port=55569",
                 "--conf", "login.url=\"http://localhost:8080/login\"",
                 "--conf", "useEncryption=false",
                 "--conf", "jwt.token.generation=false",

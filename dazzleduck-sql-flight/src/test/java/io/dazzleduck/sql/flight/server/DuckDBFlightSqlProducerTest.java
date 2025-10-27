@@ -68,7 +68,9 @@ public class DuckDBFlightSqlProducerTest {
                 String.format("CREATE SCHEMA %s", TEST_SCHEMA),
                 String.format("USE %s.%s", TEST_CATALOG, TEST_SCHEMA),
                 String.format("CREATE TABLE %s (key string, value string)", TEST_TABLE),
-                String.format("INSERT INTO %s VALUES ('k1', 'v1'), ('k2', 'v2')", TEST_TABLE)
+                String.format("INSERT INTO %s VALUES ('k1', 'v1'), ('k2', 'v2')", TEST_TABLE),
+                "INSTALL arrow FROM community",
+                "LOAD arrow"
         };
         ConnectionPool.executeBatch(sqls);
         setUpClientServer();
@@ -87,7 +89,8 @@ public class DuckDBFlightSqlProducerTest {
                         new DuckDBFlightSqlProducer(serverLocation,
                                 UUID.randomUUID().toString(),
                                 "change me",
-                                serverAllocator, warehousePath, AccessMode.COMPLETE))
+                                serverAllocator, warehousePath, AccessMode.COMPLETE,
+                                DuckDBFlightSqlProducer.newTempDir()))
                 .headerAuthenticator(AuthUtils.getTestAuthenticator())
                 .build()
                 .start();
@@ -402,7 +405,6 @@ public class DuckDBFlightSqlProducerTest {
                         PASSWORD,
                         Map.of(Headers.HEADER_DATABASE, TEST_CATALOG,
                                 Headers.HEADER_SCHEMA, TEST_SCHEMA,
-                                Headers.HEADER_PARALLELIZE, "true",
                                 "path", path)))
                 .build());
     }
@@ -413,7 +415,6 @@ public class DuckDBFlightSqlProducerTest {
                         PASSWORD,
                         Map.of(Headers.HEADER_DATABASE, TEST_CATALOG,
                                 Headers.HEADER_SCHEMA, TEST_SCHEMA,
-                                Headers.HEADER_PARALLELIZE, "true",
                         "path", path, "filter", filter)))
                 .build());
     }
