@@ -8,28 +8,33 @@
         <artifactId>dazzleduck-parent</artifactId>
         <version>0.0.12-SNAPSHOT</version>
     </parent>
-    <name>DazzleDuck Project Search</name>
-    <artifactId>dazzleduck-sql-search</artifactId>
+    <artifactId>dazzleduck-sql-login</artifactId>
 
     <properties>
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <lucene.version>10.2.2</lucene.version>
-
     </properties>
     <dependencies>
-        <!-- https://mvnrepository.com/artifact/org.apache.lucene/lucene-core -->
-        <dependency>
-            <groupId>org.apache.lucene</groupId>
-            <artifactId>lucene-core</artifactId>
-            <version>${lucene.version}</version>
-        </dependency>
         <dependency>
             <groupId>io.dazzleduck.sql</groupId>
             <artifactId>dazzleduck-sql-commons</artifactId>
             <version>0.0.12-SNAPSHOT</version>
         </dependency>
+        <dependency>
+            <groupId>io.helidon.webserver</groupId>
+            <artifactId>helidon-webserver</artifactId>
+            <version>${helidon.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.helidon.webserver</groupId>
+            <artifactId>helidon-webserver-cors</artifactId>
+            <version>${helidon.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.helidon.config</groupId>
+            <artifactId>helidon-config-hocon</artifactId>
+            <version>${helidon.version}</version>
+        </dependency>
     </dependencies>
-
 </project>

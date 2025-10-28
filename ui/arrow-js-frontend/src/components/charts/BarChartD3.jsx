@@ -93,8 +93,7 @@ export default function BarChartD3({ data, design }) {
           .style("display", "block")
           .html(`
             <strong>${xGroupField}:</strong> ${d[xGroupField]}<br/>
-            <strong>${d.dataset}:</strong> ${d.value}
-          `);
+            <strong>${d.dataset}:</strong> ${d.label ?? d.value}`);
       })
       .on("mousemove", (event) => {
         const bounds = svgRef.current.getBoundingClientRect();

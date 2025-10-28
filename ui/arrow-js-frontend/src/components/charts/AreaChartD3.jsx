@@ -83,8 +83,7 @@ function AreaChartD3({ data, design }) {
             .style('display', 'block')
             .html(`
               <strong>${design.xAxisLabel}:</strong> ${d[xField]}<br/>
-              <strong>${d.dataset}:</strong> ${d.value}<br/>
-            `);
+              <strong>${d.dataset}:</strong> ${d.label ?? d.value}`);
         })
         .on('mousemove', (event) => {
           const bounds = svgRef.current.getBoundingClientRect();

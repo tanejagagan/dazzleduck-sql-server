@@ -16,6 +16,7 @@ import org.apache.arrow.memory.RootAllocator;
 
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.NoSuchAlgorithmException;
 import java.util.HashMap;
 import java.util.Map;
@@ -85,7 +86,9 @@ public interface FlightTestUtils {
             new DuckDBFlightSqlProducer(serverLocation,
                     UUID.randomUUID().toString(),
                     "change me",
-                    allocator, warehousePath, AccessMode.RESTRICTED), serverLocation, additionalClientHeaders, testAuthenticator);
+                    allocator, warehousePath, AccessMode.RESTRICTED,
+                    Path.of(System.getProperty("java.io.tmpdir"), UUID.randomUUID().toString())),
+                serverLocation, additionalClientHeaders, testAuthenticator);
     }
 
     public  default AdvanceJWTTokenAuthenticator getTestJWTTokenAuthenticator() throws NoSuchAlgorithmException {
