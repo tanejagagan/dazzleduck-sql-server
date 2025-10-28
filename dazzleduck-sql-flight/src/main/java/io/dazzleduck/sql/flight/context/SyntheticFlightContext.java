@@ -21,6 +21,9 @@ public class SyntheticFlightContext implements FlightProducer.CallContext {
 
     private final AuthResultWithClaims authResultWithClaims;
 
+    public SyntheticFlightContext(Map<String, List<String>> headers) {
+        this(headers, null, Map.of());
+    }
     public SyntheticFlightContext(Map<String, List<String>> headers,
                                   @Nullable SubjectAndVerifiedClaims subjectAndVerifiedClaims) {
         this(headers, subjectAndVerifiedClaims, Map.of());
@@ -48,7 +51,7 @@ public class SyntheticFlightContext implements FlightProducer.CallContext {
         }
     }
 
-    private static String getPeerIdentityFromAuthHeader(Map<String, List<String>> headers) {
+    public static String getPeerIdentityFromAuthHeader(Map<String, List<String>> headers) {
         var authEncodedList =
                 headers.get(Auth2Constants.AUTHORIZATION_HEADER);
         String _peerIdentity = null;
