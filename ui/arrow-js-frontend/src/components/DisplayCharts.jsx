@@ -86,8 +86,9 @@ export default function DisplayCharts({ logs, view }) {
         // Flatten all values into { label, value, key }
         const pieData = logs.flatMap(row =>
             valueKeys.map(k => ({
-                label: row[labelKey],
-                key: k,
+                labelKey: labelKey,
+                label: labelKey == "dt" ? new Date(row[labelKey]).toLocaleDateString() : row[labelKey],
+                valueKey: k,
                 value: Number(row[k]) || 0, // can set default(0) to 1 or > if want to display non numaric data too
                 defValue: row[k],
             }))

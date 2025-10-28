@@ -43,8 +43,8 @@ export default function PieChartD3({ data, design }) {
           .style('display', 'block')
           .html(`
       <div>
-        <strong>${d.data.label}</strong><br/>
-        <strong>${d.data.key}:</strong> ${d.data.defValue ?? d.data.value}
+        <strong>${d.data.labelKey}:</strong> ${d.data.label}<br/>
+        <strong>${d.data.valueKey}:</strong> ${d.data.defValue ?? d.data.value}
       </div>`);
       })
       .on('mousemove', (event) => {
