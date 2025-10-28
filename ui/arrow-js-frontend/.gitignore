@@ -23,4 +23,7 @@ dist-ssr
 *.sln
 *.sw?
 
-coverage
+# Vitest coverage output
+coverage/
+.nyc_output/
+coverage-final.json
