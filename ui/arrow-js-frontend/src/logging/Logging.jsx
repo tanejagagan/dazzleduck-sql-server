@@ -79,54 +79,69 @@ const Logging = () => {
         );
     };
 
+    // Helper: normalize response to array
+    const normalizeLogs = (logsData) => {
+        if (Array.isArray(logsData)) return logsData;
+        if (Array.isArray(logsData?.data)) return logsData.data;
+        if (Array.isArray(logsData?.logs)) return logsData.logs;
+        if (logsData && typeof logsData === "object") return [logsData];
+        return [];
+    };
+
+    // Core executor for one query row
+    const runQueryForRow = async (row) => {
+        const { url, username, password, splitSize } = connection;
+
+        // Not connected
+        if (!isConnected) {return { logs: [], error: "Not connected — click Connect" };}
+        // Empty query
+        if (!row.query?.trim()){return { logs: [], error: "Empty query — skipped" };}
+
+        try {
+            const data = await executeQuery(url, username, password, row.query, splitSize);
+            return { logs: normalizeLogs(data), error: null };
+        } catch (err) {
+            return { logs: [], error: err?.message || "Query failed" };
+        }
+    };
+
+    // Run a single query
     const handleRunQuery = async (row) => {
         const id = row.id;
-        const query = row.query;
-        // If user isn't connected, show message and don't call executeQuery
+        setResults(prev => ({ ...prev, [id]: { logs: [], loading: true, error: null } }));
+
+        const result = await runQueryForRow(row);
+
+        setResults(prev => ({
+            ...prev,
+            [id]: { ...result, loading: false },
+        }));
+    };
+
+    // Run all queries (sequential)
+    const runAllQuerys = async ({ delayMs = 100 } = {}) => {
         if (!isConnected) {
-            setResults((prev) => ({
-                ...prev,
-                [id]: { logs: [], loading: false, error: "Not connected — click Connect" },
-            }));
+            const updated = Object.fromEntries(
+                rows.map(r => [r.id, { logs: [], loading: false, error: "Not connected — click Connect" }])
+            );
+            setResults(updated);
             return;
         }
 
-        // use connection state which was set on successful connect
-        const { url, username, password, splitSize } = connection;
-
-        setResults((prev) => ({
+        // Mark all rows loading
+        setResults(prev => ({
             ...prev,
-            [id]: { logs: [], loading: true, error: null },
+            ...Object.fromEntries(rows.map(r => [r.id, { logs: [], loading: true, error: null }])),
         }));
 
-        try {
-            const logsData = await executeQuery(url, username, password, query, splitSize);
-
-            // Normalize into array of objects
-            let normalized = [];
-            if (Array.isArray(logsData)) {
-                normalized = logsData;
-            } else if (Array.isArray(logsData?.data)) {
-                normalized = logsData.data;
-            } else if (Array.isArray(logsData?.logs)) {
-                normalized = logsData.logs;
-            } else if (typeof logsData === "object" && logsData !== null) {
-                normalized = [logsData];
-            }
-
-            setResults((prev) => ({
+        for (const row of rows) {
+            const result = await runQueryForRow(row);
+            setResults(prev => ({
                 ...prev,
-                [id]: { logs: normalized, loading: false, error: null },
+                [row.id]: { ...result, loading: false },
             }));
-        } catch (err) {
-            setResults((prev) => ({
-                ...prev,
-                [id]: {
-                    logs: [],
-                    loading: false,
-                    error: err.message || "Query failed",
-                },
-            }));
+
+            if (delayMs > 0) await new Promise(res => setTimeout(res, delayMs));
         }
     };
 
@@ -266,7 +281,7 @@ const Logging = () => {
 
                     <button
                         type="submit"
-                        className={`w-full ${isConnected? "bg-blue-300 hover:bg-blue-400" : "bg-blue-600 hover:bg-blue-700 cursor-pointer"} text-white font-medium py-2 rounded-lg mt-4 transition`}
+                        className={`w-full ${isConnected ? "bg-blue-300 hover:bg-blue-400" : "bg-blue-600 hover:bg-blue-700 cursor-pointer"} text-white font-medium py-2 rounded-lg mt-4 transition`}
                         disabled={(isSubmitting, isConnected)}
                     >
                         {isSubmitting ? "Connecting..." : "Connect"}
@@ -348,7 +363,7 @@ const Logging = () => {
                                         disabled={loading || !isConnected}
                                         className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-md transition disabled:opacity-50 cursor-pointer"
                                     >
-                                        {loading ? "Running..." : "Run Query"}
+                                        {loading ? "Running..." : "Run"}
                                     </button>
                                 </div>
                             </div>
@@ -448,13 +463,20 @@ const Logging = () => {
                 );
             })}
 
-            {/* Add Row Button */}
-            <div className="flex justify-center mt-10">
+            {/* Add Row and Run all quries Button */}
+            <div className="flex justify-evenly mt-10 gap-5">
                 <button
                     onClick={addRow}
                     className="bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-6 rounded-md transition duration-300 cursor-pointer"
                 >
                     Add New Query Row
+                </button>
+
+                <button
+                    onClick={runAllQuerys}
+                    className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-md transition duration-300 cursor-pointer"
+                >
+                    Run Queries
                 </button>
             </div>
         </div>
