@@ -39,7 +39,6 @@
             <groupId>io.dazzleduck.sql</groupId> <!-- ✅ fixed -->
             <artifactId>dazzleduck-sql-login</artifactId>
             <version>0.0.12-SNAPSHOT</version>
-            <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.apache.arrow</groupId>

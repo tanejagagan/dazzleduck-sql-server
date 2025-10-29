@@ -2,6 +2,7 @@ package io.dazzleduck.sql.flight.server.auth2;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.typesafe.config.Config;
+import io.dazzleduck.sql.login.LoginResponse;
 import org.apache.arrow.flight.CallHeaders;
 import org.apache.arrow.flight.auth2.Auth2Constants;
 import org.apache.arrow.flight.auth2.CallHeaderAuthenticator;
@@ -52,6 +53,8 @@ public class HttpCredentialValidator implements AdvanceBasicCallHeaderAuthentica
             throw new RuntimeException("Failed to fetch token: " + response.body());
         }
 
+        var result = MAPPER.readValue(response.body(), LoginResponse.class);
+
         return new CallHeaderAuthenticator.AuthResult() {
             @Override
             public String getPeerIdentity() {
@@ -60,7 +63,7 @@ public class HttpCredentialValidator implements AdvanceBasicCallHeaderAuthentica
 
             @Override
             public void appendToOutgoingHeaders(CallHeaders headers) {
-                headers.insert(Auth2Constants.AUTHORIZATION_HEADER, "Bearer " + response.body());
+                headers.insert(Auth2Constants.AUTHORIZATION_HEADER, result.tokenType() + " " + result.accessToken());
             }
         };
     }
