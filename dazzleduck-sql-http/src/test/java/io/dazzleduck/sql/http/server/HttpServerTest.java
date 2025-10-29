@@ -7,6 +7,7 @@ import io.dazzleduck.sql.commons.util.TestConstants;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.dazzleduck.sql.flight.server.StatementHandle;
 import io.dazzleduck.sql.login.LoginObject;
+import io.dazzleduck.sql.login.LoginResponse;
 import io.helidon.http.HeaderNames;
 import io.helidon.http.HeaderValues;
 import org.apache.arrow.memory.BufferAllocator;
@@ -117,13 +118,13 @@ public class HttpServerTest {
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
         var jwtResponse = client.send(loginRequest, HttpResponse.BodyHandlers.ofString());
         assertEquals(200, jwtResponse.statusCode());
-        var jwt = jwtResponse.body();
+        var jwt = objectMapper.readValue(jwtResponse.body(), LoginResponse.class);
         var query = "select * from generate_series(10) order by 1";
         var body = objectMapper.writeValueAsBytes(new QueryObject(query));
         var request = HttpRequest.newBuilder(URI.create("http://localhost:8081/query"))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values())
-                .header(HeaderNames.AUTHORIZATION.defaultCase(), "Bearer " + jwt)
+                .header(HeaderNames.AUTHORIZATION.defaultCase(), jwt.tokenType() + " " + jwt.accessToken())
                 .build();
         var inputStreamResponse = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
         try (var allocator = new RootAllocator();
@@ -145,10 +146,11 @@ public class HttpServerTest {
                 .POST(HttpRequest.BodyPublishers.ofByteArray(objectMapper.writeValueAsBytes(new LoginObject("admin", "admin"))))
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
         var jwtResponse = client.send(loginRequest, HttpResponse.BodyHandlers.ofString());
+        var jwt = objectMapper.readValue(jwtResponse.body(), LoginResponse.class);
         var httpAuthSql = "CREATE SECRET http_auth (\n" +
                 "    TYPE http,\n" +
                 "    EXTRA_HTTP_HEADERS MAP {\n" +
-                "        'Authorization': 'Bearer " + jwtResponse.body() + "'\n" +
+                "        'Authorization': '"+ jwt.tokenType() + " " + jwt.accessToken() +"'\n"+
                 "    }\n" +
                 ")";
 
