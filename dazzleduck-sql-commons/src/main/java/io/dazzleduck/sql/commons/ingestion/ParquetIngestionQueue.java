@@ -55,6 +55,10 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
         // Last format
         var format = batches.isEmpty() ? "" : batches.get(batches.size() - 1).format();
         // Build SQL
+        // https://duckdb.org/docs/stable/sql/statements/copy
+        // Search for return File and stats during the copy statement.
+        // Need to create correct postIngestionTaskFactory so that you create correct IngestionTask which will be executed
+        // The ingestion task will essentially insert the data into the database which will complete our implementation
         var sql = """
                 COPY
                     (SELECT %s FROM read_arrow([%s])%s)
