@@ -15,6 +15,7 @@ import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 
 import java.io.IOException;
+import java.net.ServerSocket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.NoSuchAlgorithmException;
@@ -139,5 +140,30 @@ public interface FlightTestUtils {
         try (final FlightStream stream = streamSupplier.get()) {
             TestUtils.isEqual(expectedQuery, clientAllocator, FlightStreamReader.of(stream, clientAllocator));
         }
+    }
+
+
+
+    /**
+     * Finds the first available TCP port within a specified range.
+     *
+     * @param startPort The starting port number of the range (inclusive).
+     * @param endPort The ending port number of the range (inclusive).
+     * @return The first available port number found, or -1 if no port is available in the range.
+     */
+    public static int findFreePortInRange(int startPort, int endPort) {
+        if (startPort < 1 || endPort > 65535 || startPort > endPort) {
+            throw new IllegalArgumentException("Invalid port range. Ports must be between 1 and 65535, and startPort <= endPort.");
+        }
+
+        for (int port = startPort; port <= endPort; port++) {
+            try (ServerSocket socket = new ServerSocket(port)) {
+                // If a ServerSocket can be created and bound, the port is available.
+                return port;
+            } catch (IOException e) {
+                // Port is likely in use or unavailable for other reasons, continue to the next port.
+            }
+        }
+        throw new RuntimeException("No open port found");
     }
 }

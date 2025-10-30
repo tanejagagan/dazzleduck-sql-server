@@ -5,6 +5,7 @@ import io.dazzleduck.sql.commons.ConnectionPool;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.stream.Collectors;
@@ -13,6 +14,7 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
 
     private final String path;
     private final PostIngestionTaskFactory postIngestionTaskFactory;
+    private final String applicationId;
 
     /**
      * Thw write will be performed as soon as bucket is full or after the maxDelay is exported since the first batch is inserted
@@ -23,7 +25,9 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
      * @param executorService Executor service.
      * @param clock
      */
-    public ParquetIngestionQueue(String path, String identifier,
+    public ParquetIngestionQueue(String applicationId,
+                                 String path,
+                                 String identifier,
                                  long maxBucketSize,
                                  Duration maxDelay,
                                  PostIngestionTaskFactory postIngestionTaskFactory,
@@ -32,6 +36,7 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
         super(identifier, maxBucketSize, maxDelay, executorService, clock);
         this.path = path;
         this.postIngestionTaskFactory = postIngestionTaskFactory;
+        this.applicationId = applicationId;
     }
 
     @Override
@@ -57,9 +62,9 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
                     (FORMAT %s %s);
                 """.formatted(selectClause, arrowFiles, lastSortOrder, this.path, format, lastPartition);
         ConnectionPool.execute(sql);
-        var ingestionResult = new IngestionResult(this.path);
+        var ingestionResult = new IngestionResult(this.path, writeTask.taskId(), this.applicationId, writeTask.bucket().getProducerMaxBatchId());
         var postIngestionTask = postIngestionTaskFactory.create(ingestionResult);
         postIngestionTask.execute();
-        writeTask.bucket().futures().forEach(action -> action.complete(new IngestionResult(this.path)));
+        writeTask.bucket().futures().forEach(action -> action.complete(ingestionResult));
     }
 }

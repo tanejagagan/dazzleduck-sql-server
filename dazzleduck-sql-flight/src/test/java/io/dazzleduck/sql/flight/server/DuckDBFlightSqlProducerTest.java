@@ -5,6 +5,7 @@ import io.dazzleduck.sql.common.ConfigBasedProvider;
 import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.common.LocalStartupConfigProvider;
 import io.dazzleduck.sql.common.StartupScriptProvider;
+import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.util.TestUtils;
@@ -63,14 +64,14 @@ public class DuckDBFlightSqlProducerTest {
         Path tempDir = Files.createTempDirectory("duckdb_" + DuckDBFlightSqlProducerTest.class.getName());
         warehousePath = Files.createTempDirectory("duckdb_warehouse_" + DuckDBFlightSqlProducerTest.class.getName()).toString();
         String[] sqls = {
+                "INSTALL arrow FROM community",
+                "LOAD arrow",
                 String.format("ATTACH '%s/file.db' AS %s", tempDir.toString(), TEST_CATALOG),
                 String.format("USE %s", TEST_CATALOG),
                 String.format("CREATE SCHEMA %s", TEST_SCHEMA),
                 String.format("USE %s.%s", TEST_CATALOG, TEST_SCHEMA),
                 String.format("CREATE TABLE %s (key string, value string)", TEST_TABLE),
-                String.format("INSERT INTO %s VALUES ('k1', 'v1'), ('k2', 'v2')", TEST_TABLE),
-                "INSTALL arrow FROM community",
-                "LOAD arrow"
+                String.format("INSERT INTO %s VALUES ('k1', 'v1'), ('k2', 'v2')", TEST_TABLE)
         };
         ConnectionPool.executeBatch(sqls);
         setUpClientServer();
@@ -340,8 +341,8 @@ public class DuckDBFlightSqlProducerTest {
             writer.write(startUpFileContent);
         }
         String startUpFileLocation = startUpFile.getAbsolutePath();
-        var classConfig = "%s.%s=%s".formatted(StartupScriptProvider.STARTUP_SCRIPT_CONFIG_PREFIX, ConfigBasedProvider.CLASS_KEY, LocalStartupConfigProvider.class.getName());
-        var locationConfig = "%s.%s=%s".formatted(StartupScriptProvider.STARTUP_SCRIPT_CONFIG_PREFIX, SCRIPT_LOCATION_KEY, startUpFileLocation);
+        var classConfig = "%s.%s.%s=%s".formatted(ConfigUtils.CONFIG_PATH, StartupScriptProvider.STARTUP_SCRIPT_CONFIG_PREFIX, ConfigBasedProvider.CLASS_KEY, LocalStartupConfigProvider.class.getName());
+        var locationConfig = "%s.%s.%s=%s".formatted(ConfigUtils.CONFIG_PATH, StartupScriptProvider.STARTUP_SCRIPT_CONFIG_PREFIX, SCRIPT_LOCATION_KEY, startUpFileLocation);
 
         Main.main(new String[]{"--conf", classConfig, "--conf", locationConfig});
         List<String> expected = new ArrayList<>();

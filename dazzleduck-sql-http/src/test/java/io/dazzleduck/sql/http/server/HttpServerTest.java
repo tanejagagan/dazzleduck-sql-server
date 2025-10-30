@@ -47,14 +47,18 @@ public class HttpServerTest {
 
     private static String warehousePath;
 
+    public static final int TEST_PORT1 = 8090;
+    public static final int TEST_PORT2 = 8091;
+
     @BeforeAll
     public static void setup() throws Exception {
         warehousePath = "/tmp/" + UUID.randomUUID();
         new File(warehousePath).mkdir();
-        String[] args1 = {"--conf", "http.port=8080",   "--conf", "%s=%s".formatted(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath)};
+        String[] args1 = {"--conf", "dazzleduck-server.http.port=%s".formatted(TEST_PORT1),
+                "--conf", "dazzleduck-server.%s=%s".formatted(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath)};
         Main.main(args1);
         client = HttpClient.newHttpClient();
-        String[] args = {"--conf", "http.port=8081", "--conf", "http.%s=jwt".formatted(ConfigUtils.AUTHENTICATION_KEY), "--conf", "%s=%s".formatted(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath) };
+        String[] args = {"--conf", "dazzleduck-server.http.port=%s".formatted(TEST_PORT2), "--conf", "dazzleduck-server.http.%s=jwt".formatted(ConfigUtils.AUTHENTICATION_KEY), "--conf", "dazzleduck-server.%s=%s".formatted(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath) };
         Main.main(args);
         String[] sqls = {"INSTALL arrow FROM community", "LOAD arrow"};
         ConnectionPool.executeBatch(sqls);
@@ -64,7 +68,7 @@ public class HttpServerTest {
     public void testQueryWithPost() throws IOException, InterruptedException, SQLException {
         var query = "select * from generate_series(10) order by 1";
         var body = objectMapper.writeValueAsBytes(new QueryObject(query));
-        var request = HttpRequest.newBuilder(URI.create("http://localhost:8080/query"))
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/query".formatted(TEST_PORT1)))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
         var inputStreamResponse = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
@@ -78,7 +82,7 @@ public class HttpServerTest {
     public void testQueryWithGet() throws IOException, InterruptedException, SQLException {
         var query = "select * from generate_series(10) order by 1";
         var urlEncode = URLEncoder.encode(query, StandardCharsets.UTF_8);
-        var request = HttpRequest.newBuilder(URI.create("http://localhost:8080/query?q=" + urlEncode))
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/query?q=%s".formatted(TEST_PORT1, urlEncode)))
                 .GET()
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
         var inputStreamResponse = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
@@ -92,7 +96,7 @@ public class HttpServerTest {
     public void testSetWithGet() throws IOException, InterruptedException, SQLException {
         var query = "SET enable_progress_bar = true;";
         var urlEncode = URLEncoder.encode(query, StandardCharsets.UTF_8);
-        var request = HttpRequest.newBuilder(URI.create("http://localhost:8080/query?q=" + urlEncode))
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/query?q=%s".formatted(TEST_PORT1, urlEncode)))
                 .GET()
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
         var inputStreamResponse = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
@@ -104,7 +108,7 @@ public class HttpServerTest {
     public void testQueryWithJwtExpectUnauthorized() throws IOException, InterruptedException {
         var query = "select * from generate_series(10) order by 1";
         var body = objectMapper.writeValueAsBytes(new QueryObject(query));
-        var request = HttpRequest.newBuilder(URI.create("http://localhost:8081/query"))
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/query".formatted(TEST_PORT2)))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
         var inputStreamResponse = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
@@ -113,7 +117,7 @@ public class HttpServerTest {
 
     @Test
     public void testQueryWithJwtExpect() throws IOException, InterruptedException, SQLException {
-        var loginRequest = HttpRequest.newBuilder(URI.create("http://localhost:8081/login"))
+        var loginRequest = HttpRequest.newBuilder(URI.create("http://localhost:%s/login".formatted(TEST_PORT2)))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(objectMapper.writeValueAsBytes(new LoginObject("admin", "admin"))))
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
         var jwtResponse = client.send(loginRequest, HttpResponse.BodyHandlers.ofString());
@@ -121,7 +125,7 @@ public class HttpServerTest {
         var jwt = objectMapper.readValue(jwtResponse.body(), LoginResponse.class);
         var query = "select * from generate_series(10) order by 1";
         var body = objectMapper.writeValueAsBytes(new QueryObject(query));
-        var request = HttpRequest.newBuilder(URI.create("http://localhost:8081/query"))
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/query".formatted(TEST_PORT2)))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values())
                 .header(HeaderNames.AUTHORIZATION.defaultCase(), jwt.tokenType() + " " + jwt.accessToken())
@@ -135,14 +139,13 @@ public class HttpServerTest {
 
     @Test
     public void testWithDuckDB() {
-        String viewSql = "select * from read_arrow(concat('http://localhost:8080/query?q=',url_encode('select 1')))";
-
+        String viewSql = "select * from read_arrow(concat('http://localhost:%s/query?q=',url_encode('select 1')))".formatted(TEST_PORT1);
         ConnectionPool.execute(viewSql);
     }
 
     @Test
     public void testWithDuckDBAuthorized() throws IOException, InterruptedException {
-        var loginRequest = HttpRequest.newBuilder(URI.create("http://localhost:8081/login"))
+        var loginRequest = HttpRequest.newBuilder(URI.create("http://localhost:%s/login".formatted(TEST_PORT2)))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(objectMapper.writeValueAsBytes(new LoginObject("admin", "admin"))))
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
         var jwtResponse = client.send(loginRequest, HttpResponse.BodyHandlers.ofString());
@@ -154,7 +157,7 @@ public class HttpServerTest {
                 "    }\n" +
                 ")";
 
-        String viewSql = "select * from read_arrow(concat('http://localhost:8081/query?q=',url_encode('select 1')))";
+        String viewSql = "select * from read_arrow(concat('http://localhost:%s/query?q=',url_encode('select 1')))".formatted(TEST_PORT2);
         String[] sqls = {"INSTALL arrow FROM community", "LOAD arrow"};
         ConnectionPool.executeBatch(sqls);
         ConnectionPool.execute(httpAuthSql);
@@ -163,7 +166,7 @@ public class HttpServerTest {
 
     @Test
     public void testLogin() throws IOException, InterruptedException {
-        var request = HttpRequest.newBuilder(URI.create("http://localhost:8080/login"))
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/login".formatted(TEST_PORT1)))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(objectMapper.writeValueAsBytes(new LoginObject("admin", "admin", Map.of("org", "123")))))
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
         var inputStreamResponse = client.send(request, HttpResponse.BodyHandlers.ofString());
@@ -175,7 +178,7 @@ public class HttpServerTest {
     @ValueSource(strings = { TestConstants.SUPPORTED_HIVE_PATH_QUERY, TestConstants.SUPPORTED_AGGREGATED_HIVE_PATH_QUERY})
     public void testPlanning(String query) throws IOException, InterruptedException {
         var body = objectMapper.writeValueAsBytes(new QueryObject(query));
-        var request = HttpRequest.newBuilder(URI.create("http://localhost:8080/plan"))
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/plan".formatted(TEST_PORT1)))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
         var inputStreamResponse = client.send(request, HttpResponse.BodyHandlers.ofString());
@@ -186,7 +189,7 @@ public class HttpServerTest {
     @Test
     public void testPrintPlaning() throws SQLException {
         var query = "%s where p='1'".formatted(TestConstants.SUPPORTED_HIVE_PATH_QUERY);
-        var request = "http://localhost:8080/plan?%s=1&q=".formatted(HEADER_SPLIT_SIZE);
+        var request = "http://localhost:%s/plan?%s=1&q=".formatted(TEST_PORT1, HEADER_SPLIT_SIZE);
         var toExecute = "SELECT splitSize FROM read_json(concat('%s', url_encode('%s')))".formatted(request, query.replaceAll("'", "''"));
         ConnectionPool.printResult(toExecute);
         assertEquals(254, ConnectionPool.collectFirst(toExecute, Long.class));
@@ -197,7 +200,7 @@ public class HttpServerTest {
     @ValueSource(strings = { TestConstants.SUPPORTED_HIVE_PATH_QUERY, TestConstants.SUPPORTED_AGGREGATED_HIVE_PATH_QUERY})
     public void testPlanningWithSmallPartition(String query) throws IOException, InterruptedException {
         var body = objectMapper.writeValueAsBytes(new QueryObject(query));
-        var request = HttpRequest.newBuilder(URI.create("http://localhost:8080/plan"))
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/plan".formatted(TEST_PORT1)))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                 .header(HEADER_SPLIT_SIZE, "1")
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
@@ -210,7 +213,7 @@ public class HttpServerTest {
     public void testPlanningWithFilter() throws IOException, InterruptedException {
         var filter = "WHERE dt = '2025-01-01'";
         var body = objectMapper.writeValueAsBytes(new QueryObject(TestConstants.SUPPORTED_HIVE_PATH_QUERY + filter));
-        var request = HttpRequest.newBuilder(URI.create("http://localhost:8080/plan"))
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/plan".formatted(TEST_PORT1)))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                 .header(HEADER_SPLIT_SIZE, "1")
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
@@ -223,7 +226,7 @@ public class HttpServerTest {
     public void testPlanningWithError() throws IOException, InterruptedException {
         var errorFilter = "WHEREdt = '2025-01-01'";
         var body = objectMapper.writeValueAsBytes(new QueryObject(TestConstants.SUPPORTED_HIVE_PATH_QUERY + errorFilter));
-        var request = HttpRequest.newBuilder(URI.create("http://localhost:8080/plan"))
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/plan".formatted(TEST_PORT1)))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                 .header(HEADER_SPLIT_SIZE, "1")
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
@@ -246,7 +249,7 @@ public class HttpServerTest {
                 streamWrite.writeBatch();
             }
             streamWrite.end();
-            var request = HttpRequest.newBuilder(URI.create("http://localhost:8080/ingest?path=abc.%s".formatted(format)))
+            var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/ingest?path=abc.%s".formatted(TEST_PORT1, format)))
                     .POST(HttpRequest.BodyPublishers.ofInputStream(() ->
                             new ByteArrayInputStream(byteArrayOutputStream.toByteArray())))
                     .header("Content-Type", ContentTypes.APPLICATION_ARROW)
@@ -275,7 +278,7 @@ public class HttpServerTest {
             }
             streamWrite.end();
             var table = "table-single";
-            var request = HttpRequest.newBuilder(URI.create("http://localhost:8080/ingest?path=%s".formatted(table)))
+            var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/ingest?path=%s".formatted(TEST_PORT1, table)))
                     .POST(HttpRequest.BodyPublishers.ofInputStream(() ->
                             new ByteArrayInputStream(byteArrayOutputStream.toByteArray())))
                     .header("Content-Type", ContentTypes.APPLICATION_ARROW)
@@ -294,7 +297,7 @@ public class HttpServerTest {
 
     @Test
     public void testIngestionPostFromFile() throws SQLException, IOException, InterruptedException {
-        var request = HttpRequest.newBuilder(URI.create("http://localhost:8080/ingest?path=file1.parquet"))
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/ingest?path=file1.parquet".formatted(TEST_PORT1)))
                 .POST(HttpRequest.BodyPublishers.ofInputStream(() -> {
                     try {
                         return new FileInputStream("example/arrow_ipc/file1.arrow");
@@ -354,7 +357,7 @@ public class HttpServerTest {
                 int final1 = i;
                 CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
                     try {
-                        var request = HttpRequest.newBuilder(URI.create("http://localhost:8080/ingest?path=table"))
+                        var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/ingest?path=table".formatted(TEST_PORT1)))
                                 .POST(HttpRequest.BodyPublishers.ofInputStream(() ->
                                         new ByteArrayInputStream(byteArrayOutputStream.toByteArray())))
                                 .header("Content-Type", ContentTypes.APPLICATION_ARROW)

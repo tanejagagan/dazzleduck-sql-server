@@ -1,11 +1,17 @@
 package io.dazzleduck.sql.commons.ingestion;
 
+
+
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
 
+/**
+ * This is not a thread safe class and should only be used by BulkIngestionQueue.
+ * @param <T>
+ * @param <R>
+ */
 public class Bucket<T, R> {
     private final long capacity;
     private final List<Batch<T>> batches = new ArrayList<>();
@@ -14,6 +20,7 @@ public class Bucket<T, R> {
     private long size = 0;
     private Instant minReceiveInstance = Instant.MAX;
     private boolean scheduleWrite;
+    private final Map<String, Long> producerMaxBatchId = new HashMap<>();
 
     public Bucket(long capacity, Duration maxWriteDelay) {
         this.capacity = capacity;
@@ -22,6 +29,7 @@ public class Bucket<T, R> {
     void add(Batch<T> batch, CompletableFuture<R> future) {
         batches.add(batch);
         futures.add(future);
+        producerMaxBatchId.put(batch.producerId(), batch.producerBatchId());
         size += batch.totalSize();
         if (batch.receivedTime().isBefore(minReceiveInstance)) {
             minReceiveInstance = batch.receivedTime();
@@ -59,5 +67,9 @@ public class Bucket<T, R> {
 
     public void writeScheduled() {
         scheduleWrite = true;
+    }
+
+    public Map<String, Long> getProducerMaxBatchId() {
+        return Collections.unmodifiableMap(producerMaxBatchId);
     }
 }

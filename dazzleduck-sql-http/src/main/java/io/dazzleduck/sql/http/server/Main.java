@@ -49,7 +49,7 @@ public class Main {
         // initialize global config from default configuration
         Config helidonConfig = Config.create();
         var commandlineConfig = io.dazzleduck.sql.common.util.ConfigUtils.loadCommandLineConfig(args).config();
-        var appConfig = commandlineConfig.withFallback(ConfigFactory.load().getConfig(CONFIG_PATH));
+        var appConfig = commandlineConfig.withFallback(ConfigFactory.load()).getConfig(CONFIG_PATH);
         var httpConfig =  appConfig.getConfig("http");
         var port = httpConfig.getInt(ConfigUtils.PORT_KEY);
         var host = httpConfig.getString(ConfigUtils.HOST_KEY);

@@ -1,4 +1,4 @@
-package io.dazzleduck.sql.http.server;
+package io.dazzleduck.sql.commons.ingestion;
 
 import io.dazzleduck.sql.commons.ingestion.BulkIngestQueue;
 
