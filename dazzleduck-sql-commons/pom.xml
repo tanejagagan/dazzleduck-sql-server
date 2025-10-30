@@ -16,7 +16,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <testcontainer.version>1.20.4</testcontainer.version>
         <hadoop.version>3.3.4</hadoop.version>
-        <delta-kernel.version>3.3.0</delta-kernel.version>
+        <delta-kernel.version>3.3.2</delta-kernel.version>
     </properties>
 
     <dependencies>

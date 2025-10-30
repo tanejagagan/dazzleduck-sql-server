@@ -31,7 +31,7 @@ public class DuckDBFlightJDBCTest {
     static String urlWithS3Path = String.format("jdbc:arrow-flight-sql://localhost:%s/?database=memory&useEncryption=0&user=admin&password=admin&path=s3://bucket/my/folder", port);
     @BeforeAll
     public static void beforeAll() throws Exception {
-        String[] args = {"--conf", "flight-sql.port=" + port, "--conf", "useEncryption=false"};
+        String[] args = {"--conf", "dazzleduck-server.flight-sql.port=" + port, "--conf", "dazzleduck-server.useEncryption=false"};
         FlightTestUtils.setUpFlightServerAndClient(args, "admin", "admin", Map.of());
     }
 

@@ -32,7 +32,7 @@ public abstract class BulkIngestQueue<T, R> {
     private long totalWrite;
     private long totalWriteBatches;
     private long totalTimeSpentWriting;
-    private int writeTaskId;
+    private long writeTaskId;
     private long scheduledWriteCount;
 
     /**
@@ -146,7 +146,7 @@ public abstract class BulkIngestQueue<T, R> {
 
     protected abstract void write(WriteTask<T, R> writeTask);
 
-    protected record WriteTask<T,R>(int taskId, Instant startTime, Bucket<T, R> bucket) {
+    protected record WriteTask<T,R>(long taskId, Instant startTime, Bucket<T, R> bucket) {
         public long size() {
             return bucket.size();
         }

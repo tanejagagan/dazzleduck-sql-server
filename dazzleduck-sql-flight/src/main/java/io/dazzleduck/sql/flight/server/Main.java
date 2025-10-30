@@ -39,7 +39,7 @@ public class Main {
 
     public static FlightServer createServer(String[] args) throws Exception {
         var commandLineConfig = ConfigUtils.loadCommandLineConfig(args).config();
-        var config = commandLineConfig.withFallback(ConfigFactory.load().getConfig(CONFIG_PATH));
+        var config = commandLineConfig.withFallback(ConfigFactory.load()).getConfig(CONFIG_PATH);
         int port = config.getInt("flight-sql.port");
         String host = config.getString("flight-sql.host");
         AdvanceJWTTokenAuthenticator authenticator = AuthUtils.getAuthenticator(config);
