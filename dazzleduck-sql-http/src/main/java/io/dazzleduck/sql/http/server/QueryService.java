@@ -1,7 +1,6 @@
 package io.dazzleduck.sql.http.server;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.protobuf.ByteString;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.flight.server.StatementHandle;
@@ -11,7 +10,6 @@ import io.helidon.webserver.http.ServerResponse;
 import org.apache.arrow.flight.FlightProducer;
 import org.apache.arrow.flight.Ticket;
 import org.apache.arrow.flight.sql.impl.FlightSql;
-import org.apache.arrow.memory.BufferAllocator;
 
 import static com.google.protobuf.Any.pack;
 
@@ -44,7 +42,7 @@ public class QueryService extends AbstractQueryBasedService {
 
     private Ticket createTicket(String query) throws JsonProcessingException {
         var builder = FlightSql.TicketStatementQuery.newBuilder();
-        var handle = new StatementHandle(query, -1, "http_producer", -1);
+        var handle = new StatementHandle(query, -1, null, -1);
         var statementHandle  = handle.signed(secretKey);
         builder.setStatementHandle(ByteString.copyFrom(MAPPER.writeValueAsBytes(statementHandle)));
         var request = builder.build();

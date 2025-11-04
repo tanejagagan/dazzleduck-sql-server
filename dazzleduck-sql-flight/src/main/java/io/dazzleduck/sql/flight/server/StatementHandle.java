@@ -9,7 +9,7 @@ import org.apache.arrow.flight.FlightDescriptor;
 import javax.annotation.Nullable;
 import java.io.IOException;
 
-public record StatementHandle(String query, long queryId, String producerId, long splitSize,
+public record StatementHandle(String query, long queryId, @Nullable String producerId, long splitSize,
                               @Nullable String queryChecksum) {
 
     public StatementHandle(String query, long queryId, String producerId, long splitSize){
