@@ -523,7 +523,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         if (checkAccessModeAndRespond(ackStream)) {
            return null;
         }
-        IngestionParameters ingestionParameters = getIngestionParameters(command, warehousePath);
+        IngestionParameters ingestionParameters = IngestionParameters.getIngestionParameters(command);
         FlightStreamReader reader = FlightStreamReader.of(flightStream, allocator);
         return acceptPutStatementBulkIngest(context, ingestionParameters, reader, ackStream);
     }
@@ -539,7 +539,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             try (inputReader) {
                 tempFile = BulkIngestQueue.writeAndValidateTempFile(tempDir, inputReader);
                 var batch = ingestionParameters.constructBatch(Files.size(tempFile), tempFile.toAbsolutePath().toString());
-                var ingestionQueue = ingestionQueueMap.computeIfAbsent(ingestionParameters.completePath(), p -> {
+                var ingestionQueue = ingestionQueueMap.computeIfAbsent(ingestionParameters.completePath(warehousePath), p -> {
                     return new ParquetIngestionQueue(producerId, p, p, IngestionParameters.DEFAULT_MAX_BUCKET_SIZE,
                             IngestionParameters.DEFAULT_MAX_DELAY,
                             postIngestionTaskFactory,
@@ -555,20 +555,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             }
         };
     }
-
-    private static IngestionParameters getIngestionParameters(FlightSql.CommandStatementIngest command, String warehousePath){
-        Map<String, String > optionMap = command.getOptionsMap();
-        String path = optionMap.get("path");
-        final String completePath = warehousePath + "/" + path;
-        String format = optionMap.getOrDefault("format", "parquet");
-        String partitionColumnString = optionMap.get("partitions");
-        String[] partitionColumns = new String[0];
-        if(partitionColumnString != null) {
-            partitionColumns = partitionColumnString.split(",");
-        }
-        return new IngestionParameters(completePath, format, partitionColumns, new String[0], new String[0], "", 0L, Map.of());
-    }
-
 
     @Override
     public void cancelFlightInfo(
