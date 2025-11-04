@@ -18,6 +18,7 @@ import org.apache.arrow.memory.RootAllocator;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.UUID;
 
 import static io.dazzleduck.sql.common.util.ConfigUtils.CONFIG_PATH;
@@ -88,7 +89,7 @@ public class Main {
                             .register("/plan", new PlaningService(producer, location, allocator, accessMode))
                             .register("/ingest", new IngestionService(producer, warehousePath, allocator));
                     if ("jwt".equals(auth)) {
-                        b.addFilter(new JwtAuthenticationFilter("/query", appConfig, secretKey));
+                        b.addFilter(new JwtAuthenticationFilter(List.of("/query", "/plan", "/ingest"), appConfig, secretKey));
                     }
                 })
                 .port(port)
