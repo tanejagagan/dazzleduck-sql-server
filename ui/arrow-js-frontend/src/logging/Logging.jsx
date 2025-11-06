@@ -111,7 +111,7 @@ const Logging = () => {
         setResults(prev => ({ ...prev, [id]: { logs: [], loading: true, error: null } }));
 
         const result = await runQueryForRow(row);
-
+        
         setResults(prev => ({
             ...prev,
             [id]: { ...result, loading: false },
@@ -387,7 +387,7 @@ const Logging = () => {
 
                                 {/* View selection radio buttons */}
                                 <div className="flex items-center gap-5">
-                                    {["table", "line", "area", "bar", "pie"].map((v) => (
+                                    {["table", "line", "bar", "pie"].map((v) => (
                                         <label
                                             key={v}
                                             className="flex items-center text-sm cursor-pointer"

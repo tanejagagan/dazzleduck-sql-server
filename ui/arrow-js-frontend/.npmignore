@@ -1,0 +1,9 @@
+src/
+node_modules/
+public/
+tests/
+coverage/
+vite.config.js
+index.html
+*.log
+*.lock

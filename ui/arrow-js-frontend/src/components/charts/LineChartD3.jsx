@@ -99,7 +99,7 @@ export default function LineChartD3({ data, design }) {
             .style("display", "block")
             .html(`
               <strong>${xField}:</strong> ${d[xField]}<br/>
-              <strong>${d.dataset}:</strong> ${d.label ?? d.value}`);
+              <strong>${d.dataset}:</strong> ${d.value ?? d.label}`);
         })
         .on("mousemove", (event) => {
           const bounds = svgRef.current.getBoundingClientRect();
