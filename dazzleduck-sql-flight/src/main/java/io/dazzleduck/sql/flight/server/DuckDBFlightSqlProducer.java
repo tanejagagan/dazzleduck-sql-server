@@ -53,7 +53,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 
 import static com.google.protobuf.Any.pack;
 import static com.google.protobuf.ByteString.copyFrom;
@@ -70,6 +69,7 @@ import static org.duckdb.DuckDBConnection.DEFAULT_SCHEMA;
  */
 public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable, SimpleBulkIngestConsumer {
     record DatabaseSchema ( String database, String schema) {}
+    record CacheKey(String peerIdentity, long id){}
 
     protected static final Calendar DEFAULT_CALENDAR = JdbcToArrowUtils.getUtcCalendar();
     public static final String  DEFAULT_DATABASE = "memory";
@@ -82,9 +82,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     private final String secretKey;
     private final BufferAllocator allocator;
     private final String warehousePath;
-    final private static AtomicLong sqlIdCounter = new AtomicLong();
-    private final Cache<Long, StatementContext<PreparedStatement>> preparedStatementLoadingCache;
-    private final Cache<Long, StatementContext<Statement>> statementLoadingCache;
+    private final Cache<CacheKey, StatementContext<PreparedStatement>> preparedStatementLoadingCache;
+    private final Cache<CacheKey, StatementContext<Statement>> statementLoadingCache;
     private final SqlAuthorizer sqlAuthorizer;
 
     private final SqlInfoBuilder sqlInfoBuilder;
@@ -208,6 +207,11 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     }
 
     @Override
+    public String getProducerId() {
+        return producerId;
+    }
+
+    @Override
     public void createPreparedStatement(FlightSql.ActionCreatePreparedStatementRequest request, final CallContext context, StreamListener<Result> listener) {
         if (checkAccessModeAndRespond(listener)) {
             return;
@@ -224,6 +228,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
         String authorizedSql = request.getQuery();
         StatementHandle handle = newStatementHandle(authorizedSql);
+        var cacheKey = new CacheKey(context.peerIdentity(), handle.queryId());
 
         Runnable runnable = () -> {
             try {
@@ -237,7 +242,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                 final StatementContext<PreparedStatement> preparedStatementContext =
                         new StatementContext<>(preparedStatement, authorizedSql);
                 preparedStatementLoadingCache.put(
-                        handle.queryId(), preparedStatementContext);
+                        cacheKey, preparedStatementContext);
 
                 final Schema parameterSchema =
                         JdbcToArrowUtils.jdbcToArrowSchema(preparedStatement.getParameterMetaData(), DEFAULT_CALENDAR);
@@ -301,8 +306,10 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         if (statementHandle.signatureMismatch(secretKey)) {
             ErrorHandling.handleSignatureMismatch();
         }
+
+        var key = new CacheKey(context.peerIdentity(), statementHandle.queryId());
         StatementContext<PreparedStatement> statementContext =
-                preparedStatementLoadingCache.getIfPresent(statementHandle.queryId());
+                preparedStatementLoadingCache.getIfPresent(key);
         if (statementContext == null) {
             ErrorHandling.handleContextNotFound();
         }
@@ -377,8 +384,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         if (statementHandle.signatureMismatch(secretKey)) {
             ErrorHandling.handleSignatureMismatch(listener);
         }
+        var key = new CacheKey(context.peerIdentity(), statementHandle.queryId());
         StatementContext<PreparedStatement> statementContext =
-            preparedStatementLoadingCache.getIfPresent(statementHandle.queryId());
+            preparedStatementLoadingCache.getIfPresent(key);
         if (statementContext == null) {
             ErrorHandling.handleContextNotFound();
         }
@@ -410,13 +418,14 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             var connection = getConnection(context, accessMode);
             Statement statement = connection.createStatement();
             var statementContext = new StatementContext<>(statement, statementHandle.query());
-            statementLoadingCache.put(statementHandle.queryId(), statementContext);
+            var key = new CacheKey(context.peerIdentity(), statementHandle.queryId());
+            statementLoadingCache.put(key, statementContext);
             streamResultSet(executorService,
                     OptionalResultSetSupplier.of(statement, statementHandle.query()),
                     allocator,
                     getBatchSize(context),
                     listener,
-                    () -> statementLoadingCache.invalidate(statementHandle.queryId()));
+                    () -> statementLoadingCache.invalidate(key));
         } catch (Throwable e) {
             ErrorHandling.handleThrowable(listener, e);
         }
@@ -464,8 +473,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                 ErrorHandling.handleSignatureMismatch(ackStream);
                 return;
             }
+            var key = new CacheKey(context.peerIdentity(),statementHandle.queryId());
             StatementContext<PreparedStatement> statementContext =
-                    preparedStatementLoadingCache.getIfPresent(statementHandle.queryId());
+                    preparedStatementLoadingCache.getIfPresent(key);
             if (statementContext == null) {
                 ErrorHandling.handleContextNotFound(ackStream);
                 return;
@@ -783,7 +793,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                  CallContext context,
                                  StreamListener<CancelStatus> listener) {
         StatementHandle statementHandle = StatementHandle.deserialize(ticketStatementQuery.getStatementHandle());
-        cancel(statementHandle, listener);
+        cancel(statementHandle, listener, context.peerIdentity());
     }
 
 
@@ -791,19 +801,21 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                          CallContext context,
                                          StreamListener<CancelStatus> listener) {
         final StatementHandle statementHandle = StatementHandle.deserialize(ticketPreparedStatementQuery.getPreparedStatementHandle());
-        cancel(statementHandle, listener);
+        cancel(statementHandle, listener, context.peerIdentity());
     }
 
 
     private void cancel(StatementHandle statementHandle,
-                        StreamListener<CancelStatus> listener) {
+                        StreamListener<CancelStatus> listener,
+                        String peerIdentity) {
         if (statementHandle.signatureMismatch(secretKey)) {
             ErrorHandling.handleSignatureMismatch(listener);
             return;
         }
+        var key = new CacheKey(peerIdentity, statementHandle.queryId());
         try {
             StatementContext<Statement> statementContext =
-                    statementLoadingCache.getIfPresent(statementHandle.queryId());
+                    statementLoadingCache.getIfPresent(key);
             if (statementContext == null) {
                 ErrorHandling.handleContextNotFound(listener);
                 return;
@@ -824,9 +836,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
 
     private static class StatementRemovalListener<T extends Statement>
-            implements RemovalListener<Long, StatementContext<T>> {
+            implements RemovalListener<CacheKey, StatementContext<T>> {
         @Override
-        public void onRemoval(final RemovalNotification<Long, StatementContext<T>> notification) {
+        public void onRemoval(final RemovalNotification<CacheKey, StatementContext<T>> notification) {
             try {
                 assert notification.getValue() != null;
                 notification.getValue().close();
@@ -1063,7 +1075,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     }
 
     protected StatementHandle newStatementHandle(String query, long splitSize) {
-        return new StatementHandle(query, sqlIdCounter.incrementAndGet(), producerId, splitSize).signed(secretKey);
+        return StatementHandle.newStatementHandle(query, producerId, splitSize).signed(secretKey);
     }
 
     protected StatementHandle newStatementHandle(String query) {
