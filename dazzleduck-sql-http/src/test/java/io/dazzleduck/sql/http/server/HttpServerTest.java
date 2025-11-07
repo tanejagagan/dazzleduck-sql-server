@@ -450,7 +450,7 @@ public class HttpServerTest {
     }
 
     @Test
-    public void testPlanThenQueryThenCancel_flow() throws Exception {
+    public void testCancelWithPlanning() throws Exception {
         var jwt = login();
         String auth = jwt.tokenType() + " " + jwt.accessToken();
         var planBody = objectMapper.writeValueAsBytes(new QueryRequest(TestConstants.SUPPORTED_HIVE_PATH_QUERY));
