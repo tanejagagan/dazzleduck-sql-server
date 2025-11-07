@@ -804,7 +804,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         cancel(statementHandle.queryId(), listener, context.peerIdentity());
     }
 
-
+    @Override
     public void cancel(Long queryId,
                         StreamListener<CancelStatus> listener,
                         String peerIdentity) {

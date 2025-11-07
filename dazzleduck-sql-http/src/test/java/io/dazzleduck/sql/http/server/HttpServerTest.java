@@ -450,8 +450,49 @@ public class HttpServerTest {
     }
 
     @Test
-    public void testCancelWithPlanning(){
+    public void testPlanThenQueryThenCancel_flow() throws Exception {
+        var jwt = login();
+        String auth = jwt.tokenType() + " " + jwt.accessToken();
+        var planBody = objectMapper.writeValueAsBytes(new QueryRequest(TestConstants.SUPPORTED_HIVE_PATH_QUERY));
+        var planReq = HttpRequest.newBuilder(URI.create("http://localhost:%s/plan".formatted(TEST_PORT2)))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(planBody))
+                .header(HeaderNames.AUTHORIZATION.defaultCase(), auth)
+                .header("Content-Type", "application/json")
+                .build();
+        var planResp = client.send(planReq, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, planResp.statusCode());
+        var handles = objectMapper.readValue(planResp.body(), StatementHandle[].class);
+        assertNotNull(handles);
+        assertTrue(handles.length > 0);
 
+        String plannedQuery = handles[0].query();
+        long id = handles[0].queryId();
+
+        String qEnc = URLEncoder.encode(plannedQuery, StandardCharsets.UTF_8);
+        var queryReq = HttpRequest.newBuilder(URI.create("http://localhost:%s/query?q=%s&id=%s".formatted(TEST_PORT2, qEnc, id)))
+                .GET()
+                .header(HeaderNames.AUTHORIZATION.defaultCase(), auth)
+                .header("Accept", HeaderValues.ACCEPT_JSON.values())
+                .build();
+        client.sendAsync(queryReq, HttpResponse.BodyHandlers.ofString());
+        var cancelFuture = CompletableFuture.supplyAsync(() -> {
+            try {
+                Thread.sleep(2000);
+                var cancelBody = objectMapper.writeValueAsBytes(new QueryRequest(plannedQuery, id));
+                var cancelReq = HttpRequest.newBuilder(URI.create("http://localhost:%s/cancel".formatted(TEST_PORT2)))
+                        .POST(HttpRequest.BodyPublishers.ofByteArray(cancelBody))
+                        .header("Content-Type", "application/json")
+                        .header("Accept", HeaderValues.ACCEPT_JSON.values())
+                        .header(HeaderNames.AUTHORIZATION.defaultCase(), auth)
+                        .build();
+                return client.send(cancelReq, HttpResponse.BodyHandlers.ofString());
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+
+        var cancelResp = cancelFuture.get(5, TimeUnit.SECONDS);
+        assertTrue(Set.of(200, 202, 409).contains(cancelResp.statusCode()), "unexpected cancel status");
     }
 
     private LoginResponse login() throws IOException, InterruptedException {

@@ -4,10 +4,9 @@ import io.dazzleduck.sql.flight.ingestion.IngestionParameters;
 import org.apache.arrow.flight.CancelStatus;
 import org.apache.arrow.flight.FlightProducer;
 import org.apache.arrow.flight.PutResult;
-import org.apache.arrow.flight.sql.FlightSqlProducer;
 import org.apache.arrow.vector.ipc.ArrowReader;
 
-public interface SimpleBulkIngestConsumer extends FlightSqlProducer {
+public interface SimpleBulkIngestConsumer extends FlightProducer {
     Runnable acceptPutStatementBulkIngest(
             FlightProducer.CallContext context,
             IngestionParameters ingestionParameters,
