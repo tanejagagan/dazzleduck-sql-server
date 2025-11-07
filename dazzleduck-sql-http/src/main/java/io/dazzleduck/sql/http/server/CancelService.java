@@ -34,14 +34,14 @@ public class CancelService extends AbstractQueryBasedService {
             flightProducer.cancel(queryId, new FlightProducer.StreamListener<CancelStatus>() {
                 @Override
                 public void onNext(CancelStatus val) {
-                    log.info("Cancel update for id {}: {}", queryId, val);
+                    log.info("cancel update for id {}: {}", queryId, val);
                 }
 
                 @Override
                 public void onError(Throwable t) {
                     log.error("Failed to cancel id {}: {}", queryId, t.getMessage(), t);
                     if (!response.isSent()) {
-                        response.status(500).send("failed");
+                        response.status(500).send("failed to cancel query.");
                     }
                 }
 
@@ -49,14 +49,14 @@ public class CancelService extends AbstractQueryBasedService {
                 public void onCompleted() {
                     log.info("Cancellation completed for id {} (status={})", queryId, CancelStatus.CANCELLED);
                     if (!response.isSent()) {
-                        response.status(200).send("done");
+                        response.status(200).send("query cancel successfully.");
                     }
                 }
             }, context.peerIdentity());
 
         } catch (Exception ex) {
             log.error("Error while requesting cancel for id {}: {}", queryId, ex.getMessage(), ex);
-            response.status(500).send(Map.of("error", "failed to request cancellation", "details", ex.getMessage()));
+            response.status(500).send("Error while requesting cancel: " +  ex.getMessage());
         }
     }
 }
