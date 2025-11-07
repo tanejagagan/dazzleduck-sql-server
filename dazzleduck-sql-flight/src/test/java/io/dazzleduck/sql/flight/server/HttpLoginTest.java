@@ -21,7 +21,7 @@ public class HttpLoginTest {
     private static final String CLUSTER_HEADER_KEY = "cluster_id";
     private static final String TEST_CLUSTER = "TEST_CLUSTER";
     private static final BufferAllocator clientAllocator = new RootAllocator(Integer.MAX_VALUE);
-    private static final int HTTP_PORT = 8080;
+    private static final int HTTP_PORT = 8090;
     private static FlightSqlClient sqlClient;
     private static Location serverLocation;
 
@@ -36,12 +36,13 @@ public class HttpLoginTest {
         io.dazzleduck.sql.login.Main.main(new String[]{
                 "--conf", "dazzleduck-login-service.http.port: " + HTTP_PORT,
         });
-        var confOverload = new String[]{"--conf", "flight-sql.port=55569",
-                "--conf", "login.url=\"http://localhost:8080/login\"",
-                "--conf", "useEncryption=false",
-                "--conf", "jwt.token.generation=false",
-                "--conf", "jwt.token.claims.generate.headers=[%s]".formatted(CLUSTER_HEADER_KEY),
-                "--conf", "jwt.token.claims.validate.headers=[%s]".formatted(CLUSTER_HEADER_KEY)};
+        Thread.sleep(100);
+        var confOverload = new String[]{"--conf", "dazzleduck-server.flight-sql.port=55569",
+                "--conf", "dazzleduck-server.login.url=\"http://localhost:%s/login\"".formatted(HTTP_PORT),
+                "--conf", "dazzleduck-server.useEncryption=false",
+                "--conf", "dazzleduck-server.jwt.token.generation=false",
+                "--conf", "dazzleduck-server.jwt.token.claims.generate.headers=[%s]".formatted(CLUSTER_HEADER_KEY),
+                "--conf", "dazzleduck-server.jwt.token.claims.validate.headers=[%s]".formatted(CLUSTER_HEADER_KEY)};
         serverClient = FlightTestUtils.setUpFlightServerAndClient(confOverload, USER, PASSWORD, Map.of(CLUSTER_HEADER_KEY, TEST_CLUSTER));
         sqlClient = serverClient.flightSqlClient();
         serverLocation = serverClient.flightServer().getLocation();

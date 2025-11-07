@@ -21,17 +21,17 @@ public class JwtAuthenticationFilter implements Filter {
     private final Config config;
     private final SecretKey secretKey;
     private final JwtParser jwtParser;
-    private final String path;
+    private final List<String> paths;
     private final List<String> claimHeader;
     private final Set<String> validateHeaders;
 
-    public JwtAuthenticationFilter(String path, Config config, SecretKey secretKey) {
+    public JwtAuthenticationFilter(List<String> paths, Config config, SecretKey secretKey) {
         this.config = config;
         this.secretKey = secretKey;
         this.jwtParser = Jwts.parser()     // (1)
                 .verifyWith(secretKey)      //     or a constant key used to verify all signed JWTs
                 .build();
-        this.path = path;
+        this.paths = paths;
         this.claimHeader = config.getStringList("jwt.token.claims.generate.headers");
         this.validateHeaders = new HashSet<>(config.getStringList("jwt.token.claims.validate.headers"));
     }
@@ -59,7 +59,14 @@ public class JwtAuthenticationFilter implements Filter {
 
     @Override
     public void filter(FilterChain chain, RoutingRequest req, RoutingResponse res) {
-        if( !req.path().path().startsWith(path)) {
+        boolean authenticate = false;
+        for (var path : paths) {
+            if (req.path().path().startsWith(path)) {
+                authenticate = true;
+                break;
+            }
+        }
+        if (!authenticate) {
             chain.proceed();
             return;
         }

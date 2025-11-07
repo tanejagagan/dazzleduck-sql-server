@@ -21,6 +21,7 @@ public class Headers {
     public static final String HEADER_DATA_PARTITION = "partition";
     public static final String HEADER_DATA_FORMAT = "format";
     public static final String HEADER_PRODUCER_ID = "producer_id";
+    public static final String HEADER_QUERY_ID = "query_id";
     public static final String HEADER_PRODUCER_BATCH_ID = "producer_batch_id";
     public static final String HEADER_SORT_ORDER = "sort_order";
     public static final String HEADER_DATA_TRANSFORMATION ="transformation";

@@ -50,7 +50,8 @@ public class LoginService implements HttpService {
                     .expiration(expiration.getTime())
                     .claims(loginRequest.claims())
                     .signWith(secretKey).compact();
-            serverResponse.send(jwt.getBytes());
+            var response = new LoginResponse(jwt, loginRequest.username());
+            MAPPER.writeValue(serverResponse.outputStream(), response);
         } catch (Exception e ){
             serverResponse.status(Status.UNAUTHORIZED_401);
             serverResponse.send();

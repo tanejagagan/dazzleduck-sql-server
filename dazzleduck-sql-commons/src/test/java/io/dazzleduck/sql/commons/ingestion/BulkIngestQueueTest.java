@@ -1,6 +1,6 @@
-package io.dazzleduck.sql.http.server;
+package io.dazzleduck.sql.commons.ingestion;
 
-import io.dazzleduck.sql.commons.ingestion.Batch;
+
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
