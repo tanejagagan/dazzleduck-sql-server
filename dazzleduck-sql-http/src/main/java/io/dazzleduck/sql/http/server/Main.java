@@ -87,9 +87,10 @@ public class Main {
                     var b = routing.register("/query", new QueryService(producer, accessMode,base64SecretKey))
                             .register("/login", new LoginService(appConfig, secretKey, jwtExpiration))
                             .register("/plan", new PlaningService(producer, location, allocator, accessMode))
+                            .register("/cancel", new CancelService(producer, accessMode))
                             .register("/ingest", new IngestionService(producer, warehousePath, allocator));
                     if ("jwt".equals(auth)) {
-                        b.addFilter(new JwtAuthenticationFilter(List.of("/query", "/plan", "/ingest"), appConfig, secretKey));
+                        b.addFilter(new JwtAuthenticationFilter(List.of("/query", "/plan", "/ingest", "/cancel"), appConfig, secretKey));
                     }
                 })
                 .port(port)
