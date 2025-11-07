@@ -8,9 +8,16 @@ import org.apache.arrow.flight.FlightDescriptor;
 
 import javax.annotation.Nullable;
 import java.io.IOException;
+import java.util.concurrent.atomic.AtomicLong;
 
 public record StatementHandle(String query, long queryId, @Nullable String producerId, long splitSize,
                               @Nullable String queryChecksum) {
+
+    final private static AtomicLong queryIdCounter = new AtomicLong();
+
+    public static long nextStatementId(){
+        return queryIdCounter.incrementAndGet();
+    }
 
     public StatementHandle(String query, long queryId, String producerId, long splitSize){
         this(query, queryId, producerId, splitSize, null);
@@ -49,5 +56,13 @@ public record StatementHandle(String query, long queryId, @Nullable String produ
 
     public static StatementHandle fromFlightDescriptor(FlightDescriptor flightDescriptor) {
         return deserialize(flightDescriptor.getCommand());
+    }
+
+    public static StatementHandle newStatementHandle(String query, String producerId, long splitSize) {
+        return new StatementHandle(query, queryIdCounter.incrementAndGet(), producerId, splitSize);
+    }
+
+    public static StatementHandle newStatementHandle(long id, String query, String producerId, long splitSize) {
+        return new StatementHandle(query, id, producerId, splitSize);
     }
 }

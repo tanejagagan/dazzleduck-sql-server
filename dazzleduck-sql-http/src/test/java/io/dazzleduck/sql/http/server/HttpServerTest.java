@@ -67,7 +67,7 @@ public class HttpServerTest {
     @Test
     public void testQueryWithPost() throws IOException, InterruptedException, SQLException {
         var query = "select * from generate_series(10) order by 1";
-        var body = objectMapper.writeValueAsBytes(new QueryObject(query));
+        var body = objectMapper.writeValueAsBytes(new QueryRequest(query));
         var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/query".formatted(TEST_PORT1)))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
@@ -107,7 +107,7 @@ public class HttpServerTest {
     @Test
     public void testQueryWithJwtExpectUnauthorized() throws IOException, InterruptedException {
         var query = "select * from generate_series(10) order by 1";
-        var body = objectMapper.writeValueAsBytes(new QueryObject(query));
+        var body = objectMapper.writeValueAsBytes(new QueryRequest(query));
         var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/query".formatted(TEST_PORT2)))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
@@ -124,7 +124,7 @@ public class HttpServerTest {
         assertEquals(200, jwtResponse.statusCode());
         var jwt = objectMapper.readValue(jwtResponse.body(), LoginResponse.class);
         var query = "select * from generate_series(10) order by 1";
-        var body = objectMapper.writeValueAsBytes(new QueryObject(query));
+        var body = objectMapper.writeValueAsBytes(new QueryRequest(query));
         var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/query".formatted(TEST_PORT2)))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values())
@@ -177,7 +177,7 @@ public class HttpServerTest {
     @ParameterizedTest
     @ValueSource(strings = { TestConstants.SUPPORTED_HIVE_PATH_QUERY, TestConstants.SUPPORTED_AGGREGATED_HIVE_PATH_QUERY})
     public void testPlanning(String query) throws IOException, InterruptedException {
-        var body = objectMapper.writeValueAsBytes(new QueryObject(query));
+        var body = objectMapper.writeValueAsBytes(new QueryRequest(query));
         var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/plan".formatted(TEST_PORT1)))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
@@ -199,7 +199,7 @@ public class HttpServerTest {
     @ParameterizedTest
     @ValueSource(strings = { TestConstants.SUPPORTED_HIVE_PATH_QUERY, TestConstants.SUPPORTED_AGGREGATED_HIVE_PATH_QUERY})
     public void testPlanningWithSmallPartition(String query) throws IOException, InterruptedException {
-        var body = objectMapper.writeValueAsBytes(new QueryObject(query));
+        var body = objectMapper.writeValueAsBytes(new QueryRequest(query));
         var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/plan".formatted(TEST_PORT1)))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                 .header(HEADER_SPLIT_SIZE, "1")
@@ -212,7 +212,7 @@ public class HttpServerTest {
     @Test
     public void testPlanningWithFilter() throws IOException, InterruptedException {
         var filter = "WHERE dt = '2025-01-01'";
-        var body = objectMapper.writeValueAsBytes(new QueryObject(TestConstants.SUPPORTED_HIVE_PATH_QUERY + filter));
+        var body = objectMapper.writeValueAsBytes(new QueryRequest(TestConstants.SUPPORTED_HIVE_PATH_QUERY + filter));
         var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/plan".formatted(TEST_PORT1)))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                 .header(HEADER_SPLIT_SIZE, "1")
@@ -225,7 +225,7 @@ public class HttpServerTest {
     @Test
     public void testPlanningWithError() throws IOException, InterruptedException {
         var errorFilter = "WHEREdt = '2025-01-01'";
-        var body = objectMapper.writeValueAsBytes(new QueryObject(TestConstants.SUPPORTED_HIVE_PATH_QUERY + errorFilter));
+        var body = objectMapper.writeValueAsBytes(new QueryRequest(TestConstants.SUPPORTED_HIVE_PATH_QUERY + errorFilter));
         var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/plan".formatted(TEST_PORT1)))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                 .header(HEADER_SPLIT_SIZE, "1")
@@ -377,5 +377,20 @@ public class HttpServerTest {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
             executor.shutdown();
         }
+    }
+
+    @Test
+    public void testCancelWithGet(){
+
+    }
+
+    @Test
+    public void testCancelWithPost(){
+
+    }
+
+    @Test
+    public void testCancelWithPlanning(){
+
     }
 }

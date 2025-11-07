@@ -26,9 +26,9 @@ public class PlaningService extends AbstractQueryBasedService implements Paramet
         this.flightProducer = flightProducer;
     }
     @Override
-    protected void handleInternal(ServerRequest request, ServerResponse response, String query) {
+    protected void handleInternal(ServerRequest request, ServerResponse response, QueryRequest queryRequest) {
         try {
-            var command = FlightSql.CommandStatementQuery.newBuilder().setQuery(query).build();
+            var command = FlightSql.CommandStatementQuery.newBuilder().setQuery(queryRequest.query()).build();
             var info = flightProducer.getFlightInfo(ControllerService.createContext(request),
                     FlightDescriptor.command(Any.pack(command).toByteArray()));
             var result = new ArrayList<StatementHandle>();

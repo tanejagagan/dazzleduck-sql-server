@@ -31,9 +31,9 @@ public abstract class AbstractQueryBasedService implements HttpService, Controll
     protected static final Logger logger = LoggerFactory.getLogger(AbstractQueryBasedService.class);
 
     protected void handle(ServerRequest request,
-                        ServerResponse response, String query) {
+                        ServerResponse response, QueryRequest requestObject) {
         try {
-            handleInternal(request, response, query);
+            handleInternal(request, response, requestObject);
         } catch (HttpException e) {
             if (e instanceof InternalErrorException) {
                 logger.atError().setCause(e).log("Error");
@@ -60,16 +60,23 @@ public abstract class AbstractQueryBasedService implements HttpService, Controll
 
     private void handleGet(ServerRequest request,
                            ServerResponse response) {
-        var query = request.requestedUri().query().get("q");
-        handle(request, response, query);
+        var query = request.requestedUri().query();
+        var q = request.requestedUri().query().get("q");
+        QueryRequest queryRequest;
+        if (query.contains("id")) {
+            queryRequest = new QueryRequest(q, Long.parseLong(query.get("id")));
+        } else {
+            queryRequest = new QueryRequest(q);
+        }
+        handle(request, response, queryRequest);
     }
 
     public void handlePost(ServerRequest request,
                            ServerResponse response) throws IOException {
-        var queryObject = MAPPER.readValue(request.content().inputStream(), QueryObject.class);
-        handle(request, response, queryObject.query());
+        var requestObject = MAPPER.readValue(request.content().inputStream(), QueryRequest.class);
+        handle(request, response, requestObject);
     }
 
     protected abstract void handleInternal(ServerRequest request,
-                                           ServerResponse response, String query) ;
+                                           ServerResponse response, QueryRequest requestObject) ;
 }

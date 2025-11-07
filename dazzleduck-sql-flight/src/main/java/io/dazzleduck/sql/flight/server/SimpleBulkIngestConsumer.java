@@ -5,10 +5,12 @@ import org.apache.arrow.flight.FlightProducer;
 import org.apache.arrow.flight.PutResult;
 import org.apache.arrow.vector.ipc.ArrowReader;
 
-public interface SimpleBulkIngestConsumer {
+public interface SimpleBulkIngestConsumer extends FlightProducer {
     Runnable acceptPutStatementBulkIngest(
             FlightProducer.CallContext context,
             IngestionParameters ingestionParameters,
             ArrowReader inputReader,
             FlightProducer.StreamListener<PutResult> ackStream);
+
+    String getProducerId();
 }
