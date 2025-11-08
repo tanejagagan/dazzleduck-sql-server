@@ -29,16 +29,11 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executors;
+import java.util.*;
+import java.util.concurrent.*;
 
 import static io.dazzleduck.sql.common.Headers.*;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.*;
 
 public class HttpServerTest {
     static HttpClient client;
@@ -49,6 +44,10 @@ public class HttpServerTest {
 
     public static final int TEST_PORT1 = 8090;
     public static final int TEST_PORT2 = 8091;
+
+    private static final String LONG_RUNNING_QUERY = "with t as " +
+            "(select len(split(concat('abcdefghijklmnopqrstuvwxyz:', generate_series), ':')) as len  from generate_series(1, 1000000000) )" +
+            " select count(*) from t where len = 10";
 
     @BeforeAll
     public static void setup() throws Exception {
@@ -380,17 +379,129 @@ public class HttpServerTest {
     }
 
     @Test
-    public void testCancelWithGet(){
+    public void testCancelWithGet() throws Exception {
+        var jwt = login();
+        String auth = jwt.tokenType() + " " + jwt.accessToken();
 
+        String q = URLEncoder.encode(LONG_RUNNING_QUERY, StandardCharsets.UTF_8);
+        var query = HttpRequest.newBuilder(URI.create("http://localhost:%s/query?q=%s&id=%s".formatted(TEST_PORT2, q, 11L)))
+                .GET().header("Accept", HeaderValues.ACCEPT_JSON.values())
+                .header(HeaderNames.AUTHORIZATION.defaultCase(), auth).build();
+
+        var queryFuture = client.sendAsync(query, HttpResponse.BodyHandlers.ofString());
+        var cancelFuture = CompletableFuture.supplyAsync(() -> {
+            try {
+                Thread.sleep(500);
+                var body = objectMapper.writeValueAsBytes(new QueryRequest(LONG_RUNNING_QUERY, 11L));
+                var cancel = HttpRequest.newBuilder(URI.create("http://localhost:%s/cancel".formatted(TEST_PORT2)))
+                        .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+                        .header("Accept", HeaderValues.ACCEPT_JSON.values())
+                        .header("Content-Type", "application/json")
+                        .header(HeaderNames.AUTHORIZATION.defaultCase(), auth).build();
+                return client.send(cancel, HttpResponse.BodyHandlers.ofString());
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+
+        var cancelResp = cancelFuture.get(5, TimeUnit.SECONDS);
+        assertTrue(Set.of(200, 202, 409).contains(cancelResp.statusCode()));
+
+        var queryResp = queryFuture.get(15, TimeUnit.SECONDS);
+        var body = queryResp.body().toLowerCase();
+        assertTrue(body.contains("cancel") || body.contains("interrupted") || queryResp.statusCode() != 200);
+    }
+
+
+    @Test
+    public void testCancelWithPost() throws Exception {
+        var jwt = login();
+        String auth = jwt.tokenType() + " " + jwt.accessToken();
+
+        var body = objectMapper.writeValueAsBytes(new QueryRequest(LONG_RUNNING_QUERY, 12L));
+        var query = HttpRequest.newBuilder(URI.create("http://localhost:%s/query".formatted(TEST_PORT2)))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+                .header("Accept", HeaderValues.ACCEPT_JSON.values())
+                .header("Content-Type", "application/json")
+                .header(HeaderNames.AUTHORIZATION.defaultCase(), auth).build();
+
+        var queryFuture = client.sendAsync(query, HttpResponse.BodyHandlers.ofString());
+        var cancelFuture = CompletableFuture.supplyAsync(() -> {
+            try {
+                Thread.sleep(500);
+                var cancelBody = objectMapper.writeValueAsBytes(new QueryRequest(LONG_RUNNING_QUERY, 12L));
+                var cancel = HttpRequest.newBuilder(URI.create("http://localhost:%s/cancel".formatted(TEST_PORT2)))
+                        .POST(HttpRequest.BodyPublishers.ofByteArray(cancelBody))
+                        .header("Accept", HeaderValues.ACCEPT_JSON.values())
+                        .header("Content-Type", "application/json")
+                        .header(HeaderNames.AUTHORIZATION.defaultCase(), auth).build();
+                return client.send(cancel, HttpResponse.BodyHandlers.ofString());
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+
+        var cancelResp = cancelFuture.get(5, TimeUnit.SECONDS);
+        assertTrue(Set.of(200, 202, 409).contains(cancelResp.statusCode()));
+
+        var queryResp = queryFuture.get(15, TimeUnit.SECONDS);
+        var respBody = queryResp.body().toLowerCase();
+        assertTrue(respBody.contains("cancel") || respBody.contains("interrupted") || queryResp.statusCode() != 200);
     }
 
     @Test
-    public void testCancelWithPost(){
+    public void testCancelWithPlanning() throws Exception {
+        var jwt = login();
+        String auth = jwt.tokenType() + " " + jwt.accessToken();
+        var planBody = objectMapper.writeValueAsBytes(new QueryRequest(TestConstants.SUPPORTED_HIVE_PATH_QUERY));
+        var planReq = HttpRequest.newBuilder(URI.create("http://localhost:%s/plan".formatted(TEST_PORT2)))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(planBody))
+                .header(HeaderNames.AUTHORIZATION.defaultCase(), auth)
+                .header("Content-Type", "application/json")
+                .build();
+        var planResp = client.send(planReq, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, planResp.statusCode());
+        var handles = objectMapper.readValue(planResp.body(), StatementHandle[].class);
+        assertNotNull(handles);
+        assertTrue(handles.length > 0);
 
+        String plannedQuery = handles[0].query();
+        long id = handles[0].queryId();
+
+        String qEnc = URLEncoder.encode(plannedQuery, StandardCharsets.UTF_8);
+        var queryReq = HttpRequest.newBuilder(URI.create("http://localhost:%s/query?q=%s&id=%s".formatted(TEST_PORT2, qEnc, id)))
+                .GET()
+                .header(HeaderNames.AUTHORIZATION.defaultCase(), auth)
+                .header("Accept", HeaderValues.ACCEPT_JSON.values())
+                .build();
+        client.sendAsync(queryReq, HttpResponse.BodyHandlers.ofString());
+        var cancelFuture = CompletableFuture.supplyAsync(() -> {
+            try {
+                Thread.sleep(2000);
+                var cancelBody = objectMapper.writeValueAsBytes(new QueryRequest(plannedQuery, id));
+                var cancelReq = HttpRequest.newBuilder(URI.create("http://localhost:%s/cancel".formatted(TEST_PORT2)))
+                        .POST(HttpRequest.BodyPublishers.ofByteArray(cancelBody))
+                        .header("Content-Type", "application/json")
+                        .header("Accept", HeaderValues.ACCEPT_JSON.values())
+                        .header(HeaderNames.AUTHORIZATION.defaultCase(), auth)
+                        .build();
+                return client.send(cancelReq, HttpResponse.BodyHandlers.ofString());
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+
+        var cancelResp = cancelFuture.get(5, TimeUnit.SECONDS);
+        assertTrue(Set.of(200, 202, 409).contains(cancelResp.statusCode()), "unexpected cancel status");
     }
 
-    @Test
-    public void testCancelWithPlanning(){
-
+    private LoginResponse login() throws IOException, InterruptedException {
+        var loginRequest = HttpRequest.newBuilder(URI.create("http://localhost:%s/login".formatted(TEST_PORT2)))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(objectMapper.writeValueAsBytes(new LoginObject("admin", "admin"))))
+                .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values())
+                .build();
+        var jwtResponse = client.send(loginRequest, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, jwtResponse.statusCode());
+        return objectMapper.readValue(jwtResponse.body(), LoginResponse.class);
     }
 }

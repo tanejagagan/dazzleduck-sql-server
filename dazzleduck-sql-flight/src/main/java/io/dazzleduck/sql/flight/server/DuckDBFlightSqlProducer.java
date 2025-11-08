@@ -793,7 +793,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                  CallContext context,
                                  StreamListener<CancelStatus> listener) {
         StatementHandle statementHandle = StatementHandle.deserialize(ticketStatementQuery.getStatementHandle());
-        cancel(statementHandle, listener, context.peerIdentity());
+        cancel(statementHandle.queryId(), listener, context.peerIdentity());
     }
 
 
@@ -801,18 +801,14 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                          CallContext context,
                                          StreamListener<CancelStatus> listener) {
         final StatementHandle statementHandle = StatementHandle.deserialize(ticketPreparedStatementQuery.getPreparedStatementHandle());
-        cancel(statementHandle, listener, context.peerIdentity());
+        cancel(statementHandle.queryId(), listener, context.peerIdentity());
     }
 
-
-    private void cancel(StatementHandle statementHandle,
+    @Override
+    public void cancel(Long queryId,
                         StreamListener<CancelStatus> listener,
                         String peerIdentity) {
-        if (statementHandle.signatureMismatch(secretKey)) {
-            ErrorHandling.handleSignatureMismatch(listener);
-            return;
-        }
-        var key = new CacheKey(peerIdentity, statementHandle.queryId());
+        var key = new CacheKey(peerIdentity, queryId);
         try {
             StatementContext<Statement> statementContext =
                     statementLoadingCache.getIfPresent(key);
@@ -830,7 +826,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             listener.onNext(CancelStatus.CANCELLED);
         } finally {
             listener.onCompleted();
-            statementLoadingCache.invalidate(statementHandle.queryId());
+            statementLoadingCache.invalidate(queryId);
         }
     }
 
