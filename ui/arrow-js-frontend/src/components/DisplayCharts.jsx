@@ -21,7 +21,7 @@ export default function DisplayCharts({ logs, view, width, height }) {
   if (keys.length === 0)
     return <p className="text-gray-500">No valid data columns.</p>;
 
-  // ✅ Use only first 3 columns for visualization (ignore the rest)
+  // Use only first 3 columns for visualization (ignore the rest)
   const usedKeys = keys.slice(0, 3);
   const [col1, col2, col3] = usedKeys;
 
@@ -72,7 +72,7 @@ export default function DisplayCharts({ logs, view, width, height }) {
   };
 
   // -------------------------------------------------
-  // 🥧 PIE CHART (always works using first 2 columns)
+  // PIE CHART (always works using first 2 columns)
   // -------------------------------------------------
   if (view === "pie") {
     const [k1, k2] = keys.slice(0, 2); // only first two columns used
@@ -100,7 +100,7 @@ export default function DisplayCharts({ logs, view, width, height }) {
   }
 
   // -------------------------------------------------
-  // 📈 LINE / 📊 BAR charts (3 columns or less)
+  // LINE / BAR charts (3 columns or less)
   // -------------------------------------------------
   const xKey = col1;
   let yKey = col2;
@@ -144,7 +144,7 @@ export default function DisplayCharts({ logs, view, width, height }) {
   };
 
   // -------------------------------------------------
-  // 🧾 Render chart
+  // Render chart
   // -------------------------------------------------
   if (view === "line") return <LineChartD3 data={chartData} design={design} />;
   if (view === "bar") return <BarChartD3 data={chartData} design={design} />;
