@@ -46,7 +46,7 @@ export const LoggingProvider = ({ children }) => {
                 password,
                 claims: { org: "1" },
             });
-            const jwt = response.data;
+            const jwt = `${response.data.tokenType} ${response.data.accessToken}`;
             Cookies.set("jwtToken", jwt, { path: "/", secure: true });
             return jwt;
         } catch (err) {

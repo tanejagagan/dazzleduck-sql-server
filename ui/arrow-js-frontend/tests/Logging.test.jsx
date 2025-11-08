@@ -50,7 +50,7 @@ describe("Logging Component Integration Tests", () => {
     it("should connect successfully when valid credentials are provided", async () => {
         setup();
 
-        fireEvent.change(screen.getByPlaceholderText(/http:\/\/localhost:8080/i), {
+        fireEvent.change(screen.getByPlaceholderText(/Enter Server URL/i), {
             target: { value: SERVER_URL },
         });
         fireEvent.change(screen.getByPlaceholderText(/enter username/i), {
@@ -96,7 +96,7 @@ describe("Logging Component Integration Tests", () => {
     it("should execute a real query after connecting", async () => {
         setup();
 
-        fireEvent.change(screen.getByPlaceholderText(/http:\/\/localhost:8080/i), {
+        fireEvent.change(screen.getByPlaceholderText(/Enter Server URL/i), {
             target: { value: SERVER_URL },
         });
         fireEvent.change(screen.getByPlaceholderText(/enter username/i), {
@@ -166,7 +166,7 @@ describe("Logging Component Integration Tests", () => {
         setup();
 
         // Fill credentials
-        fireEvent.change(screen.getByPlaceholderText(/http:\/\/localhost:8080/i), {
+        fireEvent.change(screen.getByPlaceholderText(/Enter Server URL/i), {
             target: { value: SERVER_URL },
         });
         fireEvent.change(screen.getByPlaceholderText(/enter username/i), {

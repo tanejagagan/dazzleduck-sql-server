@@ -206,7 +206,7 @@ const Logging = () => {
                         <input
                             type="text"
                             {...register("url", { required: "Server URL is required" })}
-                            placeholder="Server URL"
+                            placeholder="Enter Server URL"
                             className="w-full border border-gray-400 rounded-lg p-2"
                         />
                         {/* show error only after submit attempt */}
