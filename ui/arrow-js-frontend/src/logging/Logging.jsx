@@ -79,27 +79,18 @@ const Logging = () => {
         );
     };
 
-    // Helper: normalize response to array
-    const normalizeLogs = (logsData) => {
-        if (Array.isArray(logsData)) return logsData;
-        if (Array.isArray(logsData?.data)) return logsData.data;
-        if (Array.isArray(logsData?.logs)) return logsData.logs;
-        if (logsData && typeof logsData === "object") return [logsData];
-        return [];
-    };
-
     // Core executor for one query row
     const runQueryForRow = async (row) => {
         const { url, username, password, splitSize } = connection;
 
         // Not connected
-        if (!isConnected) {return { logs: [], error: "Not connected — click Connect" };}
+        if (!isConnected) { return { logs: [], error: "Not connected — click Connect" }; }
         // Empty query
-        if (!row.query?.trim()){return { logs: [], error: "Empty query — skipped" };}
+        if (!row.query?.trim()) { return { logs: [], error: "Empty query — skipped" }; }
 
         try {
-            const data = await executeQuery(url, username, password, row.query, splitSize);
-            return { logs: normalizeLogs(data), error: null };
+            const logs = await executeQuery(url, row.query, splitSize);
+            return { logs, error: null };
         } catch (err) {
             return { logs: [], error: err?.message || "Query failed" };
         }
@@ -215,7 +206,7 @@ const Logging = () => {
                         <input
                             type="text"
                             {...register("url", { required: "Server URL is required" })}
-                            placeholder="http://localhost:8080"
+                            placeholder="Enter Server URL"
                             className="w-full border border-gray-400 rounded-lg p-2"
                         />
                         {/* show error only after submit attempt */}
@@ -387,7 +378,7 @@ const Logging = () => {
 
                                 {/* View selection radio buttons */}
                                 <div className="flex items-center gap-5">
-                                    {["table", "line", "area", "bar", "pie"].map((v) => (
+                                    {["table", "line", "bar", "pie"].map((v) => (
                                         <label
                                             key={v}
                                             className="flex items-center text-sm cursor-pointer"

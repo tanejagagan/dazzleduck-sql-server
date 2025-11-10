@@ -27,18 +27,17 @@ describe('LoggingContext Integration Tests', () => {
     // Basic test to ensure login works by checking if a token is string
     it('should login successfully and return a token', () => {
         expect(jwtToken).toBeDefined();
+        console.log(jwtToken, " <<----jwt-----")
         expect(typeof jwtToken).toBe('string');
     });
 
     // /query tests ---------------------- START
-    // test /query with splitSize 0.
-    it('should runQuery directly (not going to /plan as split is 0)', async () => {
+    it('should runQuery directly (split size 0)', async () => {
         const directRes = await result.current.executeQuery(
-            `${SERVER_URL}/query`,
-            USERNAME,
-            PASSWORD,
+            SERVER_URL,
             'select 2+2 as sum',
-            0
+            0,
+            jwtToken
         );
 
         expect(Array.isArray(directRes)).toBe(true);
@@ -48,32 +47,27 @@ describe('LoggingContext Integration Tests', () => {
         }
     });
 
-    // test to ensure executeQuery works with select 1
-    it('should execute a /query', async () => {
+    it('should execute a simple select query', async () => {
         const rows = await result.current.executeQuery(
-            `${SERVER_URL}/query`,
-            USERNAME,
-            PASSWORD,
-            'select 1',
-            0
+            SERVER_URL,
+            'select 1 as one',
+            0,
+            jwtToken
         );
 
         expect(Array.isArray(rows)).toBe(true);
         if (rows.length > 0) {
-            expect(rows[0]).toHaveProperty('1');
-            expect(rows[0]['1']).toBe(1);
+            expect(rows[0]).toHaveProperty('one');
+            expect(rows[0].one).toBe(1);
         }
     });
 
-    // test executeQuery with /query directly
-    it('should execute the simple sql query with /query', async () => {
-
+    it('should execute the simple /query with alias', async () => {
         const rows = await result.current.executeQuery(
-            `${SERVER_URL}/query`,
-            USERNAME,
-            PASSWORD,
+            SERVER_URL,
             'select 21 as age',
-            0
+            0,
+            jwtToken
         );
 
         expect(Array.isArray(rows)).toBe(true);
@@ -85,7 +79,6 @@ describe('LoggingContext Integration Tests', () => {
     // /query tests ---------------------- END
 
     // /plan and split queries tests ---------------------- START
-    // test to ensure executeQuery works with /plan -> /query split logic
     it('should execute /plan -> /query split logic correctly', async () => {
         const splitQuery = `FROM (FROM (VALUES(NULL::DATE, NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR)) t(dt, p, key, value)
         WHERE false
@@ -94,10 +87,9 @@ describe('LoggingContext Integration Tests', () => {
 
         const resultRows = await result.current.executeQuery(
             SERVER_URL,
-            USERNAME,
-            PASSWORD,
             splitQuery,
-            1
+            1,
+            jwtToken
         );
 
         expect(Array.isArray(resultRows)).toBe(true);
@@ -111,43 +103,39 @@ describe('LoggingContext Integration Tests', () => {
     });
     // /plan and split queries tests ---------------------- END
 
-
-    // test to ensure executeQuery handles invalid input gracefully
+    // Invalid input handling
     it('should handle invalid input gracefully', async () => {
         await expect(
-            result.current.executeQuery(SERVER_URL, USERNAME, PASSWORD, '', 0)
+            result.current.executeQuery(SERVER_URL, '', 0, jwtToken)
         ).rejects.toThrow(/Please fill in all fields/);
     });
 
-    // test to ensure executeQuery handles bad splits query
+    // Handle /plan returning no splits
     it('should handle /plan returning no splits gracefully', async () => {
         const badSplitQuery = 'select * from wrong_table';
         try {
-            await result.current.executeQuery(SERVER_URL, USERNAME, PASSWORD, badSplitQuery, 1);
+            await result.current.executeQuery(SERVER_URL, badSplitQuery, 1, jwtToken);
         } catch (err) {
             expect(err.message).toMatch(/Query execution failed/);
         }
     });
 
-    // test query execution with invlalid token
-    // this test will fail until we start server with auth enabled, so we skipping it for now.
+    // Invalid token test (skipped for now)
     it.skip('should fail if token is invalid', async () => {
         Cookies.set('jwtToken', 'invalidtoken');
         await expect(
-            result.current.executeQuery(`${SERVER_URL}/query`, USERNAME, PASSWORD, 'select 1', 0)
+            result.current.executeQuery(SERVER_URL, 'select 1', 0, 'invalidtoken')
         ).rejects.toThrow(/Fail|responded|Unauthorized/i);
     });
 
-    // test to ensure forwardToDazzleDuck works correctly
-    it('should forward to a valid endpoint using forwardToDazzleDuck', async () => {
+    // Forwarding test
+    it('should forward to a valid endpoint using forwardToDazzleDuck internally', async () => {
         const res = await result.current.executeQuery(
             SERVER_URL,
-            USERNAME,
-            PASSWORD,
             'select current_date',
-            0
+            0,
+            jwtToken
         );
         expect(Array.isArray(res)).toBe(true);
     });
-
-})
+});
