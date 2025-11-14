@@ -1,5 +1,8 @@
 package io.dazzleduck.sql.commons.ingestion;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import java.util.List;
 import java.util.Map;
 
@@ -11,8 +14,5 @@ import java.util.Map;
  * @param maxProducerIds Id of the producer
  * @param filesCreated This will be populated when the  files are written in the s3
  */
-public record IngestionResult(String queueName, long ingestionBatchId, String applicationId, Map<String, Long> maxProducerIds, List<String> filesCreated) {
-    public IngestionResult(String queueName, long ingestionBatchId, String applicationId, Map<String, Long> maxProducerIds) {
-        this(queueName, ingestionBatchId, applicationId, maxProducerIds, List.of());
-    }
+public record IngestionResult(String queueName, long ingestionBatchId, String applicationId, Map<String, Long> maxProducerIds, long rowCount, List<String> filesCreated) {
 }

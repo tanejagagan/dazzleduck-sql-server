@@ -68,6 +68,9 @@ import static org.duckdb.DuckDBConnection.DEFAULT_SCHEMA;
  * Future implementation note for statement we check if its SET or RESET statement and based on that use cookies to set unset the values
  */
 public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable, SimpleBulkIngestConsumer {
+
+    public static final String TEMP_WRITE_FORMAT = "arrow";
+
     record DatabaseSchema ( String database, String schema) {}
     record CacheKey(String peerIdentity, long id){}
 
@@ -547,10 +550,11 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         return () -> {
             Path tempFile;
             try (inputReader) {
-                tempFile = BulkIngestQueue.writeAndValidateTempFile(tempDir, inputReader);
+                tempFile = BulkIngestQueue.writeAndValidateTempArrowFile(tempDir, inputReader);
                 var batch = ingestionParameters.constructBatch(Files.size(tempFile), tempFile.toAbsolutePath().toString());
                 var ingestionQueue = ingestionQueueMap.computeIfAbsent(ingestionParameters.completePath(warehousePath), p -> {
-                    return new ParquetIngestionQueue(producerId, p, p, IngestionParameters.DEFAULT_MAX_BUCKET_SIZE,
+                    return new ParquetIngestionQueue(producerId, TEMP_WRITE_FORMAT, p, p,
+                            IngestionParameters.DEFAULT_MAX_BUCKET_SIZE,
                             IngestionParameters.DEFAULT_MAX_DELAY,
                             postIngestionTaskFactory,
                             Executors.newSingleThreadScheduledExecutor(),

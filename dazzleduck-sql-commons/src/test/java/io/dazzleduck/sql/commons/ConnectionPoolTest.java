@@ -113,13 +113,26 @@ public class ConnectionPoolTest {
     }
 
     @Test
-    public void testArrayCollection() throws SQLException {
+    public void testArrayCollectionInt() throws SQLException {
         try (var c = ConnectionPool.getConnection()) {
             Iterable<Object[]> longArray = (Iterable<Object[]>) ConnectionPool.collectFirstColumn(c, "select [1, 2]", Object.class.arrayType());
             for (var a : longArray) {
                 var res = new Object[2];
                 res[0] = 1;
                 res[1] = 2;
+                Assertions.assertArrayEquals(res, a);
+            }
+        }
+    }
+
+    @Test
+    public void testArrayCollectionVarChar() throws SQLException {
+        try (var c = ConnectionPool.getConnection()) {
+            Iterable<Object[]> varcharArray = (Iterable<Object[]>) ConnectionPool.collectFirstColumn(c, "select ['one', 'two']", Object.class.arrayType());
+            for (var a : varcharArray) {
+                var res = new Object[2];
+                res[0] = "one";
+                res[1] = "two";
                 Assertions.assertArrayEquals(res, a);
             }
         }

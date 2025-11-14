@@ -1,5 +1,7 @@
 package io.dazzleduck.sql.commons.ingestion;
 
+import io.dazzleduck.sql.commons.ConnectionPool;
+import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.arrow.vector.ipc.ArrowStreamWriter;
 
@@ -11,11 +13,15 @@ import java.nio.channels.Channels;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.sql.SQLException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public abstract class BulkIngestQueue<T, R> {
     private final ScheduledExecutorService executorService;
@@ -172,7 +178,7 @@ public abstract class BulkIngestQueue<T, R> {
         }
     }
 
-    public static Path writeAndValidateTempFile(Path tempDir, InputStream inputStream) throws IOException {
+    public static Path writeAndValidateTempArrowFile(Path tempDir, InputStream inputStream) throws IOException {
         String uniqueFileName = "ingestion_" + UUID.randomUUID() + ".arrow";
         Path tempFilePath = tempDir.resolve(uniqueFileName);
         try (OutputStream out = Files.newOutputStream(tempFilePath, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
@@ -181,7 +187,7 @@ public abstract class BulkIngestQueue<T, R> {
         return tempFilePath;
     }
 
-    public static Path writeAndValidateTempFile(Path tempDir, ArrowReader reader) throws IOException {
+    public static Path writeAndValidateTempArrowFile(Path tempDir, ArrowReader reader) throws IOException {
         String uniqueFileName = "ingestion_" + UUID.randomUUID() + ".arrow";
         Path tempFilePath = tempDir.resolve(uniqueFileName);
         try (FileOutputStream fos = new FileOutputStream(String.valueOf(tempFilePath));
@@ -193,5 +199,12 @@ public abstract class BulkIngestQueue<T, R> {
         }
         return tempFilePath;
     }
-}
 
+    public static Path writeAndValidateTempParquetFile(Path tempDir, ArrowReader reader, BufferAllocator allocator) throws  SQLException {
+
+        String uniqueFileName = "ingestion_" + UUID.randomUUID() + ".parquet";
+        Path tempFilePath = tempDir.resolve(uniqueFileName);
+        ConnectionPool.bulkIngestToFile(reader, allocator, tempFilePath.toString(), List.of(),"parquet");
+        return tempFilePath;
+    }
+}

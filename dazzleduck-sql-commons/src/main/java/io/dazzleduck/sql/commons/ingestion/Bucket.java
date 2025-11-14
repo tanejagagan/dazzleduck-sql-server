@@ -29,7 +29,9 @@ public class Bucket<T, R> {
     void add(Batch<T> batch, CompletableFuture<R> future) {
         batches.add(batch);
         futures.add(future);
-        producerMaxBatchId.put(batch.producerId(), batch.producerBatchId());
+        if (batch.producerId() != null) {
+            producerMaxBatchId.put(batch.producerId(), batch.producerBatchId());
+        }
         size += batch.totalSize();
         if (batch.receivedTime().isBefore(minReceiveInstance)) {
             minReceiveInstance = batch.receivedTime();

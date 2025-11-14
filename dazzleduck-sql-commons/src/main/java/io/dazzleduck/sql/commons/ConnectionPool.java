@@ -114,7 +114,11 @@ public enum ConnectionPool {
             Object[] read = new Object[rc.length];
             for(int i = 0; i <rc.length ; i++  ) {
                 var type  = rc[i].getType();
-                read[i] = rs.getObject(i + 1 , type);
+                if (type.isArray()) {
+                    read[i] = rs.getArray(i + 1).getArray();
+                } else {
+                    read[i] = rs.getObject(i + 1, type);
+                }
             }
             return constructor.newInstance(read);
             }, rClass);
