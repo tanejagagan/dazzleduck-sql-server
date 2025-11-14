@@ -1,9 +1,11 @@
 package io.dazzleduck.sql.http.server;
 
+import com.google.protobuf.ByteString;
 import io.dazzleduck.sql.flight.ingestion.IngestionParameters;
 import io.dazzleduck.sql.flight.server.SimpleBulkIngestConsumer;
 import io.helidon.common.uri.UriQuery;
 import io.helidon.http.HeaderNames;
+import io.helidon.http.HeaderValues;
 import io.helidon.http.Status;
 import io.helidon.webserver.http.HttpRules;
 import io.helidon.webserver.http.HttpService;
@@ -11,6 +13,7 @@ import io.helidon.webserver.http.ServerRequest;
 import io.helidon.webserver.http.ServerResponse;
 import org.apache.arrow.flight.FlightClient;
 import org.apache.arrow.flight.PutResult;
+import org.apache.arrow.flight.impl.Flight;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.arrow.vector.ipc.ArrowStreamReader;
@@ -18,6 +21,7 @@ import org.apache.arrow.vector.ipc.ArrowStreamReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.channels.Channels;
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 
@@ -77,8 +81,10 @@ public class IngestionService implements HttpService, ParameterUtils, Controller
         }
         var context = ControllerService.createContext(serverRequest);
         var ingestionParameters = parseIngestionParameters(serverRequest);
+
         var runnable = bulkIngestConsumer.acceptPutStatementBulkIngest(context, ingestionParameters,
                 createStream(serverRequest.content().inputStream()), new FlightClient.PutListener() {
+
                     @Override
                     public void getResult() {
 
@@ -91,17 +97,17 @@ public class IngestionService implements HttpService, ParameterUtils, Controller
 
                     @Override
                     public void onError(Throwable t) {
-
+                        serverResponse.status(Status.BAD_REQUEST_400);
+                        serverResponse.send(t.getMessage().getBytes());
                     }
 
                     @Override
                     public void onCompleted() {
-                        //serverResponse.status(Status.OK_200);
+                        serverResponse.status(Status.OK_200);
+                        serverResponse.send();
                     }
                 });
         runnable.run();
-        serverResponse.status(Status.OK_200);
-        serverResponse.send();
     }
 
     private ArrowReader createStream(InputStream inputStream){
