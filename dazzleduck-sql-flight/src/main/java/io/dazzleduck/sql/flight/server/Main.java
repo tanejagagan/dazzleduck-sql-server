@@ -1,10 +1,13 @@
 package io.dazzleduck.sql.flight.server;
 
+import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.common.StartupScriptProvider;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.commons.ConnectionPool;
+import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactory;
+import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactoryProvider;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceJWTTokenAuthenticator;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceServerCallHeaderAuthMiddleware;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
@@ -24,22 +27,17 @@ import static io.dazzleduck.sql.common.util.ConfigUtils.CONFIG_PATH;
 public class Main {
 
     public static void main(String[] args) throws Exception {
-        var flightServer = createServer(args);
-        Thread severThread = new Thread(() -> {
-            try {
-                flightServer.start();
-                System.out.println("Flight Server is up: Listening on URI: " + flightServer.getLocation().getUri());
-                flightServer.awaitTermination();
-            } catch (IOException | InterruptedException e) {
-                throw new RuntimeException(e);
-            }
-        });
-        severThread.start();
+        var commandLineConfig = ConfigUtils.loadCommandLineConfig(args).config();
+        var config = commandLineConfig.withFallback(ConfigFactory.load()).getConfig(CONFIG_PATH);
+        start(config);
     }
 
     public static FlightServer createServer(String[] args) throws Exception {
         var commandLineConfig = ConfigUtils.loadCommandLineConfig(args).config();
         var config = commandLineConfig.withFallback(ConfigFactory.load()).getConfig(CONFIG_PATH);
+        return createServer(config);
+    }
+    public static FlightServer createServer(Config config) throws Exception {
         int port = config.getInt("flight-sql.port");
         String host = config.getString("flight-sql.host");
         AdvanceJWTTokenAuthenticator authenticator = AuthUtils.getAuthenticator(config);
@@ -59,10 +57,11 @@ public class Main {
             ConnectionPool.execute(startupContent);
         }
         BufferAllocator allocator = new RootAllocator();
-        var producer = createProducer(location, producerId, secretKey, allocator, warehousePath, accessMode);
+        var postIngestionTaskFactorProvider = PostIngestionTaskFactoryProvider.load(config);
+        var postIngestionTaskFactor = postIngestionTaskFactorProvider.getPostIngestionTaskFactory();
+        var producer = createProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, postIngestionTaskFactor);
         var certStream = getInputStreamForResource(serverCertLocation);
         var keyStream = getInputStreamForResource(keystoreLocation);
-
 
         var builder = FlightServer.builder(allocator, location, producer)
                 .middleware(AdvanceServerCallHeaderAuthMiddleware.KEY,
@@ -73,13 +72,30 @@ public class Main {
         return builder.build();
     }
 
+
+    public static void start(Config config) throws Exception {
+        var flightServer = createServer(config);
+        Thread severThread = new Thread(() -> {
+            try {
+                flightServer.start();
+                System.out.println("Flight Server is up: Listening on URI: " + flightServer.getLocation().getUri());
+                flightServer.awaitTermination();
+            } catch (IOException | InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        });
+        severThread.start();
+    }
+
     public static DuckDBFlightSqlProducer createProducer(Location location,
-                                                          String producerId,
-                                                          String secretKey,
-                                                          BufferAllocator allocator,
-                                                          String warehousePath,
-                                                          AccessMode accessMode) {
-        return new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, Path.of(System.getProperty("java.io.tmpdir"), UUID.randomUUID().toString()));
+                                                         String producerId,
+                                                         String secretKey,
+                                                         BufferAllocator allocator,
+                                                         String warehousePath,
+                                                         AccessMode accessMode,
+                                                         PostIngestionTaskFactory postIngestionTaskFactory) {
+        return new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode,
+                Path.of(System.getProperty("java.io.tmpdir"), UUID.randomUUID().toString()), postIngestionTaskFactory);
     }
 
     private static InputStream getInputStreamForResource(String filename) {

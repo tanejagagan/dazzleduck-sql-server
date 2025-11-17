@@ -102,8 +102,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                                           String secretKey,
                                                           BufferAllocator allocator,
                                                           String warehousePath,
-                                                          AccessMode accessMode) {
-        return new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, newTempDir());
+                                                          AccessMode accessMode,
+                                                         PostIngestionTaskFactory postIngestionTaskFactory) {
+        return new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, newTempDir(), postIngestionTaskFactory);
     }
 
     public static Path newTempDir() {
@@ -123,7 +124,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     }
 
     public DuckDBFlightSqlProducer(Location location, String producerId) {
-        this(location, producerId, "change me", new RootAllocator(),  System.getProperty("user.dir") + "/warehouse", AccessMode.COMPLETE, newTempDir());
+        this(location, producerId, "change me", new RootAllocator(),  System.getProperty("user.dir") + "/warehouse", AccessMode.COMPLETE, newTempDir()
+        , PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory());
     }
 
     public DuckDBFlightSqlProducer(Location location,
@@ -132,7 +134,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                    BufferAllocator allocator,
                                    String warehousePath,
                                    AccessMode accessMode,
-                                   Path tempDir) {
+                                   Path tempDir,
+                                   PostIngestionTaskFactory postIngestionTaskFactory) {
         this.location = location;
         this.producerId = producerId;
         this.allocator = allocator;
@@ -145,9 +148,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             this.sqlAuthorizer = SqlAuthorizer.NOOP_AUTHORIZER;
         }
 
-        this.postIngestionTaskFactory = connectionResult -> (PostIngestionTask) () -> {/*do nothing*/};
-
-
+        this.postIngestionTaskFactory = postIngestionTaskFactory;
         preparedStatementLoadingCache =
                 CacheBuilder.newBuilder()
                         .maximumSize(4000)
