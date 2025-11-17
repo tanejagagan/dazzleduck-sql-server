@@ -8,6 +8,8 @@ import io.dazzleduck.sql.common.StartupScriptProvider;
 import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.ConnectionPool;
+import io.dazzleduck.sql.commons.ingestion.NOOPPostIngestionTaskFactoryProvider;
+import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactoryProvider;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.dazzleduck.sql.flight.stream.FlightStreamReader;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
@@ -91,7 +93,8 @@ public class DuckDBFlightSqlProducerTest {
                                 UUID.randomUUID().toString(),
                                 "change me",
                                 serverAllocator, warehousePath, AccessMode.COMPLETE,
-                                DuckDBFlightSqlProducer.newTempDir()))
+                                DuckDBFlightSqlProducer.newTempDir(),
+                        PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory()))
                 .headerAuthenticator(AuthUtils.getTestAuthenticator())
                 .build()
                 .start();

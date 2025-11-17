@@ -6,6 +6,7 @@ import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.common.auth.Validator;
 import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
+import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactoryProvider;
 import io.dazzleduck.sql.flight.server.DuckDBFlightSqlProducer;
 import io.dazzleduck.sql.login.LoginService;
 import io.helidon.config.Config;
@@ -16,6 +17,7 @@ import io.helidon.webserver.cors.CorsSupport;
 import org.apache.arrow.flight.Location;
 import org.apache.arrow.memory.RootAllocator;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -43,14 +45,14 @@ public class Main {
      * @param args command line arguments.
      */
     public static void main(String[] args) throws Exception {
-        
-        // load logging configuration
-        LogConfig.configureRuntime();
-
-        // initialize global config from default configuration
-        Config helidonConfig = Config.create();
         var commandlineConfig = io.dazzleduck.sql.common.util.ConfigUtils.loadCommandLineConfig(args).config();
         var appConfig = commandlineConfig.withFallback(ConfigFactory.load()).getConfig(CONFIG_PATH);
+        start(appConfig);
+    }
+
+    public static void start(com.typesafe.config.Config appConfig) throws Exception {
+        LogConfig.configureRuntime();
+        Config helidonConfig = Config.create();
         var httpConfig =  appConfig.getConfig("http");
         var port = httpConfig.getInt(ConfigUtils.PORT_KEY);
         var host = httpConfig.getString(ConfigUtils.HOST_KEY);
@@ -78,7 +80,10 @@ public class Main {
                 .build();
 
         var producerId = UUID.randomUUID().toString();
-        var producer = DuckDBFlightSqlProducer.createProducer(Location.forGrpcInsecure(host, port), producerId, base64SecretKey, allocator, warehousePath, accessMode);
+        var provider = PostIngestionTaskFactoryProvider.load(appConfig);
+        var factory = provider.getPostIngestionTaskFactory();
+        var producer = DuckDBFlightSqlProducer.createProducer(Location.forGrpcInsecure(host, port), producerId,
+                base64SecretKey, allocator, warehousePath, accessMode, factory);
         WebServer server = WebServer.builder()
                 .config(helidonConfig.get("dazzleduck-server"))
                 .config(helidonConfig.get("flight-sql"))

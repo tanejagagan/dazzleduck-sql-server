@@ -4,6 +4,7 @@ import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.common.util.ConfigUtils;
+import io.dazzleduck.sql.commons.ingestion.NOOPPostIngestionTaskFactoryProvider;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.dazzleduck.sql.flight.stream.FlightStreamReader;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceJWTTokenAuthenticator;
@@ -88,11 +89,12 @@ public interface FlightTestUtils {
                     UUID.randomUUID().toString(),
                     "change me",
                     allocator, warehousePath, AccessMode.RESTRICTED,
-                    Path.of(System.getProperty("java.io.tmpdir"), UUID.randomUUID().toString())),
+                    Path.of(System.getProperty("java.io.tmpdir"), UUID.randomUUID().toString()),
+                    NOOPPostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory()),
                 serverLocation, additionalClientHeaders, testAuthenticator);
     }
 
-    public  default AdvanceJWTTokenAuthenticator getTestJWTTokenAuthenticator() throws NoSuchAlgorithmException {
+    default AdvanceJWTTokenAuthenticator getTestJWTTokenAuthenticator() throws NoSuchAlgorithmException {
         var jwtGenerateConfigString = """
                 jwt.token.claims.generate.headers=[database,catalog,schema,table,filter,path,function]
                 jwt.token.claims.validate.headers=[database,schema]
@@ -151,7 +153,7 @@ public interface FlightTestUtils {
      * @param endPort The ending port number of the range (inclusive).
      * @return The first available port number found, or -1 if no port is available in the range.
      */
-    public static int findFreePortInRange(int startPort, int endPort) {
+    static int findFreePortInRange(int startPort, int endPort) {
         if (startPort < 1 || endPort > 65535 || startPort > endPort) {
             throw new IllegalArgumentException("Invalid port range. Ports must be between 1 and 65535, and startPort <= endPort.");
         }
