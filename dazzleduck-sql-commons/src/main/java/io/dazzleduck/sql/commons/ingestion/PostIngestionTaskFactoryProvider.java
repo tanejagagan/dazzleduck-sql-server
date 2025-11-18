@@ -5,7 +5,7 @@ import io.dazzleduck.sql.common.ConfigBasedProvider;
 
 public interface PostIngestionTaskFactoryProvider extends ConfigBasedProvider {
 
-    String POST_INGESTION_CONFIG_PREFIX = "post_ingestion";
+    String POST_INGESTION_CONFIG_PREFIX = "post_ingestion_task_factory_provider";
 
     PostIngestionTaskFactoryProvider NO_OP = new NOOPPostIngestionTaskFactoryProvider();
     void setConfig(Config config);
@@ -13,7 +13,7 @@ public interface PostIngestionTaskFactoryProvider extends ConfigBasedProvider {
     PostIngestionTaskFactory getPostIngestionTaskFactory();
 
     static PostIngestionTaskFactoryProvider load(Config config) throws Exception {
-        return ConfigBasedProvider.load(config, POST_INGESTION_CONFIG_PREFIX,
+        return (PostIngestionTaskFactoryProvider) ConfigBasedProvider.load(config, POST_INGESTION_CONFIG_PREFIX,
                 PostIngestionTaskFactoryProvider.NO_OP);
     }
 }
