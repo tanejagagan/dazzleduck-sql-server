@@ -5,7 +5,7 @@ import io.dazzleduck.sql.common.ConfigBasedProvider;
 
 public interface PostIngestionTaskFactoryProvider extends ConfigBasedProvider {
 
-    String POST_INGESTION_CONFIG_PREFIX = "post-ingestion";
+    String POST_INGESTION_CONFIG_PREFIX = "post_ingestion";
 
     PostIngestionTaskFactoryProvider NO_OP = new NOOPPostIngestionTaskFactoryProvider();
     void setConfig(Config config);

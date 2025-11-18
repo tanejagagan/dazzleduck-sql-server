@@ -10,7 +10,7 @@ import io.helidon.webserver.WebServer;
 
 public class Main {
 
-    public static final String CONFIG_PATH = "dazzleduck-login-service";
+    public static final String CONFIG_PATH = "dazzleduck_login_service";
     public static void main(String[] args) throws Exception {
 
         // load logging configuration
@@ -24,10 +24,10 @@ public class Main {
         var port = httpConfig.getInt(ConfigUtils.PORT_KEY);
         var host = httpConfig.getString(ConfigUtils.HOST_KEY);
         var secretKey = Validator.fromBase64String(appConfig.getString(ConfigUtils.SECRET_KEY_KEY));
-        var jwtExpiration = appConfig.getDuration("jwt.token.expiration");
+        var jwtExpiration = appConfig.getDuration("jwt_token.expiration");
         WebServer server = WebServer.builder()
-                .config(helidonConfig.get("dazzleduck-server"))
-                .config(helidonConfig.get("flight-sql"))
+                .config(helidonConfig.get("dazzleduck_server"))
+                .config(helidonConfig.get("flight_sql"))
                 .routing(routing -> {
                     var b = routing
                             .register("/login", new LoginService(appConfig, secretKey, jwtExpiration));

@@ -85,7 +85,7 @@ public class AuthUtils {
     }
 
     public static AdvanceBasicCallHeaderAuthenticator.AdvanceCredentialValidator createCredentialValidator(Config config) {
-        return config.hasPath("login.url") ?
+        return config.hasPath("login_url") ?
                 new HttpCredentialValidator(config)
                 : new ConfBasedCredentialValidator(config);
     }

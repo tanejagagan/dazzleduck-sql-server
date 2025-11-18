@@ -43,18 +43,18 @@ public class AdvanceJWTTokenAuthenticator implements CallHeaderAuthenticator {
                 .verifyWith(key)//     or a constant key used to verify all signed JWTs
                 .build();
         this.initialAuthenticator = initialAuthenticator;
-        this.timeMinutes = config.getDuration("jwt.token.expiration");
-        this.claimHeader = config.getStringList("jwt.token.claims.generate.headers");
-        this.validateHeaders = new HashSet<>(config.getStringList("jwt.token.claims.validate.headers"));
-        this.generateToken = config.getBoolean("jwt.token.generation");
+        this.timeMinutes = config.getDuration("jwt_token.expiration");
+        this.claimHeader = config.getStringList("jwt_token.claims.generate.headers");
+        this.validateHeaders = new HashSet<>(config.getStringList("jwt_token.claims.validate.headers"));
+        this.generateToken = config.getBoolean("jwt_token.generation");
     }
 
     private static Config defaulConfig() {
         String defaultConfig = """
-                jwt.token.expiration = 1h
-                jwt.token.claims.generate.headers = []
-                jwt.token.claims.validate.headers = []
-                jwt.token.generation = true
+                jwt_token.expiration = 1h
+                jwt_token.claims.generate.headers = []
+                jwt_token.claims.validate.headers = []
+                jwt_token.generation = true
                 """;
         return ConfigFactory.parseString(defaultConfig);
     }
