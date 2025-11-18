@@ -9,7 +9,7 @@ import java.util.List;
 
 public class ConfigUtils {
 
-    public static final String CONFIG_PATH = "dazzleduck-server";
+    public static final String CONFIG_PATH = "dazzleduck_server";
 
     public static final String WAREHOUSE_CONFIG_KEY  = "warehouse";
     public static final String AUTHENTICATION_KEY =  "authentication";
@@ -18,7 +18,7 @@ public class ConfigUtils {
 
     public static final String  HOST_KEY =  "host";
 
-    public static final String SECRET_KEY_KEY = "secret-key";
+    public static final String SECRET_KEY_KEY = "secret_key";
 
     public record ConfigWithMainParameters(Config config, List<String> mainParameters){}
 

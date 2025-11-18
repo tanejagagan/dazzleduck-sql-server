@@ -38,20 +38,20 @@ public class Main {
         return createServer(config);
     }
     public static FlightServer createServer(Config config) throws Exception {
-        int port = config.getInt("flight-sql.port");
-        String host = config.getString("flight-sql.host");
+        int port = config.getInt("flight_sql.port");
+        String host = config.getString("flight_sql.host");
         AdvanceJWTTokenAuthenticator authenticator = AuthUtils.getAuthenticator(config);
-        boolean useEncryption = config.getBoolean("useEncryption");
+        boolean useEncryption = config.getBoolean("use_encryption");
         Location location = useEncryption ? Location.forGrpcTls(host, port) : Location.forGrpcInsecure(host, port);
         String keystoreLocation = config.getString("keystore");
-        String serverCertLocation = config.getString("serverCert");
+        String serverCertLocation = config.getString("server_cert");
         String warehousePath = ConfigUtils.getWarehousePath(config);
         String secretKey = config.getString(ConfigUtils.SECRET_KEY_KEY);
         String producerId = config.hasPath("producerId") ? config.getString("producerId") : UUID.randomUUID().toString();
         if(!checkWarehousePath(warehousePath)) {
             System.out.printf("Warehouse dir does not exist %s. Create the dir to proceed", warehousePath);
         }
-        AccessMode accessMode = config.hasPath("accessMode") ? AccessMode.valueOf(config.getString("accessMode").toUpperCase()) : AccessMode.COMPLETE;
+        AccessMode accessMode = DuckDBFlightSqlProducer.getAccessMode(config);
         var startupContent = StartupScriptProvider.load(config).getStartupScript();
         if (startupContent != null) {
             ConnectionPool.execute(startupContent);
@@ -59,7 +59,8 @@ public class Main {
         BufferAllocator allocator = new RootAllocator();
         var postIngestionTaskFactorProvider = PostIngestionTaskFactoryProvider.load(config);
         var postIngestionTaskFactor = postIngestionTaskFactorProvider.getPostIngestionTaskFactory();
-        var producer = createProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, postIngestionTaskFactor);
+        var tempWriteDirector = DuckDBFlightSqlProducer.getTempWriteDir(config);
+        var producer = createProducer(location, producerId, secretKey, allocator, warehousePath, tempWriteDirector, accessMode, postIngestionTaskFactor);
         var certStream = getInputStreamForResource(serverCertLocation);
         var keyStream = getInputStreamForResource(keystoreLocation);
 
@@ -92,10 +93,10 @@ public class Main {
                                                          String secretKey,
                                                          BufferAllocator allocator,
                                                          String warehousePath,
+                                                         Path tempWriteDir,
                                                          AccessMode accessMode,
                                                          PostIngestionTaskFactory postIngestionTaskFactory) {
-        return new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode,
-                Path.of(System.getProperty("java.io.tmpdir"), UUID.randomUUID().toString()), postIngestionTaskFactory);
+        return new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, tempWriteDir, postIngestionTaskFactory);
     }
 
     private static InputStream getInputStreamForResource(String filename) {

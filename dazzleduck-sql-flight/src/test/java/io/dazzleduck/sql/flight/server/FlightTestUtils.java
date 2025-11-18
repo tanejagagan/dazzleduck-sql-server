@@ -96,11 +96,11 @@ public interface FlightTestUtils {
 
     default AdvanceJWTTokenAuthenticator getTestJWTTokenAuthenticator() throws NoSuchAlgorithmException {
         var jwtGenerateConfigString = """
-                jwt.token.claims.generate.headers=[database,catalog,schema,table,filter,path,function]
-                jwt.token.claims.validate.headers=[database,schema]
+                jwt_token.claims.generate.headers=[database,catalog,schema,table,filter,path,function]
+                jwt_token.claims.validate.headers=[database,schema]
                 """;
         var jwtConfig = ConfigFactory.parseString(jwtGenerateConfigString);
-        var config = jwtConfig.withFallback(ConfigFactory.load().getConfig("dazzleduck-server"));
+        var config = jwtConfig.withFallback(ConfigFactory.load().getConfig("dazzleduck_server"));
         return AuthUtils.getTestAuthenticator(config);
     }
 

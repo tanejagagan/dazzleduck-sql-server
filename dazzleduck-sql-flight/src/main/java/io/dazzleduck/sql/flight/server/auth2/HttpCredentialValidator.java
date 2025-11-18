@@ -24,8 +24,8 @@ public class HttpCredentialValidator implements AdvanceBasicCallHeaderAuthentica
     private final String loginUrl;
 
     public HttpCredentialValidator(Config config) {
-        this.jwtClaims = config.getStringList("jwt.token.claims.generate.headers");
-        this.loginUrl = config.getString("login.url");
+        this.jwtClaims = config.getStringList("jwt_token.claims.generate.headers");
+        this.loginUrl = config.getString("login_url");
     }
 
     @Override

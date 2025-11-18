@@ -32,8 +32,8 @@ public class JwtAuthenticationFilter implements Filter {
                 .verifyWith(secretKey)      //     or a constant key used to verify all signed JWTs
                 .build();
         this.paths = paths;
-        this.claimHeader = config.getStringList("jwt.token.claims.generate.headers");
-        this.validateHeaders = new HashSet<>(config.getStringList("jwt.token.claims.validate.headers"));
+        this.claimHeader = config.getStringList("jwt_token.claims.generate.headers");
+        this.validateHeaders = new HashSet<>(config.getStringList("jwt_token.claims.validate.headers"));
     }
 
     public SubjectAndVerifiedClaims authenticate(String token) {

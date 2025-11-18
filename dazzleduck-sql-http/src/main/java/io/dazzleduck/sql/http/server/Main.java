@@ -17,9 +17,7 @@ import io.helidon.webserver.cors.CorsSupport;
 import org.apache.arrow.flight.Location;
 import org.apache.arrow.memory.RootAllocator;
 
-import java.io.IOException;
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.List;
 import java.util.UUID;
 
@@ -62,15 +60,12 @@ public class Main {
         var secretKey = Validator.fromBase64String(base64SecretKey);
         var allocator = new RootAllocator();
         String location = "http://%s:%s".formatted(host, port);
-        var tempWriteDir = Path.of(appConfig.getString("temp-write-location"));
-        if (!Files.exists(tempWriteDir)) {
-            Files.createDirectories(tempWriteDir);
-        }
-        AccessMode accessMode = appConfig.hasPath("accessMode") ? AccessMode.valueOf(appConfig.getString("accessMode").toUpperCase()) : AccessMode.COMPLETE;
+        var tempWriteDir = DuckDBFlightSqlProducer.getTempWriteDir(appConfig);
+        AccessMode accessMode = DuckDBFlightSqlProducer.getAccessMode(appConfig);
         if (Files.exists(tempWriteDir)) {
             Files.createDirectories(tempWriteDir);
         }
-        var jwtExpiration = appConfig.getDuration("jwt.token.expiration");
+        var jwtExpiration = appConfig.getDuration("jwt_token.expiration");
         var cors = CorsSupport.builder()
                 .addCrossOrigin(CrossOriginConfig.builder()
                         .allowOrigins(appConfig.hasPath("allow-origin") ? appConfig.getString("allow-origin") : "*")
@@ -85,8 +80,8 @@ public class Main {
         var producer = DuckDBFlightSqlProducer.createProducer(Location.forGrpcInsecure(host, port), producerId,
                 base64SecretKey, allocator, warehousePath, accessMode, factory);
         WebServer server = WebServer.builder()
-                .config(helidonConfig.get("dazzleduck-server"))
-                .config(helidonConfig.get("flight-sql"))
+                .config(helidonConfig.get("dazzleduck_server"))
+                .config(helidonConfig.get("flight_sql"))
                 .routing(routing -> {
                     routing.register(cors);
                     var b = routing.register("/query", new QueryService(producer, accessMode,base64SecretKey))

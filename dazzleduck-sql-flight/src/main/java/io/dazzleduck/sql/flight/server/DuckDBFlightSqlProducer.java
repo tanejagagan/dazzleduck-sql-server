@@ -71,6 +71,18 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
     public static final String TEMP_WRITE_FORMAT = "arrow";
 
+    public static AccessMode getAccessMode(com.typesafe.config.Config appConfig) {
+        return appConfig.hasPath("access_mode") ? AccessMode.valueOf(appConfig.getString("access_mode").toUpperCase()) : AccessMode.COMPLETE;
+    }
+
+    public static Path getTempWriteDir(com.typesafe.config.Config appConfig) throws IOException {
+        var tempWriteDir = Path.of(appConfig.getString("temp_write_location"));
+        if (!Files.exists(tempWriteDir)) {
+            Files.createDirectories(tempWriteDir);
+        }
+        return tempWriteDir;
+    }
+
     record DatabaseSchema ( String database, String schema) {}
     record CacheKey(String peerIdentity, long id){}
 

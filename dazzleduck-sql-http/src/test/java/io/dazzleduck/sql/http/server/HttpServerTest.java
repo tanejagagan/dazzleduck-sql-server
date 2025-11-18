@@ -53,11 +53,11 @@ public class HttpServerTest {
     public static void setup() throws Exception {
         warehousePath = "/tmp/" + UUID.randomUUID();
         new File(warehousePath).mkdir();
-        String[] args1 = {"--conf", "dazzleduck-server.http.port=%s".formatted(TEST_PORT1),
-                "--conf", "dazzleduck-server.%s=%s".formatted(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath)};
+        String[] args1 = {"--conf", "dazzleduck_server.http.port=%s".formatted(TEST_PORT1),
+                "--conf", "dazzleduck_server.%s=%s".formatted(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath)};
         Main.main(args1);
         client = HttpClient.newHttpClient();
-        String[] args = {"--conf", "dazzleduck-server.http.port=%s".formatted(TEST_PORT2), "--conf", "dazzleduck-server.http.%s=jwt".formatted(ConfigUtils.AUTHENTICATION_KEY), "--conf", "dazzleduck-server.%s=%s".formatted(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath) };
+        String[] args = {"--conf", "dazzleduck_server.http.port=%s".formatted(TEST_PORT2), "--conf", "dazzleduck_server.http.%s=jwt".formatted(ConfigUtils.AUTHENTICATION_KEY), "--conf", "dazzleduck_server.%s=%s".formatted(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath) };
         Main.main(args);
         String[] sqls = {"INSTALL arrow FROM community", "LOAD arrow"};
         ConnectionPool.executeBatch(sqls);

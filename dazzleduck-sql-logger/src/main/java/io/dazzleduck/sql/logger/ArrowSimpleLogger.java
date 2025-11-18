@@ -61,7 +61,7 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger {
         this.name = name;
         this.flightSender = sender;
         Config config = ConfigFactory.load();
-        Config appConfig = config.getConfig("dazzleduck-server");
+        Config appConfig = config.getConfig("dazzleduck_server");
 
         this.applicationId = appConfig.getString("id");
         this.applicationName = appConfig.getString("name");
