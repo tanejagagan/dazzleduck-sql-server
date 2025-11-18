@@ -443,6 +443,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         final String query = command.getQuery();
         return () -> {
             if (checkAccessModeAndRespond(ackStream)) {
+                ackStream.onError(new UnauthorizedException("access mode not supported"));
                 return;
             }
             try (final Connection connection = getConnection(context, accessMode);
@@ -535,7 +536,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             FlightStream flightStream,
             StreamListener<PutResult> ackStream) {
         if (checkAccessModeAndRespond(ackStream)) {
-           return null;
+           return () -> ackStream.onError(new UnauthorizedException("Access Mode not support ingestion"));
         }
         IngestionParameters ingestionParameters = IngestionParameters.getIngestionParameters(command);
         FlightStreamReader reader = FlightStreamReader.of(flightStream, allocator);

@@ -28,9 +28,13 @@ public class LoginService implements HttpService {
 
     public LoginService(Config validatorConfig, SecretKey secretKey, Duration jwtExpiration) {
         this.config = validatorConfig;
-        this.validator = Validator.load(validatorConfig);
+        this.validator = getValidator(config);
         this.secretKey = secretKey;
         this.jwtExpiration = jwtExpiration;
+    }
+
+    public static Validator getValidator(Config config) {
+        return Validator.load(config);
     }
     @Override
     public void routing(HttpRules rules) {
@@ -39,7 +43,7 @@ public class LoginService implements HttpService {
 
     private void handleLogin(ServerRequest serverRequest, ServerResponse serverResponse) throws IOException {
         var inputStream = serverRequest.content().inputStream();
-        var loginRequest = MAPPER.readValue(inputStream, LoginObject.class);
+        var loginRequest = MAPPER.readValue(inputStream, LoginRequest.class);
         try {
             validator.validate(loginRequest.username(), loginRequest.password());
             Calendar expiration = Calendar.getInstance();
