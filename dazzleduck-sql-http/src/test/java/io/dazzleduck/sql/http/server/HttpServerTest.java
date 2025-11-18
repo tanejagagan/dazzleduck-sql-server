@@ -6,7 +6,7 @@ import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.util.TestConstants;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.dazzleduck.sql.flight.server.StatementHandle;
-import io.dazzleduck.sql.login.LoginObject;
+import io.dazzleduck.sql.login.LoginRequest;
 import io.dazzleduck.sql.login.LoginResponse;
 import io.helidon.http.HeaderNames;
 import io.helidon.http.HeaderValues;
@@ -117,7 +117,7 @@ public class HttpServerTest {
     @Test
     public void testQueryWithJwtExpect() throws IOException, InterruptedException, SQLException {
         var loginRequest = HttpRequest.newBuilder(URI.create("http://localhost:%s/login".formatted(TEST_PORT2)))
-                .POST(HttpRequest.BodyPublishers.ofByteArray(objectMapper.writeValueAsBytes(new LoginObject("admin", "admin"))))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(objectMapper.writeValueAsBytes(new LoginRequest("admin", "admin"))))
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
         var jwtResponse = client.send(loginRequest, HttpResponse.BodyHandlers.ofString());
         assertEquals(200, jwtResponse.statusCode());
@@ -145,7 +145,7 @@ public class HttpServerTest {
     @Test
     public void testWithDuckDBAuthorized() throws IOException, InterruptedException {
         var loginRequest = HttpRequest.newBuilder(URI.create("http://localhost:%s/login".formatted(TEST_PORT2)))
-                .POST(HttpRequest.BodyPublishers.ofByteArray(objectMapper.writeValueAsBytes(new LoginObject("admin", "admin"))))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(objectMapper.writeValueAsBytes(new LoginRequest("admin", "admin"))))
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
         var jwtResponse = client.send(loginRequest, HttpResponse.BodyHandlers.ofString());
         var jwt = objectMapper.readValue(jwtResponse.body(), LoginResponse.class);
@@ -166,7 +166,7 @@ public class HttpServerTest {
     @Test
     public void testLogin() throws IOException, InterruptedException {
         var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/login".formatted(TEST_PORT1)))
-                .POST(HttpRequest.BodyPublishers.ofByteArray(objectMapper.writeValueAsBytes(new LoginObject("admin", "admin", Map.of("org", "123")))))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(objectMapper.writeValueAsBytes(new LoginRequest("admin", "admin", Map.of("org", "123")))))
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
         var inputStreamResponse = client.send(request, HttpResponse.BodyHandlers.ofString());
         assertEquals(200, inputStreamResponse.statusCode());
@@ -497,7 +497,7 @@ public class HttpServerTest {
 
     private LoginResponse login() throws IOException, InterruptedException {
         var loginRequest = HttpRequest.newBuilder(URI.create("http://localhost:%s/login".formatted(TEST_PORT2)))
-                .POST(HttpRequest.BodyPublishers.ofByteArray(objectMapper.writeValueAsBytes(new LoginObject("admin", "admin"))))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(objectMapper.writeValueAsBytes(new LoginRequest("admin", "admin"))))
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values())
                 .build();
         var jwtResponse = client.send(loginRequest, HttpResponse.BodyHandlers.ofString());

@@ -96,13 +96,13 @@ public class IngestionService implements HttpService, ParameterUtils, Controller
                     }
 
                     @Override
-                    public void onError(Throwable t) {
+                    synchronized public void onError(Throwable t) {
                         serverResponse.status(Status.BAD_REQUEST_400);
                         serverResponse.send(t.getMessage().getBytes());
                     }
 
                     @Override
-                    public void onCompleted() {
+                    synchronized public void onCompleted() {
                         serverResponse.status(Status.OK_200);
                         serverResponse.send();
                     }

@@ -89,12 +89,17 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
             files.addAll(Arrays.stream(r.files()).map(Object::toString).toList());
         }
 
-        var ingestionResult = new IngestionResult(this.path, writeTask.taskId(), this.applicationId, writeTask.bucket().getProducerMaxBatchId(),
+        var ingestionResult = new IngestionResult(this.path, writeTask.taskId(), this.applicationId,
+                writeTask.bucket().getProducerMaxBatchId(),
                 count,
                 files);
-        var postIngestionTask = postIngestionTaskFactory.create(ingestionResult);
-        postIngestionTask.execute();
-        writeTask.bucket().futures().forEach(action -> action.complete(ingestionResult));
+        try {
+            var postIngestionTask = postIngestionTaskFactory.create(ingestionResult);
+            postIngestionTask.execute();
+            writeTask.bucket().futures().forEach(action -> action.complete(ingestionResult));
+        }  catch (Exception e) {
+            writeTask.bucket().futures().forEach(action -> action.completeExceptionally(e));
+        }
     }
 
 }
