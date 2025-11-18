@@ -17,8 +17,8 @@ public class DuckLakePartitionPruningTest {
     public static final String DATABASE = "test_ducklake_partition";
     public static final String METADATA_DATABASE = "__ducklake_metadata_%s".formatted(DATABASE);
     public static final String FILE_COLUMN_STAT_TABLE = "%s.ducklake_file_column_stats".formatted(METADATA_DATABASE);
-    public static final String PARTITIONED_TABLE = "t_partitioned";
-    public static final String NO_PARTITIONED_TABLE = "t";
+    public static final String PARTITIONED_TABLE = "tt_p";
+    public static final String NO_PARTITIONED_TABLE = "tt";
     public static final String QUALIFIED_PARTITIONED_TABLE = "%s.%s".formatted(DATABASE, PARTITIONED_TABLE);
     public static final String QUALIFIED_NO_PARTITIONED_TABLE = "%s.%s".formatted(DATABASE, NO_PARTITIONED_TABLE);
     public static final String COLUMN_MAPPING_TABLE = "ducklake_column_mapping";
@@ -44,8 +44,6 @@ public class DuckLakePartitionPruningTest {
         addDataFile(PARTITIONED_TABLE);
         createTestTable(QUALIFIED_NO_PARTITIONED_TABLE, false);
         addDataFile(NO_PARTITIONED_TABLE);
-        ConnectionPool.printResult("SELECT * FROM %s".formatted(QUALIFIED_PARTITIONED_TABLE));
-        ConnectionPool.printResult("SELECT * FROM %s".formatted(QUALIFIED_NO_PARTITIONED_TABLE));
         ConnectionPool.printResult("SELECT * FROM %s".formatted(FILE_COLUMN_STAT_TABLE));
         ConnectionPool.printResult("SELECT * FROM %s".formatted(QUALIFIED_COLUMN_MAPPING_TABLE));
 
@@ -61,8 +59,14 @@ public class DuckLakePartitionPruningTest {
 
     @Test
     public void testPartitioned() {
+        String  tableName = "";
+        var tableId = getTableId(tableName);
         String query = constructQuery(METADATA_DATABASE, 1, List.of(1L, 2L, 3L, 4L));
         ConnectionPool.printResult(query);
+    }
+
+    private Object getTableId(String tableName) {
+        return null;
     }
 
     @Test
@@ -73,27 +77,36 @@ public class DuckLakePartitionPruningTest {
 
     public static void createTestTable(String table , boolean partitioned) {
         String[] statements = getStatements(table, partitioned);
-        ConnectionPool.executeBatch(statements);
+        for(var statement : statements) {
+            System.out.println(statement + ";");
+            ConnectionPool.execute(statement);
+        }
     }
 
     @NotNull
     private static String[] getStatements(String table, boolean partition) {
         var createStatement = "CREATE TABLE %s(key string, value string, partition int)".formatted( table);
+        var insertStatement0 = "INSERT INTO %s VALUES ('k00', 'v00', 0), ('k00', 'v00', 0) ".formatted(table);
         var partitionTable = partition ? "ALTER TABLE %s SET PARTITIONED BY (partition)".formatted(table)
                 : "select 1";
-        var insertStatement0 = "INSERT INTO %s VALUES (null, null, 1)".formatted(table);
-        var insertStatement1 = "INSERT INTO %s VALUES ('k11', 'v11', 1), ('k21', 'v21', 1) ".formatted(table);
-        var insertStatement2 = "INSERT INTO %s VALUES ('k31', 'v31', 1), ('k41', 'v41', 1) ".formatted(table);
-        var insertStatement3 = "INSERT INTO %s VALUES ('k51', 'v51', 1), ('k61', 'v61', 1) ".formatted(table);
-        var addColumn = "ALTER TABLE %s ADD COLUMN version VARCHAR".formatted(table);
+        var insertStatement1 = "INSERT INTO %s VALUES (null, null, 1)".formatted(table);
+        var insertStatement2 = "INSERT INTO %s VALUES ('k11', 'v11', 1), ('k21', 'v21', 1) ".formatted(table);
+        var insertStatement3 = "INSERT INTO %s VALUES ('k31', 'v31', 1), ('k41', 'v41', 1) ".formatted(table);
+        var insertStatement4 = "INSERT INTO %s VALUES ('k51', 'v51', 1), ('k61', 'v61', 1) ".formatted(table);
+        var addColumn = "ALTER TABLE %s ADD COLUMN version INT".formatted(table);
+        var insertStatement5 = "INSERT INTO %s VALUES ('k51', 'v51', 1, 0 ), ('k61', 'v61', 1, 0) ".formatted(table);
+        var insertStatement6 = "INSERT INTO %s VALUES ('k52', 'v52', 2, 0 ), ('k62', 'v62', 2, 0) ".formatted(table);
         return new String[]{
                 createStatement,
-                partitionTable,
                 insertStatement0,
+                partitionTable,
                 insertStatement1,
                 insertStatement2,
                 insertStatement3,
-                addColumn
+                insertStatement4,
+                addColumn,
+                insertStatement5,
+                insertStatement6,
         };
     }
 
