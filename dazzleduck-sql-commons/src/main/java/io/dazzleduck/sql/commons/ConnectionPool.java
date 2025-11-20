@@ -233,7 +233,7 @@ public enum ConnectionPool {
         try(Statement statement = connection.createStatement()) {
             return statement.execute(sql);
         } catch (SQLException e) {
-            throw new RuntimeException("Error running sql :" + sql,  e);
+            throw new RuntimeSqlException(e);
         }
     }
 
@@ -247,7 +247,7 @@ public enum ConnectionPool {
             Statement statement = connection.createStatement()) {
             return statement.execute(sql);
         } catch (SQLException e) {
-            throw new RuntimeException("Error running sql :" + sql,  e);
+            throw new RuntimeSqlException(e);
         }
     }
 
@@ -268,14 +268,39 @@ public enum ConnectionPool {
         }
     }
 
-    public static int[] executeBatch(Connection connection, String[] sqls) {
+    public static int[] executeBatch(Connection connection, String[] queries) {
         try(Statement statement = connection.createStatement()) {
-            for(String sql : sqls) {
+            for(String sql : queries) {
                 statement.addBatch(sql);
             }
             return statement.executeBatch();
         } catch (SQLException e) {
             throw new RuntimeException("Error running sqls :",  e);
+        }
+    }
+
+    public static int[] executeBatchInTxn(Connection connection, String[] queries) throws SQLException {
+        var oldAutoCommit = connection.getAutoCommit();
+        connection.setAutoCommit(false);
+        try (Statement statement = connection.createStatement()) {
+            for (String sql : queries) {
+                statement.addBatch(sql);
+            }
+            var res = statement.executeBatch();
+            connection.commit();
+            return res;
+        } catch (SQLException e) {
+            connection.rollback();
+            throw e;
+        } finally {
+            connection.setAutoCommit(oldAutoCommit);
+        }
+    }
+
+
+    public static int[] executeBatchInTxn(String[] queries) throws SQLException {
+        try (var connection = ConnectionPool.getConnection()) {
+            return executeBatchInTxn(connection, queries);
         }
     }
 
