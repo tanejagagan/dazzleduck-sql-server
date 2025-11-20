@@ -22,10 +22,6 @@ public class Main {
                 return null;
             }
 
-            @Override
-            public Duration step() {
-                return Duration.ofSeconds(10);
-            }
         };
 
         ArrowMicroMeterRegistry registry = new ArrowMicroMeterRegistry.Builder()

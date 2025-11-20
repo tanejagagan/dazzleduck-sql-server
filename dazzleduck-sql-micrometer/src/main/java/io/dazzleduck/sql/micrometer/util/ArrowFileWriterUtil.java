@@ -161,10 +161,10 @@ public final class ArrowFileWriterUtil {
                 id.getName(),
                 id.getType().name().toLowerCase(),
                 tagsMap,
-                !Double.isNaN(value) ? value : null,
-                !Double.isNaN(min) ? min : null,
-                !Double.isNaN(max) ? max : null,
-                !Double.isNaN(mean) ? mean : null
+                !Double.isNaN(value) ? value : 0,
+                !Double.isNaN(min) ? min : 0,
+                !Double.isNaN(max) ? max : 0,
+                !Double.isNaN(mean) ? mean : 0
         });
     }
 
