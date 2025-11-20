@@ -133,19 +133,26 @@ public class Transformations {
             if (literalObjects.size() != 1 || references.size() != 1) {
                 failed = true;
             }
-            JsonNode literalObject = literalObjects.get(0);
-            JsonNode refObject = references.get(0);
-            String[] col = getReferenceName(refObject);
             if (failed) {
                 return ExpressionFactory.trueExpression();
             }
-            if (isUpperBound(node)) {
-                String maxC = maxMapping.get(col[0]);
-                return constructUpperBoundPredicate(new String[]{maxC}, literalObject, dataTypeMap.get(col[0]));
-            }
-            if (isLowerBound(node)) {
+            JsonNode literalObject = literalObjects.get(0);
+            JsonNode refObject = references.get(0);
+            String[] col = getReferenceName(refObject);
+            var upperBound = isUpperBound(node);
+            var lowerBound = isLowerBound(node);
+            if(upperBound && lowerBound) {
                 String minC = minMapping.get(col[0]);
-                return constructLowerBoundPredicate(new String[]{minC}, literalObject, dataTypeMap.get(col[0]));
+                String maxC = maxMapping.get(col[0]);
+                return constructEqualPredicate( new String[]{minC}, new String[]{maxC}, literalObject, dataTypeMap.get(col[0]));
+            }
+            if (upperBound) {
+                String minC = minMapping.get(col[0]);
+                return constructUpperBoundPredicate(new String[]{minC}, literalObject, dataTypeMap.get(col[0]));
+            }
+            if (lowerBound) {
+                String maxC = maxMapping.get(col[0]);
+                return constructLowerBoundPredicate(new String[]{maxC}, literalObject, dataTypeMap.get(col[0]));
             }
             return ExpressionFactory.trueExpression();
         };
@@ -199,23 +206,24 @@ public class Transformations {
                                                                          Map<String, String> maxMapping,
                                                                          Map<String, String> dataTypeMap) {
         return n -> {
-            ObjectNode c = n.deepCopy();
-            ObjectNode from_table = (ObjectNode) c.get("from_table");
+            ObjectNode query = n.deepCopy();
+            var firstStatementNode = (ObjectNode) Transformations.getFirstStatementNode(query);
+            ObjectNode from_table = (ObjectNode) firstStatementNode.get("from_table");
             from_table.put("table_name", statTable);
-            JsonNode where = n.get("where_clause");
+            JsonNode where = firstStatementNode.get("where_clause");
             if (where == null || where instanceof NullNode) {
-                return c;
+                return query;
             }
             if (IS_CONJUNCTION_AND.apply(where)) {
                 JsonNode w = Transformations.transform(where, IS_CONJUNCTION_AND, replaceEqualMinMaxFromAndConjunction(minMapping, maxMapping, dataTypeMap));
-                c.set("where_clause", w);
-            } else if (IS_COMPARISON.apply(n)) {
+                firstStatementNode.set("where_clause", w);
+            } else if (IS_COMPARISON.apply(where)) {
                 JsonNode w = Transformations.transform(where, IS_COMPARISON, replaceEqualMinMaxFromComparison(minMapping, maxMapping, dataTypeMap));
-                c.set("where_clause", w);
+                firstStatementNode.set("where_clause", w);
             } else {
-                c.set("where_clause", null);
+                firstStatementNode.set("where_clause", null);
             }
-            return c;
+            return query;
         };
     }
 
@@ -269,26 +277,38 @@ public class Transformations {
 
 
     /**
-     *  if(max_a=null, true, cast(max_a as int) &gt;= cast(x as int)
+     *  if(max_a=null, true, cast(min_a as int) &lt;= cast(x as int)
      **/
-    public static JsonNode constructUpperBoundPredicate(String[] col, JsonNode literal, String datatype) {
+    public static JsonNode constructUpperBoundPredicate(String[] minCol, JsonNode literal, String datatype) {
         JsonNode nullNode = ExpressionFactory.constant(null);
-        JsonNode referenceNode = ExpressionFactory.reference(col);
-        JsonNode ifCondition = ExpressionFactory.equalExpr(referenceNode, nullNode);
-        JsonNode then = ExpressionFactory.cast(ExpressionFactory.constant("t"), "BOOLEAN");
-        JsonNode elseExpression = ExpressionFactory.greaterThanOrEqualExpr(ExpressionFactory.cast(referenceNode.deepCopy(), datatype), ExpressionFactory.cast(literal, datatype));
-        return ExpressionFactory.ifExpr(ifCondition, then, elseExpression);
-    }
-
-    /**
-     *  if(min_a=null, true, cast(min_a as int) &lt;= cast(x as int)
-     **/
-    public static JsonNode constructLowerBoundPredicate(String[] col, JsonNode literal, String datatype) {
-        JsonNode nullNode = ExpressionFactory.constant(null);
-        JsonNode referenceNode = ExpressionFactory.reference(col);
+        JsonNode referenceNode = ExpressionFactory.reference(minCol);
         JsonNode ifCondition = ExpressionFactory.equalExpr(referenceNode, nullNode);
         JsonNode then = ExpressionFactory.cast(ExpressionFactory.constant("t"), "BOOLEAN");
         JsonNode elseExpression = ExpressionFactory.lessThanOrEqualExpr(ExpressionFactory.cast(referenceNode.deepCopy(), datatype), ExpressionFactory.cast(literal, datatype));
+        return ExpressionFactory.ifExpr(ifCondition, then, elseExpression);
+    }
+
+    public static JsonNode constructEqualPredicate(String[] minCol, String[] maxCol, JsonNode literal, String datatype) {
+        JsonNode nullNode = ExpressionFactory.constant(null);
+        JsonNode minReferenceNode = ExpressionFactory.reference(minCol);
+        JsonNode maxReferenceNode = ExpressionFactory.reference(maxCol);
+        JsonNode ifCondition = ExpressionFactory.equalExpr(minReferenceNode, nullNode);
+        JsonNode then = ExpressionFactory.cast(ExpressionFactory.constant("t"), "BOOLEAN");
+        JsonNode elseRightExpression = ExpressionFactory.lessThanOrEqualExpr(ExpressionFactory.cast(literal, datatype), ExpressionFactory.cast(maxReferenceNode.deepCopy(), datatype));
+        JsonNode elseLeftExpression = ExpressionFactory.lessThanOrEqualExpr(ExpressionFactory.cast(minReferenceNode.deepCopy(), datatype), ExpressionFactory.cast(literal, datatype));
+        JsonNode andExpression = ExpressionFactory.andFilters(elseLeftExpression, elseRightExpression);
+        return ExpressionFactory.ifExpr(ifCondition, then, andExpression);
+    }
+
+    /**
+     *  if(min_a=null, true, cast(max_a as int) &lt;= cast(x as int)
+     **/
+    public static JsonNode constructLowerBoundPredicate(String[] maxCol, JsonNode literal, String datatype) {
+        JsonNode nullNode = ExpressionFactory.constant(null);
+        JsonNode referenceNode = ExpressionFactory.reference(maxCol);
+        JsonNode ifCondition = ExpressionFactory.equalExpr(referenceNode, nullNode);
+        JsonNode then = ExpressionFactory.cast(ExpressionFactory.constant("t"), "BOOLEAN");
+        JsonNode elseExpression = ExpressionFactory.greaterThanOrEqualExpr(ExpressionFactory.cast(referenceNode.deepCopy(), datatype), ExpressionFactory.cast(literal, datatype));
         return ExpressionFactory.ifExpr(ifCondition, then, elseExpression);
     }
 
@@ -437,6 +457,20 @@ public class Transformations {
         return objectMapper.readTree(jsonString);
     }
 
+    public static Function<String, JsonNode> start(String sql) {
+        return s -> {
+            try {
+                return parseToTree(sql);
+            } catch (SQLException | JsonProcessingException e) {
+                throw new RuntimeException(e);
+            }
+        };
+    }
+
+    public static Function<JsonNode, JsonNode> identity() {
+        return node -> node;
+    }
+
     public static String parseToSql(Connection connection, JsonNode node) throws SQLException {
         String sql = String.format(JSON_DESERIALIZE_SQL, node.toString());
         return ConnectionPool.collectFirst(connection, sql, String.class);
@@ -477,6 +511,8 @@ public class Transformations {
         var statement = statements.get(0);
         return statement.get("node");
     }
+
+    public static Function<JsonNode, JsonNode> FIRST_STATEMENT_NODE = Transformations::getFirstStatementNode;
 
     public static JsonNode getTableFunction(JsonNode tree) {
         var fromNode = tree.get("from_table");
