@@ -18,6 +18,40 @@ public class UIService implements HttpService {
     }
 
     private void handleGet(ServerRequest serverRequest, ServerResponse serverResponse) {
-        serverResponse.send("In Progress".getBytes());
+
+        var response  = """
+                <table>
+                  <caption>
+                    Monthly Sales Report
+                  </caption>
+                  <thead>
+                    <tr>
+                      <th>Month</th>
+                      <th>Sales</th>
+                      <th>Profit</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>January</td>
+                      <td>$10,000</td>
+                      <td>$2,000</td>
+                    </tr>
+                    <tr>
+                      <td>February</td>
+                      <td>$12,000</td>
+                      <td>$2,500</td>
+                    </tr>
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <td>Total</td>
+                      <td>$22,000</td>
+                      <td>$4,500</td>
+                    </tr>
+                  </tfoot>
+                </table>
+                """;
+        serverResponse.send(response.getBytes());
     }
 }
