@@ -11,6 +11,10 @@ import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactoryProvider;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceJWTTokenAuthenticator;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceServerCallHeaderAuthMiddleware;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
+import io.dazzleduck.sql.micrometer.metrics.MetricsRegistryFactory;
+import io.helidon.metrics.api.MetricsConfig;
+import io.micrometer.core.instrument.Measurement;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.apache.arrow.flight.FlightServer;
 import org.apache.arrow.flight.Location;
 import org.apache.arrow.memory.BufferAllocator;
@@ -20,8 +24,11 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Path;
 import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static io.dazzleduck.sql.common.util.ConfigUtils.CONFIG_PATH;
+import static io.dazzleduck.sql.micrometer.metrics.MetricsRegistryFactory.create;
 
 
 public class Main {
@@ -63,7 +70,9 @@ public class Main {
         var producer = createProducer(location, producerId, secretKey, allocator, warehousePath, tempWriteDirector, accessMode, postIngestionTaskFactor);
         var certStream = getInputStreamForResource(serverCertLocation);
         var keyStream = getInputStreamForResource(keystoreLocation);
-
+        MeterRegistry registry = create();
+        producer.setMetrics(registry);
+        Main.startConsoleMetricsPrinter(registry);
         var builder = FlightServer.builder(allocator, location, producer)
                 .middleware(AdvanceServerCallHeaderAuthMiddleware.KEY,
                         new AdvanceServerCallHeaderAuthMiddleware.Factory(authenticator));
@@ -105,6 +114,24 @@ public class Main {
             throw new IllegalArgumentException("File not found! : " + filename);
         }
         return inputStream;
+    }
+    public static void startConsoleMetricsPrinter(MeterRegistry registry) {
+        Executors.newSingleThreadScheduledExecutor()
+                .scheduleAtFixedRate(() -> {
+                    System.out.println("\n===== METRICS SNAPSHOT =====");
+
+                    registry.getMeters().forEach(meter -> {
+                        for (Measurement m : meter.measure()) {
+                            System.out.printf(
+                                    "%s [%s] = %.4f\n",
+                                    meter.getId().getName(),
+                                    m.getStatistic(),
+                                    m.getValue()
+                            );
+                        }
+                    });
+
+                }, 0, 10, TimeUnit.SECONDS);
     }
 
     private static boolean checkWarehousePath(String warehousePath) {

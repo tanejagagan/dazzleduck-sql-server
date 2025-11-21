@@ -107,15 +107,11 @@ public final class ArrowFileWriterUtil {
                 case Gauge g -> value = g.value();
                 case Timer tmr -> {
                     HistogramSnapshot snap = tmr.takeSnapshot();
-                    value = snap.total(TimeUnit.SECONDS);
-                    double[] vals = Arrays.stream(snap.percentileValues())
-                            .mapToDouble(v -> v.value(TimeUnit.SECONDS))
-                            .toArray();
-                    if (vals.length > 0) {
-                        min = Arrays.stream(vals).min().orElse(Double.NaN);
-                        max = Arrays.stream(vals).max().orElse(Double.NaN);
-                        mean = Arrays.stream(vals).average().orElse(Double.NaN);
-                    }
+                    value = tmr.count();
+                    Double totalTime = snap.total(TimeUnit.SECONDS);
+                    max = snap.max(TimeUnit.SECONDS);
+                    mean = snap.mean(TimeUnit.SECONDS);
+
                 }
                 case DistributionSummary ds -> {
                     value = ds.count();
