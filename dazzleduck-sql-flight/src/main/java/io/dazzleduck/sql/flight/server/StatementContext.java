@@ -20,6 +20,7 @@ import org.apache.arrow.flight.sql.FlightSqlProducer;
 import org.apache.arrow.util.AutoCloseables;
 
 import java.sql.Statement;
+import java.time.Instant;
 import java.util.Objects;
 
 /**
@@ -32,10 +33,16 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
     private final T statement;
     private final String query;
     private boolean inUse = false;
+    private final Instant startTime;
 
     public StatementContext(final T statement, final String query) {
+        this(statement, query, Instant.now());
+    }
+
+    public StatementContext(final T statement, final String query,  Instant startTime) {
         this.statement = Objects.requireNonNull(statement, "statement cannot be null.");
         this.query = query;
+        this.startTime = startTime;
     }
 
     /**
@@ -93,5 +100,9 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
 
     public synchronized void release() {
         inUse = false;
+    }
+
+    public Instant getStartTime() {
+        return startTime;
     }
 }
