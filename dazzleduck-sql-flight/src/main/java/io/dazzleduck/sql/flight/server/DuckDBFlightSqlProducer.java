@@ -15,6 +15,7 @@ import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.authorization.SqlAuthorizer;
 import io.dazzleduck.sql.commons.ingestion.*;
 import io.dazzleduck.sql.commons.planner.SplitPlanner;
+import io.dazzleduck.sql.flight.FlightRecorder;
 import io.dazzleduck.sql.flight.ingestion.IngestionParameters;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceServerCallHeaderAuthMiddleware;
 import io.dazzleduck.sql.flight.stream.FlightStreamReader;
@@ -70,6 +71,7 @@ import static org.duckdb.DuckDBConnection.DEFAULT_SCHEMA;
 public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable, SimpleBulkIngestConsumer {
 
     public static final String TEMP_WRITE_FORMAT = "arrow";
+    private final FlightRecorder flightRecorder;
 
     public static AccessMode getAccessMode(com.typesafe.config.Config appConfig) {
         return appConfig.hasPath("access_mode") ? AccessMode.valueOf(appConfig.getString("access_mode").toUpperCase()) : AccessMode.COMPLETE;
@@ -137,7 +139,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
     public DuckDBFlightSqlProducer(Location location, String producerId) {
         this(location, producerId, "change me", new RootAllocator(),  System.getProperty("user.dir") + "/warehouse", AccessMode.COMPLETE, newTempDir()
-        , PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory());
+        , PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(), new NOOPFlightRecorder());
     }
 
     public DuckDBFlightSqlProducer(Location location,
@@ -147,13 +149,15 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                    String warehousePath,
                                    AccessMode accessMode,
                                    Path tempDir,
-                                   PostIngestionTaskFactory postIngestionTaskFactory) {
+                                   PostIngestionTaskFactory postIngestionTaskFactory,
+                                   FlightRecorder flightRecorder) {
         this.location = location;
         this.producerId = producerId;
         this.allocator = allocator;
         this.secretKey = secretKey;
         this.accessMode = accessMode;
         this.tempDir = tempDir;
+        this.flightRecorder = flightRecorder;
         if(AccessMode.RESTRICTED ==  accessMode) {
             this.sqlAuthorizer = SqlAuthorizer.JWT_AUTHORIZER;
         } else {
@@ -317,6 +321,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             final FlightSql.CommandPreparedStatementQuery command,
             final CallContext context,
             final FlightDescriptor descriptor) {
+
+        flightRecorder.recordGetFlightInfoPreparedStatement();
         checkAccessModeAndRespond();
         StatementHandle statementHandle = StatementHandle.deserialize(command.getPreparedStatementHandle());
         if (statementHandle.signatureMismatch(secretKey)) {
@@ -378,6 +384,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             final CallContext context,
             final FlightDescriptor descriptor) {
         String query = request.getQuery();
+        flightRecorder.recordGetFlightInfoStatement();
         return getFlightInfoStatementFromQuery(query,  context, descriptor);
     }
 
@@ -997,7 +1004,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                         BufferAllocator allocator,
                                         final int batchSize,
                                         final ServerStreamListener listener,
-                                        Runnable finalBlock) {
+                                        Runnable finalBlock,
+                                        FlightRecorder flightRecorder) {
         executorService.submit(() -> {
             var error = false;
             try {
@@ -1007,6 +1015,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                          ArrowReader reader = (ArrowReader) resultSet.arrowExportStream(allocator, batchSize)) {
                         listener.start(reader.getVectorSchemaRoot());
                         while (reader.loadNextBatch()) {
+                            flightRecorder.recordGetStreamPreparedStatement(-1);
                             listener.putNext();
                         }
                     }
