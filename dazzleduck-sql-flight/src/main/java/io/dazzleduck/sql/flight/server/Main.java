@@ -8,6 +8,7 @@ import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactory;
 import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactoryProvider;
+import io.dazzleduck.sql.flight.MicroMeterFlightRecorder;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceJWTTokenAuthenticator;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceServerCallHeaderAuthMiddleware;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
@@ -28,7 +29,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import static io.dazzleduck.sql.common.util.ConfigUtils.CONFIG_PATH;
-import static io.dazzleduck.sql.micrometer.metrics.MetricsRegistryFactory.create;
 
 
 public class Main {
@@ -67,12 +67,11 @@ public class Main {
         var postIngestionTaskFactorProvider = PostIngestionTaskFactoryProvider.load(config);
         var postIngestionTaskFactor = postIngestionTaskFactorProvider.getPostIngestionTaskFactory();
         var tempWriteDirector = DuckDBFlightSqlProducer.getTempWriteDir(config);
-        var producer = createProducer(location, producerId, secretKey, allocator, warehousePath, tempWriteDirector, accessMode, postIngestionTaskFactor);
+        MeterRegistry meterRegistry = MetricsRegistryFactory.create();
+        startConsoleMetricsPrinter(meterRegistry);
+        var producer = createProducer(location, producerId, secretKey, allocator, warehousePath, tempWriteDirector, accessMode, postIngestionTaskFactor, meterRegistry );
         var certStream = getInputStreamForResource(serverCertLocation);
         var keyStream = getInputStreamForResource(keystoreLocation);
-        MeterRegistry registry = create();
-        producer.setMetrics(registry);
-        Main.startConsoleMetricsPrinter(registry);
         var builder = FlightServer.builder(allocator, location, producer)
                 .middleware(AdvanceServerCallHeaderAuthMiddleware.KEY,
                         new AdvanceServerCallHeaderAuthMiddleware.Factory(authenticator));
@@ -104,8 +103,8 @@ public class Main {
                                                          String warehousePath,
                                                          Path tempWriteDir,
                                                          AccessMode accessMode,
-                                                         PostIngestionTaskFactory postIngestionTaskFactory) {
-        return new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, tempWriteDir, postIngestionTaskFactory);
+                                                         PostIngestionTaskFactory postIngestionTaskFactory, MeterRegistry registry) {
+        return new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, tempWriteDir, postIngestionTaskFactory,   new MicroMeterFlightRecorder(registry, producerId));
     }
 
     private static InputStream getInputStreamForResource(String filename) {
@@ -116,22 +115,26 @@ public class Main {
         return inputStream;
     }
     public static void startConsoleMetricsPrinter(MeterRegistry registry) {
-        Executors.newSingleThreadScheduledExecutor()
-                .scheduleAtFixedRate(() -> {
-                    System.out.println("\n===== METRICS SNAPSHOT =====");
+        Executors.newSingleThreadScheduledExecutor().scheduleAtFixedRate(() -> {
 
-                    registry.getMeters().forEach(meter -> {
-                        for (Measurement m : meter.measure()) {
-                            System.out.printf(
-                                    "%s [%s] = %.4f\n",
-                                    meter.getId().getName(),
-                                    m.getStatistic(),
-                                    m.getValue()
-                            );
-                        }
-                    });
+            System.out.println("\n===== METRICS SNAPSHOT =====");
 
-                }, 0, 10, TimeUnit.SECONDS);
+            registry.getMeters().forEach(meter -> {
+                String meterName = meter.getId().getName();
+
+                meter.measure().forEach(measurement -> {
+                    System.out.printf(
+                            "%s [%s] = %.4f%n",
+                            meterName,
+                            measurement.getStatistic(),
+                            measurement.getValue()
+                    );
+                });
+            });
+
+            System.out.println("============================");
+
+        }, 0, 10, TimeUnit.SECONDS);
     }
 
     private static boolean checkWarehousePath(String warehousePath) {

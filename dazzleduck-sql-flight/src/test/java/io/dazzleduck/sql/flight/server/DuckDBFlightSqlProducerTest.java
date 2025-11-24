@@ -94,7 +94,7 @@ public class DuckDBFlightSqlProducerTest {
                                 "change me",
                                 serverAllocator, warehousePath, AccessMode.COMPLETE,
                                 DuckDBFlightSqlProducer.newTempDir(),
-                        PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory()))
+                        PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(),new NOOPFlightRecorder()))
                 .headerAuthenticator(AuthUtils.getTestAuthenticator())
                 .build()
                 .start();
