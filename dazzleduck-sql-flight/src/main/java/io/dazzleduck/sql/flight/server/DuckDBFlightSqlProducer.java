@@ -48,6 +48,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.*;
 import java.time.Clock;
+import java.time.Instant;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -108,6 +110,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
     private final ScheduledExecutorService scheduledExecutorService;
 
+    private final Duration maxStatementLifetime;
+
     public static DuckDBFlightSqlProducer createProducer(Location location,
                                                           String producerId,
                                                           String secretKey,
@@ -115,7 +119,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                                           String warehousePath,
                                                           AccessMode accessMode,
                                                          PostIngestionTaskFactory postIngestionTaskFactory) {
-        return new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, newTempDir(), postIngestionTaskFactory);
+        return new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, newTempDir(), postIngestionTaskFactory, Duration.ofMinutes(10));
     }
 
     public static Path newTempDir() {
@@ -136,7 +140,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
     public DuckDBFlightSqlProducer(Location location, String producerId) {
         this(location, producerId, "change me", new RootAllocator(),  System.getProperty("user.dir") + "/warehouse", AccessMode.COMPLETE, newTempDir()
-        , PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory());
+        , PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(), Duration.ofMinutes(10));
     }
 
     public DuckDBFlightSqlProducer(Location location,
@@ -146,13 +150,15 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                    String warehousePath,
                                    AccessMode accessMode,
                                    Path tempDir,
-                                   PostIngestionTaskFactory postIngestionTaskFactory) {
+                                   PostIngestionTaskFactory postIngestionTaskFactory,
+                                   Duration maxStatementLifetime) {
         this.location = location;
         this.producerId = producerId;
         this.allocator = allocator;
         this.secretKey = secretKey;
         this.accessMode = accessMode;
         this.tempDir = tempDir;
+        this.maxStatementLifetime = maxStatementLifetime;
         if(AccessMode.RESTRICTED ==  accessMode) {
             this.sqlAuthorizer = SqlAuthorizer.JWT_AUTHORIZER;
         } else {
@@ -217,11 +223,19 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             providerField.setAccessible(true);
             supportedSqlInfo = ((HashMap<Integer, ?>)providerField.get(sqlInfoBuilder)).keySet();
             scheduledExecutorService = Executors.newSingleThreadScheduledExecutor();
-            scheduledExecutorService.schedule(() -> {
-                // Check All the statement and prepared Statement Cache
-                // Cancel the if timeout;
-                // Pass the configuration from the constructor
-            }, 30, TimeUnit.SECONDS);
+            scheduledExecutorService.scheduleWithFixedDelay(() -> {
+                preparedStatementLoadingCache.asMap().forEach((key, ctx) -> {
+                    if (ctx.startTime().plus(maxStatementLifetime).isBefore(Instant.now())) {
+                        preparedStatementLoadingCache.invalidate(key);
+                    }
+                });
+
+                statementLoadingCache.asMap().forEach((key, ctx) -> {
+                    if (ctx.startTime().plus(maxStatementLifetime).isBefore(Instant.now())) {
+                        statementLoadingCache.invalidate(key);
+                    }
+                });
+            }, 5, 30, TimeUnit.SECONDS);
 
         } catch (SQLException | NoSuchFieldException | IllegalAccessException e) {
             throw new RuntimeException(e);
