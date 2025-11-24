@@ -49,10 +49,7 @@ import java.nio.file.Path;
 import java.sql.*;
 import java.time.Clock;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 
 import static com.google.protobuf.Any.pack;
 import static com.google.protobuf.ByteString.copyFrom;
@@ -108,6 +105,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     private final PostIngestionTaskFactory postIngestionTaskFactory;
 
     private final Path tempDir;
+
+    private final ScheduledExecutorService scheduledExecutorService;
 
     public static DuckDBFlightSqlProducer createProducer(Location location,
                                                           String producerId,
@@ -217,6 +216,13 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             var providerField =  sqlInfoBuilder.getClass().getDeclaredField("providers");
             providerField.setAccessible(true);
             supportedSqlInfo = ((HashMap<Integer, ?>)providerField.get(sqlInfoBuilder)).keySet();
+            scheduledExecutorService = Executors.newSingleThreadScheduledExecutor();
+            scheduledExecutorService.schedule(() -> {
+                // Check All the statement and prepared Statement Cache
+                // Cancel the if timeout;
+                // Pass the configuration from the constructor
+            }, 30, TimeUnit.SECONDS);
+
         } catch (SQLException | NoSuchFieldException | IllegalAccessException e) {
             throw new RuntimeException(e);
         }
@@ -406,8 +412,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         if (statementContext == null) {
             ErrorHandling.handleContextNotFound();
         }
-        final PreparedStatement preparedStatement = statementContext.getStatement();
-        streamResultSet(executorService, OptionalResultSetSupplier.of(preparedStatement),
+        streamResultSet(executorService, OptionalResultSetSupplier.of(statementContext),
             allocator, getBatchSize(context),
             listener, () -> {});
     }
@@ -437,7 +442,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             var key = new CacheKey(context.peerIdentity(), statementHandle.queryId());
             statementLoadingCache.put(key, statementContext);
             streamResultSet(executorService,
-                    OptionalResultSetSupplier.of(statement, statementHandle.query()),
+                    OptionalResultSetSupplier.of(statementContext, statementHandle.query()),
                     allocator,
                     getBatchSize(context),
                     listener,
