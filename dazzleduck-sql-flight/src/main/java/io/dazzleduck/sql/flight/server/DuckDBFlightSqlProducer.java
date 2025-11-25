@@ -876,42 +876,40 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                        StreamListener<CancelStatus> listener,
                        String peerIdentity) {
         var key = new CacheKey(peerIdentity, queryId);
-        StatementContext<Statement> statementContext =
-                statementLoadingCache.getIfPresent(key);
-        StatementContext<PreparedStatement> preparedStatementStatementContext =
-                preparedStatementLoadingCache.getIfPresent(key);
-        if (statementContext == null && preparedStatementStatementContext == null) {
+        StatementContext<?> context = getStatementContext(key);
+
+        if (context == null) {
             ErrorHandling.handleContextNotFound(listener);
             return;
         }
-        if (statementContext != null) {
+        try {
+            Statement statement = context.getStatement();
+            listener.onNext(CancelStatus.CANCELLING);
             try {
-                Statement statement = statementContext.getStatement();
-                listener.onNext(CancelStatus.CANCELLING);
-                try {
-                    statement.cancel();
-                } catch (SQLException e) {
-                    ErrorHandling.handleSqlException(listener, e);
-                }
+                statement.cancel();
                 listener.onNext(CancelStatus.CANCELLED);
-            } finally {
-                listener.onCompleted();
-                statementLoadingCache.invalidate(queryId);
+            } catch (SQLException e) {
+                ErrorHandling.handleSqlException(listener, e);
             }
+        } finally {
+            listener.onCompleted();
+            invalidateCache(key, context);
+        }
+    }
+
+    private StatementContext<?> getStatementContext(CacheKey key) {
+        StatementContext<?> context = statementLoadingCache.getIfPresent(key);
+        if (context == null) {
+            context = preparedStatementLoadingCache.getIfPresent(key);
+        }
+        return context;
+    }
+
+    private void invalidateCache(CacheKey key, StatementContext<?> context) {
+        if (context.getStatement() instanceof PreparedStatement) {
+            preparedStatementLoadingCache.invalidate(key);
         } else {
-            try {
-                PreparedStatement preparedStatement = preparedStatementStatementContext.getStatement();
-                listener.onNext(CancelStatus.CANCELLING);
-                try {
-                    preparedStatement.cancel();
-                } catch (SQLException e) {
-                    ErrorHandling.handleSqlException(listener, e);
-                }
-                listener.onNext(CancelStatus.CANCELLED);
-            } finally {
-                listener.onCompleted();
-                preparedStatementLoadingCache.invalidate(queryId);
-            }
+            statementLoadingCache.invalidate(key);
         }
     }
 
