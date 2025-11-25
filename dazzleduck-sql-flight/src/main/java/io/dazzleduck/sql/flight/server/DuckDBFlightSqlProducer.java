@@ -112,6 +112,23 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
     private final Duration maxStatementLifetime;
 
+    StreamListener<CancelStatus> streamListener = new StreamListener<>() {
+        @Override
+        public void onNext(CancelStatus val) {
+
+        }
+
+        @Override
+        public void onError(Throwable t) {
+
+        }
+
+        @Override
+        public void onCompleted() {
+
+        }
+    };
+
     public static DuckDBFlightSqlProducer createProducer(Location location,
                                                           String producerId,
                                                           String secretKey,
@@ -226,47 +243,16 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             scheduledExecutorService.scheduleWithFixedDelay(() -> {
                 preparedStatementLoadingCache.asMap().forEach((key, ctx) -> {
                     if (ctx.startTime().plus(maxStatementLifetime).isBefore(Instant.now())) {
-                        cancel(key.id, new StreamListener<>() {
-                            @Override
-                            public void onNext(CancelStatus val) {
-
-                            }
-
-                            @Override
-                            public void onError(Throwable t) {
-
-                            }
-
-                            @Override
-                            public void onCompleted() {
-
-                            }
-                        }, key.peerIdentity);
+                        cancel(key.id, streamListener, key.peerIdentity);
                     }
                 });
 
                 statementLoadingCache.asMap().forEach((key, ctx) -> {
                     if (ctx.startTime().plus(maxStatementLifetime).isBefore(Instant.now())) {
-                        cancel(key.id, new StreamListener<>() {
-                            @Override
-                            public void onNext(CancelStatus val) {
-
-                            }
-
-                            @Override
-                            public void onError(Throwable t) {
-
-                            }
-
-                            @Override
-                            public void onCompleted() {
-
-                            }
-                        }, key.peerIdentity);
+                        cancel(key.id, streamListener, key.peerIdentity);
                     }
                 });
             }, 0, 30, TimeUnit.SECONDS);
-
         } catch (SQLException | NoSuchFieldException | IllegalAccessException e) {
             throw new RuntimeException(e);
         }
