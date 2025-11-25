@@ -42,7 +42,6 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
     public StatementContext(final T statement, final String query) {
         this.statement = Objects.requireNonNull(statement, "statement cannot be null.");
         this.query = query;
-        this.startTime = Instant.now();
     }
 
     /**

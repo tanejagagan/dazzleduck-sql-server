@@ -29,6 +29,7 @@ public interface OptionalResultSetSupplier {
 
             @Override
             public void execute() throws SQLException {
+                statementContext.start();
                 hasResultSet = statementContext.getStatement().execute(query);
             }
         };
@@ -50,6 +51,7 @@ public interface OptionalResultSetSupplier {
 
             @Override
             public void execute() throws SQLException {
+                preparedStatementStatementContext.start();
                 hasResultSet = preparedStatementStatementContext.getStatement().execute();
             }
         };

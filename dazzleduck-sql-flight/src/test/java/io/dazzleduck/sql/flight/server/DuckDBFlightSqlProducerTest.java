@@ -58,8 +58,6 @@ public class DuckDBFlightSqlProducerTest {
     private static final String LONG_RUNNING_QUERY = "with t as " +
             "(select len(split(concat('abcdefghijklmnopqrstuvwxyz:', generate_series), ':')) as len  from generate_series(1, 1000000000) )" +
             " select count(*) from t where len = 10";
-    private static final String SEMI_LONG_RUNNING_QUERY =
-            "SELECT COUNT(*) FROM (SELECT * FROM generate_series(1, 20000000) ORDER BY random()) t";
     protected static FlightServer flightServer;
     protected static FlightSqlClient sqlClient;
     protected static String warehousePath;
@@ -227,11 +225,22 @@ public class DuckDBFlightSqlProducerTest {
     }
 
     @Test
-    public void testAutoCancel() {
+    public void testAutoCancelForPreparedStatement() {
         try (FlightSqlClient.PreparedStatement preparedStatement = sqlClient.prepare(LONG_RUNNING_QUERY);
              FlightStream stream = sqlClient.getStream(preparedStatement.execute().getEndpoints().get(0).getTicket())) {
             assertFalse(stream.next());
         } catch (Exception ignored) {
+
+        }
+    }
+
+    @Test
+    public void testAutoCancelForStatement() {
+        FlightInfo flightInfo = sqlClient.execute(LONG_RUNNING_QUERY);
+        try (FlightStream stream = sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket())) {
+            assertFalse(stream.next());
+        } catch (Exception ignored) {
+
         }
     }
 

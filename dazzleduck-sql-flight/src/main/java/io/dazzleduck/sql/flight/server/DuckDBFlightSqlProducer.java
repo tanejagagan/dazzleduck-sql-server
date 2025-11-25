@@ -226,16 +226,46 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             scheduledExecutorService.scheduleWithFixedDelay(() -> {
                 preparedStatementLoadingCache.asMap().forEach((key, ctx) -> {
                     if (ctx.startTime().plus(maxStatementLifetime).isBefore(Instant.now())) {
-                        preparedStatementLoadingCache.invalidate(key);
+                        cancel(key.id, new StreamListener<>() {
+                            @Override
+                            public void onNext(CancelStatus val) {
+
+                            }
+
+                            @Override
+                            public void onError(Throwable t) {
+
+                            }
+
+                            @Override
+                            public void onCompleted() {
+
+                            }
+                        }, key.peerIdentity);
                     }
                 });
 
                 statementLoadingCache.asMap().forEach((key, ctx) -> {
                     if (ctx.startTime().plus(maxStatementLifetime).isBefore(Instant.now())) {
-                        statementLoadingCache.invalidate(key);
+                        cancel(key.id, new StreamListener<>() {
+                            @Override
+                            public void onNext(CancelStatus val) {
+
+                            }
+
+                            @Override
+                            public void onError(Throwable t) {
+
+                            }
+
+                            @Override
+                            public void onCompleted() {
+
+                            }
+                        }, key.peerIdentity);
                     }
                 });
-            }, 5, 30, TimeUnit.SECONDS);
+            }, 0, 30, TimeUnit.SECONDS);
 
         } catch (SQLException | NoSuchFieldException | IllegalAccessException e) {
             throw new RuntimeException(e);
@@ -843,27 +873,45 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
     @Override
     public void cancel(Long queryId,
-                        StreamListener<CancelStatus> listener,
-                        String peerIdentity) {
+                       StreamListener<CancelStatus> listener,
+                       String peerIdentity) {
         var key = new CacheKey(peerIdentity, queryId);
-        try {
-            StatementContext<Statement> statementContext =
-                    statementLoadingCache.getIfPresent(key);
-            if (statementContext == null) {
-                ErrorHandling.handleContextNotFound(listener);
-                return;
-            }
-            Statement statement = statementContext.getStatement();
-            listener.onNext(CancelStatus.CANCELLING);
+        StatementContext<Statement> statementContext =
+                statementLoadingCache.getIfPresent(key);
+        StatementContext<PreparedStatement> preparedStatementStatementContext =
+                preparedStatementLoadingCache.getIfPresent(key);
+        if (statementContext == null && preparedStatementStatementContext == null) {
+            ErrorHandling.handleContextNotFound(listener);
+            return;
+        }
+        if (statementContext != null) {
             try {
-                statement.cancel();
-            } catch (SQLException e) {
-                ErrorHandling.handleSqlException(listener, e);
+                Statement statement = statementContext.getStatement();
+                listener.onNext(CancelStatus.CANCELLING);
+                try {
+                    statement.cancel();
+                } catch (SQLException e) {
+                    ErrorHandling.handleSqlException(listener, e);
+                }
+                listener.onNext(CancelStatus.CANCELLED);
+            } finally {
+                listener.onCompleted();
+                statementLoadingCache.invalidate(queryId);
             }
-            listener.onNext(CancelStatus.CANCELLED);
-        } finally {
-            listener.onCompleted();
-            statementLoadingCache.invalidate(queryId);
+        } else {
+            try {
+                PreparedStatement preparedStatement = preparedStatementStatementContext.getStatement();
+                listener.onNext(CancelStatus.CANCELLING);
+                try {
+                    preparedStatement.cancel();
+                } catch (SQLException e) {
+                    ErrorHandling.handleSqlException(listener, e);
+                }
+                listener.onNext(CancelStatus.CANCELLED);
+            } finally {
+                listener.onCompleted();
+                preparedStatementLoadingCache.invalidate(queryId);
+            }
         }
     }
 
