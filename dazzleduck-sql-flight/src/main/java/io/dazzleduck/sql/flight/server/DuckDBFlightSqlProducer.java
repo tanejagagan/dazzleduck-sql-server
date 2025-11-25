@@ -18,6 +18,7 @@ import io.dazzleduck.sql.commons.planner.SplitPlanner;
 import io.dazzleduck.sql.flight.FlightRecorder;
 import io.dazzleduck.sql.flight.MicroMeterFlightRecorder;
 import io.dazzleduck.sql.flight.ingestion.IngestionParameters;
+import io.dazzleduck.sql.flight.model.RunningStatementInfo;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceServerCallHeaderAuthMiddleware;
 import io.dazzleduck.sql.flight.stream.FlightStreamReader;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -71,6 +72,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
     public static final String TEMP_WRITE_FORMAT = "arrow";
     private final FlightRecorder flightRecorder;
+    private final ConcurrentHashMap<String, RunningStatementInfo> runningStatements = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, RunningStatementInfo> runningPreparedStatements = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, RunningStatementInfo> runningBulkIngest = new ConcurrentHashMap<>();
 
 
     public static AccessMode getAccessMode(com.typesafe.config.Config appConfig) {
@@ -112,12 +116,12 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     private final Path tempDir;
 
     public static DuckDBFlightSqlProducer createProducer(Location location,
-                                                          String producerId,
-                                                          String secretKey,
-                                                          BufferAllocator allocator,
-                                                          String warehousePath,
-                                                          AccessMode accessMode,
-                                                         PostIngestionTaskFactory postIngestionTaskFactory,MeterRegistry registry) {
+                                                         String producerId,
+                                                         String secretKey,
+                                                         BufferAllocator allocator,
+                                                         String warehousePath,
+                                                         AccessMode accessMode,
+                                                         PostIngestionTaskFactory postIngestionTaskFactory, MeterRegistry registry) {
         return new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, newTempDir(), postIngestionTaskFactory,  new MicroMeterFlightRecorder(registry, producerId));
     }
 
@@ -413,35 +417,54 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     @Override
     public void getStreamPreparedStatement(FlightSql.CommandPreparedStatementQuery command, CallContext context,
                                            ServerStreamListener listener) {
-
+        String user = context.peerIdentity();
+        String statementId = String.valueOf(command.getPreparedStatementHandle());
+        String keyValue = user + "-" + statementId;
+        String query = "<unknown-prepared-sql>";
+        RunningStatementInfo info = new RunningStatementInfo(user, statementId, query);
+        runningPreparedStatements.put(keyValue, info);
         Runnable body = () -> {
             try {
                 if (checkAccessModeAndRespond(listener)) {
+                    info.endTimeMs = System.currentTimeMillis();
+                    info.action = "FAILED";
                     return;
                 }
 
                 StatementHandle statementHandle = StatementHandle.deserialize(command.getPreparedStatementHandle());
                 if (statementHandle.signatureMismatch(secretKey)) {
+                    info.endTimeMs = System.currentTimeMillis();
+                    info.action = "FAILED";
                     ErrorHandling.handleSignatureMismatch(listener);
                 }
                 var key = new CacheKey(context.peerIdentity(), statementHandle.queryId());
                 StatementContext<PreparedStatement> statementContext =
                         preparedStatementLoadingCache.getIfPresent(key);
                 if (statementContext == null) {
+                    info.endTimeMs = System.currentTimeMillis();
+                    info.action = "FAILED";
                     ErrorHandling.handleContextNotFound();
                 }
+                info.query = statementContext.getQuery();
                 final PreparedStatement preparedStatement = statementContext.getStatement();
                 streamResultSet(executorService, OptionalResultSetSupplier.of(preparedStatement),
                         allocator, getBatchSize(context),
                         listener, () -> {}
                 );
+                info.endTimeMs = System.currentTimeMillis();
+                info.action = "COMPLETED";
             } catch (Throwable e) {
                 ErrorHandling.handleThrowable(listener, e);
+                info.endTimeMs = System.currentTimeMillis();
+                info.action = "FAILED";
             }
         };
         flightRecorder.recordGetStreamPreparedStatement(body);
     }
 
+    public Map<String, RunningStatementInfo> runningStatements() {
+        return runningStatements;
+    }
 
 
     @Override
@@ -461,7 +484,12 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             StatementHandle statementHandle,
             final CallContext context,
             final ServerStreamListener listener) {
-
+        String user = context.peerIdentity();
+        String statementId = String.valueOf(statementHandle.queryId());
+        String query = statementHandle.query();
+        String keyValue = user + "-" + statementId;
+        RunningStatementInfo info = new RunningStatementInfo(user, statementId, query);
+        runningStatements.put(keyValue, info);
         Runnable body = () -> {
             try {
                 var connection = getConnection(context, accessMode);
@@ -475,7 +503,11 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                         getBatchSize(context),
                         listener,
                         () -> statementLoadingCache.invalidate(key));
+                info.endTimeMs = System.currentTimeMillis();
+                info.action = "COMPLETED";
             } catch (Throwable e) {
+                info.endTimeMs = System.currentTimeMillis();
+                info.action = "FAILED";
                 ErrorHandling.handleThrowable(listener, e);
             }
         };
@@ -483,6 +515,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         flightRecorder.recordGetStreamStatement(body);
     }
 
+    public Map<String, RunningStatementInfo> runningPreparedStatements() {
+        return runningPreparedStatements;
+    }
 
     @Override
     public Runnable acceptPutStatement(FlightSql.CommandStatementUpdate command, CallContext context,
@@ -597,6 +632,15 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             IngestionParameters ingestionParameters,
             ArrowReader inputReader,
             StreamListener<PutResult> ackStream) {
+        String user = context.peerIdentity();
+        String statementId = String.valueOf(ingestionParameters.hashCode());
+        String keyValue = user + "-" + statementId;
+
+        // Bulk ingest show the target path as "query"
+        String query = "COPY INTO " + ingestionParameters.completePath(warehousePath);
+
+        RunningStatementInfo info = new RunningStatementInfo(user, statementId, query);
+        runningBulkIngest.put(keyValue, info);
 
         Runnable logic = () -> {
             Path tempFile;
@@ -613,9 +657,13 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                 });
                 var result = ingestionQueue.addToQueue(batch);
                 result.get();
+                info.endTimeMs = System.currentTimeMillis();
+                info.action = "COMPLETED";
                 ackStream.onNext(PutResult.empty());
                 ackStream.onCompleted();
             } catch (Throwable throwable) {
+                info.endTimeMs = System.currentTimeMillis();
+                info.action = "FAILED";
                 ErrorHandling.handleThrowable(ackStream, throwable);
             }
         };
@@ -623,6 +671,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         return () -> {
                 flightRecorder.recordBulkIngest(logic);
         };
+    }
+    public Map<String, RunningStatementInfo> runningBulkIngest() {
+        return runningBulkIngest;
     }
 
     @Override

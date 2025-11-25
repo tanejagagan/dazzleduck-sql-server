@@ -9,11 +9,13 @@ import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactoryProvider;
 import io.dazzleduck.sql.flight.server.DuckDBFlightSqlProducer;
 import io.dazzleduck.sql.login.LoginService;
+import io.dazzleduck.sql.micrometer.metrics.MetricsRegistryFactory;
 import io.helidon.config.Config;
 import io.helidon.cors.CrossOriginConfig;
 import io.helidon.logging.common.LogConfig;
 import io.helidon.webserver.WebServer;
 import io.helidon.webserver.cors.CorsSupport;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.apache.arrow.flight.Location;
 import org.apache.arrow.memory.RootAllocator;
 
@@ -77,8 +79,9 @@ public class Main {
         var producerId = UUID.randomUUID().toString();
         var provider = PostIngestionTaskFactoryProvider.load(appConfig);
         var factory = provider.getPostIngestionTaskFactory();
+        MeterRegistry meterRegistry = MetricsRegistryFactory.create();
         var producer = DuckDBFlightSqlProducer.createProducer(Location.forGrpcInsecure(host, port), producerId,
-                base64SecretKey, allocator, warehousePath, accessMode, factory);
+                base64SecretKey, allocator, warehousePath, accessMode, factory,meterRegistry);
         WebServer server = WebServer.builder()
                 .config(helidonConfig.get("dazzleduck_server"))
                 .config(helidonConfig.get("flight_sql"))
