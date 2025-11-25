@@ -138,35 +138,7 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
 
     @Override public void recordGetFlightInfoStatement() { }
 
-    @Override
-    public void incrementRunningStatements() {
 
-    }
-
-    @Override
-    public void decrementRunningStatements() {
-
-    }
-
-    @Override
-    public void incrementRunningPrepared() {
-
-    }
-
-    @Override
-    public void decrementRunningPrepared() {
-
-    }
-
-    @Override
-    public void incrementRunningBulkIngest() {
-
-    }
-
-    @Override
-    public void decrementRunningBulkIngest() {
-
-    }
 
     @Override
     public void recordGetFlightInfoPreparedStatement() {

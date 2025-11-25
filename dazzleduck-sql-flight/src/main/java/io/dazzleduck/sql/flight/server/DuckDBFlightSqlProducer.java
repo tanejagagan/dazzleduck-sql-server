@@ -414,32 +414,32 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     public void getStreamPreparedStatement(FlightSql.CommandPreparedStatementQuery command, CallContext context,
                                            ServerStreamListener listener) {
 
-        Runnable logic = () -> {
+        Runnable body = () -> {
+            try {
+                if (checkAccessModeAndRespond(listener)) {
+                    return;
+                }
 
-            if (checkAccessModeAndRespond(listener)) {
-                return;
+                StatementHandle statementHandle = StatementHandle.deserialize(command.getPreparedStatementHandle());
+                if (statementHandle.signatureMismatch(secretKey)) {
+                    ErrorHandling.handleSignatureMismatch(listener);
+                }
+                var key = new CacheKey(context.peerIdentity(), statementHandle.queryId());
+                StatementContext<PreparedStatement> statementContext =
+                        preparedStatementLoadingCache.getIfPresent(key);
+                if (statementContext == null) {
+                    ErrorHandling.handleContextNotFound();
+                }
+                final PreparedStatement preparedStatement = statementContext.getStatement();
+                streamResultSet(executorService, OptionalResultSetSupplier.of(preparedStatement),
+                        allocator, getBatchSize(context),
+                        listener, () -> {}
+                );
+            } catch (Throwable e) {
+                ErrorHandling.handleThrowable(listener, e);
             }
-
-            StatementHandle statementHandle = StatementHandle.deserialize(command.getPreparedStatementHandle());
-            if (statementHandle.signatureMismatch(secretKey)) {
-                ErrorHandling.handleSignatureMismatch(listener);
-            }
-            var key = new CacheKey(context.peerIdentity(), statementHandle.queryId());
-            StatementContext<PreparedStatement> statementContext =
-                    preparedStatementLoadingCache.getIfPresent(key);
-            if (statementContext == null) {
-                ErrorHandling.handleContextNotFound();
-            }
-            final PreparedStatement preparedStatement = statementContext.getStatement();
-            streamResultSet(executorService,
-                    OptionalResultSetSupplier.of(preparedStatement),
-                    allocator,
-                    getBatchSize(context),
-                    listener,
-                    flightRecorder::decrementRunningPrepared);
         };
-
-        flightRecorder.recordGetStreamPreparedStatement(logic);
+        flightRecorder.recordGetStreamPreparedStatement(body);
     }
 
 

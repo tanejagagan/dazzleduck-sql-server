@@ -45,16 +45,6 @@ public class NOOPFlightRecorder implements FlightRecorder {
 
     }
 
-    @Override
-    public void incrementRunningPrepared() {
-
-    }
-
-    @Override
-    public void decrementRunningPrepared() {
-
-    }
-
 
 
     @Override

@@ -20,13 +20,6 @@ public interface FlightRecorder {
 
     void recordGetFlightInfoStatement();
 
-
-
-    void incrementRunningPrepared();
-    void decrementRunningPrepared();
-
-
-
     void recordGetFlightInfoPreparedStatement();
 
     void recordGetStreamPreparedStatement(long networkSize);
