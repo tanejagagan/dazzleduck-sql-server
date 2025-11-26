@@ -97,7 +97,7 @@ public class Main {
                                                          Path tempWriteDir,
                                                          AccessMode accessMode,
                                                          PostIngestionTaskFactory postIngestionTaskFactory) {
-        return new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, tempWriteDir, postIngestionTaskFactory, Duration.ofMinutes(10));
+        return new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, tempWriteDir, postIngestionTaskFactory, Duration.ofMinutes(2));
     }
 
     private static InputStream getInputStreamForResource(String filename) {
