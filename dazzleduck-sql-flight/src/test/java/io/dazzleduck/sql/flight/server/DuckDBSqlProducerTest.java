@@ -106,6 +106,59 @@ public class DuckDBSqlProducerTest {
 
     @Test
     public void testAutoCancelForStatement() {
-
+        var context = new SyntheticFlightContext(
+                Map.of("database", List.of(), "schema", List.of()),
+                new SubjectAndVerifiedClaims("admin", Map.of()),
+                Map.of()
+        );
+//        StatementHandle handle = newStatementHandle(newStatementHandle(newStatementHandle(LONG_RUNNING_QUERY)));
+//        ByteString serializedHandle = copyFrom(handle.serialize());
+//        FlightSql.TicketStatementQuery statement = FlightSql.TicketStatementQuery.newBuilder().setStatementHandle(serializedHandle).build();
+//        duckDBSqlProducer.getStreamStatement(statement, context, new ServerStreamListener() {
+//            @Override
+//            public boolean isCancelled() {
+//                return false;
+//            }
+//
+//            @Override
+//            public void setOnCancelHandler(Runnable handler) {
+//
+//            }
+//
+//            @Override
+//            public boolean isReady() {
+//                return false;
+//            }
+//
+//            @Override
+//            public void start(VectorSchemaRoot root, DictionaryProvider dictionaries, IpcOption option) {
+//
+//            }
+//
+//            @Override
+//            public void putNext() {
+//
+//            }
+//
+//            @Override
+//            public void putNext(ArrowBuf metadata) {
+//
+//            }
+//
+//            @Override
+//            public void putMetadata(ArrowBuf metadata) {
+//
+//            }
+//
+//            @Override
+//            public void error(Throwable ex) {
+//
+//            }
+//
+//            @Override
+//            public void completed() {
+//
+//            }
+//        });
     }
 }
