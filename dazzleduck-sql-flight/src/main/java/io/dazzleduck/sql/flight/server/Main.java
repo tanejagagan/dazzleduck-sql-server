@@ -8,6 +8,7 @@ import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactory;
 import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactoryProvider;
+import io.dazzleduck.sql.flight.FlightRecorder;
 import io.dazzleduck.sql.flight.MicroMeterFlightRecorder;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceJWTTokenAuthenticator;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceServerCallHeaderAuthMiddleware;
@@ -69,7 +70,8 @@ public class Main {
         var tempWriteDirector = DuckDBFlightSqlProducer.getTempWriteDir(config);
         MeterRegistry meterRegistry = MetricsRegistryFactory.create();
         startConsoleMetricsPrinter(meterRegistry);
-        var producer = createProducer(location, producerId, secretKey, allocator, warehousePath, tempWriteDirector, accessMode, postIngestionTaskFactor, meterRegistry );
+        FlightRecorder recorder = new MicroMeterFlightRecorder(meterRegistry, producerId);
+        var producer = createProducer(location, producerId, secretKey, allocator, warehousePath, tempWriteDirector, accessMode, postIngestionTaskFactor, recorder );
         var certStream = getInputStreamForResource(serverCertLocation);
         var keyStream = getInputStreamForResource(keystoreLocation);
         var builder = FlightServer.builder(allocator, location, producer)
@@ -103,8 +105,8 @@ public class Main {
                                                          String warehousePath,
                                                          Path tempWriteDir,
                                                          AccessMode accessMode,
-                                                         PostIngestionTaskFactory postIngestionTaskFactory, MeterRegistry registry) {
-        return new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, tempWriteDir, postIngestionTaskFactory,   new MicroMeterFlightRecorder(registry, producerId));
+                                                         PostIngestionTaskFactory postIngestionTaskFactory, FlightRecorder recorder) {
+        return new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, tempWriteDir, postIngestionTaskFactory, recorder);
     }
 
     private static InputStream getInputStreamForResource(String filename) {

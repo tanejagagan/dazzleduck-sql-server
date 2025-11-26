@@ -1,38 +1,21 @@
 package io.dazzleduck.sql.flight.model;
 
-public class FlightMetricsSnapshot {
+public record FlightMetricsSnapshot(
 
-    // ---- Application / Global ----
-    public long startTimeMs;
+        // ---- Application / Global ----
+        long startTimeMs,
 
-    // ---- Live gauges ----
-    public int runningStatements;
-    public int runningPrepared;
-    public int runningBulkIngest;
+        // ---- Live gauges ----
+        int runningStatements,
+        int runningPrepared,
+        int runningBulkIngest,
 
-    // ---- Counters ----
-    public double completedStatements;
-    public double completedPrepared;
-    public double completedBulkIngest;
+        // ---- Counters ----
+        double completedStatements,
+        double completedPrepared,
+        double completedBulkIngest,
 
-    public double cancelledStatements;
-    public double cancelledPrepared;
-    public double dataInBytes;
-    public double dataOutBytes;
+        double cancelledStatements,
+        double cancelledPrepared
 
-
-    @Override
-    public String toString() {
-        return "FlightMetricsSnapshot{" +
-                "startTimeMs=" + startTimeMs +
-                ", runningStatements=" + runningStatements +
-                ", runningPrepared=" + runningPrepared +
-                ", runningBulkIngest=" + runningBulkIngest +
-                ", completedStatements=" + completedStatements +
-                ", completedPrepared=" + completedPrepared +
-                ", completedBulkIngest=" + completedBulkIngest +
-                ", cancelledStatements=" + cancelledStatements +
-                ", cancelledPrepared=" + cancelledPrepared +
-                '}';
-    }
-}
+) {}

@@ -1,8 +1,7 @@
 package io.dazzleduck.sql.flight.server;
 
 import io.dazzleduck.sql.flight.FlightRecorder;
-
-import java.util.concurrent.Callable;
+import io.dazzleduck.sql.flight.model.FlightMetricsSnapshot;
 
 public class NOOPFlightRecorder implements FlightRecorder {
     @Override
@@ -16,44 +15,41 @@ public class NOOPFlightRecorder implements FlightRecorder {
     }
 
     @Override
-    public <T> T recordGetFlightInfo(Callable<T> work) throws Exception {
-        return null;
-    }
-
-    @Override
-    public <T> T recordGetFlightInfoPrepared(Callable<T> work) throws Exception {
-        return null;
-    }
-
-    @Override
-    public void recordGetStreamStatement(Runnable r) {
+    public void startStreamStatement() {
 
     }
 
     @Override
-    public void recordGetStreamPreparedStatement(Runnable r) {
+    public void endStreamStatement() {
 
     }
 
     @Override
-    public void recordBulkIngest(Runnable r) {
+    public void startStreamPreparedStatement() {
 
     }
 
     @Override
-    public void recordGetFlightInfoStatement() {
+    public void endStreamPreparedStatement() {
 
     }
-
-
 
     @Override
-    public void recordGetFlightInfoPreparedStatement() {
+    public void startBulkIngest() {
 
     }
 
+    @Override
+    public void endBulkIngest() {
+
+    }
     @Override
     public void recordGetStreamPreparedStatement(long networkSize) {
 
+    }
+
+    @Override
+    public FlightMetricsSnapshot snapshot() {
+        return null;
     }
 }

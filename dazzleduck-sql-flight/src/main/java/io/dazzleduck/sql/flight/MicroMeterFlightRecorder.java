@@ -3,97 +3,64 @@ package io.dazzleduck.sql.flight;
 import io.dazzleduck.sql.flight.model.FlightMetricsSnapshot;
 import io.micrometer.core.instrument.*;
 
-import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class MicroMeterFlightRecorder implements FlightRecorder {
 
     private final MeterRegistry registry;
 
-    // --------------------- Counters --------------------------
-    private final Counter getFlightInfo;
-    private final Counter getFlightInfoPrepared;
-    private final Counter getStreamStatement;
-    private final Counter getStreamPreparedStatement;
-    private final Counter bulkIngest;
+    // -------------------- Counters -------------------------
+    private final Counter streamStatementCounter;
+    private final Counter streamPreparedStatementCounter;
+    private final Counter bulkIngestCounter;
 
-    private final Counter cancelCounterStatement;
-    private final Counter cancelCounterPreparedStatement;
+    private final Counter cancelStatementCounter;
+    private final Counter cancelPreparedStatementCounter;
 
-    // --------------------- Timers ----------------------------
-    private final Timer getFlightInfoTimer;
-    private final Timer getFlightInfoPreparedTimer;
-    private final Timer getStreamStatementTimer;
-    private final Timer getStreamPreparedStatementTimer;
+    // ---- Completed counters (Option 2) ----
+    private final Counter streamStatementCompletedCounter;
+    private final Counter streamPreparedStatementCompletedCounter;
+    private final Counter bulkIngestCompletedCounter;
+
+    // -------------------- Timers ---------------------------
+    private final Timer streamStatementTimer;
+    private final Timer streamPreparedStatementTimer;
     private final Timer bulkIngestTimer;
 
-    // --------------------- Running Gauges ---------------------
-    private final AtomicInteger runningStatements = new AtomicInteger(0);
-    private final AtomicInteger runningPrepared = new AtomicInteger(0);
-    private final AtomicInteger runningBulkIngest = new AtomicInteger(0);
-
+    // Start time
     private final AtomicLong startTime = new AtomicLong(0);
 
-    // --------------------- Network Metrics --------------------
-    private final Counter dataInBytes;
-    private final Counter dataOutBytes;
-    private final Counter arrowBatchIn;
-    private final Counter arrowBatchOut;
-
-    // ==========================================================
-    //                    CONSTRUCTOR
-    // ==========================================================
+    // Thread-local timing
+    private final ThreadLocal<Long> startNanos = ThreadLocal.withInitial(() -> 0L);
 
     public MicroMeterFlightRecorder(MeterRegistry registry, String producerId) {
         this.registry = registry;
+        this.startTime.set(System.currentTimeMillis());
 
-        startTime.set(System.currentTimeMillis());
+        // ------- Started counters --------
 
-        // ----- Counters -----
-        this.getFlightInfo = counter("get_flight_info", producerId);
-        this.getFlightInfoPrepared = counter("get_flight_info_prepared", producerId);
-        this.getStreamStatement = counter("get_stream_statement", producerId);
-        this.getStreamPreparedStatement = counter("get_stream_prepared_statement", producerId);
-        this.bulkIngest = counter("bulk_ingest", producerId);
+        this.streamStatementCounter = counter("stream_statement", producerId);
+        this.streamPreparedStatementCounter = counter("stream_prepared_statement", producerId);
+        this.bulkIngestCounter = counter("bulk_ingest", producerId);
 
-        this.cancelCounterStatement = counter("cancel_statement_request", producerId);
-        this.cancelCounterPreparedStatement = counter("cancel_statement_prepared_request", producerId);
+        // ------- Cancelled counters -------
+        this.cancelStatementCounter = counter("cancel_statement", producerId);
+        this.cancelPreparedStatementCounter = counter("cancel_prepared_statement", producerId);
 
-        // ----- Timers -----
-        this.getFlightInfoTimer = timer("get_flight_info", producerId);
-        this.getFlightInfoPreparedTimer = timer("get_flight_info_prepared", producerId);
-        this.getStreamStatementTimer = timer("get_stream_statement", producerId);
-        this.getStreamPreparedStatementTimer = timer("get_stream_prepared_statement", producerId);
+        // ------- Completed counters -------
+        this.streamStatementCompletedCounter = counter("stream_statement_completed", producerId);
+        this.streamPreparedStatementCompletedCounter = counter("stream_prepared_statement_completed", producerId);
+        this.bulkIngestCompletedCounter = counter("bulk_ingest_completed", producerId);
+
+        // ------- Timers -------
+        this.streamStatementTimer = timer("stream_statement", producerId);
+        this.streamPreparedStatementTimer = timer("stream_prepared_statement", producerId);
         this.bulkIngestTimer = timer("bulk_ingest", producerId);
-
-        // ----- Gauges -----
-        registerGauge("start_time_ms", startTime, producerId);
-        registerGauge("running_statements", runningStatements, producerId);
-        registerGauge("running_prepared_statements", runningPrepared, producerId);
-        registerGauge("running_bulk_ingest", runningBulkIngest, producerId);
-
-        // ----- Network Metrics -----
-        this.dataInBytes = Counter.builder("dazzleduck.flight.data_in.bytes")
-                .tag("producer", producerId)
-                .register(registry);
-
-        this.dataOutBytes = Counter.builder("dazzleduck.flight.data_out.bytes")
-                .tag("producer", producerId)
-                .register(registry);
-
-        this.arrowBatchIn = Counter.builder("dazzleduck.flight.arrow_batch.in")
-                .tag("producer", producerId)
-                .register(registry);
-
-        this.arrowBatchOut = Counter.builder("dazzleduck.flight.arrow_batch.out")
-                .tag("producer", producerId)
-                .register(registry);
     }
 
     // ==========================================================
-    //                      METRIC HELPERS
+    //                    HELPER BUILDERS
     // ==========================================================
 
     private Counter counter(String name, String producerId) {
@@ -110,148 +77,85 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
                 .register(registry);
     }
 
-    private void registerGauge(String name, AtomicInteger ref, String producerId) {
-        Gauge.builder("dazzleduck.flight." + name, ref, AtomicInteger::get)
-                .tag("producer", producerId)
-                .register(registry);
-    }
-
-    private void registerGauge(String name, AtomicLong ref, String producerId) {
-        Gauge.builder("dazzleduck.flight." + name, ref, AtomicLong::get)
-                .tag("producer", producerId)
-                .register(registry);
-    }
-
-    // ==========================================================
-    //                       STATEMENT RECORDERS
-    // ==========================================================
-
     @Override
-    public void recordStatementCancel() { cancelCounterStatement.increment(); }
-
-    @Override
-    public void recordPreparedStatementCancel() { cancelCounterPreparedStatement.increment(); }
-
-    @Override
-    public <T> T recordGetFlightInfo(Callable<T> work) throws Exception {
-        getFlightInfo.increment();
-        return getFlightInfoTimer.recordCallable(work);
+    public void recordStatementCancel() {
+        cancelStatementCounter.increment();
     }
 
     @Override
-    public <T> T recordGetFlightInfoPrepared(Callable<T> work) throws Exception {
-        getFlightInfoPrepared.increment();
-        return getFlightInfoPreparedTimer.recordCallable(work);
+    public void recordPreparedStatementCancel() {
+        cancelPreparedStatementCounter.increment();
     }
 
     @Override
-    public void recordGetStreamStatement(Runnable r) {
-        runningStatements.incrementAndGet();
-        try {
-            getStreamStatement.increment();
-            getStreamStatementTimer.record(r);
-        } finally {
-            runningStatements.decrementAndGet();
-        }
+    public void startStreamStatement() {
+        streamStatementCounter.increment();
+        startNanos.set(System.nanoTime());
     }
 
     @Override
-    public void recordGetStreamPreparedStatement(Runnable r) {
-        runningPrepared.incrementAndGet();
-        long start = System.nanoTime();
-        try {
-            getStreamPreparedStatement.increment();
-            r.run();
-        } finally {
-            long end = System.nanoTime();
-            getStreamPreparedStatementTimer.record(end - start, TimeUnit.NANOSECONDS);
-            runningPrepared.decrementAndGet();
-        }
+    public void endStreamStatement() {
+        streamStatementTimer.record(System.nanoTime() - startNanos.get(), TimeUnit.NANOSECONDS);
+        streamStatementCompletedCounter.increment();
+    }
+
+    // ---------------- Stream Prepared Statement ----------------
+
+    @Override
+    public void startStreamPreparedStatement() {
+        streamPreparedStatementCounter.increment();
+        startNanos.set(System.nanoTime());
     }
 
     @Override
-    public void recordBulkIngest(Runnable r) {
-        runningBulkIngest.incrementAndGet();
-        try {
-            bulkIngest.increment();
-            bulkIngestTimer.record(r);
-        } finally {
-            runningBulkIngest.decrementAndGet();
-        }
+    public void endStreamPreparedStatement() {
+        streamPreparedStatementTimer.record(System.nanoTime() - startNanos.get(), TimeUnit.NANOSECONDS);
+        streamPreparedStatementCompletedCounter.increment();
     }
 
-    @Override public void recordGetFlightInfoStatement() { }
-    @Override public void recordGetFlightInfoPreparedStatement() { }
-    @Override public void recordGetStreamPreparedStatement(long size) { }
+    // ---------------- Bulk Ingest ----------------
 
-
-
-    // ==========================================================
-    //                   NETWORK RECORDERS
-    // ==========================================================
-
-    public void recordDataIn(long bytes) {
-        dataInBytes.increment(bytes);
-        arrowBatchIn.increment();
+    @Override
+    public void startBulkIngest() {
+        bulkIngestCounter.increment();
+        startNanos.set(System.nanoTime());
     }
 
-    public void recordDataOut(long bytes) {
-        dataOutBytes.increment(bytes);
-        arrowBatchOut.increment();
+    @Override
+    public void endBulkIngest() {
+        bulkIngestTimer.record(System.nanoTime() - startNanos.get(), TimeUnit.NANOSECONDS);
+        bulkIngestCompletedCounter.increment();
     }
 
-    // ==========================================================
-    //                 GETTERS USED BY UI / SNAPSHOT
-    // ==========================================================
+    @Override
+    public void recordGetStreamPreparedStatement(long size) { }
 
-    public long getStartTimeMs() { return startTime.get(); }
 
-    public int getRunningStatements() { return runningStatements.get(); }
-
-    public int getRunningPrepared() { return runningPrepared.get(); }
-
-    public int getRunningBulkIngest() { return runningBulkIngest.get(); }
-
-    public double getCompletedStatements() { return getStreamStatement.count(); }
-
-    public double getCompletedPreparedStatements() { return getStreamPreparedStatement.count(); }
-
-    public double getCompletedBulkIngest() { return bulkIngest.count(); }
-
-    public double getCancelledStatements() { return cancelCounterStatement.count(); }
-
-    public double getCancelledPreparedStatements() { return cancelCounterPreparedStatement.count(); }
-
-    public double getDataInBytes() { return dataInBytes.count(); }
-
-    public double getDataOutBytes() { return dataOutBytes.count(); }
-
-    public double getArrowBatchIn() { return arrowBatchIn.count(); }
-
-    public double getArrowBatchOut() { return arrowBatchOut.count(); }
-
-    // ==========================================================
-    //                       SNAPSHOT EXPORT
-    // ==========================================================
-
+    @Override
     public FlightMetricsSnapshot snapshot() {
-        FlightMetricsSnapshot s = new FlightMetricsSnapshot();
 
-        s.startTimeMs = getStartTimeMs();
+        long startTimeMs = startTime.get();
+        int runningStatements = Math.toIntExact((long) streamStatementCounter.count() - (long) streamStatementCompletedCounter.count() - (long) cancelStatementCounter.count());
+        int runningPrepared = Math.toIntExact((long) streamPreparedStatementCounter.count() - (long) streamPreparedStatementCompletedCounter.count() - (long) cancelPreparedStatementCounter.count());
+        int runningBulkIngest = Math.toIntExact((long) bulkIngestCounter.count() - (long) bulkIngestCompletedCounter.count());
 
-        s.runningStatements = getRunningStatements();
-        s.runningPrepared = getRunningPrepared();
-        s.runningBulkIngest = getRunningBulkIngest();
+        double completedStatements = streamStatementCompletedCounter.count();
+        double completedPrepared = streamPreparedStatementCompletedCounter.count();
+        double completedBulkIngest = bulkIngestCompletedCounter.count();
+        double cancelledStatements = cancelStatementCounter.count();
+        double cancelledPrepared = cancelPreparedStatementCounter.count();
 
-        s.completedStatements = getCompletedStatements();
-        s.completedPrepared = getCompletedPreparedStatements();
-        s.completedBulkIngest = getCompletedBulkIngest();
+        return new FlightMetricsSnapshot(
+                startTimeMs,
+                runningStatements,
+                runningPrepared,
+                runningBulkIngest,
+                completedStatements,
+                completedPrepared,
+                completedBulkIngest,
+                cancelledStatements,
+                cancelledPrepared
 
-        s.cancelledStatements = getCancelledStatements();
-        s.cancelledPrepared = getCancelledPreparedStatements();
-
-        s.dataInBytes = getDataInBytes();
-        s.dataOutBytes = getDataOutBytes();
-        return s;
+        );
     }
 }

@@ -6,8 +6,9 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Clock;
 import io.micrometer.core.instrument.composite.CompositeMeterRegistry;
 
+import java.time.Duration;
 
-import java.time.Duration;public class MetricsRegistryFactory {
+public class MetricsRegistryFactory {
 
     public static MeterRegistry create() {
 
@@ -15,21 +16,20 @@ import java.time.Duration;public class MetricsRegistryFactory {
             @Override
             public String get(String key) {
                 return switch (key) {
-                    case "arrow.enabled" -> "true";
-                    case "arrow.outputFile" -> "/opt/metrics/metrics.arrow";
-                    case "arrow.uri" -> "http://localhost:8080/arrow";
+                    case "arrow.enabled"     -> "true";
+                    case "arrow.endpoint"    -> "http://localhost:8080/ingest?path=metrics";
                     default -> null;
                 };
             }
         };
 
-        // Arrow registry only
-        MeterRegistry arrow = new ArrowMicroMeterRegistry.Builder()
-                .config(config)
-                .endpoint(config.uri())
-                .httpTimeout(Duration.ofSeconds(20))
-                .clock(Clock.SYSTEM)
-                .build();
+        ArrowMicroMeterRegistry arrow =
+                new ArrowMicroMeterRegistry.Builder()
+                        .config(config)
+                        .endpoint(config.uri())
+                        .httpTimeout(Duration.ofSeconds(20))
+                        .clock(Clock.SYSTEM)
+                        .build();
 
         CompositeMeterRegistry composite = new CompositeMeterRegistry();
         composite.add(arrow);

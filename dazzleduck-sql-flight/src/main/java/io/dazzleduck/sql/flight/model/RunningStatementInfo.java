@@ -1,21 +1,29 @@
 package io.dazzleduck.sql.flight.model;
 
-public class RunningStatementInfo {
-    public final String user;
-    public final String statementId;
-    public String query;
-    public final long startTimeMs;
-    public volatile String action = "RUNNING";
-    public volatile Long endTimeMs = null;
+import java.time.Duration;
+import java.time.Instant;
+
+public record RunningStatementInfo(
+        String user,
+        String statementId,
+        Instant startInstant
+) {
+    public static String query;
+    public static String action = "RUNNING";
+    public static Instant endInstant = null;
+
     public RunningStatementInfo(String user, String statementId, String query) {
-        this.user = user;
-        this.statementId = statementId;
-        this.query = query;
-        this.startTimeMs = System.currentTimeMillis();
+        this(user, statementId, Instant.now());
+        RunningStatementInfo.query = query;
     }
 
     public long durationMs() {
-        long end = (endTimeMs != null) ? endTimeMs : System.currentTimeMillis();
-        return end - startTimeMs;
+        Instant end = (endInstant != null) ? endInstant : Instant.now();
+        return Duration.between(startInstant, end).toMillis();
+    }
+
+    public Duration duration() {
+        Instant end = (endInstant != null) ? endInstant : Instant.now();
+        return Duration.between(startInstant, end);
     }
 }

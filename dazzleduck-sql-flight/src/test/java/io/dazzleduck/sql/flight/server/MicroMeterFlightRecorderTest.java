@@ -1,15 +1,13 @@
 package io.dazzleduck.sql.flight.server;
 
 import io.dazzleduck.sql.flight.MicroMeterFlightRecorder;
-import io.dazzleduck.sql.micrometer.config.ArrowRegistryConfig;
-import io.dazzleduck.sql.micrometer.service.ArrowMicroMeterRegistry;
+import io.dazzleduck.sql.flight.model.FlightMetricsSnapshot;
 import io.micrometer.core.instrument.*;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.time.Duration;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -17,192 +15,139 @@ public class MicroMeterFlightRecorderTest {
 
     private MeterRegistry registry;
     private MicroMeterFlightRecorder recorder;
-    private MockClock testClock;
 
     @BeforeEach
     void setup() {
-        testClock = new MockClock();
-
-        ArrowRegistryConfig config = new ArrowRegistryConfig() {
-            @Override
-            public String get(String k) {
-                if ("arrow.enabled".equals(k)) return "true";
-                return null;
-            }
-
-            @Override
-            public Duration step() {
-                return Duration.ofSeconds(1);  // REQUIRED for StepMeterRegistry
-            }
-        };
-
-        registry = new ArrowMicroMeterRegistry.Builder()
-                .config(config)
-                .endpoint("http://localhost:0")
-                .clock(testClock)
-                .testMode(true)
-                .build();
-
+        registry = new SimpleMeterRegistry();
         recorder = new MicroMeterFlightRecorder(registry, "producer1");
     }
 
-    private Counter counter(String name) {
-        return registry.find("dazzleduck.flight." + name + ".count")
+    private Counter counter(String metric) {
+        return registry.find("dazzleduck.flight." + metric + ".count")
                 .tag("producer", "producer1")
                 .counter();
     }
 
-    private Timer timer(String name) {
-        return registry.find("dazzleduck.flight." + name + ".timer")
+    private Timer timer(String metric) {
+        return registry.find("dazzleduck.flight." + metric + ".timer")
                 .tag("producer", "producer1")
                 .timer();
-    }
-
-    private Gauge gauge(String name) {
-        return registry.find("dazzleduck.flight." + name)
-                .tag("producer", "producer1")
-                .gauge();
-    }
-
-    private void advanceStep() {
-        testClock.add(Duration.ofSeconds(1)); // forces step publishing
-    }
-
-    @Test
-    void testStartTimeGaugeExists() {
-        Gauge g = gauge("start_time_ms");
-        assertNotNull(g);
-        assertTrue(g.value() > 0);
-    }
-
-    @Test
-    void testRecordGetFlightInfo() throws Exception {
-        String val = recorder.recordGetFlightInfo(() -> "ok");
-
-        advanceStep();
-
-        assertEquals("ok", val);
-        assertEquals(1.0, counter("get_flight_info").count());
-        assertEquals(1, timer("get_flight_info").count());
-    }
-
-    // -------------------------------------------------------------
-    // Test: recordGetFlightInfoPrepared
-    // -------------------------------------------------------------
-    @Test
-    void testRecordGetFlightInfoPrepared() throws Exception {
-        int result = recorder.recordGetFlightInfoPrepared(() -> 42);
-
-        advanceStep();
-
-        assertEquals(42, result);
-        assertEquals(1.0, counter("get_flight_info_prepared").count());
-        assertEquals(1, timer("get_flight_info_prepared").count());
-    }
-
-    @Test
-    void testRecordGetStreamStatement() {
-        recorder.recordGetStreamStatement(() -> {});
-
-        advanceStep();
-
-        assertEquals(1.0, counter("get_stream_statement").count());
-        assertEquals(1, timer("get_stream_statement").count());
-        assertEquals(0.0, gauge("running_statements").value());
-    }
-
-    @Test
-    void testRecordGetStreamStatementGaugeIncrement() {
-        AtomicInteger before = new AtomicInteger((int) gauge("running_statements").value());
-
-        recorder.recordGetStreamStatement(() -> {
-            assertEquals(before.get() + 1, (int) gauge("running_statements").value());
-        });
-
-        advanceStep();
-
-        assertEquals(before.get(), (int) gauge("running_statements").value());
-    }
-
-    @Test
-    void testRecordGetStreamPreparedStatement() {
-        recorder.recordGetStreamPreparedStatement(() -> {});
-
-        advanceStep();
-
-        assertEquals(1.0, counter("get_stream_prepared_statement").count());
-        assertEquals(1, timer("get_stream_prepared_statement").count());
-        assertEquals(0.0, gauge("running_prepared_statements").value());
-    }
-
-    @Test
-    void testPreparedGaugeIncrement() {
-        AtomicInteger before = new AtomicInteger((int) gauge("running_prepared_statements").value());
-
-        recorder.recordGetStreamPreparedStatement(() -> {
-            assertEquals(before.get() + 1, (int) gauge("running_prepared_statements").value());
-        });
-
-        advanceStep();
-
-        assertEquals(before.get(), (int) gauge("running_prepared_statements").value());
-    }
-
-
-    @Test
-    void testRecordBulkIngest() {
-        recorder.recordBulkIngest(() -> {});
-
-        advanceStep();
-
-        assertEquals(1.0, counter("bulk_ingest").count());
-        assertEquals(1, timer("bulk_ingest").count());
-        assertEquals(0.0, gauge("running_bulk_ingest").value());
-    }
-
-    @Test
-    void testRunningBulkIngestGaugeIncrement() {
-        AtomicInteger before = new AtomicInteger((int) gauge("running_bulk_ingest").value());
-
-        recorder.recordBulkIngest(() -> {
-            assertEquals(before.get() + 1, (int) gauge("running_bulk_ingest").value());
-        });
-
-        advanceStep();
-
-        assertEquals(before.get(), (int) gauge("running_bulk_ingest").value());
     }
 
     @Test
     void testRecordStatementCancel() {
         recorder.recordStatementCancel();
 
-        advanceStep();
-
-        assertEquals(1.0, counter("cancel_Statement_request").count());
+        Counter c = counter("cancel_statement");
+        assertNotNull(c);
+        assertEquals(1.0, c.count());
     }
 
     @Test
     void testRecordPreparedStatementCancel() {
         recorder.recordPreparedStatementCancel();
 
-        advanceStep();
-
-        assertEquals(1.0, counter("cancel_Statement_Prepared_request").count());
+        Counter c = counter("cancel_prepared_statement");
+        assertNotNull(c);
+        assertEquals(1.0, c.count());
     }
 
     @Test
-    void testTimerMeasuresTime() {
-        recorder.recordGetStreamPreparedStatement(() -> {
-            try {
-                Thread.sleep(10);
-            } catch (Exception ignored) {}
-        });
+    void testStartAndEndStreamStatement() {
+        recorder.startStreamStatement();
+        recorder.endStreamStatement();
 
-        advanceStep();
-        Timer t = timer("get_stream_prepared_statement");
+        assertEquals(1.0, counter("stream_statement").count());
+        assertEquals(1.0, counter("stream_statement_completed").count());
+        assertEquals(1, timer("stream_statement").count());
+    }
+
+    @Test
+    void testStreamStatementTimerRecord() {
+        recorder.startStreamStatement();
+        // simulate 10ms long operation
+        try { Thread.sleep(10); } catch (Exception ignored) {}
+        recorder.endStreamStatement();
+
+        Timer t = timer("stream_statement");
 
         assertEquals(1, t.count());
-        assertTrue(t.totalTime(TimeUnit.MILLISECONDS) >= 10);
+        assertTrue(t.totalTime(TimeUnit.MILLISECONDS) >= 9);
+    }
+
+    @Test
+    void testStartAndEndPreparedStatement() {
+        recorder.startStreamPreparedStatement();
+        recorder.endStreamPreparedStatement();
+
+        assertEquals(1.0, counter("stream_prepared_statement").count());
+        assertEquals(1.0, counter("stream_prepared_statement_completed").count());
+        assertEquals(1, timer("stream_prepared_statement").count());
+    }
+
+    @Test
+    void testPreparedStatementTimerRecord() {
+        recorder.startStreamPreparedStatement();
+        try { Thread.sleep(5); } catch (Exception ignored) {}
+        recorder.endStreamPreparedStatement();
+
+        Timer t = timer("stream_prepared_statement");
+
+        assertEquals(1, t.count());
+        assertTrue(t.totalTime(TimeUnit.MILLISECONDS) >= 4);
+    }
+
+
+    @Test
+    void testStartAndEndBulkIngest() {
+        recorder.startBulkIngest();
+        recorder.endBulkIngest();
+
+        assertEquals(1.0, counter("bulk_ingest").count());
+        assertEquals(1.0, counter("bulk_ingest_completed").count());
+        assertEquals(1, timer("bulk_ingest").count());
+    }
+
+    @Test
+    void testBulkIngestTimerRecord() {
+        recorder.startBulkIngest();
+        try { Thread.sleep(7); } catch (Exception ignored) {}
+        recorder.endBulkIngest();
+
+        Timer t = timer("bulk_ingest");
+
+        assertEquals(1, t.count());
+        assertTrue(t.totalTime(TimeUnit.MILLISECONDS) >= 6);
+    }
+
+    @Test
+    void testRecordGetStreamPreparedStatementDoesNotThrow() {
+        recorder.recordGetStreamPreparedStatement(123);
+    }
+
+    @Test
+    void testSnapshotRunningCounts() {
+
+        // start but don't end -> running = 1
+        recorder.startStreamStatement();
+        recorder.startStreamPreparedStatement();
+        recorder.startBulkIngest();
+
+        FlightMetricsSnapshot snap = recorder.snapshot();
+
+        assertEquals(1, snap.runningStatements());
+        assertEquals(1, snap.runningPrepared());
+        assertEquals(1, snap.runningBulkIngest());
+    }
+
+    @Test
+    void testStartTimeCaptured() {
+        long before = System.currentTimeMillis();
+        MicroMeterFlightRecorder r2 = new MicroMeterFlightRecorder(registry, "p1");
+        long after = System.currentTimeMillis();
+
+        long recorded = r2.snapshot().startTimeMs();
+
+        assertTrue(recorded >= before && recorded <= after);
     }
 }

@@ -1,29 +1,27 @@
 package io.dazzleduck.sql.flight;
 
-import java.util.concurrent.Callable;
+import io.dazzleduck.sql.flight.model.FlightMetricsSnapshot;
 
 public interface FlightRecorder {
-
     void recordStatementCancel();
 
     void recordPreparedStatementCancel();
 
-    <T> T recordGetFlightInfo(Callable<T> work) throws Exception;
+    void startStreamStatement();
 
-    <T> T recordGetFlightInfoPrepared(Callable<T> work) throws Exception;
+    void endStreamStatement();
 
-    void recordGetStreamStatement(Runnable r);
+    void startStreamPreparedStatement();
 
-    void recordGetStreamPreparedStatement(Runnable r);
+    void endStreamPreparedStatement();
 
-    void recordBulkIngest(Runnable r);
+    void startBulkIngest();
 
-    void recordGetFlightInfoStatement();
+    void endBulkIngest();
 
-    void recordGetFlightInfoPreparedStatement();
+    void recordGetStreamPreparedStatement(long size);
 
-    void recordGetStreamPreparedStatement(long networkSize);
-
+    FlightMetricsSnapshot snapshot();
 
 
     // Add other methods which needs to be recorded
