@@ -8,12 +8,8 @@ import io.dazzleduck.sql.flight.context.SyntheticFlightContext;
 import org.apache.arrow.flight.*;
 import org.apache.arrow.flight.FlightProducer.*;
 import org.apache.arrow.flight.sql.impl.FlightSql;
-import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
-import org.apache.arrow.vector.VectorSchemaRoot;
-import org.apache.arrow.vector.dictionary.DictionaryProvider;
-import org.apache.arrow.vector.ipc.message.IpcOption;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
@@ -27,8 +23,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
-import static com.google.protobuf.ByteString.copyFrom;
-import static io.dazzleduck.sql.flight.server.StatementHandle.newStatementHandle;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 
@@ -41,7 +35,33 @@ public class DuckDBSqlProducerTest {
     private static final Logger log = LoggerFactory.getLogger(DuckDBSqlProducerTest.class);
     protected static String warehousePath;
     private static DuckDBFlightSqlProducer duckDBSqlProducer;
+    private static AtomicReference<FlightSql.ActionCreatePreparedStatementResult> resultHolder = new AtomicReference<>();
+    private static AtomicReference<Throwable> errorHolder = new AtomicReference<>();
+    private static CountDownLatch latch = new CountDownLatch(1);
+    private static StreamListener<Result> streamListener = new StreamListener<Result>() {
+        @Override
+        public void onNext(Result val) {
+            try {
+                Any any = Any.parseFrom(val.getBody());
+                FlightSql.ActionCreatePreparedStatementResult result =
+                        any.unpack(FlightSql.ActionCreatePreparedStatementResult.class);
+                resultHolder.set(result);
+            } catch (Exception e) {
+                errorHolder.set(e);
+            }
+        }
 
+        @Override
+        public void onError(Throwable t) {
+            errorHolder.set(t);
+            latch.countDown();
+        }
+
+        @Override
+        public void onCompleted() {
+            latch.countDown();
+        }
+    };
 
     @BeforeAll
     public static void setDuckDBSqlProducer() {
@@ -66,35 +86,7 @@ public class DuckDBSqlProducerTest {
                 Map.of()
         );
 
-        AtomicReference<FlightSql.ActionCreatePreparedStatementResult> resultHolder = new AtomicReference<>();
-        CountDownLatch latch = new CountDownLatch(1);
-        AtomicReference<Throwable> errorHolder = new AtomicReference<>();
-
-        duckDBSqlProducer.createPreparedStatement(request, context, new StreamListener<Result>() {
-            @Override
-            public void onNext(Result val) {
-                try {
-                    Any any = Any.parseFrom(val.getBody());
-                    FlightSql.ActionCreatePreparedStatementResult result =
-                            any.unpack(FlightSql.ActionCreatePreparedStatementResult.class);
-                    resultHolder.set(result);
-                } catch (Exception e) {
-                    errorHolder.set(e);
-                }
-            }
-
-            @Override
-            public void onError(Throwable t) {
-                errorHolder.set(t);
-                latch.countDown();
-            }
-
-            @Override
-            public void onCompleted() {
-                latch.countDown();
-            }
-        });
-
+        duckDBSqlProducer.createPreparedStatement(request, context, streamListener);
         // Wait for the async operation to complete (with timeout)
         var completed = latch.await(10, TimeUnit.SECONDS);
         assertTrue(completed, "Timeout waiting for prepared statement to complete");
@@ -113,6 +105,7 @@ public class DuckDBSqlProducerTest {
     }
 
     @Test
-    public void testAutoCancelForStatement() throws InterruptedException {
+    public void testAutoCancelForStatement() {
+
     }
 }
