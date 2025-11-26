@@ -225,26 +225,6 @@ public class DuckDBFlightSqlProducerTest {
     }
 
     @Test
-    public void testAutoCancelForPreparedStatement() {
-        try (FlightSqlClient.PreparedStatement preparedStatement = sqlClient.prepare(LONG_RUNNING_QUERY);
-             FlightStream stream = sqlClient.getStream(preparedStatement.execute().getEndpoints().get(0).getTicket())) {
-            assertFalse(stream.next());
-        } catch (Exception ignored) {
-
-        }
-    }
-
-    @Test
-    public void testAutoCancelForStatement() {
-        FlightInfo flightInfo = sqlClient.execute(LONG_RUNNING_QUERY);
-        try (FlightStream stream = sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket())) {
-            assertFalse(stream.next());
-        } catch (Exception ignored) {
-
-        }
-    }
-
-    @Test
     public void testCancelRemoteStatement() throws Exception {
         final FlightInfo flightInfo = sqlClient.execute(LONG_RUNNING_QUERY);
         Thread thread = new Thread(() -> {

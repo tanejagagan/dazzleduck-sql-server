@@ -15,6 +15,7 @@ import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.authorization.SqlAuthorizer;
 import io.dazzleduck.sql.commons.ingestion.*;
 import io.dazzleduck.sql.commons.planner.SplitPlanner;
+import io.dazzleduck.sql.flight.context.SyntheticFlightContext;
 import io.dazzleduck.sql.flight.ingestion.IngestionParameters;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceServerCallHeaderAuthMiddleware;
 import io.dazzleduck.sql.flight.stream.FlightStreamReader;
@@ -110,7 +111,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
     private final ScheduledExecutorService scheduledExecutorService;
 
-    private final Duration maxStatementLifetime;
+    private final Duration queryTimeout;
 
     StreamListener<CancelStatus> streamListener = new StreamListener<>() {
         @Override
@@ -136,7 +137,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                                           String warehousePath,
                                                           AccessMode accessMode,
                                                          PostIngestionTaskFactory postIngestionTaskFactory) {
-        return new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, newTempDir(), postIngestionTaskFactory, Duration.ofMinutes(10));
+        return new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, newTempDir(), postIngestionTaskFactory, Duration.ofMinutes(2));
     }
 
     public static Path newTempDir() {
@@ -157,7 +158,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
     public DuckDBFlightSqlProducer(Location location, String producerId) {
         this(location, producerId, "change me", new RootAllocator(),  System.getProperty("user.dir") + "/warehouse", AccessMode.COMPLETE, newTempDir()
-        , PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(), Duration.ofMinutes(10));
+        , PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(), Duration.ofMinutes(2));
     }
 
     public DuckDBFlightSqlProducer(Location location,
@@ -168,14 +169,14 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                    AccessMode accessMode,
                                    Path tempDir,
                                    PostIngestionTaskFactory postIngestionTaskFactory,
-                                   Duration maxStatementLifetime) {
+                                   Duration queryTimeout) {
         this.location = location;
         this.producerId = producerId;
         this.allocator = allocator;
         this.secretKey = secretKey;
         this.accessMode = accessMode;
         this.tempDir = tempDir;
-        this.maxStatementLifetime = maxStatementLifetime;
+        this.queryTimeout = queryTimeout;
         if(AccessMode.RESTRICTED ==  accessMode) {
             this.sqlAuthorizer = SqlAuthorizer.JWT_AUTHORIZER;
         } else {
@@ -242,13 +243,13 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             scheduledExecutorService = Executors.newSingleThreadScheduledExecutor();
             scheduledExecutorService.scheduleWithFixedDelay(() -> {
                 preparedStatementLoadingCache.asMap().forEach((key, ctx) -> {
-                    if (ctx.startTime().plus(maxStatementLifetime).isBefore(Instant.now())) {
+                    if (ctx.startTime().plus(queryTimeout).isBefore(Instant.now())) {
                         cancel(key.id, streamListener, key.peerIdentity);
                     }
                 });
 
                 statementLoadingCache.asMap().forEach((key, ctx) -> {
-                    if (ctx.startTime().plus(maxStatementLifetime).isBefore(Instant.now())) {
+                    if (ctx.startTime().plus(queryTimeout).isBefore(Instant.now())) {
                         cancel(key.id, streamListener, key.peerIdentity);
                     }
                 });
