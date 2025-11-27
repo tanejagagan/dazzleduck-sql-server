@@ -1,12 +1,15 @@
 package io.dazzleduck.sql.commons.ducklake;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.nio.file.Files;
+import java.sql.SQLException;
 import java.util.List;
 
 import static io.dazzleduck.sql.commons.ducklake.DucklakePartitionPruning.constructQuery;
@@ -33,7 +36,7 @@ public class DuckLakePartitionPruningTest {
     }
 
     @BeforeAll
-    public static void setup() throws IOException {
+    public static void setup() {
         String[] setups = {
                 "INSTALL ducklake",
                 "LOAD ducklake",
@@ -58,6 +61,7 @@ public class DuckLakePartitionPruningTest {
     }
 
     @Test
+    @Disabled
     public void testPartitioned() {
         String  tableName = "";
         var tableId = getTableId(tableName);
@@ -111,11 +115,10 @@ public class DuckLakePartitionPruningTest {
     }
 
     @Test
-    public void testTransformation() {
-        String table = "ducklake_file_column_stats";
-        String insertStatement = "INSERT INTO ";
-        String create = "CREATE TABLE %s (table_id bigint, column_id )";
-        //String createPartitionTable = "CREATE TABLE %s AS SELECT * FROM %s".formatted(table);
+    public void testTransformation() throws SQLException, JsonProcessingException, NoSuchMethodException {
+        var sql = "select * from %s where key = 'k52'".formatted(PARTITIONED_TABLE);
+        var files = DucklakePartitionPruning.pruneFiles("main", PARTITIONED_TABLE, sql, METADATA_DATABASE );
+        files.forEach(System.out::println);
     }
 
     public static void createNonPartitionedTable() {

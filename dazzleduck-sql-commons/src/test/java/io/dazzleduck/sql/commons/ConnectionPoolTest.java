@@ -137,4 +137,31 @@ public class ConnectionPoolTest {
             }
         }
     }
+
+    @Test
+    public void testExecuteBatchInTxn() throws SQLException, IOException {
+        String[] sqls = {
+                "CREATE TABLE batch_in_txn(key int)",
+                "INSERT INTO batch_in_txn VALUES (1), (2)"
+        };
+        ConnectionPool.executeBatchInTxn(sqls);
+        TestUtils.isEqual("select 2", "select count(*) from batch_in_txn");
+    }
+
+    @Test
+    public void testExecuteBatchInTxnFailure() throws SQLException, IOException {
+        String[] sqls = {
+                "CREATE TABLE batch_in_txn(key int)",
+                // Incorrect statement for txn rollback
+                "INSERT INTO batch_in_txn VALUES (1,2), (2,  3)"
+        };
+        try {
+            ConnectionPool.executeBatchInTxn(sqls);
+        } catch (Exception e) {
+            // Expected
+            // ignore it
+        }
+        Assertions.assertThrowsExactly(RuntimeSqlException.class,
+                () -> ConnectionPool.execute("desc batch_in_txn"));
+    }
 }

@@ -95,7 +95,8 @@ public class Main {
                             .register("/login", new LoginService(appConfig, secretKey, jwtExpiration))
                             .register("/plan", new PlaningService(producer, location, allocator, accessMode))
                             .register("/cancel", new CancelService(producer, accessMode))
-                            .register("/ingest", new IngestionService(producer, warehousePath, allocator));
+                            .register("/ingest", new IngestionService(producer, warehousePath, allocator))
+                            .register("/ui", new UIService(producer));
                     if ("jwt".equals(auth)) {
                         b.addFilter(new JwtAuthenticationFilter(List.of("/query", "/plan", "/ingest", "/cancel"), appConfig, secretKey));
                     }
