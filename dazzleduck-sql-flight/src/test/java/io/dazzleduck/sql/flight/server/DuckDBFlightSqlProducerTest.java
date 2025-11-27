@@ -14,7 +14,6 @@ import io.dazzleduck.sql.commons.util.TestUtils;
 import io.dazzleduck.sql.flight.stream.FlightStreamReader;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
 import io.dazzleduck.sql.flight.stream.ArrowStreamReaderWrapper;
-import io.grpc.Status;
 import org.apache.arrow.flight.*;
 import org.apache.arrow.flight.sql.FlightSqlClient;
 import org.apache.arrow.flight.sql.impl.FlightSql;
@@ -34,7 +33,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.NoSuchAlgorithmException;
 import java.sql.*;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -43,7 +41,8 @@ import java.util.UUID;
 import static io.dazzleduck.sql.common.LocalStartupConfigProvider.SCRIPT_LOCATION_KEY;
 import static io.dazzleduck.sql.commons.util.TestConstants.SUPPORTED_DELTA_PATH_QUERY;
 import static io.dazzleduck.sql.commons.util.TestConstants.SUPPORTED_HIVE_PATH_QUERY;
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 public class DuckDBFlightSqlProducerTest {
     protected static final String LOCALHOST = "localhost";
@@ -95,7 +94,7 @@ public class DuckDBFlightSqlProducerTest {
                                 "change me",
                                 serverAllocator, warehousePath, AccessMode.COMPLETE,
                                 DuckDBFlightSqlProducer.newTempDir(),
-                        PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(), Duration.ofMillis(100)))
+                        PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory()))
                 .headerAuthenticator(AuthUtils.getTestAuthenticator())
                 .build()
                 .start();
@@ -221,26 +220,6 @@ public class DuckDBFlightSqlProducerTest {
             } catch (Exception e) {
                 // Nothing to do
             }
-        }
-    }
-
-    @Test
-    public void testAutoCancelForPreparedStatement() {
-        try (FlightSqlClient.PreparedStatement preparedStatement = sqlClient.prepare(LONG_RUNNING_QUERY);
-             FlightStream stream = sqlClient.getStream(preparedStatement.execute().getEndpoints().get(0).getTicket())) {
-            assertFalse(stream.next());
-        } catch (Exception ignored) {
-
-        }
-    }
-
-    @Test
-    public void testAutoCancelForStatement() {
-        FlightInfo flightInfo = sqlClient.execute(LONG_RUNNING_QUERY);
-        try (FlightStream stream = sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket())) {
-            assertFalse(stream.next());
-        } catch (Exception ignored) {
-
         }
     }
 

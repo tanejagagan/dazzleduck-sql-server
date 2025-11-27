@@ -19,7 +19,6 @@ import org.apache.arrow.memory.RootAllocator;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.UUID;
 
 import static io.dazzleduck.sql.common.util.ConfigUtils.CONFIG_PATH;
@@ -97,7 +96,7 @@ public class Main {
                                                          Path tempWriteDir,
                                                          AccessMode accessMode,
                                                          PostIngestionTaskFactory postIngestionTaskFactory) {
-        return new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, tempWriteDir, postIngestionTaskFactory, Duration.ofMinutes(10));
+        return new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, tempWriteDir, postIngestionTaskFactory);
     }
 
     private static InputStream getInputStreamForResource(String filename) {
