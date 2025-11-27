@@ -69,7 +69,6 @@ public class Main {
         var postIngestionTaskFactor = postIngestionTaskFactorProvider.getPostIngestionTaskFactory();
         var tempWriteDirector = DuckDBFlightSqlProducer.getTempWriteDir(config);
         MeterRegistry meterRegistry = MetricsRegistryFactory.create();
-        startConsoleMetricsPrinter(meterRegistry);
         FlightRecorder recorder = new MicroMeterFlightRecorder(meterRegistry, producerId);
         var producer = createProducer(location, producerId, secretKey, allocator, warehousePath, tempWriteDirector, accessMode, postIngestionTaskFactor, recorder );
         var certStream = getInputStreamForResource(serverCertLocation);
@@ -116,29 +115,6 @@ public class Main {
         }
         return inputStream;
     }
-    public static void startConsoleMetricsPrinter(MeterRegistry registry) {
-        Executors.newSingleThreadScheduledExecutor().scheduleAtFixedRate(() -> {
-
-            System.out.println("\n===== METRICS SNAPSHOT =====");
-
-            registry.getMeters().forEach(meter -> {
-                String meterName = meter.getId().getName();
-
-                meter.measure().forEach(measurement -> {
-                    System.out.printf(
-                            "%s [%s] = %.4f%n",
-                            meterName,
-                            measurement.getStatistic(),
-                            measurement.getValue()
-                    );
-                });
-            });
-
-            System.out.println("============================");
-
-        }, 0, 10, TimeUnit.SECONDS);
-    }
-
     private static boolean checkWarehousePath(String warehousePath) {
         return true;
     }
