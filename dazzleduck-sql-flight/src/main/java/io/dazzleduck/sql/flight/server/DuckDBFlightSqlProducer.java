@@ -7,6 +7,7 @@ import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.RemovalListener;
 import com.google.common.cache.RemovalNotification;
 import com.google.protobuf.*;
+import com.typesafe.config.Config;
 import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.common.auth.UnauthorizedException;
 import io.dazzleduck.sql.commons.ConnectionPool;
@@ -19,6 +20,7 @@ import io.dazzleduck.sql.flight.FlightRecorder;
 import io.dazzleduck.sql.flight.MicroMeterFlightRecorder;
 import io.dazzleduck.sql.flight.ingestion.IngestionParameters;
 import io.dazzleduck.sql.flight.model.RunningStatementInfo;
+import io.dazzleduck.sql.flight.model.StatementTrackingInfo;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceServerCallHeaderAuthMiddleware;
 import io.dazzleduck.sql.flight.stream.FlightStreamReader;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -72,7 +74,7 @@ import static org.duckdb.DuckDBConnection.DEFAULT_SCHEMA;
 public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable, SimpleBulkIngestConsumer {
 
     public static final String TEMP_WRITE_FORMAT = "arrow";
-    private final FlightRecorder flightRecorder;
+    private static FlightRecorder flightRecorder = new NOOPFlightRecorder();
     private final ConcurrentHashMap<String, RunningStatementInfo> runningStatements = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, RunningStatementInfo> runningPreparedStatements = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, RunningStatementInfo> runningBulkIngest = new ConcurrentHashMap<>();
@@ -82,11 +84,11 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     public Map<String, RunningStatementInfo> runningBulkIngest() {return runningBulkIngest;}
 
 
-    public static AccessMode getAccessMode(com.typesafe.config.Config appConfig) {
+    public static AccessMode getAccessMode(Config appConfig) {
         return appConfig.hasPath("access_mode") ? AccessMode.valueOf(appConfig.getString("access_mode").toUpperCase()) : AccessMode.COMPLETE;
     }
 
-    public static Path getTempWriteDir(com.typesafe.config.Config appConfig) throws IOException {
+    public static Path getTempWriteDir(Config appConfig) throws IOException {
         var tempWriteDir = Path.of(appConfig.getString("temp_write_location"));
         if (!Files.exists(tempWriteDir)) {
             Files.createDirectories(tempWriteDir);
@@ -166,7 +168,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         this.secretKey = secretKey;
         this.accessMode = accessMode;
         this.tempDir = tempDir;
-        this.flightRecorder = flightRecorder;
+        DuckDBFlightSqlProducer.flightRecorder = flightRecorder;
         if(AccessMode.RESTRICTED ==  accessMode) {
             this.sqlAuthorizer = SqlAuthorizer.JWT_AUTHORIZER;
         } else {
@@ -406,45 +408,38 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     @Override
     public void getStreamPreparedStatement(FlightSql.CommandPreparedStatementQuery command, CallContext context,
                                            ServerStreamListener listener) {
-        String user = context.peerIdentity();
-        String statementId = String.valueOf(command.getPreparedStatementHandle());
-        String keyValue = user + "-" + statementId;
-        String query = "<unknown-prepared-sql>";
-        RunningStatementInfo info = new RunningStatementInfo(user, statementId, "<unknown-prepared-sql>");
-        runningPreparedStatements.put(keyValue, info);
+        String handleString = String.valueOf(command.getPreparedStatementHandle());
+        StatementTrackingInfo meta = StatementTrackingInfo.fromPrepared(context, handleString, "<unknown-prepared-sql>");
+        RunningStatementInfo info = new RunningStatementInfo(meta.user(), meta.statementId(), meta.query());
+        runningPreparedStatements.put(meta.keyValue(), info);
         flightRecorder.startStreamPreparedStatement();
-        try {
             if (checkAccessModeAndRespond(listener)){
-                info = info.asFailed();
-                runningPreparedStatements.put(keyValue, info);
+                runningPreparedStatements.put(meta.keyValue(), info.asFailed());
                 return;
             }
 
             StatementHandle statementHandle = StatementHandle.deserialize(command.getPreparedStatementHandle());
             if (statementHandle.signatureMismatch(secretKey)) {
-                info = info.asFailed();
-                runningPreparedStatements.put(keyValue, info);
+                runningPreparedStatements.put(meta.keyValue(), info.asFailed());
                 ErrorHandling.handleSignatureMismatch(listener);
             }
             var key = new CacheKey(context.peerIdentity(), statementHandle.queryId());
             StatementContext<PreparedStatement> statementContext =
                     preparedStatementLoadingCache.getIfPresent(key);
             if (statementContext == null) {
-                info = info.asFailed();
-                runningPreparedStatements.put(keyValue, info);
+                runningPreparedStatements.put(meta.keyValue(), info.asFailed());
                 ErrorHandling.handleContextNotFound();
             }
-            info = info.withQuery(statementContext.getQuery());
-            runningPreparedStatements.put(keyValue, info);
+        info = info.withQuery(statementContext.getQuery());
+        runningPreparedStatements.put(meta.keyValue(), info);
             final PreparedStatement preparedStatement = statementContext.getStatement();
+             RunningStatementInfo finalInfo = info;
             streamResultSet(executorService, OptionalResultSetSupplier.of(preparedStatement),
                     allocator, getBatchSize(context),
-                    listener, () -> {});
-            info = info.asCompleted();
-            runningPreparedStatements.put(keyValue, info);
-        } finally {
-            flightRecorder.endStreamPreparedStatement();
-        }
+                    listener, () -> {flightRecorder.endStreamPreparedStatement();
+                        runningPreparedStatements.put(meta.keyValue(), finalInfo.asCompleted());
+                        flightRecorder.endStreamPreparedStatement();});
+
     }
 
 
@@ -465,14 +460,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             StatementHandle statementHandle,
             final CallContext context,
             final ServerStreamListener listener) {
-        String user = context.peerIdentity();
-        String statementId = String.valueOf(statementHandle.queryId());
-        String query = statementHandle.query();
-        String keyValue = user + "-" + statementId;
-
-        // Track the running statement (initial state: RUNNING)
-        RunningStatementInfo info = new RunningStatementInfo(user, statementId, query);
-        runningStatements.put(keyValue, info);
+        StatementTrackingInfo meta = StatementTrackingInfo.from(context, statementHandle);
+        RunningStatementInfo info = new RunningStatementInfo(meta.user(), meta.statementId(), meta.query());
+        runningStatements.put(meta.keyValue(), info);
         flightRecorder.startStreamStatement();
         try {
             var connection = getConnection(context, accessMode);
@@ -485,15 +475,14 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                     allocator,
                     getBatchSize(context),
                     listener,
-                    () -> statementLoadingCache.invalidate(key));
-            info = info.asCompleted();
-            runningStatements.put(keyValue, info);
+                    () -> {
+                        statementLoadingCache.invalidate(key);
+                        runningStatements.put(meta.keyValue(), info.asCompleted());
+                        flightRecorder.endStreamStatement();
+                    });
         } catch (Throwable e) {
-            info = info.asFailed();
-            runningStatements.put(keyValue, info);
+            runningStatements.put(meta.keyValue(), info.asFailed());
             ErrorHandling.handleThrowable(listener, e);
-        }finally {
-            flightRecorder.endStreamStatement();
         }
     }
 
@@ -611,13 +600,11 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             IngestionParameters ingestionParameters,
             ArrowReader inputReader,
             StreamListener<PutResult> ackStream) {
-        String user = context.peerIdentity();
-        String statementId = String.valueOf(ingestionParameters.hashCode());
-        String keyValue = user + "-" + statementId;
-        // Bulk ingest show the target path as "query"
         String query = "COPY INTO " + ingestionParameters.completePath(warehousePath);
-        final RunningStatementInfo[] info = {new RunningStatementInfo(user, statementId, query)};
-        runningBulkIngest.put(keyValue, info[0]);
+        String statementId = String.valueOf(ingestionParameters.hashCode());
+        StatementTrackingInfo meta = new StatementTrackingInfo(context.peerIdentity(), statementId, query, context.peerIdentity() + "-" + statementId);
+        RunningStatementInfo info = new RunningStatementInfo(meta.user(), meta.statementId(), meta.query());
+        runningBulkIngest.put(meta.keyValue(), info);
         return () -> {
             flightRecorder.startBulkIngest();
             Path tempFile;
@@ -636,11 +623,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                 result.get();
                 ackStream.onNext(PutResult.empty());
                 ackStream.onCompleted();
-                info[0] = info[0].asCompleted();
-                runningBulkIngest.put(keyValue, info[0]);
+                runningBulkIngest.put(meta.keyValue(), info.asCompleted());
             } catch (Throwable throwable) {
-                info[0] = info[0].asFailed();
-                runningBulkIngest.put(keyValue, info[0]);
+                runningBulkIngest.put(meta.keyValue(), info.asFailed());
                 ErrorHandling.handleThrowable(ackStream, throwable);
 
             } finally {
