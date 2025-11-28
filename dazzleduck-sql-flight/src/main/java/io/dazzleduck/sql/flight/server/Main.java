@@ -8,15 +8,9 @@ import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactory;
 import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactoryProvider;
-import io.dazzleduck.sql.flight.FlightRecorder;
-import io.dazzleduck.sql.flight.MicroMeterFlightRecorder;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceJWTTokenAuthenticator;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceServerCallHeaderAuthMiddleware;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
-import io.dazzleduck.sql.micrometer.metrics.MetricsRegistryFactory;
-import io.helidon.metrics.api.MetricsConfig;
-import io.micrometer.core.instrument.Measurement;
-import io.micrometer.core.instrument.MeterRegistry;
 import org.apache.arrow.flight.FlightServer;
 import org.apache.arrow.flight.Location;
 import org.apache.arrow.memory.BufferAllocator;
@@ -26,8 +20,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Path;
 import java.util.UUID;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 
 import static io.dazzleduck.sql.common.util.ConfigUtils.CONFIG_PATH;
 
@@ -68,11 +60,10 @@ public class Main {
         var postIngestionTaskFactorProvider = PostIngestionTaskFactoryProvider.load(config);
         var postIngestionTaskFactor = postIngestionTaskFactorProvider.getPostIngestionTaskFactory();
         var tempWriteDirector = DuckDBFlightSqlProducer.getTempWriteDir(config);
-        MeterRegistry meterRegistry = MetricsRegistryFactory.create();
-        FlightRecorder recorder = new MicroMeterFlightRecorder(meterRegistry, producerId);
-        var producer = createProducer(location, producerId, secretKey, allocator, warehousePath, tempWriteDirector, accessMode, postIngestionTaskFactor, recorder );
+        var producer = createProducer(location, producerId, secretKey, allocator, warehousePath, tempWriteDirector, accessMode, postIngestionTaskFactor);
         var certStream = getInputStreamForResource(serverCertLocation);
         var keyStream = getInputStreamForResource(keystoreLocation);
+
         var builder = FlightServer.builder(allocator, location, producer)
                 .middleware(AdvanceServerCallHeaderAuthMiddleware.KEY,
                         new AdvanceServerCallHeaderAuthMiddleware.Factory(authenticator));
@@ -104,8 +95,8 @@ public class Main {
                                                          String warehousePath,
                                                          Path tempWriteDir,
                                                          AccessMode accessMode,
-                                                         PostIngestionTaskFactory postIngestionTaskFactory, FlightRecorder recorder) {
-        return new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, tempWriteDir, postIngestionTaskFactory, recorder);
+                                                         PostIngestionTaskFactory postIngestionTaskFactory) {
+        return new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, tempWriteDir, postIngestionTaskFactory);
     }
 
     private static InputStream getInputStreamForResource(String filename) {
@@ -115,6 +106,7 @@ public class Main {
         }
         return inputStream;
     }
+
     private static boolean checkWarehousePath(String warehousePath) {
         return true;
     }

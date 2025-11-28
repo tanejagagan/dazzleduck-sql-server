@@ -90,7 +90,7 @@ public interface FlightTestUtils {
                     "change me",
                     allocator, warehousePath, AccessMode.RESTRICTED,
                     Path.of(System.getProperty("java.io.tmpdir"), UUID.randomUUID().toString()),
-                    NOOPPostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(),new NOOPFlightRecorder()),
+                    NOOPPostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory()),
                 serverLocation, additionalClientHeaders, testAuthenticator);
     }
 

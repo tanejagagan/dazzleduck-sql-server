@@ -6,16 +6,16 @@ public record FlightMetricsSnapshot(
         long startTimeMs,
 
         // ---- Live gauges ----
-        int runningStatements,
-        int runningPrepared,
-        int runningBulkIngest,
+        long runningStatements,
+        long runningPrepared,
+        long runningBulkIngest,
 
         // ---- Counters ----
-        double completedStatements,
-        double completedPrepared,
-        double completedBulkIngest,
+        long completedStatements,
+        long completedPrepared,
+        long completedBulkIngest,
 
-        double cancelledStatements,
-        double cancelledPrepared
+        long cancelledStatements,
+        long cancelledPrepared
 
 ) {}

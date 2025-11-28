@@ -3,7 +3,6 @@ package io.dazzleduck.sql.flight;
 import io.dazzleduck.sql.flight.model.FlightMetricsSnapshot;
 import io.micrometer.core.instrument.*;
 
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class MicroMeterFlightRecorder implements FlightRecorder {
@@ -23,10 +22,7 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
     private final Counter streamPreparedStatementCompletedCounter;
     private final Counter bulkIngestCompletedCounter;
 
-    // -------------------- Timers ---------------------------
-    private final Timer streamStatementTimer;
-    private final Timer streamPreparedStatementTimer;
-    private final Timer bulkIngestTimer;
+
 
     // Start time
     private final AtomicLong startTime = new AtomicLong(0);
@@ -53,10 +49,6 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
         this.streamPreparedStatementCompletedCounter = counter("stream_prepared_statement_completed", producerId);
         this.bulkIngestCompletedCounter = counter("bulk_ingest_completed", producerId);
 
-        // ------- Timers -------
-        this.streamStatementTimer = timer("stream_statement", producerId);
-        this.streamPreparedStatementTimer = timer("stream_prepared_statement", producerId);
-        this.bulkIngestTimer = timer("bulk_ingest", producerId);
     }
 
     // ==========================================================
@@ -90,12 +82,10 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
     @Override
     public void startStreamStatement() {
         streamStatementCounter.increment();
-        startNanos.set(System.nanoTime());
     }
 
     @Override
     public void endStreamStatement() {
-        streamStatementTimer.record(System.nanoTime() - startNanos.get(), TimeUnit.NANOSECONDS);
         streamStatementCompletedCounter.increment();
     }
 
@@ -104,12 +94,10 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
     @Override
     public void startStreamPreparedStatement() {
         streamPreparedStatementCounter.increment();
-        startNanos.set(System.nanoTime());
     }
 
     @Override
     public void endStreamPreparedStatement() {
-        streamPreparedStatementTimer.record(System.nanoTime() - startNanos.get(), TimeUnit.NANOSECONDS);
         streamPreparedStatementCompletedCounter.increment();
     }
 
@@ -117,13 +105,11 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
 
     @Override
     public void startBulkIngest() {
-        bulkIngestCounter.increment();
         startNanos.set(System.nanoTime());
     }
 
     @Override
     public void endBulkIngest() {
-        bulkIngestTimer.record(System.nanoTime() - startNanos.get(), TimeUnit.NANOSECONDS);
         bulkIngestCompletedCounter.increment();
     }
 
@@ -135,15 +121,14 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
     public FlightMetricsSnapshot snapshot() {
 
         long startTimeMs = startTime.get();
-        int runningStatements = Math.toIntExact((long) streamStatementCounter.count() - (long) streamStatementCompletedCounter.count() - (long) cancelStatementCounter.count());
-        int runningPrepared = Math.toIntExact((long) streamPreparedStatementCounter.count() - (long) streamPreparedStatementCompletedCounter.count() - (long) cancelPreparedStatementCounter.count());
-        int runningBulkIngest = Math.toIntExact((long) bulkIngestCounter.count() - (long) bulkIngestCompletedCounter.count());
-
-        double completedStatements = streamStatementCompletedCounter.count();
-        double completedPrepared = streamPreparedStatementCompletedCounter.count();
-        double completedBulkIngest = bulkIngestCompletedCounter.count();
-        double cancelledStatements = cancelStatementCounter.count();
-        double cancelledPrepared = cancelPreparedStatementCounter.count();
+        long runningStatements = Math.round(streamStatementCounter.count()) - Math.round(streamStatementCompletedCounter.count()) - Math.round(cancelStatementCounter.count());
+        long runningPrepared = Math.round(streamPreparedStatementCounter.count()) - Math.round(streamPreparedStatementCompletedCounter.count()) - Math.round(cancelPreparedStatementCounter.count());
+        long runningBulkIngest = Math.round(bulkIngestCounter.count()) - Math.round(bulkIngestCompletedCounter.count());
+        long completedStatements = Math.round(streamStatementCompletedCounter.count());
+        long completedPrepared = Math.round(streamPreparedStatementCompletedCounter.count());
+        long completedBulkIngest = Math.round(bulkIngestCompletedCounter.count());
+        long cancelledStatements = Math.round(cancelStatementCounter.count());
+        long cancelledPrepared = Math.round(cancelPreparedStatementCounter.count());
 
         return new FlightMetricsSnapshot(
                 startTimeMs,
