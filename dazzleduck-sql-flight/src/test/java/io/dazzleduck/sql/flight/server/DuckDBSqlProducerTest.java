@@ -28,7 +28,6 @@ public class DuckDBSqlProducerTest {
     private static final String PASSWORD = "password";
     private static final String TEST_CATALOG = "producer_test_catalog";
     private static final String TEST_SCHEMA = "test_schema";
-    private static final String TEST_TABLE = "test_table";
     private static final BufferAllocator clientAllocator = new RootAllocator(Integer.MAX_VALUE);
     private static final BufferAllocator serverAllocator = new RootAllocator(Integer.MAX_VALUE);
     private static final String LONG_RUNNING_QUERY = "with t as " +
@@ -42,17 +41,13 @@ public class DuckDBSqlProducerTest {
     public static void beforeAll() throws Exception {
         Path tempDir = Files.createTempDirectory("duckdb_" + DuckDBFlightSqlProducerTest.class.getName());
         warehousePath = Files.createTempDirectory("duckdb_warehouse_" + DuckDBFlightSqlProducerTest.class.getName()).toString();
-        String[] sqls = {
-                "INSTALL arrow FROM community",
-                "LOAD arrow",
+        String[] sql = {
                 String.format("ATTACH '%s/file.db' AS %s", tempDir.toString(), TEST_CATALOG),
                 String.format("USE %s", TEST_CATALOG),
                 String.format("CREATE SCHEMA %s", TEST_SCHEMA),
-                String.format("USE %s.%s", TEST_CATALOG, TEST_SCHEMA),
-                String.format("CREATE TABLE %s (key string, value string)", TEST_TABLE),
-                String.format("INSERT INTO %s VALUES ('k1', 'v1'), ('k2', 'v2')", TEST_TABLE)
+                String.format("USE %s.%s", TEST_CATALOG, TEST_SCHEMA)
         };
-        ConnectionPool.executeBatch(sqls);
+        ConnectionPool.executeBatch(sql);
         setUpClientServer();
     }
 
