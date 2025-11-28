@@ -602,9 +602,6 @@ public class Transformations {
                     }
                 }
             }
-            case "TABLE_FUNCTION" -> {
-                return null;
-            }
             default -> {
                 return null;
             }
