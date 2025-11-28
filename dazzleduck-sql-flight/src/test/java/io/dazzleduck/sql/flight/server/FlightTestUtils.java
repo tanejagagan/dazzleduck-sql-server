@@ -24,6 +24,7 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Executors;
 import java.util.function.Supplier;
 
 public interface FlightTestUtils {
@@ -91,7 +92,7 @@ public interface FlightTestUtils {
                     "change me",
                     allocator, warehousePath, AccessMode.RESTRICTED,
                     Path.of(System.getProperty("java.io.tmpdir"), UUID.randomUUID().toString()),
-                    NOOPPostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(), Duration.ofMinutes(2)),
+                    NOOPPostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(), Executors.newSingleThreadScheduledExecutor(), Duration.ofMinutes(2)),
                 serverLocation, additionalClientHeaders, testAuthenticator);
     }
 

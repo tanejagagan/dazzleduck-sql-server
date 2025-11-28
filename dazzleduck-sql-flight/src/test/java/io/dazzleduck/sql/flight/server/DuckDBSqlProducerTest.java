@@ -1,164 +1,105 @@
 package io.dazzleduck.sql.flight.server;
 
-import com.google.protobuf.*;
+import io.dazzleduck.sql.common.Headers;
+import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
-import io.dazzleduck.sql.commons.authorization.SubjectAndVerifiedClaims;
 import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactoryProvider;
-import io.dazzleduck.sql.flight.context.SyntheticFlightContext;
+import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
 import org.apache.arrow.flight.*;
-import org.apache.arrow.flight.FlightProducer.*;
-import org.apache.arrow.flight.sql.impl.FlightSql;
+import org.apache.arrow.flight.sql.FlightSqlClient;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.Executors;
 
-import static org.junit.jupiter.api.Assertions.assertTrue;
-
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 public class DuckDBSqlProducerTest {
     protected static final String LOCALHOST = "localhost";
+    private static final String USER = "admin";
+    private static final String PASSWORD = "password";
+    private static final String TEST_CATALOG = "producer_test_catalog";
+    private static final String TEST_SCHEMA = "test_schema";
+    private static final String TEST_TABLE = "test_table";
+    private static final BufferAllocator clientAllocator = new RootAllocator(Integer.MAX_VALUE);
     private static final BufferAllocator serverAllocator = new RootAllocator(Integer.MAX_VALUE);
     private static final String LONG_RUNNING_QUERY = "with t as " +
             "(select len(split(concat('abcdefghijklmnopqrstuvwxyz:', generate_series), ':')) as len  from generate_series(1, 1000000000) )" +
             " select count(*) from t where len = 10";
-    private static final Logger log = LoggerFactory.getLogger(DuckDBSqlProducerTest.class);
+    protected static FlightServer flightServer;
+    protected static FlightSqlClient sqlClient;
     protected static String warehousePath;
-    private static DuckDBFlightSqlProducer duckDBSqlProducer;
-    private static AtomicReference<FlightSql.ActionCreatePreparedStatementResult> resultHolder = new AtomicReference<>();
-    private static AtomicReference<Throwable> errorHolder = new AtomicReference<>();
-    private static CountDownLatch latch = new CountDownLatch(1);
-    private static StreamListener<Result> streamListener = new StreamListener<Result>() {
-        @Override
-        public void onNext(Result val) {
-            try {
-                Any any = Any.parseFrom(val.getBody());
-                FlightSql.ActionCreatePreparedStatementResult result =
-                        any.unpack(FlightSql.ActionCreatePreparedStatementResult.class);
-                resultHolder.set(result);
-            } catch (Exception e) {
-                errorHolder.set(e);
-            }
-        }
-
-        @Override
-        public void onError(Throwable t) {
-            errorHolder.set(t);
-            latch.countDown();
-        }
-
-        @Override
-        public void onCompleted() {
-            latch.countDown();
-        }
-    };
 
     @BeforeAll
-    public static void setDuckDBSqlProducer() {
-        final Location serverLocation = Location.forGrpcInsecure(LOCALHOST, 55556);
-        duckDBSqlProducer = new DuckDBFlightSqlProducer(serverLocation,
-                UUID.randomUUID().toString(),
-                "change me",
-                serverAllocator, warehousePath, AccessMode.COMPLETE,
-                DuckDBFlightSqlProducer.newTempDir(),
-                PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(), Duration.ofMinutes(1));
+    public static void beforeAll() throws Exception {
+        Path tempDir = Files.createTempDirectory("duckdb_" + DuckDBFlightSqlProducerTest.class.getName());
+        warehousePath = Files.createTempDirectory("duckdb_warehouse_" + DuckDBFlightSqlProducerTest.class.getName()).toString();
+        String[] sqls = {
+                "INSTALL arrow FROM community",
+                "LOAD arrow",
+                String.format("ATTACH '%s/file.db' AS %s", tempDir.toString(), TEST_CATALOG),
+                String.format("USE %s", TEST_CATALOG),
+                String.format("CREATE SCHEMA %s", TEST_SCHEMA),
+                String.format("USE %s.%s", TEST_CATALOG, TEST_SCHEMA),
+                String.format("CREATE TABLE %s (key string, value string)", TEST_TABLE),
+                String.format("INSERT INTO %s VALUES ('k1', 'v1'), ('k2', 'v2')", TEST_TABLE)
+        };
+        ConnectionPool.executeBatch(sqls);
+        setUpClientServer();
+    }
+
+    @AfterAll
+    public static void afterAll() {
+        clientAllocator.close();
+    }
+
+    private static void setUpClientServer() throws Exception {
+        final Location serverLocation = Location.forGrpcInsecure(LOCALHOST, 55551);
+        flightServer = FlightServer.builder(
+                        serverAllocator,
+                        serverLocation,
+                        new DuckDBFlightSqlProducer(serverLocation,
+                                UUID.randomUUID().toString(),
+                                "change me",
+                                serverAllocator, warehousePath, AccessMode.COMPLETE,
+                                DuckDBFlightSqlProducer.newTempDir(),
+                                PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(), Executors.newSingleThreadScheduledExecutor(), Duration.ofSeconds(5)))
+                .headerAuthenticator(AuthUtils.getTestAuthenticator())
+                .build()
+                .start();
+        sqlClient = new FlightSqlClient(FlightClient.builder(clientAllocator, serverLocation)
+                .intercept(AuthUtils.createClientMiddlewareFactory(USER,
+                        PASSWORD,
+                        Map.of(Headers.HEADER_DATABASE, TEST_CATALOG,
+                                Headers.HEADER_SCHEMA, TEST_SCHEMA)))
+                .build());
     }
 
     @Test
-    public void testAutoCancelForPreparedStatement() throws InterruptedException {
-        FlightSql.ActionCreatePreparedStatementRequest request =
-                FlightSql.ActionCreatePreparedStatementRequest.newBuilder()
-                        .setQuery(LONG_RUNNING_QUERY)
-                        .build();
-        var context = new SyntheticFlightContext(
-                Map.of("database", List.of(), "schema", List.of()),
-                new SubjectAndVerifiedClaims("admin", Map.of()),
-                Map.of()
-        );
+    public void testAutoCancelForPreparedStatement() {
+        try (FlightSqlClient.PreparedStatement preparedStatement = sqlClient.prepare(LONG_RUNNING_QUERY);
+             FlightStream stream = sqlClient.getStream(preparedStatement.execute().getEndpoints().get(0).getTicket())) {
+            assertFalse(stream.next());
+        } catch (Exception ignored) {
 
-        duckDBSqlProducer.createPreparedStatement(request, context, streamListener);
-        // Wait for the async operation to complete (with timeout)
-        var completed = latch.await(10, TimeUnit.SECONDS);
-        assertTrue(completed, "Timeout waiting for prepared statement to complete");
-
-        FlightSql.ActionCreatePreparedStatementResult preparedResult = resultHolder.get();
-        ByteString preparedStatementHandle = preparedResult.getPreparedStatementHandle();
-        FlightSql.CommandPreparedStatementQuery command =
-                FlightSql.CommandPreparedStatementQuery.newBuilder()
-                        .setPreparedStatementHandle(preparedStatementHandle)
-                        .build();
-        try {
-            duckDBSqlProducer.getFlightInfo(context, FlightDescriptor.command(Any.pack(command).toByteArray()));
-        } catch (Exception e) {
-            log.error("e: ", e);
         }
     }
 
     @Test
     public void testAutoCancelForStatement() {
-        var context = new SyntheticFlightContext(
-                Map.of("database", List.of(), "schema", List.of()),
-                new SubjectAndVerifiedClaims("admin", Map.of()),
-                Map.of()
-        );
-//        StatementHandle handle = newStatementHandle(newStatementHandle(newStatementHandle(LONG_RUNNING_QUERY)));
-//        ByteString serializedHandle = copyFrom(handle.serialize());
-//        FlightSql.TicketStatementQuery statement = FlightSql.TicketStatementQuery.newBuilder().setStatementHandle(serializedHandle).build();
-//        duckDBSqlProducer.getStreamStatement(statement, context, new ServerStreamListener() {
-//            @Override
-//            public boolean isCancelled() {
-//                return false;
-//            }
-//
-//            @Override
-//            public void setOnCancelHandler(Runnable handler) {
-//
-//            }
-//
-//            @Override
-//            public boolean isReady() {
-//                return false;
-//            }
-//
-//            @Override
-//            public void start(VectorSchemaRoot root, DictionaryProvider dictionaries, IpcOption option) {
-//
-//            }
-//
-//            @Override
-//            public void putNext() {
-//
-//            }
-//
-//            @Override
-//            public void putNext(ArrowBuf metadata) {
-//
-//            }
-//
-//            @Override
-//            public void putMetadata(ArrowBuf metadata) {
-//
-//            }
-//
-//            @Override
-//            public void error(Throwable ex) {
-//
-//            }
-//
-//            @Override
-//            public void completed() {
-//
-//            }
-//        });
+        FlightInfo flightInfo = sqlClient.execute(LONG_RUNNING_QUERY);
+        try (FlightStream stream = sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket())) {
+            assertFalse(stream.next());
+        } catch (Exception ignored) {
+
+        }
     }
 }

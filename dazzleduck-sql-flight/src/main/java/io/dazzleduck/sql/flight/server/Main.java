@@ -21,6 +21,7 @@ import java.io.InputStream;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.UUID;
+import java.util.concurrent.Executors;
 
 import static io.dazzleduck.sql.common.util.ConfigUtils.CONFIG_PATH;
 
@@ -97,7 +98,7 @@ public class Main {
                                                          Path tempWriteDir,
                                                          AccessMode accessMode,
                                                          PostIngestionTaskFactory postIngestionTaskFactory) {
-        return new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, tempWriteDir, postIngestionTaskFactory, Duration.ofMinutes(2));
+        return new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, tempWriteDir, postIngestionTaskFactory, Executors.newSingleThreadScheduledExecutor(), Duration.ofMinutes(2));
     }
 
     private static InputStream getInputStreamForResource(String filename) {

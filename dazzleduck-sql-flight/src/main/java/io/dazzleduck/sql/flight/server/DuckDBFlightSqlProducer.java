@@ -15,7 +15,6 @@ import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.authorization.SqlAuthorizer;
 import io.dazzleduck.sql.commons.ingestion.*;
 import io.dazzleduck.sql.commons.planner.SplitPlanner;
-import io.dazzleduck.sql.flight.context.SyntheticFlightContext;
 import io.dazzleduck.sql.flight.ingestion.IngestionParameters;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceServerCallHeaderAuthMiddleware;
 import io.dazzleduck.sql.flight.stream.FlightStreamReader;
@@ -113,6 +112,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
     private final Duration queryTimeout;
 
+    private final long CANCEL_TASK_INTERVAL_SECOND = 10;
+
     StreamListener<CancelStatus> streamListener = new StreamListener<>() {
         @Override
         public void onNext(CancelStatus val) {
@@ -137,7 +138,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                                           String warehousePath,
                                                           AccessMode accessMode,
                                                          PostIngestionTaskFactory postIngestionTaskFactory) {
-        return new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, newTempDir(), postIngestionTaskFactory, Duration.ofMinutes(2));
+        return new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, newTempDir(), postIngestionTaskFactory, Executors.newSingleThreadScheduledExecutor(), Duration.ofMinutes(2));
     }
 
     public static Path newTempDir() {
@@ -158,7 +159,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
     public DuckDBFlightSqlProducer(Location location, String producerId) {
         this(location, producerId, "change me", new RootAllocator(),  System.getProperty("user.dir") + "/warehouse", AccessMode.COMPLETE, newTempDir()
-        , PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(), Duration.ofMinutes(2));
+        , PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(), Executors.newSingleThreadScheduledExecutor(), Duration.ofMinutes(2));
     }
 
     public DuckDBFlightSqlProducer(Location location,
@@ -169,6 +170,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                    AccessMode accessMode,
                                    Path tempDir,
                                    PostIngestionTaskFactory postIngestionTaskFactory,
+                                   ScheduledExecutorService scheduledExecutorService,
                                    Duration queryTimeout) {
         this.location = location;
         this.producerId = producerId;
@@ -176,6 +178,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         this.secretKey = secretKey;
         this.accessMode = accessMode;
         this.tempDir = tempDir;
+        this.scheduledExecutorService = scheduledExecutorService;
         this.queryTimeout = queryTimeout;
         if(AccessMode.RESTRICTED ==  accessMode) {
             this.sqlAuthorizer = SqlAuthorizer.JWT_AUTHORIZER;
@@ -240,7 +243,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             var providerField =  sqlInfoBuilder.getClass().getDeclaredField("providers");
             providerField.setAccessible(true);
             supportedSqlInfo = ((HashMap<Integer, ?>)providerField.get(sqlInfoBuilder)).keySet();
-            scheduledExecutorService = Executors.newSingleThreadScheduledExecutor();
             scheduledExecutorService.scheduleWithFixedDelay(() -> {
                 preparedStatementLoadingCache.asMap().forEach((key, ctx) -> {
                     if (ctx.startTime().plus(queryTimeout).isBefore(Instant.now())) {
@@ -253,7 +255,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                         cancel(key.id, streamListener, key.peerIdentity);
                     }
                 });
-            }, 0, 30, TimeUnit.SECONDS);
+            }, 0, CANCEL_TASK_INTERVAL_SECOND, TimeUnit.SECONDS);
         } catch (SQLException | NoSuchFieldException | IllegalAccessException e) {
             throw new RuntimeException(e);
         }

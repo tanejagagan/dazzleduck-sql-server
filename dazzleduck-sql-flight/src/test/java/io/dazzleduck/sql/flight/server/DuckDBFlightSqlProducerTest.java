@@ -8,13 +8,11 @@ import io.dazzleduck.sql.common.StartupScriptProvider;
 import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.ConnectionPool;
-import io.dazzleduck.sql.commons.ingestion.NOOPPostIngestionTaskFactoryProvider;
 import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactoryProvider;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.dazzleduck.sql.flight.stream.FlightStreamReader;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
 import io.dazzleduck.sql.flight.stream.ArrowStreamReaderWrapper;
-import io.grpc.Status;
 import org.apache.arrow.flight.*;
 import org.apache.arrow.flight.sql.FlightSqlClient;
 import org.apache.arrow.flight.sql.impl.FlightSql;
@@ -39,6 +37,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Executors;
 
 import static io.dazzleduck.sql.common.LocalStartupConfigProvider.SCRIPT_LOCATION_KEY;
 import static io.dazzleduck.sql.commons.util.TestConstants.SUPPORTED_DELTA_PATH_QUERY;
@@ -95,7 +94,7 @@ public class DuckDBFlightSqlProducerTest {
                                 "change me",
                                 serverAllocator, warehousePath, AccessMode.COMPLETE,
                                 DuckDBFlightSqlProducer.newTempDir(),
-                        PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(), Duration.ofMinutes(2)))
+                        PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(), Executors.newSingleThreadScheduledExecutor(), Duration.ofMinutes(2)))
                 .headerAuthenticator(AuthUtils.getTestAuthenticator())
                 .build()
                 .start();
