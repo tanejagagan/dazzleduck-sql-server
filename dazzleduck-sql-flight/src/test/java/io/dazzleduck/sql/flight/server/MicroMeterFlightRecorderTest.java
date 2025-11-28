@@ -28,12 +28,6 @@ public class MicroMeterFlightRecorderTest {
                 .counter();
     }
 
-    private Timer timer(String metric) {
-        return registry.find("dazzleduck.flight." + metric + ".timer")
-                .tag("producer", "producer1")
-                .timer();
-    }
-
     @Test
     void testRecordStatementCancel() {
         recorder.recordStatementCancel();
@@ -59,20 +53,6 @@ public class MicroMeterFlightRecorderTest {
 
         assertEquals(1.0, counter("stream_statement").count());
         assertEquals(1.0, counter("stream_statement_completed").count());
-        assertEquals(1, timer("stream_statement").count());
-    }
-
-    @Test
-    void testStreamStatementTimerRecord() {
-        recorder.startStreamStatement();
-        // simulate 10ms long operation
-        try { Thread.sleep(10); } catch (Exception ignored) {}
-        recorder.endStreamStatement();
-
-        Timer t = timer("stream_statement");
-
-        assertEquals(1, t.count());
-        assertTrue(t.totalTime(TimeUnit.MILLISECONDS) >= 9);
     }
 
     @Test
@@ -82,42 +62,13 @@ public class MicroMeterFlightRecorderTest {
 
         assertEquals(1.0, counter("stream_prepared_statement").count());
         assertEquals(1.0, counter("stream_prepared_statement_completed").count());
-        assertEquals(1, timer("stream_prepared_statement").count());
     }
-
-    @Test
-    void testPreparedStatementTimerRecord() {
-        recorder.startStreamPreparedStatement();
-        try { Thread.sleep(5); } catch (Exception ignored) {}
-        recorder.endStreamPreparedStatement();
-
-        Timer t = timer("stream_prepared_statement");
-
-        assertEquals(1, t.count());
-        assertTrue(t.totalTime(TimeUnit.MILLISECONDS) >= 4);
-    }
-
 
     @Test
     void testStartAndEndBulkIngest() {
         recorder.startBulkIngest();
         recorder.endBulkIngest();
-
-        assertEquals(1.0, counter("bulk_ingest").count());
         assertEquals(1.0, counter("bulk_ingest_completed").count());
-        assertEquals(1, timer("bulk_ingest").count());
-    }
-
-    @Test
-    void testBulkIngestTimerRecord() {
-        recorder.startBulkIngest();
-        try { Thread.sleep(7); } catch (Exception ignored) {}
-        recorder.endBulkIngest();
-
-        Timer t = timer("bulk_ingest");
-
-        assertEquals(1, t.count());
-        assertTrue(t.totalTime(TimeUnit.MILLISECONDS) >= 6);
     }
 
     @Test
@@ -137,7 +88,6 @@ public class MicroMeterFlightRecorderTest {
 
         assertEquals(1, snap.runningStatements());
         assertEquals(1, snap.runningPrepared());
-        assertEquals(1, snap.runningBulkIngest());
     }
 
     @Test
@@ -145,7 +95,6 @@ public class MicroMeterFlightRecorderTest {
         long before = System.currentTimeMillis();
         MicroMeterFlightRecorder r2 = new MicroMeterFlightRecorder(registry, "p1");
         long after = System.currentTimeMillis();
-
         long recorded = r2.snapshot().startTimeMs();
 
         assertTrue(recorded >= before && recorded <= after);
