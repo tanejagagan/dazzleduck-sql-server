@@ -83,12 +83,11 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     public Map<String, RunningStatementInfo> runningPreparedStatements() {return runningPreparedStatements;}
     public Map<String, RunningStatementInfo> runningBulkIngest() {return runningBulkIngest;}
 
-
-    public static AccessMode getAccessMode(Config appConfig) {
+    public static AccessMode getAccessMode(com.typesafe.config.Config appConfig) {
         return appConfig.hasPath("access_mode") ? AccessMode.valueOf(appConfig.getString("access_mode").toUpperCase()) : AccessMode.COMPLETE;
     }
 
-    public static Path getTempWriteDir(Config appConfig) throws IOException {
+    public static Path getTempWriteDir(com.typesafe.config.Config appConfig) throws IOException  {
         var tempWriteDir = Path.of(appConfig.getString("temp_write_location"));
         if (!Files.exists(tempWriteDir)) {
             Files.createDirectories(tempWriteDir);
@@ -331,7 +330,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             final FlightSql.CommandPreparedStatementQuery command,
             final CallContext context,
             final FlightDescriptor descriptor) {
-
             checkAccessModeAndRespond();
             StatementHandle statementHandle = StatementHandle.deserialize(command.getPreparedStatementHandle());
             if (statementHandle.signatureMismatch(secretKey)) {
@@ -345,7 +343,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                 ErrorHandling.handleContextNotFound();
             }
             return getFlightInfoForSchema(command, descriptor, null);
-
     }
 
 
@@ -436,9 +433,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
              RunningStatementInfo finalInfo = info;
             streamResultSet(executorService, OptionalResultSetSupplier.of(preparedStatement),
                     allocator, getBatchSize(context),
-                    listener, () -> {flightRecorder.endStreamPreparedStatement();
-                        runningPreparedStatements.put(meta.keyValue(), finalInfo.asCompleted());
-                        flightRecorder.endStreamPreparedStatement();});
+                    listener, () -> {runningPreparedStatements.put(meta.keyValue(), finalInfo.asCompleted());});
 
     }
 
@@ -478,7 +473,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                     () -> {
                         statementLoadingCache.invalidate(key);
                         runningStatements.put(meta.keyValue(), info.asCompleted());
-                        flightRecorder.endStreamStatement();
                     });
         } catch (Throwable e) {
             runningStatements.put(meta.keyValue(), info.asFailed());
