@@ -15,14 +15,16 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Executors;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
-public class DuckDBSqlProducerTest {
+public class DuckDBSqlProducerTimeoutTest {
     protected static final String LOCALHOST = "localhost";
     private static final String USER = "admin";
     private static final String PASSWORD = "password";
@@ -36,6 +38,7 @@ public class DuckDBSqlProducerTest {
     protected static FlightServer flightServer;
     protected static FlightSqlClient sqlClient;
     protected static String warehousePath;
+
 
     @BeforeAll
     public static void beforeAll() throws Exception {
@@ -51,8 +54,11 @@ public class DuckDBSqlProducerTest {
         setUpClientServer();
     }
 
+
     @AfterAll
     public static void afterAll() {
+        String[] sql = { "DETACH  " + TEST_CATALOG };
+        ConnectionPool.executeBatch(sql);
         clientAllocator.close();
     }
 
@@ -66,7 +72,13 @@ public class DuckDBSqlProducerTest {
                                 "change me",
                                 serverAllocator, warehousePath, AccessMode.COMPLETE,
                                 DuckDBFlightSqlProducer.newTempDir(),
-                                PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(), Executors.newSingleThreadScheduledExecutor(), Duration.ofSeconds(5)))
+                                PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(),
+                                // Pass Different Executor
+                                Executors.newSingleThreadScheduledExecutor(),
+                                Duration.ofSeconds(5),
+                                // Pass controllable clock
+                                Clock.systemDefaultZone()
+                        ))
                 .headerAuthenticator(AuthUtils.getTestAuthenticator())
                 .build()
                 .start();
@@ -82,7 +94,9 @@ public class DuckDBSqlProducerTest {
     public void testAutoCancelForPreparedStatement() {
         try (FlightSqlClient.PreparedStatement preparedStatement = sqlClient.prepare(LONG_RUNNING_QUERY);
              FlightStream stream = sqlClient.getStream(preparedStatement.execute().getEndpoints().get(0).getTicket())) {
-            assertFalse(stream.next());
+            stream.next();
+            // This should return timeout.
+            assertThrows(Exception.class, stream::next);
         } catch (Exception ignored) {
 
         }
@@ -92,7 +106,8 @@ public class DuckDBSqlProducerTest {
     public void testAutoCancelForStatement() {
         FlightInfo flightInfo = sqlClient.execute(LONG_RUNNING_QUERY);
         try (FlightStream stream = sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket())) {
-            assertFalse(stream.next());
+            // This should return timeout.
+            assertThrows(Exception.class, stream::next);
         } catch (Exception ignored) {
 
         }

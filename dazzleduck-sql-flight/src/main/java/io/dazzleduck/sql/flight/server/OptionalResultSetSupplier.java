@@ -13,7 +13,7 @@ public interface OptionalResultSetSupplier {
 
     void execute() throws SQLException;
 
-    static OptionalResultSetSupplier of(final StatementContext<Statement> statementContext, String query) {
+    static OptionalResultSetSupplier of(final Statement statement, String query) {
         return new OptionalResultSetSupplier() {
             boolean hasResultSet;
 
@@ -24,18 +24,17 @@ public interface OptionalResultSetSupplier {
 
             @Override
             public DuckDBResultSet get() throws SQLException {
-                return (DuckDBResultSet) statementContext.getStatement().getResultSet();
+                return (DuckDBResultSet) statement.getResultSet();
             }
 
             @Override
             public void execute() throws SQLException {
-                statementContext.start();
-                hasResultSet = statementContext.getStatement().execute(query);
+                hasResultSet = statement.execute(query);
             }
         };
     }
 
-    static OptionalResultSetSupplier of(StatementContext<PreparedStatement> preparedStatementStatementContext) {
+    static OptionalResultSetSupplier of(PreparedStatement preparedStatement) {
         return new OptionalResultSetSupplier() {
             boolean hasResultSet;
 
@@ -46,13 +45,12 @@ public interface OptionalResultSetSupplier {
 
             @Override
             public DuckDBResultSet get() throws SQLException {
-                return (DuckDBResultSet) preparedStatementStatementContext.getStatement().getResultSet();
+                return (DuckDBResultSet) preparedStatement.getResultSet();
             }
 
             @Override
             public void execute() throws SQLException {
-                preparedStatementStatementContext.start();
-                hasResultSet = preparedStatementStatementContext.getStatement().execute();
+                hasResultSet = preparedStatement.execute();
             }
         };
     }
