@@ -67,8 +67,6 @@ public class DuckDBFlightSqlProducerTest {
     private Path catalogFile;
     private Path dataPath;
     private final String CATALOG = "test_catalog";
-    private final String SCHEMA = "test_schema";
-    private final String TABLE = "test_table";
 
     @BeforeAll
     public static void beforeAll() throws Exception {
@@ -207,9 +205,9 @@ public class DuckDBFlightSqlProducerTest {
                     .intercept(AuthUtils.createClientMiddlewareFactory(USER,
                             PASSWORD,
                             Map.of("function", "read_ducklake",
-                                    "path", "%s.%s.%s".formatted(CATALOG, SCHEMA, TABLE),
+                                    "path", "%s.%s.%s".formatted(CATALOG, TEST_SCHEMA, TEST_TABLE),
                                     "catalog", CATALOG,
-                                    "schema", SCHEMA)))
+                                    "schema", TEST_SCHEMA)))
                     .build())) {
                 var flightCallHeaders = new FlightCallHeaders();
                 flightCallHeaders.insert(Headers.HEADER_SPLIT_SIZE, "1");
@@ -472,14 +470,14 @@ public class DuckDBFlightSqlProducerTest {
         String[] sql = getStrings(absCatalog, absDataPath);
         try(Connection conn = ConnectionPool.getConnection()) {
             ConnectionPool.executeBatch(conn, sql);
-            ConnectionPool.printResult("SELECT * FROM %s.%s.%s;".formatted(CATALOG, SCHEMA, TABLE));
+            ConnectionPool.printResult("SELECT * FROM %s.%s.%s;".formatted(CATALOG, TEST_SCHEMA, TEST_TABLE));
         }
     }
 
     private String[] getStrings(String absCatalog, String absDataPath) {
         String attachDB = "ATTACH 'ducklake:%s' AS %s (DATA_PATH '%s');".formatted(absCatalog, CATALOG, absDataPath);
-        String createSchema = "CREATE SCHEMA IF NOT EXISTS %s.%s;".formatted(CATALOG, SCHEMA);
-        String createTable = "CREATE TABLE %s.%s.%s (key VARCHAR, value VARCHAR);".formatted(CATALOG, SCHEMA, TABLE);
+        String createSchema = "CREATE SCHEMA IF NOT EXISTS %s.%s;".formatted(CATALOG, TEST_SCHEMA);
+        String createTable = "CREATE TABLE %s.%s.%s (key VARCHAR, value VARCHAR);".formatted(CATALOG, TEST_SCHEMA, TEST_TABLE);
         String insertValues = """
         INSERT INTO %s.%s.%s (key, value) VALUES
             ('k1', 'value1'),
@@ -487,7 +485,7 @@ public class DuckDBFlightSqlProducerTest {
             ('k3', 'value3'),
             ('k4', 'value4'),
             ('k5', 'value5');
-        """.formatted(CATALOG, SCHEMA, TABLE);
+        """.formatted(CATALOG, TEST_SCHEMA, TEST_TABLE);
         return new String[]{
                 attachDB, createSchema, createTable, insertValues
         };
