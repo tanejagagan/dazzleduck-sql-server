@@ -1,5 +1,7 @@
 package io.dazzleduck.sql.micrometer.util;
 
+import com.typesafe.config.Config;
+import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.commons.types.JavaRow;
 import io.dazzleduck.sql.commons.types.VectorSchemaRootWriter;
 import io.micrometer.core.instrument.*;
@@ -34,7 +36,7 @@ public final class ArrowFileWriterUtil {
     /**
      * Writes meters to an Arrow IPC file on disk.
      */
-    public static void writeMetersToFile(List<Meter> meters, String filePath) throws IOException {
+    public static void writeMetersToFile(List<Meter> meters, String filePath, String applicationId, String applicationName, String host) throws IOException {
         if (meters == null || meters.isEmpty()) {
             log.debug("No meters to write to file: {}", filePath);
             return;
@@ -42,7 +44,7 @@ public final class ArrowFileWriterUtil {
         Objects.requireNonNull(filePath, "filePath must not be null");
         try (BufferAllocator allocator = new RootAllocator();
              FileOutputStream fos = new FileOutputStream(filePath)) {
-            writeMetersInternal(allocator, meters, fos);
+            writeMetersInternal(allocator, meters, fos, applicationId, applicationName, host);
             log.info("Successfully wrote {} meters to Arrow file: {}", meters.size(), filePath);
         }
     }
@@ -50,7 +52,7 @@ public final class ArrowFileWriterUtil {
     /**
      * Converts meters into Arrow IPC bytes (in-memory).
      */
-    public static byte[] convertMetersToArrowBytes(List<Meter> meters) throws IOException {
+    public static byte[] convertMetersToArrowBytes(List<Meter> meters, String applicationId, String applicationName, String host) throws IOException {
         if (meters == null || meters.isEmpty()) {
             log.debug("No meters to convert to Arrow bytes");
             return new byte[0];
@@ -58,12 +60,12 @@ public final class ArrowFileWriterUtil {
 
         try (BufferAllocator allocator = new RootAllocator();
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-            writeMetersInternal(allocator, meters, out);
+            writeMetersInternal(allocator, meters, out, applicationId, applicationName, host);
             return out.toByteArray();
         }
     }
 
-    private static void writeMetersInternal(BufferAllocator allocator, List<Meter> meters, OutputStream os) throws IOException {
+    private static void writeMetersInternal(BufferAllocator allocator, List<Meter> meters, OutputStream os,  String applicationId, String applicationName, String host) throws IOException {
         try (VectorSchemaRoot root = VectorSchemaRoot.create(METER_SCHEMA, allocator);
              ArrowStreamWriter writer = new ArrowStreamWriter(root, null, os)) {
 
@@ -79,7 +81,7 @@ public final class ArrowFileWriterUtil {
 
             List<JavaRow> rows = new ArrayList<>(sortedMeters.size());
             for (Meter meter : sortedMeters) {
-                rows.add(toRow(meter));
+                rows.add(toRow(meter,applicationId, applicationName, host));
             }
 
             vectorWriter.writeToVector(rows.toArray(JavaRow[]::new), root);
@@ -91,9 +93,8 @@ public final class ArrowFileWriterUtil {
     /**
      * Converts a single Micrometer Meter to a JavaRow (Arrow record).
      */
-    private static JavaRow toRow(Meter meter) {
+    private static JavaRow toRow(Meter meter,  String applicationId, String applicationName, String host) {
         Meter.Id id = meter.getId();
-
         Map<String, String> tagsMap = new LinkedHashMap<>();
         for (Tag t : id.getTags()) {
             tagsMap.put(t.getKey(), t.getValue());
@@ -156,6 +157,9 @@ public final class ArrowFileWriterUtil {
         return new JavaRow(new Object[]{
                 id.getName(),
                 id.getType().name().toLowerCase(),
+                applicationId,
+                applicationName,
+                host,
                 tagsMap,
                 !Double.isNaN(value) ? value : 0,
                 !Double.isNaN(min) ? min : 0,
@@ -173,7 +177,9 @@ public final class ArrowFileWriterUtil {
 
         fields.add(new Field("name", FieldType.notNullable(new ArrowType.Utf8()), null));
         fields.add(new Field("type", FieldType.notNullable(new ArrowType.Utf8()), null));
-
+        fields.add(new Field("applicationId", FieldType.nullable(new ArrowType.Utf8()), null));
+        fields.add(new Field("applicationName", FieldType.nullable(new ArrowType.Utf8()), null));
+        fields.add(new Field("host", FieldType.nullable(new ArrowType.Utf8()), null));
         // tags: Map<String, String>
         Field keyField = new Field("key", FieldType.notNullable(new ArrowType.Utf8()), null);
         Field valField = new Field("value", FieldType.nullable(new ArrowType.Utf8()), null);

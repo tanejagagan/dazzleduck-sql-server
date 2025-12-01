@@ -1,5 +1,7 @@
 package io.dazzleduck.sql.micrometer;
 
+import com.typesafe.config.Config;
+import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.micrometer.config.ArrowRegistryConfig;
 import io.dazzleduck.sql.micrometer.service.ArrowMicroMeterRegistry;
@@ -28,9 +30,19 @@ class ArrowMicroMeterRegistryTest {
     private MockClock testClock;
     private static final Logger log = LoggerFactory.getLogger(ArrowMicroMeterRegistryTest.class);
     private File tempFile;
+    private String applicationId;
+    private String applicationName;
+    private String host;
 
     @BeforeEach
     void setup() {
+
+        // Load test metadata EXACTLY like production
+        Config dazzConfig = ConfigFactory.load().getConfig("dazzleduck_micrometer");
+        applicationId = dazzConfig.getString("applicationId");
+        applicationName = dazzConfig.getString("applicationName");
+        host = dazzConfig.getString("host");
+
         testClock = new MockClock();
 
         ArrowRegistryConfig config = new ArrowRegistryConfig() {
@@ -53,6 +65,9 @@ class ArrowMicroMeterRegistryTest {
                 .outputPath("arrow.outputFile")
                 .testMode(true)
                 .clock(testClock)
+                .applicationId(applicationId)
+                .applicationName(applicationName)
+                .host(host)
                 .build();
     }
 
@@ -70,7 +85,14 @@ class ArrowMicroMeterRegistryTest {
 
         File tempFile = File.createTempFile("test-metrics", ".arrow");
         try {
-            ArrowFileWriterUtil.writeMetersToFile(new ArrayList<>(registry.getMeters()), tempFile.getAbsolutePath());
+            ArrowFileWriterUtil.writeMetersToFile(
+                    new ArrayList<>(registry.getMeters()),
+                    tempFile.getAbsolutePath(),
+                    applicationId,
+                    applicationName,
+                    host
+            );
+
             TestUtils.isEqual(
                     "select unnest(['demo.counter', 'demo.gauge', 'demo.timer.percentile', 'demo.timer.percentile', 'demo.timer']) as name",
                     "select name from read_arrow('%s')".formatted(tempFile.getAbsolutePath())
@@ -113,7 +135,14 @@ class ArrowMicroMeterRegistryTest {
 
         File tempFile = File.createTempFile("test-metrics", ".arrow");
         try {
-            ArrowFileWriterUtil.writeMetersToFile(new ArrayList<>(registry.getMeters()), tempFile.getAbsolutePath());
+            ArrowFileWriterUtil.writeMetersToFile(
+                    new ArrayList<>(registry.getMeters()),
+                    tempFile.getAbsolutePath(),
+                    applicationId,
+                    applicationName,
+                    host
+            );
+
             TestUtils.isEqual(
                     "select unnest(['demo.counter', 'demo.function.counter', 'demo.summary', 'demo.gauge', 'demo.timer.percentile', 'demo.timer.percentile', 'demo.longtask', 'demo.function.timer', 'demo.timer']) as 'name'",
                     "select name from read_arrow('%s')".formatted(tempFile.getAbsolutePath())
@@ -131,7 +160,14 @@ class ArrowMicroMeterRegistryTest {
 
         File tempFile = File.createTempFile("test-metrics-", ".arrow");
         try {
-            ArrowFileWriterUtil.writeMetersToFile(new ArrayList<>(registry.getMeters()), tempFile.getAbsolutePath());
+            ArrowFileWriterUtil.writeMetersToFile(
+                    new ArrayList<>(registry.getMeters()),
+                    tempFile.getAbsolutePath(),
+                    applicationId,
+                    applicationName,
+                    host
+            );
+
             TestUtils.isEqual(
                     "select 'test.fn.counter' as name",
                     "select name from read_arrow('%s')".formatted(tempFile.getAbsolutePath())
@@ -151,7 +187,14 @@ class ArrowMicroMeterRegistryTest {
 
         File tempFile = File.createTempFile("test-metrics-", ".arrow");
         try {
-            ArrowFileWriterUtil.writeMetersToFile(new ArrayList<>(registry.getMeters()), tempFile.getAbsolutePath());
+            ArrowFileWriterUtil.writeMetersToFile(
+                    new ArrayList<>(registry.getMeters()),
+                    tempFile.getAbsolutePath(),
+                    applicationId,
+                    applicationName,
+                    host
+            );
+
             TestUtils.isEqual(
                     "select 'test.fn.timer' as name",
                     "select name from read_arrow('%s')".formatted(tempFile.getAbsolutePath())
@@ -167,10 +210,17 @@ class ArrowMicroMeterRegistryTest {
         DistributionSummary summary = DistributionSummary.builder("test.summary").register(registry);
         summary.record(5);
         summary.record(15);
-
+        testClock.add(Duration.ofSeconds(6));
         tempFile = File.createTempFile("test-metrics-", ".arrow");
-        System.out.println("Arrow file created at: " + tempFile.getAbsolutePath());
-        ArrowFileWriterUtil.writeMetersToFile(new ArrayList<>(registry.getMeters()), tempFile.getAbsolutePath());
+
+        ArrowFileWriterUtil.writeMetersToFile(
+                new ArrayList<>(registry.getMeters()),
+                tempFile.getAbsolutePath(),
+                applicationId,
+                applicationName,
+                host
+        );
+
         Assertions.assertTrue(tempFile.exists(), "Temp file should exist after serialization");
     }
 
@@ -192,6 +242,18 @@ class ArrowMicroMeterRegistryTest {
         TestUtils.isEqual(
                 "select 2.0 as value, 0.0 as min, 15.0 as max, 10.0 as mean",
                 "select value, min, max, mean from read_arrow('%s')".formatted(tempFile.getAbsolutePath())
+        );
+
+        TestUtils.isEqual(
+                """
+                select 'test.summary' as name,
+                       'distribution_summary' as type,
+                       'ap101' as applicationId,
+                       'MyApplication' as applicationName,
+                       'localhost' as host
+                """,
+                "select name, type, applicationId, applicationName, host from read_arrow('%s')"
+                        .formatted(tempFile.getAbsolutePath())
         );
     }
 }
