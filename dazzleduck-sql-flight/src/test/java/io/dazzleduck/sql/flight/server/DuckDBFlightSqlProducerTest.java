@@ -21,7 +21,9 @@ import org.apache.arrow.memory.RootAllocator;
 import org.duckdb.DuckDBConnection;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.Logger;
@@ -40,8 +42,7 @@ import java.util.UUID;
 import java.util.concurrent.Executors;
 
 import static io.dazzleduck.sql.common.LocalStartupConfigProvider.SCRIPT_LOCATION_KEY;
-import static io.dazzleduck.sql.commons.util.TestConstants.SUPPORTED_DELTA_PATH_QUERY;
-import static io.dazzleduck.sql.commons.util.TestConstants.SUPPORTED_HIVE_PATH_QUERY;
+import static io.dazzleduck.sql.commons.util.TestConstants.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 public class DuckDBFlightSqlProducerTest {
@@ -60,6 +61,12 @@ public class DuckDBFlightSqlProducerTest {
     protected static FlightServer flightServer;
     protected static FlightSqlClient sqlClient;
     protected static String warehousePath;
+
+    @TempDir
+    Path projectTempDir;
+    private Path catalogFile;
+    private Path dataPath;
+    private final String CATALOG = "test_catalog";
 
     @BeforeAll
     public static void beforeAll() throws Exception {
@@ -184,6 +191,37 @@ public class DuckDBFlightSqlProducerTest {
                     }
                 }
                 assertEquals(11, size);
+            }
+        }
+    }
+
+    @Test
+    @Disabled
+    public void testStatementSplittableDucklake() throws Exception {
+        setupDuckDb();
+        var serverLocation = Location.forGrpcInsecure(LOCALHOST, 55571);
+        try (var clientServer = createRestrictedServerClient(serverLocation, "admin")) {
+            try (var splittableClient = new FlightSqlClient(FlightClient.builder(clientServer.clientAllocator(), serverLocation)
+                    .intercept(AuthUtils.createClientMiddlewareFactory(USER,
+                            PASSWORD,
+                            Map.of("function", "read_ducklake",
+                                    "path", "%s.%s.%s".formatted(CATALOG, TEST_SCHEMA, TEST_TABLE),
+                                    "catalog", CATALOG,
+                                    "schema", TEST_SCHEMA)))
+                    .build())) {
+                var flightCallHeaders = new FlightCallHeaders();
+                flightCallHeaders.insert(Headers.HEADER_SPLIT_SIZE, "1");
+                var flightInfo = splittableClient.execute(SUPPORTED_DUCKLAKE_QUERY, new HeaderCallOption(flightCallHeaders));
+                var size = 0;
+                assertEquals(5, flightInfo.getEndpoints().size()); // 5 rows = 5 endpoints with split size 1
+                for (var endpoint : flightInfo.getEndpoints()) {
+                    try (final FlightStream stream = splittableClient.getStream(endpoint.getTicket(), new HeaderCallOption(flightCallHeaders))) {
+                        while (stream.next()) {
+                            size += stream.getRoot().getRowCount();
+                        }
+                    }
+                }
+                assertEquals(5, size); // Total 5 rows
             }
         }
     }
@@ -421,5 +459,35 @@ public class DuckDBFlightSqlProducerTest {
                                 Headers.HEADER_SCHEMA, TEST_SCHEMA,
                         "path", path, "filter", filter)))
                 .build());
+    }
+
+    private void setupDuckDb() throws IOException, SQLException {
+        catalogFile = projectTempDir.resolve(CATALOG + ".ducklake");
+        dataPath = projectTempDir.resolve("data");
+        Files.createDirectories(dataPath);
+        String absCatalog = catalogFile.toAbsolutePath().toString();
+        String absDataPath = dataPath.toAbsolutePath().toString();
+        String[] sql = getStrings(absCatalog, absDataPath);
+        try(Connection conn = ConnectionPool.getConnection()) {
+            ConnectionPool.executeBatch(conn, sql);
+            ConnectionPool.printResult("SELECT * FROM %s.%s.%s;".formatted(CATALOG, TEST_SCHEMA, TEST_TABLE));
+        }
+    }
+
+    private String[] getStrings(String absCatalog, String absDataPath) {
+        String attachDB = "ATTACH 'ducklake:%s' AS %s (DATA_PATH '%s');".formatted(absCatalog, CATALOG, absDataPath);
+        String createSchema = "CREATE SCHEMA IF NOT EXISTS %s.%s;".formatted(CATALOG, TEST_SCHEMA);
+        String createTable = "CREATE TABLE %s.%s.%s (key VARCHAR, value VARCHAR);".formatted(CATALOG, TEST_SCHEMA, TEST_TABLE);
+        String insertValues = """
+        INSERT INTO %s.%s.%s (key, value) VALUES
+            ('k1', 'value1'),
+            ('k2', 'value2'),
+            ('k3', 'value3'),
+            ('k4', 'value4'),
+            ('k5', 'value5');
+        """.formatted(CATALOG, TEST_SCHEMA, TEST_TABLE);
+        return new String[]{
+                attachDB, createSchema, createTable, insertValues
+        };
     }
 }
