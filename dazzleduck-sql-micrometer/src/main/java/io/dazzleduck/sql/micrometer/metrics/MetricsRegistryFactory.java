@@ -1,5 +1,7 @@
 package io.dazzleduck.sql.micrometer.metrics;
 
+import com.typesafe.config.Config;
+import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.micrometer.config.ArrowRegistryConfig;
 import io.dazzleduck.sql.micrometer.service.ArrowMicroMeterRegistry;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -11,7 +13,11 @@ import java.time.Duration;
 public class MetricsRegistryFactory {
 
     public static MeterRegistry create() {
+        Config dazzConfig = ConfigFactory.load().getConfig("dazzleduck_micrometer");
 
+        String applicationId = dazzConfig.getString("applicationId");
+        String applicationName = dazzConfig.getString("applicationName");
+        String host = dazzConfig.getString("host");
         ArrowRegistryConfig config = new ArrowRegistryConfig() {
             @Override
             public String get(String key) {
@@ -28,6 +34,9 @@ public class MetricsRegistryFactory {
                         .config(config)
                         .endpoint(config.uri())
                         .httpTimeout(Duration.ofSeconds(20))
+                        .applicationId(applicationId)
+                        .applicationName(applicationName)
+                        .host(host)
                         .clock(Clock.SYSTEM)
                         .build();
 

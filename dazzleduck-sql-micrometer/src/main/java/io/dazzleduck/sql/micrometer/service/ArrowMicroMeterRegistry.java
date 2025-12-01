@@ -30,6 +30,9 @@ public class ArrowMicroMeterRegistry extends StepMeterRegistry {
     private final boolean testMode;
     private final String outputPath;
     private final ArrowReceiverServer receiver;
+    private final String applicationId;
+    private final String applicationName;
+    private final String host;
 
     private ArrowMicroMeterRegistry(
             ArrowRegistryConfig config,
@@ -40,7 +43,10 @@ public class ArrowMicroMeterRegistry extends StepMeterRegistry {
             Duration httpTimeout,
             String outputPath,
             boolean testMode,
-            ArrowReceiverServer receiver
+            ArrowReceiverServer receiver,
+            String applicationId,
+            String applicationName,
+            String host
     ) {
         super(config, clock);
         this.arrowConfig = Objects.requireNonNull(config, "config");
@@ -50,7 +56,9 @@ public class ArrowMicroMeterRegistry extends StepMeterRegistry {
         this.outputPath = outputPath;
         this.testMode = testMode;
         this.receiver = receiver;
-
+        this.applicationId = applicationId;
+        this.applicationName = applicationName;
+        this.host = host;
         this.config().namingConvention(NamingConvention.dot);
 
         if (!testMode) {
@@ -69,11 +77,11 @@ public class ArrowMicroMeterRegistry extends StepMeterRegistry {
         }
 
         try {
-            byte[] payload = ArrowFileWriterUtil.convertMetersToArrowBytes(meters);
+            byte[] payload = ArrowFileWriterUtil.convertMetersToArrowBytes(meters, applicationId, applicationName, host);
 
             // Write to file if configured
             if (outputPath != null && !outputPath.isBlank()) {
-                ArrowFileWriterUtil.writeMetersToFile(meters, outputPath);
+                ArrowFileWriterUtil.writeMetersToFile(meters, outputPath, applicationId, applicationName, host);
                 log.info("Wrote {} meters to Arrow file: {}", meters.size(), outputPath);
             }
 
@@ -116,6 +124,9 @@ public class ArrowMicroMeterRegistry extends StepMeterRegistry {
         private String outputPath;
         private boolean testMode = false;
         private ArrowReceiverServer receiver;
+        private String applicationId;
+        private String applicationName;
+        private String host;
 
         public Builder config(ArrowRegistryConfig cfg) { this.config = cfg; return this; }
         public Builder clock(Clock c) { this.clock = c; return this; }
@@ -126,12 +137,16 @@ public class ArrowMicroMeterRegistry extends StepMeterRegistry {
         public Builder outputPath(String path) { this.outputPath = path; return this; }
         public Builder testMode(boolean t) { this.testMode = t; return this; }
         public Builder receiver(ArrowReceiverServer receiver) { this.receiver = receiver; return this; }
+        public Builder applicationId(String id) { this.applicationId = id; return this; }
+        public Builder applicationName(String name) { this.applicationName = name; return this; }
+        public Builder host(String host) { this.host = host; return this; }
 
         public ArrowMicroMeterRegistry build() {
             if (endpoint == null) throw new IllegalStateException("endpoint is required");
             return new ArrowMicroMeterRegistry(
                     config, clock, threadFactory, httpClient,
-                    endpoint, httpTimeout, outputPath, testMode, receiver
+                    endpoint, httpTimeout, outputPath, testMode, receiver, applicationId,
+                    applicationName, host
             );
         }
     }
