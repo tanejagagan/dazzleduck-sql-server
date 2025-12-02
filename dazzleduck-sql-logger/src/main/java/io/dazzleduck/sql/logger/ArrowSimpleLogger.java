@@ -46,8 +46,8 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger {
 
     // load config ONCE — names unchanged
     private static final Config config = ConfigFactory.load().getConfig("dazzleduck_micrometer");
-    private static final String CONFIG_APPLICATION_ID = config.getString("id");
-    private static final String CONFIG_APPLICATION_NAME = config.getString("name");
+    private static final String CONFIG_APPLICATION_ID = config.getString("applicationId");
+    private static final String CONFIG_APPLICATION_NAME = config.getString("applicationName");
     private static final String CONFIG_HOST = config.getString("host");
 
     private static final DateTimeFormatter TS_FORMAT =
