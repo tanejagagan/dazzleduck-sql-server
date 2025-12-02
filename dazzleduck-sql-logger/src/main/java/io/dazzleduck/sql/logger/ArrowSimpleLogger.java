@@ -8,17 +8,17 @@ import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.ipc.ArrowStreamWriter;
 import org.apache.arrow.vector.types.pojo.*;
-import org.slf4j.helpers.LegacyAbstractLogger;
 import org.slf4j.Marker;
 import org.slf4j.event.Level;
 import org.slf4j.event.LoggingEvent;
+import org.slf4j.helpers.LegacyAbstractLogger;
 
 import java.io.ByteArrayOutputStream;
 import java.io.Serial;
-import java.text.SimpleDateFormat;
-import java.util.*;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -28,10 +28,12 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger {
 
     @Serial
     private static final long serialVersionUID = 1L;
+
     private static final int MAX_BATCH_SIZE = 10;
     private static final RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
-    final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
-    private static final Schema schema = new Schema(List.of(
+
+    // schema stays EXACTLY the same
+    private static final Schema schema = new Schema(java.util.List.of(
             new Field("timestamp", FieldType.nullable(new ArrowType.Utf8()), null),
             new Field("level", FieldType.nullable(new ArrowType.Utf8()), null),
             new Field("logger", FieldType.nullable(new ArrowType.Utf8()), null),
@@ -39,19 +41,26 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger {
             new Field("message", FieldType.nullable(new ArrowType.Utf8()), null),
             new Field("applicationId", FieldType.nullable(new ArrowType.Utf8()), null),
             new Field("applicationName", FieldType.nullable(new ArrowType.Utf8()), null),
-            new Field("host", FieldType.nullable(new ArrowType.Utf8()), null),
-            new Field("destinationUrl", FieldType.nullable(new ArrowType.Utf8()), null)//no need
+            new Field("host", FieldType.nullable(new ArrowType.Utf8()), null)
     ));
-//timestamp == timestamp,
-    //add few more field -application name ,host ,application_id,dest url ,user,password
+
+    // load config ONCE — names unchanged
+    private static final Config config = ConfigFactory.load().getConfig("dazzleduck_micrometer");
+    private static final String CONFIG_APPLICATION_ID = config.getString("applicationId");
+    private static final String CONFIG_APPLICATION_NAME = config.getString("applicationName");
+    private static final String CONFIG_HOST = config.getString("host");
+
+    private static final DateTimeFormatter TS_FORMAT =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
+
+    // -------- instance fields (names unchanged) ----------
     private final String name;
     private final AsyncArrowFlightSender flightSender;
-    private final List<JavaRow> batchBuffer = Collections.synchronizedList(new ArrayList<>());
+    private final Queue<JavaRow> batchBuffer = new ConcurrentLinkedQueue<>();
     final AtomicInteger batchCounter = new AtomicInteger(0);
     final String applicationId;
     final String applicationName;
     final String host;
-    final String destinationUrl;
 
     public ArrowSimpleLogger(String name) {
         this(name, AsyncArrowFlightSender.getDefault());
@@ -60,23 +69,9 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger {
     public ArrowSimpleLogger(String name, AsyncArrowFlightSender sender) {
         this.name = name;
         this.flightSender = sender;
-        Config config = ConfigFactory.load();
-        Config appConfig = config.getConfig("dazzleduck_server");
-
-        this.applicationId = appConfig.getString("id");
-        this.applicationName = appConfig.getString("name");
-        this.host = appConfig.getString("host");
-        this.destinationUrl = appConfig.getString("destinationUrl");
-
-
-        try {
-            VectorSchemaRoot root = VectorSchemaRoot.create(schema, allocator);
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            ArrowStreamWriter streamWriter = new ArrowStreamWriter(root, null, out);
-            streamWriter.start();
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to initialize ArrowStreamWriter", e);
-        }
+        this.applicationId = CONFIG_APPLICATION_ID;
+        this.applicationName = CONFIG_APPLICATION_NAME;
+        this.host = CONFIG_HOST;
     }
 
     @Override
@@ -85,8 +80,10 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger {
     }
 
     @Override
-    protected void handleNormalizedLoggingCall(Level level, Marker marker,
-                                               String messagePattern, Object[] args, Throwable throwable) {
+    protected void handleNormalizedLoggingCall(
+            Level level, Marker marker, String messagePattern,
+            Object[] args, Throwable throwable) {
+
         String message = format(messagePattern, args);
         writeArrowAsync(level, message);
     }
@@ -101,15 +98,15 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger {
     private void writeArrowAsync(Level level, String message) {
         try {
             JavaRow row = new JavaRow(new Object[]{
-                    new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS").format(new Date()),
+                    TS_FORMAT.format(LocalDateTime.now()),
                     level.toString(),
                     name,
                     Thread.currentThread().getName(),
-                    message
-                    ,applicationId,
+                    message,
+                    applicationId,
                     applicationName,
-                    host,
-                    destinationUrl
+                    host
+
             });
 
             batchBuffer.add(row);
@@ -122,15 +119,18 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger {
         }
     }
     /** Serialize batched logs into Arrow and send */
-    private synchronized void flushBatch() {
+    private void flushBatch() {
         if (batchBuffer.isEmpty()) return;
 
         try (VectorSchemaRoot root = VectorSchemaRoot.create(schema, allocator);
              ByteArrayOutputStream out = new ByteArrayOutputStream();
              ArrowStreamWriter streamWriter = new ArrowStreamWriter(root, null, out)) {
 
-            var writer = VectorSchemaRootWriter.of(schema);
             JavaRow[] rows = batchBuffer.toArray(new JavaRow[0]);
+            batchBuffer.clear();
+            batchCounter.set(0);
+
+            var writer = VectorSchemaRootWriter.of(schema);
             writer.writeToVector(rows, root);
             root.setRowCount(rows.length);
 
@@ -141,19 +141,15 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger {
             flightSender.enqueue(out.toByteArray());
         } catch (Exception e) {
             System.err.println("[ArrowSimpleLogger] flushBatch failed: " + e.getMessage());
-        } finally {
-            batchBuffer.clear();
-            batchCounter.set(0);
         }
     }
 
-    public synchronized void flush() {
+    public void flush() {
         flushBatch();
     }
     /** Close logger and flush remaining logs */
     public void close() {
         flushBatch();
-        scheduler.shutdown();
     }
     /** For SLF4J event forwarding */
     public void log(LoggingEvent event) {

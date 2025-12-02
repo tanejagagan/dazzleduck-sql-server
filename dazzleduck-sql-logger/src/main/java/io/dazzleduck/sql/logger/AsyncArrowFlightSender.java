@@ -6,6 +6,7 @@ import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.ipc.ArrowStreamReader;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
 import java.time.Duration;
 import java.util.*;
@@ -95,25 +96,32 @@ public class AsyncArrowFlightSender implements Closeable {
         if (batch.isEmpty()) return;
 
         try {
-            for (byte[] bytes : batch) {
-                try (ByteArrayInputStream in = new ByteArrayInputStream(bytes);
-                     ArrowStreamReader reader = new ArrowStreamReader(in, allocator)) {
+            // 1) Merge all byte[] into one Arrow IPC stream
+            ByteArrayOutputStream combined = new ByteArrayOutputStream();
+            for (byte[] b : batch) {
+                combined.write(b);
+            }
 
-                    VectorSchemaRoot root = reader.getVectorSchemaRoot();
-                    FlightDescriptor descriptor = FlightDescriptor.path("logs");
+            byte[] mergedBytes = combined.toByteArray();
 
-                    AsyncPutListener listener = new AsyncPutListener();
-                    FlightClient.ClientStreamListener stream = client.startPut(descriptor, root, listener);
+            // 2) Send using one Flight PUT
+            try (ByteArrayInputStream in = new ByteArrayInputStream(mergedBytes);
+                 ArrowStreamReader reader = new ArrowStreamReader(in, allocator)) {
 
-                    if (stream == null) throw new RuntimeException("startPut returned null");
+                VectorSchemaRoot root = reader.getVectorSchemaRoot();
+                FlightDescriptor descriptor = FlightDescriptor.path("logs");
 
-                    while (reader.loadNextBatch()) {
-                        stream.putNext();
-                    }
+                AsyncPutListener listener = new AsyncPutListener();
+                FlightClient.ClientStreamListener stream =
+                        client.startPut(descriptor, root, listener);
 
-                    stream.completed();
-                    listener.getResult();
+                // Load *all* batches inside the merged Arrow stream
+                while (reader.loadNextBatch()) {
+                    stream.putNext();
                 }
+
+                stream.completed();
+                listener.getResult();
             }
         } catch (Exception e) {
             System.err.println("[AsyncArrowFlightSender] sendBatch failed: " + e.getMessage());
