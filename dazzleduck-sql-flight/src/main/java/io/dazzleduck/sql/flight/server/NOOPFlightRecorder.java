@@ -15,12 +15,32 @@ public class NOOPFlightRecorder implements FlightRecorder {
     }
 
     @Override
+    public void recordStatementTimeout() {
+
+    }
+
+    @Override
+    public void recordPreparedStatementTimeout() {
+
+    }
+
+    @Override
     public void startStreamStatement() {
 
     }
 
     @Override
     public void endStreamStatement() {
+
+    }
+
+    @Override
+    public void errorStreamStatement() {
+
+    }
+
+    @Override
+    public void errorStreamPreparedStatement() {
 
     }
 
@@ -35,6 +55,11 @@ public class NOOPFlightRecorder implements FlightRecorder {
     }
 
     @Override
+    public void errorPreparedStreamStatement() {
+
+    }
+
+    @Override
     public void startBulkIngest() {
 
     }
@@ -43,13 +68,34 @@ public class NOOPFlightRecorder implements FlightRecorder {
     public void endBulkIngest() {
 
     }
+
+    @Override
+    public void errorBulkIngest() {
+
+    }
+
     @Override
     public void recordGetStreamPreparedStatement(long networkSize) {
 
     }
 
     @Override
+    public void recordGetStreamStatement(long size) {
+
+    }
+
+    @Override
     public FlightMetricsSnapshot snapshot() {
         return null;
+    }
+
+    @Override
+    public double getBytesOut() {
+        return 0;
+    }
+
+    @Override
+    public double getBytesIn() {
+        return 0;
     }
 }

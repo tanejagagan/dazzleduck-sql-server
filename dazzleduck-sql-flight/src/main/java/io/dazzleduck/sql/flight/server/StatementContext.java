@@ -19,6 +19,7 @@ package io.dazzleduck.sql.flight.server;
 import org.apache.arrow.flight.sql.FlightSqlProducer;
 import org.apache.arrow.util.AutoCloseables;
 
+import java.sql.PreparedStatement;
 import java.sql.Statement;
 import java.time.Clock;
 import java.time.Instant;
@@ -38,10 +39,15 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
     private Instant endTime;
     private int useCount;
 
+    private long bytesOut;
+
+    private final boolean isPreparedStatementContext;
+
 
     public StatementContext(final T statement, final String query) {
         this.statement = Objects.requireNonNull(statement, "statement cannot be null.");
         this.query = query;
+        this.isPreparedStatementContext = statement instanceof PreparedStatement;
     }
 
     /**
@@ -53,6 +59,9 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
         return statement;
     }
 
+    public boolean isPreparedStatementContext() {
+        return isPreparedStatementContext;
+    }
     /**
      * Gets the optional SQL query wrapped by this {@link StatementContext}.
      *
@@ -88,18 +97,6 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
         return Objects.hash(statement);
     }
 
-    public synchronized boolean use() {
-        if(!inUse) {
-            inUse = true;
-            return true;
-        } else {
-            return false;
-        }
-    }
-
-    public synchronized void release() {
-        inUse = false;
-    }
 
     public synchronized Instant startTime() {
         return startTime;
@@ -114,12 +111,29 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
     }
 
     public synchronized void start() {
+        if(inUse) {
+            throw new IllegalStateException("Context already in use");
+        }
+        inUse = true;
         this.startTime = Clock.systemUTC().instant();
         this.endTime = null;
         useCount += 1;
     }
 
     public synchronized void end() {
+        inUse = false;
         this.endTime = Clock.systemUTC().instant();
+    }
+
+    public synchronized void bytesOut(long out) {
+        this.bytesOut +=out;
+    }
+
+    public synchronized long bytesOut() {
+        return this.bytesOut;
+    }
+
+    public synchronized long useCount() {
+        return useCount;
     }
 }

@@ -3,6 +3,7 @@ package io.dazzleduck.sql.commons.ducklake;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import org.jetbrains.annotations.NotNull;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
@@ -13,6 +14,7 @@ import java.sql.SQLException;
 import java.util.List;
 
 import static io.dazzleduck.sql.commons.ducklake.DucklakePartitionPruning.constructQuery;
+import static org.junit.Assert.assertEquals;
 
 public class DuckLakePartitionPruningTest {
 
@@ -47,9 +49,6 @@ public class DuckLakePartitionPruningTest {
         addDataFile(PARTITIONED_TABLE);
         createTestTable(QUALIFIED_NO_PARTITIONED_TABLE, false);
         addDataFile(NO_PARTITIONED_TABLE);
-        ConnectionPool.printResult("SELECT * FROM %s".formatted(FILE_COLUMN_STAT_TABLE));
-        ConnectionPool.printResult("SELECT * FROM %s".formatted(QUALIFIED_COLUMN_MAPPING_TABLE));
-
     }
 
     private static void addDataFile(String table) {
@@ -66,7 +65,7 @@ public class DuckLakePartitionPruningTest {
         String  tableName = "";
         var tableId = getTableId(tableName);
         String query = constructQuery(METADATA_DATABASE, 1, List.of(1L, 2L, 3L, 4L));
-        ConnectionPool.printResult(query);
+        //ConnectionPool.printResult(query);
     }
 
     private Object getTableId(String tableName) {
@@ -82,7 +81,6 @@ public class DuckLakePartitionPruningTest {
     public static void createTestTable(String table , boolean partitioned) {
         String[] statements = getStatements(table, partitioned);
         for(var statement : statements) {
-            System.out.println(statement + ";");
             ConnectionPool.execute(statement);
         }
     }
@@ -99,7 +97,7 @@ public class DuckLakePartitionPruningTest {
         var insertStatement4 = "INSERT INTO %s VALUES ('k51', 'v51', 1), ('k61', 'v61', 1) ".formatted(table);
         var addColumn = "ALTER TABLE %s ADD COLUMN version INT".formatted(table);
         var insertStatement5 = "INSERT INTO %s VALUES ('k51', 'v51', 1, 0 ), ('k61', 'v61', 1, 0) ".formatted(table);
-        var insertStatement6 = "INSERT INTO %s VALUES ('k52', 'v52', 2, 0 ), ('k62', 'v62', 2, 0) ".formatted(table);
+        var insertStatement6 = "INSERT INTO %s VALUES ('k72', 'v72', 2, 0 ), ('k82', 'v82', 2, 0) ".formatted(table);
         return new String[]{
                 createStatement,
                 insertStatement0,
@@ -118,8 +116,10 @@ public class DuckLakePartitionPruningTest {
     public void testTransformation() throws SQLException, JsonProcessingException, NoSuchMethodException {
         var sql = "select * from %s where key = 'k52'".formatted(PARTITIONED_TABLE);
         var files = DucklakePartitionPruning.pruneFiles("main", PARTITIONED_TABLE, sql, METADATA_DATABASE );
-        files.forEach(System.out::println);
+        Assertions.assertEquals(2, files.size());
     }
+
+
 
     public static void createNonPartitionedTable() {
         // create table
