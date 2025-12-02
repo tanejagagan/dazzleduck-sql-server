@@ -22,7 +22,6 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -98,45 +97,23 @@ public class DuckDBSqlProducerTimeoutTest {
 
     @Test
     public void testAutoCancelForPreparedStatement() throws Exception {
-        CountDownLatch queryStarted = new CountDownLatch(1);
-        Thread cancelThread = startCancelThread(queryStarted);
-
         try (FlightSqlClient.PreparedStatement preparedStatement = sqlClient.prepare(LONG_RUNNING_QUERY);
              FlightStream stream = sqlClient.getStream(preparedStatement.execute().getEndpoints().get(0).getTicket())) {
-            queryStarted.countDown();
+            Thread.sleep(100);
+            mutableClock.advanceBy(Duration.ofSeconds(10));
+            executor.tick(10, TimeUnit.SECONDS);
             assertThrows(Exception.class, stream::next);
-        } finally {
-            cancelThread.join(5000);
         }
     }
 
     @Test
     public void testAutoCancelForStatement() throws Exception {
-        CountDownLatch queryStarted = new CountDownLatch(1);
-        Thread cancelThread = startCancelThread(queryStarted);
-
         FlightInfo flightInfo = sqlClient.execute(LONG_RUNNING_QUERY);
         try (FlightStream stream = sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket())) {
-            queryStarted.countDown();
+            Thread.sleep(100);
+            mutableClock.advanceBy(Duration.ofSeconds(10));
+            executor.tick(10, TimeUnit.SECONDS);
             assertThrows(Exception.class, stream::next);
-        } finally {
-            cancelThread.join(5000);
         }
-    }
-
-    private static Thread startCancelThread(CountDownLatch queryStarted) {
-        Thread timeAdvancer = new Thread(() -> {
-            try {
-                queryStarted.await();
-                Thread.sleep(100);
-                mutableClock.advanceBy(Duration.ofSeconds(10));
-                executor.tick(10, TimeUnit.SECONDS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        });
-
-        timeAdvancer.start();
-        return timeAdvancer;
     }
 }
