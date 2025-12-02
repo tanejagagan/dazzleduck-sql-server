@@ -15,6 +15,7 @@ import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.authorization.SqlAuthorizer;
 import io.dazzleduck.sql.commons.ingestion.*;
 import io.dazzleduck.sql.commons.planner.SplitPlanner;
+import io.dazzleduck.sql.flight.FlightRecorder;
 import io.dazzleduck.sql.flight.ingestion.IngestionParameters;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceServerCallHeaderAuthMiddleware;
 import io.dazzleduck.sql.flight.stream.FlightStreamReader;
@@ -48,8 +49,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.*;
 import java.time.Clock;
-import java.time.Instant;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -66,9 +67,11 @@ import static org.duckdb.DuckDBConnection.DEFAULT_SCHEMA;
  * and available in the header. More options will be supported in the future version.
  * Future implementation note for statement we check if its SET or RESET statement and based on that use cookies to set unset the values
  */
-public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable, SimpleBulkIngestConsumer {
+public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable, SimpleBulkIngestConsumer, SqlProducerMBean {
 
     public static final String TEMP_WRITE_FORMAT = "arrow";
+    private final FlightRecorder recorder;
+    private final Instant startTime;
 
     public static AccessMode getAccessMode(com.typesafe.config.Config appConfig) {
         return appConfig.hasPath("access_mode") ? AccessMode.valueOf(appConfig.getString("access_mode").toUpperCase()) : AccessMode.COMPLETE;
@@ -80,6 +83,43 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             Files.createDirectories(tempWriteDir);
         }
         return tempWriteDir;
+    }
+
+    @Override
+    public long getRunningStatements() {
+        return statementLoadingCache.size();
+    }
+
+    @Override
+    public long getOpenPreparedStatement() {
+        return preparedStatementLoadingCache.size();
+    }
+
+    @Override
+    public long getRunningPreparedStatements() {
+        var map = preparedStatementLoadingCache.asMap();
+        var size = 0;
+        for(var e : map.values()){
+            if(e.running()) {
+                size +=0;
+            }
+        }
+        return size;
+    }
+
+    @Override
+    public double getBytesOut() {
+        return recorder.getBytesOut();
+    }
+
+    @Override
+    public double getBytesIn() {
+        return recorder.getBytesIn();
+    }
+
+    @Override
+    public Instant getStartTime() {
+        return startTime;
     }
 
     record DatabaseSchema ( String database, String schema) {}
@@ -175,7 +215,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                    ScheduledExecutorService scheduledExecutorService,
                                    Duration queryTimeout) {
         this(location, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionTaskFactory,
-                scheduledExecutorService, queryTimeout, Clock.systemDefaultZone());
+                scheduledExecutorService, queryTimeout, Clock.systemDefaultZone(),
+                new NOOPFlightRecorder());
 
     }
     public DuckDBFlightSqlProducer(Location location,
@@ -188,7 +229,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                    PostIngestionTaskFactory postIngestionTaskFactory,
                                    ScheduledExecutorService scheduledExecutorService,
                                    Duration queryTimeout,
-                                   Clock clock) {
+                                   Clock clock,
+                                   FlightRecorder recorder) {
+        this.startTime = clock.instant();
         this.location = location;
         this.producerId = producerId;
         this.allocator = allocator;
@@ -197,6 +240,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         this.tempDir = tempDir;
         this.scheduledExecutorService = scheduledExecutorService;
         this.queryTimeout = queryTimeout;
+        this.recorder = recorder;
         if(AccessMode.RESTRICTED ==  accessMode) {
             this.sqlAuthorizer = SqlAuthorizer.JWT_AUTHORIZER;
         } else {
@@ -359,7 +403,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         }
         Runnable runnable = () -> {
             try {
-                preparedStatementLoadingCache.invalidate(statementHandle.queryId());
+                var key = new CacheKey(context.peerIdentity(), statementHandle.queryId());
+                preparedStatementLoadingCache.invalidate(key);
             } catch (final Throwable e) {
                 ErrorHandling.handleThrowable(listener, e);
                 return;
@@ -466,7 +511,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         }
         streamResultSet(executorService, statementContext, OptionalResultSetSupplier.of(statementContext.getStatement()),
             allocator, getBatchSize(context),
-            listener, () -> {});
+            listener, () -> {}, recorder);
     }
 
 
@@ -499,7 +544,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                     allocator,
                     getBatchSize(context),
                     listener,
-                    () -> statementLoadingCache.invalidate(key));
+                    () -> statementLoadingCache.invalidate(key), recorder);
         } catch (Throwable e) {
             ErrorHandling.handleThrowable(listener, e);
         }
@@ -713,7 +758,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         if (checkAccessModeAndRespond(listener)) {
             return;
         }
-        streamResultSet(executorService, DuckDBDatabaseMetadataUtil::getCatalogs, context, accessMode, allocator, listener);
+        streamResultSet(executorService, DuckDBDatabaseMetadataUtil::getCatalogs, context, accessMode, allocator, listener, recorder);
     }
 
     @Override
@@ -733,7 +778,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                 command.hasDbSchemaFilterPattern() ? command.getDbSchemaFilterPattern() : null;
         streamResultSet(executorService, connection ->
                         DuckDBDatabaseMetadataUtil.getSchemas(connection, catalog, schemaFilterPattern),
-                context, accessMode, allocator, listener);
+                context, accessMode, allocator, listener, recorder);
     }
 
     @Override
@@ -769,7 +814,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                 protocolSize == 0 ? null : protocolStringList.toArray(new String[protocolSize]);
         streamResultSet(executorService, connection ->
             DuckDBDatabaseMetadataUtil.getTables(connection, catalog, schemaFilterPattern, tableFilterPattern, tableTypes),
-                context, accessMode, allocator, listener);
+                context, accessMode, allocator, listener, recorder);
     }
 
     @Override
@@ -785,7 +830,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         if (checkAccessModeAndRespond(listener)) {
             return;
         }
-        streamResultSet(executorService, DuckDBDatabaseMetadataUtil::getTableTypes, context, accessMode, allocator, listener);
+        streamResultSet(executorService, DuckDBDatabaseMetadataUtil::getTableTypes, context, accessMode, allocator, listener, recorder);
     }
 
     @Override
@@ -1010,9 +1055,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                         ResultSetSupplierFromConnection supplier,
                                         CallContext context, AccessMode accessMode,
                                         BufferAllocator allocator,
-                                        final ServerStreamListener listener) {
+                                        final ServerStreamListener listener, FlightRecorder recorder) {
 
-        streamResultSet(executorService, supplier, context, accessMode, allocator, listener, () -> {});
+        streamResultSet(executorService, supplier, context, accessMode, allocator, listener, () -> {}, recorder);
     }
     private static void streamResultSet( ExecutorService executorService,
                                          ResultSetSupplierFromConnection supplier,
@@ -1020,7 +1065,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                          AccessMode  accessMode,
                                          BufferAllocator allocator,
                                          final ServerStreamListener listener,
-                                         Runnable finalBlock) {
+                                         Runnable finalBlock,
+                                         FlightRecorder recorder) {
         try {
             DuckDBConnection connection = getConnection(context, accessMode );
             streamResultSet(executorService,
@@ -1035,7 +1081,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                             logger.atError().setCause(e).log("Error closing connection");
                         }
                         finalBlock.run();
-                    });
+                    }, recorder);
         } catch (Throwable t) {
             ErrorHandling.handleThrowable(listener, t);
         }
@@ -1046,44 +1092,59 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                         BufferAllocator allocator,
                                         final int batchSize,
                                         final ServerStreamListener listener,
-                                        Runnable finalBlock) {
+                                        Runnable finalBlock,
+                                        FlightRecorder recorder) {
+        var childAllocator = allocator.newChildAllocator("statement-allocator", 0, allocator.getLimit());
         executorService.submit(() -> {
             var error = false ;
+            recorder.startStream(false);
             try (DuckDBResultSet resultSet = supplier.get();
-                 ArrowReader reader = (ArrowReader) resultSet.arrowExportStream(allocator, batchSize)) {
+                 ArrowReader reader = (ArrowReader) resultSet.arrowExportStream(childAllocator, batchSize)) {
                 listener.start(reader.getVectorSchemaRoot());
                 while (reader.loadNextBatch()) {
+                    var size = childAllocator.getAllocatedMemory();
+                    recorder.recordGetStream(false,
+                            size);
                     listener.putNext();
                 }
             }  catch (Throwable throwable) {
-              ErrorHandling.handleThrowable(listener, throwable);
+                recorder.errorStream(false);
+                ErrorHandling.handleThrowable(listener, throwable);
             } finally {
-                if(!error) {
+                if (!error) {
                     listener.completed();
                 }
+                recorder.endStream(false);
                 finalBlock.run();
             }
         });
     }
 
     private static <T extends Statement> void streamResultSet(ExecutorService executorService,
-                                        StatementContext<T> statementContext,
-                                        OptionalResultSetSupplier supplier,
-                                        BufferAllocator allocator,
-                                        final int batchSize,
-                                        final ServerStreamListener listener,
-                                        Runnable finalBlock) {
+                                                              StatementContext<T> statementContext,
+                                                              OptionalResultSetSupplier supplier,
+                                                              BufferAllocator allocator,
+                                                              final int batchSize,
+                                                              final ServerStreamListener listener,
+                                                              Runnable finalBlock, FlightRecorder recorder) {
+
+        var childAllocator = allocator.newChildAllocator("statement-allocator", 0, allocator.getLimit());
         executorService.submit(() -> {
             var error = false;
             try {
                 statementContext.start();
+                recorder.startStream(statementContext.isPreparedStatementContext());
                 supplier.execute();
                 if (supplier.hasResultSet()) {
                     try (DuckDBResultSet resultSet = supplier.get();
-                         ArrowReader reader = (ArrowReader) resultSet.arrowExportStream(allocator, batchSize)) {
+                         ArrowReader reader = (ArrowReader) resultSet.arrowExportStream(childAllocator, batchSize)) {
                         listener.start(reader.getVectorSchemaRoot());
                         while (reader.loadNextBatch()) {
                             listener.putNext();
+                            var size = childAllocator.getAllocatedMemory();
+                            statementContext.bytesOut(size);
+                            recorder.recordGetStream(statementContext.isPreparedStatementContext(),
+                                    size);
                         }
                     }
                 } else {
@@ -1091,13 +1152,16 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                 }
             } catch (Throwable throwable) {
                 error = true;
+                recorder.errorStream(statementContext.isPreparedStatementContext());
                 ErrorHandling.handleThrowable(listener, throwable);
             } finally {
                 if (!error) {
                     listener.completed();
                 }
                 statementContext.end();
+                recorder.endStream(statementContext.isPreparedStatementContext());
                 finalBlock.run();
+                childAllocator.close();
             }
         });
     }

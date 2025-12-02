@@ -1,15 +1,15 @@
 package io.dazzleduck.sql.http.server;
 
-import io.dazzleduck.sql.flight.server.DuckDBFlightSqlProducer;
+import io.dazzleduck.sql.flight.server.SqlProducerMBean;
 import io.helidon.webserver.http.HttpRules;
 import io.helidon.webserver.http.HttpService;
 import io.helidon.webserver.http.ServerRequest;
 import io.helidon.webserver.http.ServerResponse;
 
 public class UIService implements HttpService {
-    DuckDBFlightSqlProducer producer;
-    public UIService(DuckDBFlightSqlProducer producer) {
-        this.producer = producer;
+    SqlProducerMBean producerMBean;
+    public UIService(SqlProducerMBean producerMBean) {
+        this.producerMBean = producerMBean;
     }
 
     @Override

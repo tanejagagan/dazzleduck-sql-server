@@ -11,11 +11,22 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
 
     // -------------------- Counters -------------------------
     private final Counter streamStatementCounter;
+    private final Counter streamStatementErrorCounter;
+    private final Counter stremStatementBytesOutCounter;
+    private final Counter streamPreparedStatementErrorCounter;
     private final Counter streamPreparedStatementCounter;
+
+    private final Counter stremPreparedStatementBytesOutCounter;
     private final Counter bulkIngestCounter;
+
+    private final Counter bulkIngestErrorCounter;
 
     private final Counter cancelStatementCounter;
     private final Counter cancelPreparedStatementCounter;
+
+    private final Counter timeoutStatementCounter;
+
+    private final Counter timeoutPreparedStatementCounter;
 
     // ---- Completed counters (Option 2) ----
     private final Counter streamStatementCompletedCounter;
@@ -39,6 +50,10 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
         this.streamStatementCounter = counter("stream_statement", producerId);
         this.streamPreparedStatementCounter = counter("stream_prepared_statement", producerId);
         this.bulkIngestCounter = counter("bulk_ingest", producerId);
+        this.streamPreparedStatementErrorCounter = counter("stream_prepared_statement_error", producerId);
+        this.streamStatementErrorCounter = counter("stream_statement_error", producerId);
+        this.timeoutStatementCounter = counter("stream_statement_timeout", producerId);
+        this.timeoutPreparedStatementCounter = counter("stream_prepared_statement_timeout", producerId);
 
         // ------- Cancelled counters -------
         this.cancelStatementCounter = counter("cancel_statement", producerId);
@@ -48,6 +63,10 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
         this.streamStatementCompletedCounter = counter("stream_statement_completed", producerId);
         this.streamPreparedStatementCompletedCounter = counter("stream_prepared_statement_completed", producerId);
         this.bulkIngestCompletedCounter = counter("bulk_ingest_completed", producerId);
+        this.bulkIngestErrorCounter = counter("bulk_ingest_error", producerId);
+
+        this.stremPreparedStatementBytesOutCounter = counter("stream_prepared_statement_bytes_out", producerId);
+        this.stremStatementBytesOutCounter = counter("stream_statement_bytes_out", producerId);
 
     }
 
@@ -80,6 +99,16 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
     }
 
     @Override
+    public void recordStatementTimeout() {
+        timeoutStatementCounter.increment();
+    }
+
+    @Override
+    public void recordPreparedStatementTimeout() {
+        timeoutPreparedStatementCounter.increment();
+    }
+
+    @Override
     public void startStreamStatement() {
         streamStatementCounter.increment();
     }
@@ -87,6 +116,16 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
     @Override
     public void endStreamStatement() {
         streamStatementCompletedCounter.increment();
+    }
+
+    @Override
+    public void errorStreamStatement() {
+
+    }
+
+    @Override
+    public void errorStreamPreparedStatement() {
+        streamPreparedStatementErrorCounter.increment();
     }
 
     // ---------------- Stream Prepared Statement ----------------
@@ -99,6 +138,11 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
     @Override
     public void endStreamPreparedStatement() {
         streamPreparedStatementCompletedCounter.increment();
+    }
+
+    @Override
+    public void errorPreparedStreamStatement() {
+        streamStatementErrorCounter.increment();
     }
 
     // ---------------- Bulk Ingest ----------------
@@ -114,7 +158,19 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
     }
 
     @Override
-    public void recordGetStreamPreparedStatement(long size) { }
+    public void errorBulkIngest() {
+        bulkIngestErrorCounter.increment();
+    }
+
+    @Override
+    public void recordGetStreamPreparedStatement(long size) {
+
+    }
+
+    @Override
+    public void recordGetStreamStatement(long size) {
+
+    }
 
 
     @Override
@@ -142,5 +198,15 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
                 cancelledPrepared
 
         );
+    }
+
+    @Override
+    public double getBytesOut() {
+        return stremStatementBytesOutCounter.count() + stremPreparedStatementBytesOutCounter.count();
+    }
+
+    @Override
+    public double getBytesIn() {
+        return 0;
     }
 }

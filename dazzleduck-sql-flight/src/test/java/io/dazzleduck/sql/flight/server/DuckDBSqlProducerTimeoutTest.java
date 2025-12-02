@@ -77,7 +77,8 @@ public class DuckDBSqlProducerTimeoutTest {
                                 Executors.newSingleThreadScheduledExecutor(),
                                 Duration.ofSeconds(5),
                                 // Pass controllable clock
-                                Clock.systemDefaultZone()
+                                Clock.systemDefaultZone(),
+                                new NOOPFlightRecorder()
                         ))
                 .headerAuthenticator(AuthUtils.getTestAuthenticator())
                 .build()
