@@ -3,6 +3,7 @@ package io.dazzleduck.sql.runtime;
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.common.util.ConfigUtils;
+import io.dazzleduck.sql.commons.ConnectionPool;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -14,6 +15,7 @@ public class Main {
     public static void main(String[] args) throws Exception {
         var commandLineConfig = ConfigUtils.loadCommandLineConfig(args).config();
         var config = commandLineConfig.withFallback(ConfigFactory.load().getConfig(CONFIG_PATH));
+        ConnectionPool.addPreGetConnectionStatement("LOAD 'arrow';");
         start(config);
     }
 

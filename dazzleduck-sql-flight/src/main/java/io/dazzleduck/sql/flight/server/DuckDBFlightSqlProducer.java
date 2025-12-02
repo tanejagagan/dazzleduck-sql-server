@@ -16,9 +16,12 @@ import io.dazzleduck.sql.commons.authorization.SqlAuthorizer;
 import io.dazzleduck.sql.commons.ingestion.*;
 import io.dazzleduck.sql.commons.planner.SplitPlanner;
 import io.dazzleduck.sql.flight.FlightRecorder;
+import io.dazzleduck.sql.flight.MicroMeterFlightRecorder;
 import io.dazzleduck.sql.flight.ingestion.IngestionParameters;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceServerCallHeaderAuthMiddleware;
 import io.dazzleduck.sql.flight.stream.FlightStreamReader;
+import io.dazzleduck.sql.micrometer.metrics.MetricsRegistryFactory;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.apache.arrow.adapter.jdbc.JdbcParameterBinder;
 import org.apache.arrow.adapter.jdbc.JdbcToArrowUtils;
 import org.apache.arrow.flight.*;
@@ -101,7 +104,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         var size = 0;
         for(var e : map.values()){
             if(e.running()) {
-                size +=0;
+                size +=1;
             }
         }
         return size;
@@ -121,6 +124,15 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     public Instant getStartTime() {
         return startTime;
     }
+    private static FlightRecorder buildRecorder(String producerId) {
+        try {
+            MeterRegistry registry = MetricsRegistryFactory.create();
+            return new MicroMeterFlightRecorder(registry, producerId);
+        } catch (Throwable t) {
+            return new NOOPFlightRecorder();
+        }
+    }
+
 
     record DatabaseSchema ( String database, String schema) {}
     record CacheKey(String peerIdentity, long id){}
@@ -216,7 +228,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                    Duration queryTimeout) {
         this(location, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionTaskFactory,
                 scheduledExecutorService, queryTimeout, Clock.systemDefaultZone(),
-                new NOOPFlightRecorder());
+                buildRecorder(producerId));
 
     }
     public DuckDBFlightSqlProducer(Location location,
