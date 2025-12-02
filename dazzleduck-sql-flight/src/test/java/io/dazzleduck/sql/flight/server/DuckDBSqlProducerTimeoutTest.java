@@ -4,24 +4,27 @@ import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactoryProvider;
+import io.dazzleduck.sql.commons.util.MutableClock;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
 import org.apache.arrow.flight.*;
 import org.apache.arrow.flight.sql.FlightSqlClient;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
+import org.jmock.lib.concurrent.DeterministicScheduler;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.Executors;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 public class DuckDBSqlProducerTimeoutTest {
@@ -35,6 +38,8 @@ public class DuckDBSqlProducerTimeoutTest {
     private static final String LONG_RUNNING_QUERY = "with t as " +
             "(select len(split(concat('abcdefghijklmnopqrstuvwxyz:', generate_series), ':')) as len  from generate_series(1, 1000000000) )" +
             " select count(*) from t where len = 10";
+    protected static MutableClock mutableClock;
+    protected static DeterministicScheduler executor;
     protected static FlightServer flightServer;
     protected static FlightSqlClient sqlClient;
     protected static String warehousePath;
@@ -64,6 +69,8 @@ public class DuckDBSqlProducerTimeoutTest {
 
     private static void setUpClientServer() throws Exception {
         final Location serverLocation = Location.forGrpcInsecure(LOCALHOST, 55551);
+        mutableClock = new MutableClock(Instant.now(), ZoneId.systemDefault());
+        executor = new DeterministicScheduler();
         flightServer = FlightServer.builder(
                         serverAllocator,
                         serverLocation,
@@ -73,11 +80,9 @@ public class DuckDBSqlProducerTimeoutTest {
                                 serverAllocator, warehousePath, AccessMode.COMPLETE,
                                 DuckDBFlightSqlProducer.newTempDir(),
                                 PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(),
-                                // Pass Different Executor
-                                Executors.newSingleThreadScheduledExecutor(),
+                                executor,
                                 Duration.ofSeconds(5),
-                                // Pass controllable clock
-                                Clock.systemDefaultZone(),
+                                mutableClock,
                                 new NOOPFlightRecorder()
                         ))
                 .headerAuthenticator(AuthUtils.getTestAuthenticator())
@@ -92,25 +97,46 @@ public class DuckDBSqlProducerTimeoutTest {
     }
 
     @Test
-    public void testAutoCancelForPreparedStatement() {
+    public void testAutoCancelForPreparedStatement() throws Exception {
+        CountDownLatch queryStarted = new CountDownLatch(1);
+        Thread cancelThread = startCancelThread(queryStarted);
+
         try (FlightSqlClient.PreparedStatement preparedStatement = sqlClient.prepare(LONG_RUNNING_QUERY);
              FlightStream stream = sqlClient.getStream(preparedStatement.execute().getEndpoints().get(0).getTicket())) {
-            stream.next();
-            // This should return timeout.
+            queryStarted.countDown();
             assertThrows(Exception.class, stream::next);
-        } catch (Exception ignored) {
-
+        } finally {
+            cancelThread.join(5000);
         }
     }
 
     @Test
-    public void testAutoCancelForStatement() {
+    public void testAutoCancelForStatement() throws Exception {
+        CountDownLatch queryStarted = new CountDownLatch(1);
+        Thread cancelThread = startCancelThread(queryStarted);
+
         FlightInfo flightInfo = sqlClient.execute(LONG_RUNNING_QUERY);
         try (FlightStream stream = sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket())) {
-            // This should return timeout.
+            queryStarted.countDown();
             assertThrows(Exception.class, stream::next);
-        } catch (Exception ignored) {
-
+        } finally {
+            cancelThread.join(5000);
         }
+    }
+
+    private static Thread startCancelThread(CountDownLatch queryStarted) {
+        Thread timeAdvancer = new Thread(() -> {
+            try {
+                queryStarted.await();
+                Thread.sleep(100);
+                mutableClock.advanceBy(Duration.ofSeconds(10));
+                executor.tick(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+
+        timeAdvancer.start();
+        return timeAdvancer;
     }
 }
