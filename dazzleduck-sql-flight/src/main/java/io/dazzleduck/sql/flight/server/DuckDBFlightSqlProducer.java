@@ -18,6 +18,7 @@ import io.dazzleduck.sql.commons.planner.SplitPlanner;
 import io.dazzleduck.sql.flight.FlightRecorder;
 import io.dazzleduck.sql.flight.MicroMeterFlightRecorder;
 import io.dazzleduck.sql.flight.ingestion.IngestionParameters;
+import io.dazzleduck.sql.flight.model.RunningStatementInfo;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceServerCallHeaderAuthMiddleware;
 import io.dazzleduck.sql.flight.stream.FlightStreamReader;
 import io.dazzleduck.sql.micrometer.metrics.MetricsRegistryFactory;
@@ -137,6 +138,21 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     @Override
     public long getCancelledPreparedStatements() {
         return recorder.getCancelledPreparedStatements();
+    }
+
+    @Override
+    public List<RunningStatementInfo> getRunningStatementDetails() {
+        return List.of();
+    }
+
+    @Override
+    public List<RunningStatementInfo> getOpenPreparedStatementDetails() {
+        return List.of();
+    }
+
+    @Override
+    public List<RunningStatementInfo> getRunningBulkIngestDetails() {
+        return List.of();
     }
 
     @Override
