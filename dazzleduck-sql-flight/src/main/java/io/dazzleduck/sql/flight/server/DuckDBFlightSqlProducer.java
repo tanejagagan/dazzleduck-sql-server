@@ -114,6 +114,30 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     public double getBytesOut() {
         return recorder.getBytesOut();
     }
+    @Override
+    public long getCompletedStatements() {
+        return recorder.getCompletedStatements();
+    }
+
+    @Override
+    public long getCompletedPreparedStatements() {
+        return recorder.getCompletedPreparedStatements();
+    }
+
+    @Override
+    public long getCompletedBulkIngest() {
+        return recorder.getCompletedBulkIngest();
+    }
+
+    @Override
+    public long getCancelledStatements() {
+        return recorder.getCancelledStatements();
+    }
+
+    @Override
+    public long getCancelledPreparedStatements() {
+        return recorder.getCancelledPreparedStatements();
+    }
 
     @Override
     public double getBytesIn() {
@@ -124,6 +148,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     public Instant getStartTime() {
         return startTime;
     }
+
     private static FlightRecorder buildRecorder(String producerId) {
         try {
             MeterRegistry registry = MetricsRegistryFactory.create();
