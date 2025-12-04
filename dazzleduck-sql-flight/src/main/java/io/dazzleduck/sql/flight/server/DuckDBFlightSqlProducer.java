@@ -269,7 +269,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                    Duration queryTimeout) {
         this(location, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionTaskFactory,
                 scheduledExecutorService, queryTimeout, Clock.systemDefaultZone(),
-                buildRecorder(producerId));
+                 new NOOPFlightRecorder());
 
     }
     public DuckDBFlightSqlProducer(Location location,
