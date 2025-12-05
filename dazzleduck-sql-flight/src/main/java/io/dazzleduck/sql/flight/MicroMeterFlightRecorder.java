@@ -67,7 +67,6 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
 
         this.stremPreparedStatementBytesOutCounter = counter("stream_prepared_statement_bytes_out", producerId);
         this.stremStatementBytesOutCounter = counter("stream_statement_bytes_out", producerId);
-
     }
 
     // ==========================================================
@@ -164,12 +163,12 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
 
     @Override
     public void recordGetStreamPreparedStatement(long size) {
-
+        stremPreparedStatementBytesOutCounter.increment(size);
     }
 
     @Override
     public void recordGetStreamStatement(long size) {
-
+        stremStatementBytesOutCounter.increment(size);
     }
 
 
