@@ -142,12 +142,42 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
     @Override
     public List<RunningStatementInfo> getRunningStatementDetails() {
-        return List.of();
+        var result = new ArrayList<RunningStatementInfo>();
+        statementLoadingCache.asMap().forEach((key, ctx) -> {
+            if (ctx.running()) {
+                result.add(
+                        new RunningStatementInfo(
+                                key.peerIdentity(),                       // user
+                                String.valueOf(key.id()),                  // statementId
+                                ctx.startTime(),                           // startInstant
+                                ctx.getQuery(),                                // query
+                                ctx.running(),                                 // action
+                                ctx.endTime()                                       // endInstant
+                        )
+                );
+            }
+        });
+
+        return result;
     }
 
     @Override
     public List<RunningStatementInfo> getOpenPreparedStatementDetails() {
-        return List.of();
+        List<RunningStatementInfo> result = new ArrayList<>();
+
+        preparedStatementLoadingCache.asMap().forEach((key, ctx) -> {
+            result.add(
+                    new RunningStatementInfo(
+                            key.peerIdentity(),
+                            String.valueOf(key.id()),
+                            ctx.startTime(),
+                            ctx.getQuery(),
+                            ctx.running(),
+                            ctx.endTime()
+                    )
+            );
+        });
+        return result;
     }
 
     @Override
