@@ -15,6 +15,8 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
     private final Counter stremStatementBytesOutCounter;
     private final Counter streamPreparedStatementErrorCounter;
     private final Counter streamPreparedStatementCounter;
+    private final Counter streamStatementBytesInCounter;
+    private final Counter streamPreparedStatementBytesInCounter;
 
     private final Counter stremPreparedStatementBytesOutCounter;
     private final Counter bulkIngestCounter;
@@ -67,7 +69,8 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
 
         this.stremPreparedStatementBytesOutCounter = counter("stream_prepared_statement_bytes_out", producerId);
         this.stremStatementBytesOutCounter = counter("stream_statement_bytes_out", producerId);
-
+        this.streamStatementBytesInCounter = counter("stream_statement_bytes_in", producerId);
+        this.streamPreparedStatementBytesInCounter = counter("stream_prepared_statement_bytes_in", producerId);
     }
 
     // ==========================================================
@@ -165,11 +168,13 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
     @Override
     public void recordGetStreamPreparedStatement(long size) {
         stremPreparedStatementBytesOutCounter.increment(size);
+        streamPreparedStatementBytesInCounter.increment(size);
     }
 
     @Override
     public void recordGetStreamStatement(long size) {
         stremStatementBytesOutCounter.increment(size);
+        streamStatementBytesInCounter.increment(size);
     }
 
 
@@ -207,6 +212,6 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
 
     @Override
     public double getBytesIn() {
-        return 0;
+        return streamStatementBytesInCounter.count() + streamPreparedStatementBytesInCounter.count();
     }
 }
