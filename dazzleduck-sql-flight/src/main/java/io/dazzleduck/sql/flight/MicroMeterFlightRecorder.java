@@ -164,12 +164,12 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
 
     @Override
     public void recordGetStreamPreparedStatement(long size) {
-
+        stremPreparedStatementBytesOutCounter.increment(size);
     }
 
     @Override
     public void recordGetStreamStatement(long size) {
-
+        stremStatementBytesOutCounter.increment(size);
     }
 
 
