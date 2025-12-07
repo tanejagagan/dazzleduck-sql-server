@@ -61,7 +61,7 @@ public class DuckDBFlightSqlProducerTest {
     protected static FlightServer flightServer;
     protected static FlightSqlClient sqlClient;
     protected static String warehousePath;
-
+    private static DuckDBFlightSqlProducer producer;
     @TempDir
     Path projectTempDir;
     private Path catalogFile;
@@ -93,15 +93,23 @@ public class DuckDBFlightSqlProducerTest {
 
     private static void setUpClientServer() throws Exception {
         final Location serverLocation = Location.forGrpcInsecure(LOCALHOST, 55556);
+        producer = new DuckDBFlightSqlProducer(
+                serverLocation,
+                UUID.randomUUID().toString(),
+                "change me",
+                serverAllocator,
+                warehousePath,
+                AccessMode.COMPLETE,
+                DuckDBFlightSqlProducer.newTempDir(),
+                PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(),
+                Executors.newSingleThreadScheduledExecutor(),
+                Duration.ofMinutes(2)
+        );
+
         flightServer = FlightServer.builder(
                         serverAllocator,
                         serverLocation,
-                        new DuckDBFlightSqlProducer(serverLocation,
-                                UUID.randomUUID().toString(),
-                                "change me",
-                                serverAllocator, warehousePath, AccessMode.COMPLETE,
-                                DuckDBFlightSqlProducer.newTempDir(),
-                        PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(), Executors.newSingleThreadScheduledExecutor(), Duration.ofMinutes(2)))
+                        producer)
                 .headerAuthenticator(AuthUtils.getTestAuthenticator())
                 .build()
                 .start();
@@ -112,7 +120,6 @@ public class DuckDBFlightSqlProducerTest {
                                 Headers.HEADER_SCHEMA, TEST_SCHEMA)))
                 .build());
     }
-
 
     @ParameterizedTest
     @ValueSource(strings = {"SELECT * FROM generate_series(10)",
@@ -399,6 +406,120 @@ public class DuckDBFlightSqlProducerTest {
              Statement stmt = conn.createStatement()) {
             stmt.execute("DROP TABLE a");
         }
+    }
+
+    @Test
+    public void testOpenPreparedStatementDetailsRunning() throws Exception {
+        
+        SqlProducerMBean mbean = producer;
+        var prepared = sqlClient.prepare("SELECT * FROM generate_series(5)");
+        var flightInfo = prepared.execute();
+        sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket());
+        Thread.sleep(80);
+        var openPrepared = mbean.getOpenPreparedStatementDetails();
+        assertFalse(openPrepared.isEmpty());
+        var info = openPrepared.get(0);
+        System.out.println(info);
+        assertEquals("admin", info.user());
+        assertTrue(info.query().contains("generate_series"));
+        assertEquals("RUNNING", info.action());
+        prepared.close();
+    }
+
+    @Test
+    public void testOpenPreparedStatementDetailsCompleted() throws Exception {
+
+        SqlProducerMBean mbean = producer;
+        var prepared = sqlClient.prepare("SELECT * FROM generate_series(5)");
+        var flightInfo = prepared.execute();
+        var stream = sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket());
+        while (stream.next()) { /* no processing */ }
+        stream.close();
+        Thread.sleep(50);
+        var openPrepared = mbean.getOpenPreparedStatementDetails();
+        assertFalse(openPrepared.isEmpty());
+        var info = openPrepared.get(0);
+        System.out.println(info);
+        assertEquals("admin", info.user());
+        assertTrue(info.query().contains("generate_series"));
+        assertEquals("COMPLETED", info.action());
+        prepared.close();
+    }
+    @Test
+    public void testOpenPreparedStatementDetailsOpen() throws Exception {
+
+        SqlProducerMBean mbean = producer;
+        var prepared = sqlClient.prepare("SELECT * FROM generate_series(5)");
+        Thread.sleep(50);
+        var openPrepared = mbean.getOpenPreparedStatementDetails();
+        assertFalse(openPrepared.isEmpty());
+        var info = openPrepared.get(0);
+        System.out.println(info);
+        assertEquals("admin", info.user());
+        assertTrue(info.query().contains("generate_series"));
+        assertEquals("OPEN", info.action());
+        prepared.close();
+    }
+
+
+    @Test
+    public void testStatementDetails() throws Exception {
+        final FlightInfo flightInfo = sqlClient.execute(LONG_RUNNING_QUERY);
+        Thread thread = new Thread(() -> {
+            try {
+                Thread.sleep(200);
+                var running = producer.getRunningStatementDetails();
+                assertFalse(running.isEmpty());
+                var info = running.get(0);
+                assertEquals("admin", info.user());
+                assertTrue(info.query().contains("generate_series"));
+                sqlClient.cancelFlightInfo(new CancelFlightInfoRequest(flightInfo));
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        });
+        thread.start();
+        try (final FlightStream stream =
+                     sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket())) {
+            while (stream.next()) {  // It should now reach here
+                throw new RuntimeException("Cancellation failed");
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    @Test
+    public void testRunningStatementDetails() throws Exception {
+
+        SqlProducerMBean mbean = producer;
+        var flightInfo = sqlClient.execute("SELECT * FROM generate_series(1000000000)");
+        sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket());
+        Thread.sleep(100);
+        var running = mbean.getRunningStatementDetails();
+        assertFalse(running.isEmpty(), "Expected at least one running statement");
+        var info = running.get(0);
+        System.out.println("info========="+info);
+        assertEquals("admin", info.user());
+        assertTrue(info.query().contains("generate_series"));
+        assertEquals("RUNNING", info.action());
+        assertNotNull(info.startInstant());
+        assertNull(info.endInstant());
+    }
+    @Test
+    public void testStatementDetailsCompleted() throws Exception {
+
+        SqlProducerMBean mbean = producer;
+        var flightInfo = sqlClient.execute("SELECT * FROM generate_series(1000000)");
+        Thread.sleep(100);
+        var completed = mbean.getRunningStatementDetails();
+        assertFalse(completed.isEmpty());
+        var info = completed.get(0);
+        System.out.println(info);
+        assertEquals("admin", info.user());
+        assertTrue(info.query().contains("generate_series"));
+        assertEquals("COMPLETED", info.action());
+        assertNotNull(info.startInstant());
+        assertNotNull(info.endInstant());
     }
 
     private ServerClient createRestrictedServerClient(Location serverLocation,
