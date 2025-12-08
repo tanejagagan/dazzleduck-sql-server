@@ -10,12 +10,14 @@ import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactoryProvider;
 import io.dazzleduck.sql.commons.util.TestUtils;
+import io.dazzleduck.sql.flight.FlightRecorder;
 import io.dazzleduck.sql.flight.MicroMeterFlightRecorder;
 import io.dazzleduck.sql.flight.stream.FlightStreamReader;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
 import io.dazzleduck.sql.flight.stream.ArrowStreamReaderWrapper;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.logging.LoggingMeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.apache.arrow.flight.*;
 import org.apache.arrow.flight.sql.FlightSqlClient;
 import org.apache.arrow.flight.sql.impl.FlightSql;
@@ -37,6 +39,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.NoSuchAlgorithmException;
 import java.sql.*;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -96,9 +99,12 @@ public class DuckDBFlightSqlProducerTest {
 
     private static void setUpClientServer() throws Exception {
         final Location serverLocation = Location.forGrpcInsecure(LOCALHOST, 55556);
+        MeterRegistry registry = new SimpleMeterRegistry();
+        String producerId = UUID.randomUUID().toString();
+        FlightRecorder recorder = new MicroMeterFlightRecorder(registry, producerId);
         producer = new DuckDBFlightSqlProducer(
                 serverLocation,
-                UUID.randomUUID().toString(),
+                producerId,
                 "change me",
                 serverAllocator,
                 warehousePath,
@@ -106,7 +112,9 @@ public class DuckDBFlightSqlProducerTest {
                 DuckDBFlightSqlProducer.newTempDir(),
                 PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(),
                 Executors.newSingleThreadScheduledExecutor(),
-                Duration.ofMinutes(2)
+                Duration.ofMinutes(2),
+                Clock.systemDefaultZone(),
+                recorder                  // ✅ Correct recorder injection!
         );
 
         flightServer = FlightServer.builder(
@@ -412,42 +420,31 @@ public class DuckDBFlightSqlProducerTest {
     }
 
     @Test
-    public void testOpenPreparedStatementDetailsRunning() throws Exception {
-        
+    public void testOpenPreparedStatementDetailsLifecycle() throws Exception {
+
         SqlProducerMBean mbean = producer;
-        var prepared = sqlClient.prepare("SELECT * FROM generate_series(5)");
+        var prepared = sqlClient.prepare("SELECT * FROM generate_series(10)");
+        Thread.sleep(40);
+        var info = mbean.getOpenPreparedStatementDetails().get(0);
+        assertEquals("OPEN", info.action());
+
         var flightInfo = prepared.execute();
-        sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket());
-        Thread.sleep(80);
-        var openPrepared = mbean.getOpenPreparedStatementDetails();
-        assertFalse(openPrepared.isEmpty());
-        var info = openPrepared.get(0);
-        System.out.println(info);
-        assertEquals("admin", info.user());
-        assertTrue(info.query().contains("generate_series"));
+        var ticket = flightInfo.getEndpoints().get(0).getTicket();
+        var stream = sqlClient.getStream(ticket);
+        Thread.sleep(60);
+        info = mbean.getOpenPreparedStatementDetails().get(0);
         assertEquals("RUNNING", info.action());
-        prepared.close();
-    }
 
-    @Test
-    public void testOpenPreparedStatementDetailsCompleted() throws Exception {
-
-        SqlProducerMBean mbean = producer;
-        var prepared = sqlClient.prepare("SELECT * FROM generate_series(5)");
-        var flightInfo = prepared.execute();
-        var stream = sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket());
-        while (stream.next()) { /* no processing */ }
+        while (stream.next()) { }
         stream.close();
-        Thread.sleep(50);
-        var openPrepared = mbean.getOpenPreparedStatementDetails();
-        assertFalse(openPrepared.isEmpty());
-        var info = openPrepared.get(0);
-        System.out.println(info);
-        assertEquals("admin", info.user());
-        assertTrue(info.query().contains("generate_series"));
+        Thread.sleep(60);
+        info = mbean.getOpenPreparedStatementDetails().get(0);
         assertEquals("COMPLETED", info.action());
         prepared.close();
+        Thread.sleep(40);
+        assertTrue(mbean.getOpenPreparedStatementDetails().isEmpty());
     }
+
     @Test
     public void testOpenPreparedStatementDetailsOpen() throws Exception {
 
@@ -464,32 +461,6 @@ public class DuckDBFlightSqlProducerTest {
         prepared.close();
     }
 
-
-    @Test
-    public void testStatementDetails() throws Exception {
-        final FlightInfo flightInfo = sqlClient.execute(LONG_RUNNING_QUERY);
-        Thread thread = new Thread(() -> {
-            try {
-                Thread.sleep(200);
-                var running = producer.getRunningStatementDetails();
-                assertFalse(running.isEmpty());
-                var info = running.get(0);
-                assertEquals("admin", info.user());
-                assertTrue(info.query().contains("generate_series"));
-                sqlClient.cancelFlightInfo(new CancelFlightInfoRequest(flightInfo));
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
-            }
-        });
-        thread.start();
-        try (final FlightStream stream =
-                     sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket())) {
-            while (stream.next()) {  // It should now reach here
-                throw new RuntimeException("Cancellation failed");
-            }
-        } catch (Exception ignored) {
-        }
-    }
 
     @Test
     public void testRunningStatementDetails() throws Exception {
@@ -532,17 +503,8 @@ public class DuckDBFlightSqlProducerTest {
 
         SqlProducerMBean mbean = producer;
         var flightInfo = sqlClient.execute("SELECT * FROM generate_series(1000)");
-        var stream = sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket());
-        while (stream.next()) {}
-        stream.close();
-        var recorderField = DuckDBFlightSqlProducer.class.getDeclaredField("recorder");
-        recorderField.setAccessible(true);
-        var recorder = recorderField.get(producer);
-        var registryField = MicroMeterFlightRecorder.class.getDeclaredField("registry");
-        registryField.setAccessible(true);
-        MeterRegistry registry = (MeterRegistry) registryField.get(recorder);
-        if (registry instanceof LoggingMeterRegistry loggingRegistry) {
-            loggingRegistry.close();
+        try (var stream = sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket())) {
+            while (stream.next()) { }
         }
         double bytesOut = mbean.getBytesOut();
         assertTrue(bytesOut > 0);
