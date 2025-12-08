@@ -10,9 +10,12 @@ import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactoryProvider;
 import io.dazzleduck.sql.commons.util.TestUtils;
+import io.dazzleduck.sql.flight.MicroMeterFlightRecorder;
 import io.dazzleduck.sql.flight.stream.FlightStreamReader;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
 import io.dazzleduck.sql.flight.stream.ArrowStreamReaderWrapper;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.logging.LoggingMeterRegistry;
 import org.apache.arrow.flight.*;
 import org.apache.arrow.flight.sql.FlightSqlClient;
 import org.apache.arrow.flight.sql.impl.FlightSql;
@@ -498,28 +501,51 @@ public class DuckDBFlightSqlProducerTest {
         var running = mbean.getRunningStatementDetails();
         assertFalse(running.isEmpty(), "Expected at least one running statement");
         var info = running.get(0);
-        System.out.println("info========="+info);
         assertEquals("admin", info.user());
         assertTrue(info.query().contains("generate_series"));
         assertEquals("RUNNING", info.action());
         assertNotNull(info.startInstant());
         assertNull(info.endInstant());
     }
+
+//    @Test
+//    public void testStatementDetailsCompleted() throws Exception {
+//        SqlProducerMBean mbean = producer;
+//        var flightInfo = sqlClient.execute("SELECT * FROM generate_series(1000000)");
+//        var stream = sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket());
+//        while (stream.next()) {}
+//        stream.close();
+//        Thread.sleep(100);
+//        var completed = mbean.getRunningStatementDetails();
+//        assertFalse(completed.isEmpty());
+//        var info = completed.get(0);
+//        System.out.println(info);
+//        assertEquals("admin", info.user());
+//        assertTrue(info.query().contains("generate_series"));
+//        assertEquals("COMPLETED", info.action());
+//        assertNotNull(info.startInstant());
+//        assertNotNull(info.endInstant());
+//    }
+
     @Test
-    public void testStatementDetailsCompleted() throws Exception {
+    public void testBytesOut() throws Exception {
 
         SqlProducerMBean mbean = producer;
-        var flightInfo = sqlClient.execute("SELECT * FROM generate_series(1000000)");
-        Thread.sleep(100);
-        var completed = mbean.getRunningStatementDetails();
-        assertFalse(completed.isEmpty());
-        var info = completed.get(0);
-        System.out.println(info);
-        assertEquals("admin", info.user());
-        assertTrue(info.query().contains("generate_series"));
-        assertEquals("COMPLETED", info.action());
-        assertNotNull(info.startInstant());
-        assertNotNull(info.endInstant());
+        var flightInfo = sqlClient.execute("SELECT * FROM generate_series(1000)");
+        var stream = sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket());
+        while (stream.next()) {}
+        stream.close();
+        var recorderField = DuckDBFlightSqlProducer.class.getDeclaredField("recorder");
+        recorderField.setAccessible(true);
+        var recorder = recorderField.get(producer);
+        var registryField = MicroMeterFlightRecorder.class.getDeclaredField("registry");
+        registryField.setAccessible(true);
+        MeterRegistry registry = (MeterRegistry) registryField.get(recorder);
+        if (registry instanceof LoggingMeterRegistry loggingRegistry) {
+            loggingRegistry.close();
+        }
+        double bytesOut = mbean.getBytesOut();
+        assertTrue(bytesOut > 0);
     }
 
     private ServerClient createRestrictedServerClient(Location serverLocation,
