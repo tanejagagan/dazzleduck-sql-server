@@ -23,6 +23,8 @@ import io.dazzleduck.sql.flight.server.auth2.AdvanceServerCallHeaderAuthMiddlewa
 import io.dazzleduck.sql.flight.stream.FlightStreamReader;
 import io.dazzleduck.sql.micrometer.metrics.MetricsRegistryFactory;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.logging.LoggingMeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.apache.arrow.adapter.jdbc.JdbcParameterBinder;
 import org.apache.arrow.adapter.jdbc.JdbcToArrowUtils;
 import org.apache.arrow.flight.*;
@@ -197,7 +199,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
     private static FlightRecorder buildRecorder(String producerId) {
         try {
-            MeterRegistry registry = MetricsRegistryFactory.create();
+            var registry = new LoggingMeterRegistry();
             return new MicroMeterFlightRecorder(registry, producerId);
         } catch (Throwable t) {
             return new NOOPFlightRecorder();
@@ -299,7 +301,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                    Duration queryTimeout) {
         this(location, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionTaskFactory,
                 scheduledExecutorService, queryTimeout, Clock.systemDefaultZone(),
-                 new NOOPFlightRecorder());
+                buildRecorder(producerId));
 
     }
     public DuckDBFlightSqlProducer(Location location,
