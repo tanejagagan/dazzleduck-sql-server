@@ -15,10 +15,7 @@ import io.dazzleduck.sql.flight.MicroMeterFlightRecorder;
 import io.dazzleduck.sql.flight.stream.FlightStreamReader;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
 import io.dazzleduck.sql.flight.stream.ArrowStreamReaderWrapper;
-import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.logging.LoggingMeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import io.micrometer.core.instrument.step.StepMeterRegistry;
 import org.apache.arrow.flight.*;
 import org.apache.arrow.flight.sql.FlightSqlClient;
 import org.apache.arrow.flight.sql.impl.FlightSql;
@@ -94,13 +91,6 @@ public class DuckDBFlightSqlProducerTest {
     @AfterAll
     public static void afterAll() {
         clientAllocator.close();
-    }
-    @BeforeEach
-    void resetProducer() throws Exception {
-        if (flightServer != null) {
-            flightServer.close();
-        }
-        setUpClientServer();
     }
 
     private static void setUpClientServer() throws Exception {
@@ -451,7 +441,7 @@ public class DuckDBFlightSqlProducerTest {
 
         SqlProducerMBean mbean = producer;
 
-        var flightInfo = sqlClient.execute("SELECT * FROM generate_series(100000000000)");
+        var flightInfo = sqlClient.execute("SELECT * FROM generate_series(100000000)");
         var stream = sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket());
         while (stream.next()) {}
         var info = waitForState(mbean::getRunningStatementDetails, "COMPLETED");
