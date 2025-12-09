@@ -68,6 +68,11 @@ public interface FlightSender {
         }
 
         abstract protected void doSend(SendElement element) throws InterruptedException;
+
+        public void start() {
+            senderThread.setDaemon(true);
+            senderThread.start();
+        }
     }
 
     public interface SendElement {
