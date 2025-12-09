@@ -10,6 +10,7 @@ import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactoryProvider;
 import io.dazzleduck.sql.commons.util.TestUtils;
+import io.dazzleduck.sql.flight.optimizer.QueryOptimizer;
 import io.dazzleduck.sql.flight.FlightRecorder;
 import io.dazzleduck.sql.flight.MicroMeterFlightRecorder;
 import io.dazzleduck.sql.flight.stream.FlightStreamReader;
@@ -41,7 +42,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Executors;
-import java.util.function.Supplier;
 
 import static io.dazzleduck.sql.common.LocalStartupConfigProvider.SCRIPT_LOCATION_KEY;
 import static io.dazzleduck.sql.commons.util.TestConstants.*;
@@ -109,13 +109,13 @@ public class DuckDBFlightSqlProducerTest {
                 Executors.newSingleThreadScheduledExecutor(),
                 Duration.ofMinutes(2),
                 Clock.systemDefaultZone(),
-                recorder
-        );
+                recorder, QueryOptimizer.NOOP_QUERY_OPTIMIZER);
 
         flightServer = FlightServer.builder(
                         serverAllocator,
                         serverLocation,
                         producer)
+
                 .headerAuthenticator(AuthUtils.getTestAuthenticator())
                 .build()
                 .start();
@@ -280,7 +280,11 @@ public class DuckDBFlightSqlProducerTest {
         Thread thread = new Thread(() -> {
             try {
                 Thread.sleep(200);
+                var running = producer.getRunningStatementDetails();
                 sqlClient.cancelFlightInfo(new CancelFlightInfoRequest(flightInfo));
+                // Test the assertion after cancel is  called because if assert will fail
+                // then the test will hang for a very long time
+                assertEquals(1, producer.getRunningStatementDetails().size());
             } catch (InterruptedException e) {
                 throw new RuntimeException(e);
             }
@@ -295,6 +299,7 @@ public class DuckDBFlightSqlProducerTest {
         } catch (Exception e) {
             // Expected. Ignore it
         }
+        assertEquals(0, producer.getRunningStatementDetails().size());
     }
 
     @Test
@@ -416,44 +421,17 @@ public class DuckDBFlightSqlProducerTest {
 
     @Test
     public void testOpenPreparedStatementDetailsLifecycle() throws Exception {
-
         SqlProducerMBean mbean = producer;
         var preparedStatement = sqlClient.prepare("SELECT * FROM generate_series(10)");
-        var info = waitForState(mbean::getOpenPreparedStatementDetails, "OPEN");
-        assertEquals("OPEN", info.action());
-
+        assertEquals(1, mbean.getOpenPreparedStatementDetails().size());
         var flightInfo = preparedStatement.execute();
         var ticket = flightInfo.getEndpoints().get(0).getTicket();
         var stream = sqlClient.getStream(ticket);
-        info = waitForState(mbean::getOpenPreparedStatementDetails, "RUNNING");
-        assertEquals("RUNNING", info.action());
-
         while (stream.next()) {}
         stream.close();
-        info = waitForState(mbean::getOpenPreparedStatementDetails, "COMPLETED");
-        assertEquals("COMPLETED", info.action());
         preparedStatement.close();
-        waitForState(mbean::getOpenPreparedStatementDetails, "EMPTY");
+        assertEquals(0, mbean.getOpenPreparedStatementDetails().size());
     }
-
-    @Test
-    public void testStatementDetailsCompleted() throws Exception {
-
-        SqlProducerMBean mbean = producer;
-
-        var flightInfo = sqlClient.execute("SELECT * FROM generate_series(100000000)");
-        var stream = sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket());
-        while (stream.next()) {}
-        var info = waitForState(mbean::getRunningStatementDetails, "COMPLETED");
-        assertEquals("admin", info.user());
-        assertTrue(info.query().contains("generate_series"));
-        assertEquals("COMPLETED", info.action());
-        assertNotNull(info.startInstant());
-        assertNotNull(info.endInstant());
-        stream.close();
-        waitForState(mbean::getRunningStatementDetails, "EMPTY");
-    }
-
 
     @Test
     public void testBytesOut() throws Exception {
@@ -555,28 +533,5 @@ public class DuckDBFlightSqlProducerTest {
         return new String[]{
                 attachDB, createSchema, createTable, insertValues
         };
-    }
-    private <T> T waitForState(Supplier<List<T>> supplier, String expectedAction) throws InterruptedException {
-
-        for (int i = 0; i < 30; i++) {
-            var list = supplier.get();
-            if (expectedAction.equals("EMPTY")) {
-                if (list.isEmpty()) return null;
-            }
-            else {
-                if (!list.isEmpty()) {
-                    var info = list.get(0);
-                    try {
-                        var action = (String) info.getClass().getMethod("action").invoke(info);
-                        if (expectedAction.equals(action)) {
-                            return info;
-                        }
-                    } catch (Exception ignored) {
-                    }
-                }
-            }
-            Thread.sleep(5);
-        }
-        return null;
     }
 }

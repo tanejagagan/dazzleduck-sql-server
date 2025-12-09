@@ -35,8 +35,7 @@ public class QueryService extends AbstractQueryBasedService {
         var context = ControllerService.createContext(request);
         try {
             var id = query.id() == null ? StatementHandle.nextStatementId() : query.id();
-            var statementHandle = StatementHandle.newStatementHandle(id, query.query(), producerId, -1)
-                    .signed(secretKey);
+            var statementHandle = StatementHandle.newStatementHandle(id, query.query(), producerId, -1);
             var ticket = createTicket(statementHandle);
             var listener = new OutputStreamServerStreamListener(response);
             flightProducer.getStream(context, ticket, listener);
