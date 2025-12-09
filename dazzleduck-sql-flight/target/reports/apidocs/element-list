@@ -1,9 +1,0 @@
-io.dazzleduck.sql.flight
-io.dazzleduck.sql.flight.context
-io.dazzleduck.sql.flight.ingestion
-io.dazzleduck.sql.flight.model
-io.dazzleduck.sql.flight.optimizer
-io.dazzleduck.sql.flight.server
-io.dazzleduck.sql.flight.server.auth2
-io.dazzleduck.sql.flight.stream
-org.apache.arrow.flight

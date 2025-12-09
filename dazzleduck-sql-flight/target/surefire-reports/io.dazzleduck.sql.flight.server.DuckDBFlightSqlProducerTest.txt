@@ -1,4 +1,0 @@
--------------------------------------------------------------------------------
-Test set: io.dazzleduck.sql.flight.server.DuckDBFlightSqlProducerTest
--------------------------------------------------------------------------------
-Tests run: 22, Failures: 0, Errors: 0, Skipped: 1, Time elapsed: 3.353 s -- in io.dazzleduck.sql.flight.server.DuckDBFlightSqlProducerTest

@@ -1,1 +1,0 @@
-https://github.com/grpc/grpc-java/tree/master/testing/src/main/resources/certs

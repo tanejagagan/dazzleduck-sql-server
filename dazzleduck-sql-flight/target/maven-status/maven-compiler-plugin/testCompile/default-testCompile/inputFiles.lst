@@ -1,8 +1,0 @@
-/Users/gtaneja/git/dazzleduck-sql-server/dazzleduck-sql-flight/src/test/java/io/dazzleduck/sql/flight/server/DuckDBFlightJDBCTest.java
-/Users/gtaneja/git/dazzleduck-sql-server/dazzleduck-sql-flight/src/test/java/io/dazzleduck/sql/flight/server/DuckDBFlightSqlProducerTest.java
-/Users/gtaneja/git/dazzleduck-sql-server/dazzleduck-sql-flight/src/test/java/io/dazzleduck/sql/flight/server/DuckDBSqlProducerTimeoutTest.java
-/Users/gtaneja/git/dazzleduck-sql-server/dazzleduck-sql-flight/src/test/java/io/dazzleduck/sql/flight/server/FlightTestUtils.java
-/Users/gtaneja/git/dazzleduck-sql-server/dazzleduck-sql-flight/src/test/java/io/dazzleduck/sql/flight/server/HttpLoginTest.java
-/Users/gtaneja/git/dazzleduck-sql-server/dazzleduck-sql-flight/src/test/java/io/dazzleduck/sql/flight/server/JwtClaimBasedAuthorizerTest.java
-/Users/gtaneja/git/dazzleduck-sql-server/dazzleduck-sql-flight/src/test/java/io/dazzleduck/sql/flight/server/MicroMeterFlightRecorderTest.java
-/Users/gtaneja/git/dazzleduck-sql-server/dazzleduck-sql-flight/src/test/java/io/dazzleduck/sql/flight/server/ServerClient.java
