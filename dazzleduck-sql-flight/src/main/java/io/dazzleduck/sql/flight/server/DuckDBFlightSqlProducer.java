@@ -146,7 +146,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     public List<RunningStatementInfo> getRunningStatementDetails() {
         var result = new ArrayList<RunningStatementInfo>();
         statementLoadingCache.asMap().forEach((key, ctx) -> {
-            if (ctx.running()) {
                 result.add(
                         new RunningStatementInfo(
                                 key.peerIdentity(),                       // user
@@ -157,7 +156,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                 ctx.endTime()                                       // endInstant
                         )
                 );
-            }
         });
 
         return result;
