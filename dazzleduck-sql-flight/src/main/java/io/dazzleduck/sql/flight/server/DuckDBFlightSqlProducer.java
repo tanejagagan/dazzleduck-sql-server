@@ -19,6 +19,7 @@ import io.dazzleduck.sql.flight.FlightRecorder;
 import io.dazzleduck.sql.flight.MicroMeterFlightRecorder;
 import io.dazzleduck.sql.flight.ingestion.IngestionParameters;
 import io.dazzleduck.sql.flight.optimizer.QueryOptimizer;
+import io.dazzleduck.sql.flight.model.RunningStatementInfo;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceServerCallHeaderAuthMiddleware;
 import io.dazzleduck.sql.flight.stream.FlightStreamReader;
 import io.micrometer.core.instrument.logging.LoggingMeterRegistry;
@@ -137,6 +138,49 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     @Override
     public long getCancelledPreparedStatements() {
         return recorder.getCancelledPreparedStatements();
+    }
+
+    @Override
+    public List<RunningStatementInfo> getRunningStatementDetails() {
+        var result = new ArrayList<RunningStatementInfo>();
+        statementLoadingCache.asMap().forEach((key, ctx) -> {
+                result.add(
+                        new RunningStatementInfo(
+                                key.peerIdentity(),                       // user
+                                String.valueOf(key.id()),                  // statementId
+                                ctx.startTime(),                           // startInstant
+                                ctx.getQuery(),                                // query
+                                ctx.running(),                                 // action
+                                ctx.endTime()                                       // endInstant
+                        )
+                );
+        });
+
+        return result;
+    }
+
+    @Override
+    public List<RunningStatementInfo> getOpenPreparedStatementDetails() {
+        List<RunningStatementInfo> result = new ArrayList<>();
+
+        preparedStatementLoadingCache.asMap().forEach((key, ctx) -> {
+            result.add(
+                    new RunningStatementInfo(
+                            key.peerIdentity(),
+                            String.valueOf(key.id()),
+                            ctx.startTime(),
+                            ctx.getQuery(),
+                            ctx.running(),
+                            ctx.endTime()
+                    )
+            );
+        });
+        return result;
+    }
+
+    @Override
+    public List<RunningStatementInfo> getRunningBulkIngestDetails() {
+        return List.of();
     }
 
     @Override
