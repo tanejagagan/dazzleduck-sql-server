@@ -1,6 +1,7 @@
 package io.dazzleduck.sql.flight.server;
 
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
@@ -609,26 +610,33 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             final CallContext context,
             final ServerStreamListener listener) {
         StatementHandle statementHandle = StatementHandle.deserialize(ticketStatementQuery.getStatementHandle());
-        if (statementHandle.signatureMismatch(secretKey)) {
-            ErrorHandling.handleSignatureMismatch(listener);
-            return;
-        }
         getStreamStatement(statementHandle, context, listener);
     }
 
-    public void getStreamStatement(
+    private void getStreamStatement(
             StatementHandle statementHandle,
             final CallContext context,
             final ServerStreamListener listener) {
         try {
             var connection = getConnection(context, accessMode);
+            String query = statementHandle.query();
+            if (statementHandle.queryChecksum() != null
+                    && statementHandle.signatureMismatch(secretKey)) {
+                ErrorHandling.handleSignatureMismatch(listener);
+                return;
+            }
+            if (statementHandle.queryChecksum() == null  &&
+                    AccessMode.RESTRICTED == accessMode) {
+                query = authorize(context, query, connection);
+            }
+
             Statement statement = connection.createStatement();
-            var statementContext = new StatementContext<>(statement, statementHandle.query());
+            var statementContext = new StatementContext<>(statement, query);
             var key = new CacheKey(context.peerIdentity(), statementHandle.queryId());
             statementLoadingCache.put(key, statementContext);
             streamResultSet(executorService,
                     statementContext,
-                    OptionalResultSetSupplier.of(statement, statementHandle.query(), queryOptimizer),
+                    OptionalResultSetSupplier.of(statement, query, queryOptimizer),
                     allocator,
                     getBatchSize(context),
                     listener,
@@ -1315,6 +1323,13 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         var verifiedClaims = getVerifiedClaims(callContext);
         var databaseSchema = getDatabaseSchema(callContext, accessMode);
         return sqlAuthorizer.authorize(peerIdentity, databaseSchema.database, databaseSchema.schema, sql, verifiedClaims);
+    }
+
+    private String authorize(CallContext callContext, String sql, Connection connection)
+            throws UnauthorizedException, JsonProcessingException, SQLException {
+        var tree = Transformations.parseToTree(connection, sql);
+        var authorizedTree = authorize(callContext, tree);
+        return Transformations.parseToSql(connection, authorizedTree);
     }
 
     protected StatementHandle newStatementHandle(String query, long splitSize) {
