@@ -1251,13 +1251,17 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                 recorder.errorStream(statementContext.isPreparedStatementContext());
                 ErrorHandling.handleThrowable(listener, throwable);
             } finally {
-                if (!error) {
-                    listener.completed();
+                try {
+                    if (!error) {
+                        listener.completed();
+                    }
+                    statementContext.end();
+                    recorder.endStream(statementContext.isPreparedStatementContext());
+                    finalBlock.run();
+                    childAllocator.close();
+                } catch (Exception e){
+                    logger.atError().setCause(e).log("Error running finally block");
                 }
-                statementContext.end();
-                recorder.endStream(statementContext.isPreparedStatementContext());
-                finalBlock.run();
-                childAllocator.close();
             }
         });
     }

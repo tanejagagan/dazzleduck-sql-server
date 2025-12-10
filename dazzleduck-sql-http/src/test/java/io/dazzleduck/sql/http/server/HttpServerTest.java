@@ -92,7 +92,7 @@ public class HttpServerTest {
     }
 
     @Test
-    public void testSetWithGet() throws IOException, InterruptedException, SQLException {
+    public void testSetWithGet() throws IOException, InterruptedException {
         var query = "SET enable_progress_bar = true;";
         var urlEncode = URLEncoder.encode(query, StandardCharsets.UTF_8);
         var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/query?q=%s".formatted(TEST_PORT1, urlEncode)))
