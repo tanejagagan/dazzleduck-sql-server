@@ -33,11 +33,11 @@ public class IndexerTest {
     public void testIndexCreationWriteSql() throws SQLException, IOException {
         var fieldToIndex = List.of("f1", "f2");
         try (var connection = ConnectionPool.getConnection()) {
-            var inputSql = "create temp view input as select 1 as row_num, 'f1' as f1, 'f2' as f2, struct_pack(f1:=['one', 'two'], f2:=['p', 'q']) as tokens, cast('2025-01-01' as timestamp) as time";
+            var inputSql = "create temp view input as select 'd' as filename, 1 as row_num, 'f1' as f1, 'f2' as f2, struct_pack(f1:=['one', 'two'], f2:=['p', 'q']) as tokens, cast('2025-01-01' as timestamp) as time";
             ConnectionPool.execute(connection, inputSql);
             var outputSql = Indexer.constructWriteSql(fieldToIndex, "time","tokens", "input");
-            var expected = "select unnest(['one', 'p', 'q', 'two']) as token";
-            TestUtils.isEqual(connection, new RootAllocator(), expected, "select token from (%s)".formatted(outputSql));
+            var expected = "select 'd' as filename, unnest(['one', 'p', 'q', 'two']) as token";
+            TestUtils.isEqual(connection, new RootAllocator(), expected, "select filename, token from (%s)".formatted(outputSql));
         }
     }
 
