@@ -39,10 +39,9 @@ public class QueryService extends AbstractQueryBasedService {
             var ticket = createTicket(statementHandle);
             var listener = new OutputStreamServerStreamListener(response);
             flightProducer.getStream(context, ticket, listener);
-            //Thread.sleep(1000000);
             listener.waitForEnd();
         } catch (Exception e) {
-            e.printStackTrace();
+            logger.atError().setCause(e).log("Error sending query result");
             response.send(e.getMessage());
             response.status(Status.INTERNAL_SERVER_ERROR_500);
         }
