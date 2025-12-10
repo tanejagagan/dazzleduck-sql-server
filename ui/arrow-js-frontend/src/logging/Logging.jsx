@@ -222,19 +222,39 @@ const Logging = () => {
         }
     };
 
-    // Run all queries (sequential)
-    const runAllQuerys = async () => {
-        const newResults = {};
+    // Run all queries (parallel)
+    const runAllQueries = async () => {
+        if (!isConnected) return;
 
-        for (const row of rows) {
+        const loadingState = {};
+        rows.forEach(row => {
+            loadingState[row.id] = { logs: [], loading: true, error: null };
+        });
+        setResults(prev => ({ ...prev, ...loadingState }));
+
+        rows.forEach(async (row) => {
             const id = row.id;
-            setResults(prev => ({ ...prev, [id]: { logs: [], loading: true, error: null } }));
-
-            const result = await runQueryForRow(row);
-
-            newResults[id] = { logs: result.logs, loading: false, error: result.error };
-            setResults(prev => ({ ...prev, [id]: newResults[id] }));
-        }
+            try {
+                const result = await runQueryForRow(row);
+                setResults(prev => ({
+                    ...prev,
+                    [id]: {
+                        logs: result.logs,
+                        loading: false,
+                        error: result.error
+                    }
+                }));
+            } catch (err) {
+                setResults(prev => ({
+                    ...prev,
+                    [id]: {
+                        logs: [],
+                        loading: false,
+                        error: err?.message || "Query failed"
+                    }
+                }));
+            }
+        });
     };
 
     const clearRowLogs = (id) => {
@@ -381,7 +401,7 @@ const Logging = () => {
                                     </label>
 
                                     {claims.map((item, index) => {
-                                        const allowedKeys = [ "cluster", "orgId", "database", "schema", "table", "path", "function",];
+                                        const allowedKeys = ["cluster", "orgId", "database", "schema", "table", "path", "function",];
                                         const isValidKey = item.key.trim() === "" || allowedKeys.includes(item.key.trim());
 
                                         // Suggestions appear only when partial typing AND no exact match
@@ -402,7 +422,7 @@ const Logging = () => {
                                                             placeholder="key"
                                                             value={item.key}
                                                             onChange={(e) => updateClaim(index, "key", e.target.value)}
-                                                            className={`w-full border rounded-lg py-1 px-2 ${item.key.trim() === "" ? "border-gray-400" : isValidKey ? "border-green-500" : "border-red-500" }`}
+                                                            className={`w-full border rounded-lg py-1 px-2 ${item.key.trim() === "" ? "border-gray-400" : isValidKey ? "border-green-500" : "border-red-500"}`}
                                                         />
 
                                                         {/* Suggestions */}
@@ -700,7 +720,7 @@ const Logging = () => {
                 </button>
 
                 <button
-                    onClick={runAllQuerys}
+                    onClick={runAllQueries}
                     disabled={!isConnected}
                     className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-md disabled:opacity-50 transition duration-300 cursor-pointer"
                 >
