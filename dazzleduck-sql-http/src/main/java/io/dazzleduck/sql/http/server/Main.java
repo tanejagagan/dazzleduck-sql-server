@@ -32,11 +32,6 @@ import static io.dazzleduck.sql.common.util.ConfigUtils.CONFIG_PATH;
 public class Main {
 
 
-    /**
-     * Cannot be instantiated.
-     */
-    private Main() {
-    }
 
 
 
@@ -90,7 +85,7 @@ public class Main {
                 .config(helidonConfig.get("flight_sql"))
                 .routing(routing -> {
                     routing.register(cors);
-                    var b = routing.register("/query", new QueryService(producer, accessMode,base64SecretKey))
+                    var b = routing.register("/query", new QueryService(producer, accessMode))
                             .register("/login", new LoginService(appConfig, secretKey, jwtExpiration))
                             .register("/plan", new PlaningService(producer, location, allocator, accessMode))
                             .register("/cancel", new CancelService(producer, accessMode))

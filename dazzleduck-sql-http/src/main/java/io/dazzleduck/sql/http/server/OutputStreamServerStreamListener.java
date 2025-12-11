@@ -10,6 +10,7 @@ import org.apache.arrow.vector.dictionary.DictionaryProvider;
 import org.apache.arrow.vector.ipc.ArrowStreamWriter;
 import org.apache.arrow.vector.ipc.message.IpcOption;
 import org.apache.hadoop.shaded.org.apache.commons.lang3.NotImplementedException;
+import org.slf4j.Logger;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -98,7 +99,12 @@ public class OutputStreamServerStreamListener implements FlightProducer.ServerSt
     }
 
     private void sendError(Throwable ex) {
-        this.response.send(ex.getMessage().getBytes());
+        try {
+            outputStream.write(ex.getMessage().getBytes());
+        } catch (IOException e) {
+            throw new RuntimeException();
+        }
+
         this.response.status(Status.INTERNAL_SERVER_ERROR_500);
     }
 

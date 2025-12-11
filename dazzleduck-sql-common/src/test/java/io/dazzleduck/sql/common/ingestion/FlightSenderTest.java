@@ -86,7 +86,7 @@ class OnDemandSender extends FlightSender.AbstractFlightSender {
     }
 
     @Override
-    protected synchronized void doSend(SendElement element) throws InterruptedException {
+    protected void doSend(SendElement element) throws InterruptedException {
         latch.await();
     }
 }
