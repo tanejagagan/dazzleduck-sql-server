@@ -99,7 +99,8 @@ public class Main {
                 .host(host)
                 .build()
                 .start();
-        String url = "http://localhost:" + server.port();
+        var http = server.hasTls() ? "https" : "http";
+        String url = "%s://%s:%s".formatted(http, host, port);
         System.out.println("Http Server is up: Listening on URL: " + url);
     }
 }
