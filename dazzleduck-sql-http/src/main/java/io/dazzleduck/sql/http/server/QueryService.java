@@ -17,14 +17,11 @@ import org.apache.arrow.flight.sql.impl.FlightSql;
 public class QueryService extends AbstractQueryBasedService {
 
     private final FlightProducer flightProducer;
-    private final String secretKey;
-
     private final String producerId;
 
-    public QueryService(SimpleBulkIngestConsumer flightProducer, AccessMode accessMode, String secretKey) {
+    public QueryService(SimpleBulkIngestConsumer flightProducer, AccessMode accessMode) {
         super(accessMode);
         this.flightProducer = flightProducer;
-        this.secretKey = secretKey;
         this.producerId = flightProducer.getProducerId();
     }
 

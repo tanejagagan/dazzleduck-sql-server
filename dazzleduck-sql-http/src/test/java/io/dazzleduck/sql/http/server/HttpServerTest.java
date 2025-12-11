@@ -17,6 +17,7 @@ import org.apache.arrow.vector.ipc.ArrowStreamReader;
 import org.apache.arrow.vector.ipc.ArrowStreamWriter;
 import org.duckdb.DuckDBConnection;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -450,6 +451,11 @@ public class HttpServerTest {
     }
 
     @Test
+    @Disabled
+    /**
+     * Disabled because as of now there is no way to slow the down the processing of the query
+     * By the time cancel is requested the query is already completed
+     */
     public void testCancelWithPlanning() throws Exception {
         var jwt = login();
         String auth = jwt.tokenType() + " " + jwt.accessToken();
