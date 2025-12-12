@@ -1,6 +1,11 @@
 package io.dazzleduck.sql.common.ingestion;
 
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 
@@ -18,7 +23,7 @@ public interface FlightSender {
 
     abstract class AbstractFlightSender implements FlightSender {
         private final BlockingQueue<SendElement> queue = new ArrayBlockingQueue<>(1024 * 1024);
-        private final Thread senderThread = new Thread(new Runnable() {
+        protected final Thread senderThread = new Thread(new Runnable() {
             @Override
             public void run() {
                 while (true) {
@@ -91,7 +96,7 @@ public interface FlightSender {
 
         @Override
         public InputStream read() {
-            return null;
+            return new ByteArrayInputStream(data);
         }
 
         @Override
@@ -101,17 +106,27 @@ public interface FlightSender {
     }
 
     public class FileMappedMemoryElement implements SendElement {
-        long length;
+
+        private final Path tempFile;
+        private final long length;
 
         public FileMappedMemoryElement(byte[] data) {
-
-            // write the data into temp location
-            this.length = data.length;
+            try {
+                tempFile = Files.createTempFile("flight-", ".bin");
+                Files.write(tempFile, data);
+                this.length = data.length;
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
         }
 
         @Override
         public InputStream read() {
-            return null;
+            try {
+                return Files.newInputStream(tempFile);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
         }
 
         @Override
