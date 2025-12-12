@@ -83,13 +83,13 @@ public enum ConnectionPool {
     public static <T> Iterable<T> collectFirstColumn(Connection connection, String sql, Class<T> tClass) {
         if (tClass.isArray()) {
             return collectAll(connection, sql,
-                    rs -> (T) rs.getArray(1).getArray(), tClass);
+                    rs -> (T) rs.getArray(1).getArray());
         } else {
-            return collectAll(connection, sql, rs -> rs.getObject(1, tClass), tClass);
+            return collectAll(connection, sql, rs -> rs.getObject(1, tClass));
         }
     }
 
-    public static <T> Iterable<T> collectAll(Connection connection, String sql, Extractor<T> extractor, Class<T> tClass) {
+    public static <T> Iterable<T> collectAll(Connection connection, String sql, Extractor<T> extractor) {
         List<T> result = new ArrayList<>();
         try (Statement statement = connection.createStatement()) {
             statement.execute(sql);
@@ -107,8 +107,14 @@ public enum ConnectionPool {
         }
     }
 
-    public static <R extends Record> Iterable<R> collectAll(Connection connection, String sql, Class<R> rClass) throws NoSuchMethodException {
-        final var constructor = getCanonicalConstructor(rClass);
+    public static <R extends Record> Iterable<R> collectAll(Connection connection, String sql, Class<R> rClass) {
+
+        final Constructor<R> constructor;
+        try {
+            constructor = getCanonicalConstructor(rClass);
+        } catch (NoSuchMethodException e) {
+            throw new RuntimeException(e);
+        }
         return collectAll(connection, sql, rs -> {
             RecordComponent[] rc  = rClass.getRecordComponents();
             Object[] read = new Object[rc.length];
@@ -121,7 +127,7 @@ public enum ConnectionPool {
                 }
             }
             return constructor.newInstance(read);
-            }, rClass);
+            });
     }
 
     static <T extends Record> Constructor<T> getCanonicalConstructor(Class<T> cls)
