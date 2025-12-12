@@ -13,6 +13,7 @@ const Logging = () => {
     const { executeQuery, login, cancelQuery } = useLogging();
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [claims, setClaims] = useState([{ key: "", value: "" }]);
+    const [isRunningAll, setIsRunningAll] = useState(false);
 
     // State to track query IDs and cancellation status
     const [queryIds, setQueryIds] = useState({}); // { rowId: numeric queryId }
@@ -224,15 +225,16 @@ const Logging = () => {
 
     // Run all queries (parallel)
     const runAllQueries = async () => {
-        if (!isConnected) return;
-
+        if (!isConnected || isRunningAll) return;
+        setIsRunningAll(true);
         const loadingState = {};
+
         rows.forEach(row => {
             loadingState[row.id] = { logs: [], loading: true, error: null };
         });
         setResults(prev => ({ ...prev, ...loadingState }));
 
-        rows.forEach(async (row) => {
+        const promises = rows.map(async (row) => {
             const id = row.id;
             try {
                 const result = await runQueryForRow(row);
@@ -255,6 +257,8 @@ const Logging = () => {
                 }));
             }
         });
+        await Promise.all(promises);
+        setIsRunningAll(false);
     };
 
     const clearRowLogs = (id) => {
@@ -721,10 +725,10 @@ const Logging = () => {
 
                 <button
                     onClick={runAllQueries}
-                    disabled={!isConnected}
+                    disabled={!isConnected || isRunningAll}
                     className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-md disabled:opacity-50 transition duration-300 cursor-pointer"
                 >
-                    Run Queries
+                    {isRunningAll ? "Running..." : "Run Queries"}
                 </button>
             </div>
         </div>
