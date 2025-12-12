@@ -59,7 +59,7 @@ public interface Indexer {
     private static String constructInputSql(String sourcePrefix, List<String> sourceFiles, List<String> sourceFields, String timeField) {
         String source = sourceFiles.stream().map(s -> String.format("'%s/%s'", sourcePrefix, s)).collect(Collectors.joining(","));
         String selectCols = String.join(",", sourceFields);
-        return "SELECT substring(filename, len('%s') + 2) as filename, file_row_number as row_num, %s, %s FROM read_parquet([%s])".formatted(sourcePrefix, timeField, selectCols, source);
+        return "SELECT file_row_number as row_num, %s, %s FROM read_parquet([%s])".formatted(timeField, selectCols, source);
     }
 
 
