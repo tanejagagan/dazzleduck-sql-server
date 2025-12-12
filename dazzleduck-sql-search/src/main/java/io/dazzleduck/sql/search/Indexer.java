@@ -68,14 +68,14 @@ public interface Indexer {
                                     String inputStructName,
                                     String inputTable) {
         var fs = fieldsForIndexing.stream().map(f -> String.format("%s.%s as %s", inputStructName, f, f)).collect(Collectors.joining(", "));
-        var inner = "SELECT filename, row_num, %s, %s FROM %s".formatted(timeField, fs, inputTable);
+        var inner = "SELECT row_num, %s, %s FROM %s".formatted(timeField, fs, inputTable);
         var fieldList = String.join(",", fieldsForIndexing);
         return "WITH inner0 AS (%s),\n ".formatted(inner) +
                 "inner1 AS (UNPIVOT inner0 ON %s INTO NAME field VALUE tokens),\n".formatted(fieldList) +
-                "inner2 AS (SELECT filename, field, row_num, %s, UNNEST(tokens) as token FROM inner1), \n".formatted(timeField) +
-                "inner3 AS (SELECT filename, field, token, list(row_num) as row_nums, count(row_num) as count FROM inner2 GROUP BY token, filename, field),\n" +
-                "inner4 AS (SELECT filename, field, token, CASE WHEN count > 1000 THEN NULL ELSE row_nums END AS row_nums, count FROM inner3)\n" +
-                "SELECT * FROM inner4 ORDER BY token, field, filename";
+                "inner2 AS (SELECT field, row_num, %s, UNNEST(tokens) as token FROM inner1), \n".formatted(timeField) +
+                "inner3 AS (SELECT field, token, list(row_num) as row_nums, count(row_num) as count FROM inner2 GROUP BY token, field),\n" +
+                "inner4 AS (SELECT field, token, CASE WHEN count > 1000 THEN NULL ELSE row_nums END AS row_nums, count FROM inner3)\n" +
+                "SELECT * FROM inner4 ORDER BY token, field";
     }
 
     private static void readTransformExecute(String inputSql, MappedReader.Function function, List<String> sourceCol, Field targetField, String tempTableName, String outputSql, int batchSize) throws SQLException, IOException {
