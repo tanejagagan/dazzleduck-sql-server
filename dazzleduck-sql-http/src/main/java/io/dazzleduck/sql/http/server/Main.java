@@ -10,12 +10,15 @@ import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactoryProvider;
 import io.dazzleduck.sql.flight.optimizer.QueryOptimizerProvider;
 import io.dazzleduck.sql.flight.server.DuckDBFlightSqlProducer;
+import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
 import io.dazzleduck.sql.login.LoginService;
+import io.dazzleduck.sql.login.ProxyLoginService;
 import io.helidon.config.Config;
 import io.helidon.cors.CrossOriginConfig;
 import io.helidon.logging.common.LogConfig;
 import io.helidon.webserver.WebServer;
 import io.helidon.webserver.cors.CorsSupport;
+import io.helidon.webserver.http.HttpService;
 import org.apache.arrow.flight.Location;
 import org.apache.arrow.memory.RootAllocator;
 
@@ -80,13 +83,21 @@ public class Main {
                 QueryOptimizerProvider.NOOPOptimizerProvider);
         var producer = DuckDBFlightSqlProducer.createProducer(Location.forGrpcInsecure(host, port), producerId,
                 base64SecretKey, allocator, warehousePath, accessMode, factory, optimizer.getOptimizer());
+        HttpService loginService;
+        if (appConfig.hasPath(AuthUtils.PROXY_LOGIN_URL_KEY)) {
+            var proxyUrl = appConfig.getString(AuthUtils.PROXY_LOGIN_URL_KEY);
+            loginService = new ProxyLoginService(proxyUrl);
+        } else {
+            loginService = new LoginService(appConfig, secretKey, jwtExpiration);
+        }
+
         WebServer server = WebServer.builder()
                 .config(helidonConfig.get("dazzleduck_server"))
                 .config(helidonConfig.get("flight_sql"))
                 .routing(routing -> {
                     routing.register(cors);
                     var b = routing.register("/query", new QueryService(producer, accessMode))
-                            .register("/login", new LoginService(appConfig, secretKey, jwtExpiration))
+                            .register("/login", loginService)
                             .register("/plan", new PlaningService(producer, location, allocator, accessMode))
                             .register("/cancel", new CancelService(producer, accessMode))
                             .register("/ingest", new IngestionService(producer, warehousePath, allocator))
