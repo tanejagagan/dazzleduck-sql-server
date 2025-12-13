@@ -4,6 +4,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -80,6 +81,19 @@ public class FlightSenderTest {
         assertEquals(2, sender.filesCreated.get());
         assertEquals(1, sender.filesDeleted.get());
     }
+
+    @Test
+    void testCloseInterruptsInFlightProcessing() throws Exception {
+        CountDownLatch blockLatch = new CountDownLatch(1);
+        sender = new OnDemandSender(10 * MB, 10 * MB, blockLatch);
+        sender.start();
+        sender.enqueue(new byte[1024]);
+
+        sender.close();
+        assertEquals(0, sender.filesDeleted.get());
+        blockLatch.countDown();
+    }
+
 
     class OnDemandSender extends FlightSender.AbstractFlightSender {
 

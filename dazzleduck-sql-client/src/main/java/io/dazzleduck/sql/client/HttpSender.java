@@ -21,7 +21,7 @@ public final class HttpSender extends FlightSender.AbstractFlightSender {
     private final String baseUrl;
     private final String username;
     private final String password;
-    private final String targetPath; // file path like "abc.parquet"
+    private final String targetPath;
     private final Duration timeout;
 
     private final long maxMem;
@@ -29,6 +29,7 @@ public final class HttpSender extends FlightSender.AbstractFlightSender {
 
     private String jwt = null;
     private Instant jwtExpiry = Instant.EPOCH;
+    private static final Duration REFRESH_SKEW = Duration.ofSeconds(60);
 
     public HttpSender(
             String baseUrl,
@@ -59,13 +60,13 @@ public final class HttpSender extends FlightSender.AbstractFlightSender {
     }
 
     private synchronized void login() throws Exception {
-        var loginUrl = baseUrl + "/login";
         var body = mapper.writeValueAsBytes(new LoginRequest(username, password));
 
         var req = HttpRequest.newBuilder()
-                .uri(URI.create(loginUrl))
+                .uri(URI.create(baseUrl + "/login"))
                 .timeout(timeout)
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+                .header("Content-Type", "application/json")
                 .header("Accept", "application/json")
                 .build();
 
@@ -77,13 +78,13 @@ public final class HttpSender extends FlightSender.AbstractFlightSender {
 
         LoginResponse lr = mapper.readValue(resp.body(), LoginResponse.class);
         this.jwt = lr.tokenType() + " " + lr.accessToken();
-
-        // JWT expiry handling (short lifetime for tests)
-        this.jwtExpiry = Instant.now().plusSeconds(1);
+        this.jwtExpiry = lr.expiresIn() != null
+                ? Instant.now().plusSeconds(lr.expiresIn())
+                : Instant.now().plus(Duration.ofHours(5));
     }
 
     private synchronized String getJwt() throws Exception {
-        if (jwt == null || Instant.now().isAfter(jwtExpiry)) {
+        if (jwt == null || Instant.now().isAfter(jwtExpiry.minus(REFRESH_SKEW))) {
             login();
         }
         return jwt;
@@ -92,25 +93,38 @@ public final class HttpSender extends FlightSender.AbstractFlightSender {
     @Override
     protected void doSend(SendElement element) throws InterruptedException {
         try {
-            InputStream is = element.read();
-            String url = baseUrl + "/ingest?path=" + targetPath;
+            var resp = sendRequest(element, false);
 
-            var req = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
-                    .timeout(timeout)
-                    .POST(HttpRequest.BodyPublishers.ofInputStream(() -> is))
-                    .header("Authorization", getJwt())
-                    .header("Content-Type", "application/vnd.apache.arrow.stream")
-                    .build();
-
-            var resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() == 401 || resp.statusCode() == 403) {
+                synchronized (this) {
+                    jwt = null;
+                }
+                resp = sendRequest(element, true);
+            }
 
             if (resp.statusCode() != 200) {
                 throw new RuntimeException("Ingestion failed: " + resp.body());
             }
 
+        } catch (InterruptedException e) {
+            // Re-throw to allow graceful shutdown
+            throw e;
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    }
+
+    private HttpResponse<String> sendRequest(SendElement element, boolean isRetry) throws Exception {
+        InputStream is = element.read();
+
+        var req = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/ingest?path=" + targetPath))
+                .timeout(timeout)
+                .POST(HttpRequest.BodyPublishers.ofInputStream(() -> is))
+                .header("Authorization", getJwt())
+                .header("Content-Type", "application/vnd.apache.arrow.stream")
+                .build();
+
+        return client.send(req, HttpResponse.BodyHandlers.ofString());
     }
 }
