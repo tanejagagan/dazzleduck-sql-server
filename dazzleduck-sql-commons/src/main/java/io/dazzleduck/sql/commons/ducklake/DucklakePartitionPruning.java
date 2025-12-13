@@ -116,10 +116,12 @@ public class DucklakePartitionPruning {
     private static Function<JsonNode, JsonNode> start(Function<JsonNode, JsonNode> start){
         return start;
     }
+
     public static List<FileStatus> pruneFiles(String schema,
                                               String table,
-                                              String sql,
+                                              JsonNode tree,
                                               String metadataDatabase) throws SQLException, NoSuchMethodException, JsonProcessingException {
+
         var columnMap = getColumnIdMap(schema, table, metadataDatabase);
         var tableId = getTableId(schema, table, metadataDatabase);
         var maxMap = new HashMap<String, String>();
@@ -132,13 +134,12 @@ public class DucklakePartitionPruning {
         }
 
         var statTable = "P";
-        var inputSql = Transformations.parseToTree(sql);
         var partitionQuery = Transformations.replaceEqualMinMaxInQuery(statTable, minMap, maxMap, typeMap)
-                .apply(inputSql);
+                .apply(tree);
         var where = Transformations.identity()
                 .andThen(Transformations::getFirstStatementNode)
                 .andThen(Transformations::getWhereClauseForBaseTable)
-                .apply(inputSql);
+                .apply(tree);
         var references = Transformations.collectReferences(where);
         var columnIds = references.stream().map(n -> columnMap.get(Transformations.getReferenceName(n)[0]).id())
                 .toList();
@@ -149,6 +150,14 @@ public class DucklakePartitionPruning {
             var res = ConnectionPool.collectAll(connection, toRun, FileStatus.class );
             return (List<FileStatus>) res;
         }
+
+    }
+    public static List<FileStatus> pruneFiles(String schema,
+                                              String table,
+                                              String sql,
+                                              String metadataDatabase) throws SQLException, NoSuchMethodException, JsonProcessingException {
+        var tree = Transformations.parseToTree(sql);
+        return pruneFiles(schema, table, tree, metadataDatabase);
     }
 
     private static Long getTableId(String schema, String table, String metadataDatabase) throws SQLException {
