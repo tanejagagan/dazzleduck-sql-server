@@ -7,7 +7,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.TimeUnit;
 
 public interface FlightSender {
 
@@ -30,16 +29,25 @@ public interface FlightSender {
         protected final Thread senderThread = new Thread(() -> {
             while (!shutdown || !queue.isEmpty()) {
                 try {
-                    var current = queue.take();
-                    doSend(current);
-                    updateState(current);
-                } catch (InterruptedException e) {
-                    // If interrupted during shutdown, exit gracefully
-                    if (shutdown) {
-                        break;
+                    var current = queue.poll(100, java.util.concurrent.TimeUnit.MILLISECONDS);
+                    if (current != null) {
+                        doSend(current);
+                        updateState(current);
                     }
-                    // Otherwise restore interrupt status
-                    Thread.currentThread().interrupt();
+                } catch (InterruptedException e) {
+                    if (shutdown) {
+                        // Drain and process remaining items
+                        SendElement element;
+                        while ((element = queue.poll()) != null) {
+                            try {
+                                doSend(element);
+                                updateState(element);
+                            } catch (InterruptedException ex) {
+                                // If interrupted again, exit
+                                break;
+                            }
+                        }
+                    }
                     break;
                 }
             }
@@ -50,6 +58,10 @@ public interface FlightSender {
 
         @Override
         public void enqueue(byte[] input) {
+            if (shutdown) {
+                throw new IllegalStateException("Sender is shutdown, cannot enqueue");
+            }
+
             var storeStatus = getStoreStatus(input.length);
             switch (storeStatus) {
                 case FULL -> throw new IllegalStateException("queue is full");
@@ -76,6 +88,7 @@ public interface FlightSender {
                 inMemorySize -= sendElement.length();
             } else {
                 onDiskSize -= sendElement.length();
+                ((FileMappedMemoryElement) sendElement).cleanup();
             }
         }
 
@@ -92,7 +105,26 @@ public interface FlightSender {
         @Override
         public void close() throws InterruptedException {
             shutdown = true;
-            senderThread.join(2_000);
+            senderThread.interrupt();
+            senderThread.join();
+            cleanupQueue();
+        }
+
+        private void cleanupQueue() {
+            SendElement element;
+            while ((element = queue.poll()) != null) {
+                synchronized(this) {
+                    if (element instanceof MemoryElement) {
+                        inMemorySize -= element.length();
+                    } else {
+                        onDiskSize -= element.length();
+                    }
+                }
+
+                if (element instanceof FileMappedMemoryElement) {
+                    ((FileMappedMemoryElement) element).cleanup();
+                }
+            }
         }
     }
 
@@ -130,6 +162,15 @@ public interface FlightSender {
                 this.length = data.length;
             } catch (IOException e) {
                 throw new RuntimeException(e);
+            }
+        }
+
+        public void cleanup() {
+            try {
+                if (tempFile != null && Files.exists(tempFile)) {
+                    Files.delete(tempFile);
+                }
+            } catch (IOException e) {
             }
         }
 
