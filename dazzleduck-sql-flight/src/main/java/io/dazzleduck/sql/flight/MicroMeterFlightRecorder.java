@@ -1,13 +1,16 @@
 package io.dazzleduck.sql.flight;
 
-
+import io.dazzleduck.sql.flight.model.StatementAuditObject;
+import io.dazzleduck.sql.flight.server.StatementContext;
 import io.micrometer.core.instrument.*;
+import org.slf4j.MarkerFactory;
 
 import java.util.concurrent.atomic.AtomicLong;
 
 public class MicroMeterFlightRecorder implements FlightRecorder {
 
     private final MeterRegistry registry;
+    private static final Auditor auditor = new Auditor(MarkerFactory.getMarker("flight"));
 
     // -------------------- Counters -------------------------
     private final Counter streamStatementCounter;
@@ -33,7 +36,9 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
     private final Counter streamPreparedStatementCompletedCounter;
     private final Counter bulkIngestCompletedCounter;
 
-
+    private final Counter statementStart;
+    private final Counter statementEnd;
+    private final Counter statementError;
 
     // Start time
     private final AtomicLong startTime = new AtomicLong(0);
@@ -67,6 +72,10 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
 
         this.stremPreparedStatementBytesOutCounter = counter("stream_prepared_statement_bytes_out", producerId);
         this.stremStatementBytesOutCounter = counter("stream_statement_bytes_out", producerId);
+
+        this.statementStart = counter("statement_start", producerId);
+        this.statementEnd = counter("statement_end", producerId);
+        this.statementError = counter("statement_error", producerId);
     }
 
     // ==========================================================
@@ -88,23 +97,62 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
     }
 
     @Override
-    public void recordStatementCancel() {
+    public void recordStatementCancel(StatementContext<?> ctx) {
         cancelStatementCounter.increment();
+        auditor.audit(buildAudit(ctx, "CANCEL", null));
     }
 
     @Override
-    public void recordPreparedStatementCancel() {
+    public void recordPreparedStatementCancel(StatementContext<?> ctx) {
         cancelPreparedStatementCounter.increment();
+        auditor.audit(buildAudit(ctx, "CANCEL", null));
     }
 
     @Override
-    public void recordStatementTimeout() {
+    public void recordStatementStart(StatementContext<?> ctx) {
+        statementStart.increment();
+        auditor.audit(buildAudit(ctx, "START", null));
+    }
+
+    @Override
+    public void recordStatementEnd(StatementContext<?> ctx) {
+        statementEnd.increment();
+        auditor.audit(buildAudit(ctx, "END", null));
+    }
+
+    @Override
+    public void recordStatementError(StatementContext<?> ctx, Throwable error) {
+        statementError.increment();
+        String errorMessage = error.getClass().getSimpleName() + ": " + error.getMessage();
+        auditor.audit(buildAudit(ctx, "ERROR", errorMessage));
+    }
+
+    @Override
+    public void recordStatementTimeout(StatementContext<?> ctx) {
         timeoutStatementCounter.increment();
+        auditor.audit(buildAudit(ctx, "TIMEOUT", null));
     }
 
     @Override
-    public void recordPreparedStatementTimeout() {
+    public void recordPreparedStatementTimeout(StatementContext<?> ctx) {
         timeoutPreparedStatementCounter.increment();
+        auditor.audit(buildAudit(ctx, "TIMEOUT", null));
+    }
+
+    @Override
+    public void recordStreamStart(StatementContext<?> ctx) {
+        auditor.audit(buildAudit(ctx, "STREAM_START", null));
+    }
+
+    @Override
+    public void recordStreamEnd(StatementContext<?> ctx) {
+        auditor.audit(buildAudit(ctx, "STREAM_END", null));
+    }
+
+    @Override
+    public void recordStreamError(StatementContext<?> ctx, Throwable error) {
+        String msg = error.getClass().getSimpleName() + ": " + error.getMessage();
+        auditor.audit(buildAudit(ctx, "STREAM_ERROR", msg));
     }
 
     @Override
@@ -119,7 +167,7 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
 
     @Override
     public void errorStreamStatement() {
-
+        streamStatementErrorCounter.increment();
     }
 
     @Override
@@ -201,5 +249,22 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
     @Override
     public long getCancelledPreparedStatements() {
         return (long) cancelPreparedStatementCounter.count();
+    }
+
+    // ==========================================================
+    //                    HELPER BUILDER
+    // ==========================================================
+    private static StatementAuditObject buildAudit(StatementContext<?> ctx, String action, String error) {
+        return new StatementAuditObject(
+                ctx.getStatementId(),
+                ctx.getUser(),
+                action,
+                ctx.isPreparedStatementContext(),
+                ctx.getQuery(),
+                ctx.startTime(),
+                ctx.endTime(),
+                ctx.bytesOut(),
+                error
+        );
     }
 }

@@ -31,6 +31,8 @@ import java.util.Objects;
  * @param <T> the {@link Statement} to be persisted.
  */
 public final class StatementContext<T extends Statement> implements AutoCloseable {
+    private final String user;
+    private final Long statementId;
 
     private final T statement;
     private final String query;
@@ -44,7 +46,9 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
     private final boolean isPreparedStatementContext;
 
 
-    public StatementContext(final T statement, final String query) {
+    public StatementContext(final T statement, final String query, String user, Long statementId) {
+        this.user = user;
+        this.statementId = statementId;
         this.statement = Objects.requireNonNull(statement, "statement cannot be null.");
         this.query = query;
         this.isPreparedStatementContext = statement instanceof PreparedStatement;
@@ -135,5 +139,13 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
 
     public synchronized long useCount() {
         return useCount;
+    }
+
+    public synchronized String getUser() {
+        return user;
+    }
+
+    public synchronized Long getStatementId() {
+        return statementId;
     }
 }

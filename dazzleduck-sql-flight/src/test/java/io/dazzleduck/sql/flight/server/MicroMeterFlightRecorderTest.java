@@ -7,6 +7,11 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.sql.PreparedStatement;
+import java.sql.Statement;
+
+import static org.mockito.Mockito.*;
+
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -30,7 +35,8 @@ public class MicroMeterFlightRecorderTest {
 
     @Test
     void testRecordStatementCancel() {
-        recorder.recordStatementCancel();
+        StatementContext<?> ctx = mockContext(false);
+        recorder.recordStatementCancel(ctx);
 
         Counter c = counter("cancel_statement");
         assertNotNull(c);
@@ -39,7 +45,8 @@ public class MicroMeterFlightRecorderTest {
 
     @Test
     void testRecordPreparedStatementCancel() {
-        recorder.recordPreparedStatementCancel();
+        StatementContext<?> ctx = mockContext(true);
+        recorder.recordPreparedStatementCancel(ctx);
 
         Counter c = counter("cancel_prepared_statement");
         assertNotNull(c);
@@ -76,4 +83,20 @@ public class MicroMeterFlightRecorderTest {
         recorder.recordGetStreamPreparedStatement(123);
     }
 
+
+    private StatementContext<Statement> mockContext(boolean prepared) {
+        Statement stmt = mock(Statement.class);
+        StatementContext<Statement> ctx = new StatementContext<>(
+                stmt,
+                "SELECT 1",
+                "test-user",
+                42L
+        );
+        if (prepared) {
+            PreparedStatement ps = mock(PreparedStatement.class);
+            ctx = new StatementContext<>(ps, "SELECT 1", "test-user", 42L);
+        }
+        ctx.start();
+        return ctx;
+    }
 }

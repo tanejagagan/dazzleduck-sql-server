@@ -20,24 +20,60 @@ public class NOOPFlightRecorder implements FlightRecorder {
     private final AtomicLong failedBulkIngest = new AtomicLong();
     private final AtomicLong bytesIn = new AtomicLong();
     private final AtomicLong bytesOut = new AtomicLong();
+    private final AtomicLong statementStart = new AtomicLong();
+    private final AtomicLong statementEnd = new AtomicLong();
+    private final AtomicLong statementError = new AtomicLong();
+    private final AtomicLong StreamStatementStart = new AtomicLong();
+    private final AtomicLong StreamStatementEnd = new AtomicLong();
+    private final AtomicLong StreamStatementError = new AtomicLong();
 
     @Override
-    public void recordStatementCancel() {
+    public void recordStatementCancel(StatementContext<?> ctx) {
         statementCancelCount.incrementAndGet();
     }
 
     @Override
-    public void recordPreparedStatementCancel() {
+    public void recordPreparedStatementCancel(StatementContext<?> ctx) {
         preparedStatementCancelCount.incrementAndGet();
     }
 
     @Override
-    public void recordStatementTimeout() {
+    public void recordStatementStart(StatementContext<?> ctx) {
+        statementStart.incrementAndGet();
+    }
+
+    @Override
+    public void recordStatementEnd(StatementContext<?> ctx) {
+        statementEnd.incrementAndGet();
+    }
+
+    @Override
+    public void recordStatementError(StatementContext<?> ctx, Throwable error) {
+        statementError.incrementAndGet();
+    }
+
+    @Override
+    public void recordStreamStart(StatementContext<?> ctx) {
+        StreamStatementStart.incrementAndGet();
+    }
+
+    @Override
+    public void recordStreamEnd(StatementContext<?> ctx) {
+        StreamStatementEnd.incrementAndGet();
+    }
+
+    @Override
+    public void recordStreamError(StatementContext<?> ctx, Throwable error) {
+        StreamStatementError.incrementAndGet();
+    }
+
+    @Override
+    public void recordStatementTimeout(StatementContext<?> ctx) {
         statementTimeoutCount.incrementAndGet();
     }
 
     @Override
-    public void recordPreparedStatementTimeout() {
+    public void recordPreparedStatementTimeout(StatementContext<?> ctx) {
         preparedStatementTimeoutCount.incrementAndGet();
     }
 

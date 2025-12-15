@@ -1,15 +1,28 @@
 package io.dazzleduck.sql.flight;
 
-import io.dazzleduck.sql.flight.model.FlightMetricsSnapshot;
+import io.dazzleduck.sql.flight.server.StatementContext;
 
 public interface FlightRecorder {
-    void recordStatementCancel();
 
-    void recordPreparedStatementCancel();
+    void recordStatementCancel(StatementContext<?> ctx);
 
-    void recordStatementTimeout();
+    void recordPreparedStatementCancel(StatementContext<?> ctx);
 
-    void recordPreparedStatementTimeout();
+    void recordStatementTimeout(StatementContext<?> ctx);
+
+    void recordPreparedStatementTimeout(StatementContext<?> ctx);
+
+    void recordStatementStart(StatementContext<?> ctx);
+
+    void recordStatementEnd(StatementContext<?> ctx);
+
+    void recordStatementError(StatementContext<?> ctx, Throwable error);
+
+    void recordStreamStart(StatementContext<?> ctx);
+
+    void recordStreamEnd(StatementContext<?> ctx);
+
+    void recordStreamError(StatementContext<?> ctx, Throwable error);
 
     void startStreamStatement();
 
