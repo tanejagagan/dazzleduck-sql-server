@@ -1,5 +1,6 @@
 package io.dazzleduck.sql.client;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.dazzleduck.sql.common.ingestion.FlightSender;
 import io.dazzleduck.sql.login.LoginRequest;
@@ -27,9 +28,10 @@ public final class HttpSender extends FlightSender.AbstractFlightSender {
     private final long maxMem;
     private final long maxDisk;
 
-    private String jwt = null;
-    private Instant jwtExpiry = Instant.EPOCH;
+    private volatile String jwt = null;
+    private volatile Instant jwtExpiry = Instant.EPOCH;
     private static final Duration REFRESH_SKEW = Duration.ofSeconds(60);
+    private static final Duration DEFAULT_TOKEN_LIFETIME = Duration.ofHours(5);
 
     public HttpSender(
             String baseUrl,
@@ -76,16 +78,25 @@ public final class HttpSender extends FlightSender.AbstractFlightSender {
             throw new RuntimeException("Login failed: " + resp.body());
         }
 
-        LoginResponse lr = mapper.readValue(resp.body(), LoginResponse.class);
+        JsonNode json = mapper.readTree(resp.body());
+        LoginResponse lr = mapper.treeToValue(json, LoginResponse.class);
+
         this.jwt = lr.tokenType() + " " + lr.accessToken();
-        this.jwtExpiry = lr.expiresIn() != null
-                ? Instant.now().plusSeconds(lr.expiresIn())
-                : Instant.now().plus(Duration.ofHours(5));
+
+        long expiresIn = json.hasNonNull("expiresIn")
+                ? json.get("expiresIn").asLong()
+                : DEFAULT_TOKEN_LIFETIME.toSeconds();
+
+        this.jwtExpiry = Instant.now().plusSeconds(expiresIn);
     }
 
-    private synchronized String getJwt() throws Exception {
+    private String getJwt() throws Exception {
         if (jwt == null || Instant.now().isAfter(jwtExpiry.minus(REFRESH_SKEW))) {
-            login();
+            synchronized (this) {
+                if (jwt == null || Instant.now().isAfter(jwtExpiry.minus(REFRESH_SKEW))) {
+                    login();
+                }
+            }
         }
         return jwt;
     }
@@ -93,13 +104,18 @@ public final class HttpSender extends FlightSender.AbstractFlightSender {
     @Override
     protected void doSend(SendElement element) throws InterruptedException {
         try {
-            var resp = sendRequest(element, false);
+            final byte[] payload;
+            try (InputStream in = element.read()) {
+                payload = in.readAllBytes();
+            }
+
+            HttpResponse<String> resp = post(payload);
 
             if (resp.statusCode() == 401 || resp.statusCode() == 403) {
                 synchronized (this) {
                     jwt = null;
                 }
-                resp = sendRequest(element, true);
+                resp = post(payload);
             }
 
             if (resp.statusCode() != 200) {
@@ -114,13 +130,11 @@ public final class HttpSender extends FlightSender.AbstractFlightSender {
         }
     }
 
-    private HttpResponse<String> sendRequest(SendElement element, boolean isRetry) throws Exception {
-        InputStream is = element.read();
-
+    private HttpResponse<String> post(byte[] payload) throws Exception {
         var req = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + "/ingest?path=" + targetPath))
                 .timeout(timeout)
-                .POST(HttpRequest.BodyPublishers.ofInputStream(() -> is))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(payload))
                 .header("Authorization", getJwt())
                 .header("Content-Type", "application/vnd.apache.arrow.stream")
                 .build();
