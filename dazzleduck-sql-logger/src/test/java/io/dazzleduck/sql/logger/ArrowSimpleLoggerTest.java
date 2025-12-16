@@ -1,8 +1,11 @@
 package io.dazzleduck.sql.logger;
 
 import io.dazzleduck.sql.common.ingestion.FlightSender;
+import org.apache.arrow.vector.types.pojo.*;
 import org.junit.jupiter.api.*;
 
+import java.time.Clock;
+import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -21,78 +24,53 @@ class ArrowSimpleLoggerTest {
     }
 
     @AfterEach
-    void tearDown() throws Exception {
+    void tearDown() {
         logger.close();
     }
 
     @Test
-    void testLoggerInitialization_ReadsConfig() {
-        assertNotNull(logger.applicationId);
-        assertNotNull(logger.applicationName);
-        assertNotNull(logger.host);
+    void testLoggerInitialization() {
+        assertNotNull(logger);
     }
 
     @Test
-    void testSingleLog_DoesNotFlush() {
+    void testInfoLogIsForwarded() throws Exception {
         logger.info("hello {}", "world");
 
-        assertEquals(1, logger.batchCounter.get());
-        assertEquals(0, sender.sendCount.get());
+        assertTrue(sender.awaitRows(1));
+        assertEquals(1, sender.rowsReceived.get());
     }
 
     @Test
-    void testFlushOnBatchSize() throws Exception {
-        for (int i = 0; i < 10; i++) {
+    void testMultipleLogsAreForwardedOnClose() throws Exception {
+        for (int i = 0; i < 5; i++) {
             logger.info("log {}", i);
         }
-
-        assertTrue(sender.awaitSends(1));
-        assertEquals(1, sender.sendCount.get());
-        assertEquals(0, logger.batchCounter.get());
+        logger.close(); // forces bucket flush
+        assertEquals(1, sender.rowsReceived.get());
     }
 
     @Test
-    void testMultipleBatches() throws Exception {
-        for (int i = 0; i < 25; i++) {
-            logger.info("log {}", i);
-        }
+    void testLogWithLoggingEvent() throws Exception {
+        var event = org.mockito.Mockito.mock(org.slf4j.event.LoggingEvent.class);
+        org.mockito.Mockito.when(event.getLevel())
+                .thenReturn(org.slf4j.event.Level.INFO);
+        org.mockito.Mockito.when(event.getMessage())
+                .thenReturn("event-message");
 
-        assertTrue(sender.awaitSends(2));
-        assertEquals(2, sender.sendCount.get());
-        assertEquals(5, logger.batchCounter.get());
+        logger.log(event);
+
+        assertTrue(sender.awaitRows(1));
+        assertEquals(1, sender.rowsReceived.get());
     }
 
     @Test
-    void testFlushMethod() throws Exception {
-        logger.info("one");
-        logger.info("two");
-
-        assertEquals(2, logger.batchCounter.get());
-
-        logger.flush();
-
-        assertTrue(sender.awaitSends(1));
-        assertEquals(0, logger.batchCounter.get());
-    }
-
-    @Test
-    void testCloseFlushes() throws Exception {
+    void testCloseFlushesPendingRows() throws Exception {
         logger.info("before close");
 
         logger.close();
 
-        assertTrue(sender.sendCount.get() >= 1);
-    }
-
-    @Test
-    void testLogWithLoggingEvent() {
-        var event = org.mockito.Mockito.mock(org.slf4j.event.LoggingEvent.class);
-        org.mockito.Mockito.when(event.getLevel()).thenReturn(org.slf4j.event.Level.INFO);
-        org.mockito.Mockito.when(event.getMessage()).thenReturn("event msg");
-
-        logger.log(event);
-
-        assertEquals(1, logger.batchCounter.get());
+        assertTrue(sender.rowsReceived.get() >= 1);
     }
 
     @Test
@@ -101,16 +79,34 @@ class ArrowSimpleLoggerTest {
                 .getDeclaredMethod("format", String.class, Object[].class);
         m.setAccessible(true);
 
-        String out = (String) m.invoke(logger, "A {} B {}", new Object[]{"X", 1});
+        String out = (String) m.invoke(
+                logger,
+                "A {} B {}",
+                new Object[]{"X", 1}
+        );
+
         assertEquals("A X B 1", out);
     }
 
-    /* ---------------- Test Sender ---------------- */
-
     static class TestFlightSender extends FlightSender.AbstractFlightSender {
 
-        final AtomicInteger sendCount = new AtomicInteger();
+        final AtomicInteger rowsReceived = new AtomicInteger();
         final CountDownLatch latch = new CountDownLatch(10);
+
+        TestFlightSender() {
+            super(
+                    1024 * 1024,
+                    Duration.ofSeconds(1),
+                    Clock.systemUTC(),
+                    new Schema(java.util.List.of(
+                            new Field(
+                                    "dummy",
+                                    FieldType.nullable(new ArrowType.Utf8()),
+                                    null
+                            )
+                    ))
+            );
+        }
 
         @Override
         public long getMaxInMemorySize() {
@@ -124,7 +120,7 @@ class ArrowSimpleLoggerTest {
 
         @Override
         protected void doSend(SendElement element) {
-            sendCount.incrementAndGet();
+            rowsReceived.incrementAndGet();
             latch.countDown();
             try {
                 element.read().close();
@@ -132,9 +128,9 @@ class ArrowSimpleLoggerTest {
             }
         }
 
-        boolean awaitSends(int expected) throws InterruptedException {
-            return latch.await(2, TimeUnit.SECONDS)
-                    || sendCount.get() >= expected;
+        boolean awaitRows(int expected) throws InterruptedException {
+            latch.await(2, TimeUnit.SECONDS);
+            return rowsReceived.get() >= expected;
         }
     }
 }

@@ -5,16 +5,17 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.dazzleduck.sql.common.ingestion.FlightSender;
 import io.dazzleduck.sql.login.LoginRequest;
 import io.dazzleduck.sql.login.LoginResponse;
-
+import org.apache.arrow.vector.types.pojo.Schema;
 import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 
-public final class HttpSender extends FlightSender.AbstractFlightSender {
+public final class HttpSender extends FlightSender.AbstractFlightSender  {
 
     private final HttpClient client = HttpClient.newHttpClient();
     private final ObjectMapper mapper = new ObjectMapper();
@@ -34,6 +35,7 @@ public final class HttpSender extends FlightSender.AbstractFlightSender {
     private static final Duration DEFAULT_TOKEN_LIFETIME = Duration.ofHours(5);
 
     public HttpSender(
+            Schema schema,
             String baseUrl,
             String username,
             String password,
@@ -42,6 +44,7 @@ public final class HttpSender extends FlightSender.AbstractFlightSender {
             long maxInMemorySize,
             long maxOnDiskSize
     ) {
+        super(maxInMemorySize, Duration.ofSeconds(2), Clock.systemUTC(), schema);
         this.baseUrl = baseUrl;
         this.username = username;
         this.password = password;

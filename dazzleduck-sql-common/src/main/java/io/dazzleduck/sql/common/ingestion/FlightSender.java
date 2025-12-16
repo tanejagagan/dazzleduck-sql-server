@@ -1,6 +1,7 @@
 package io.dazzleduck.sql.common.ingestion;
 
 import io.dazzleduck.sql.common.types.JavaRow;
+import org.apache.arrow.vector.types.pojo.Schema;  // FIXED: Use Arrow Schema
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -21,7 +22,7 @@ public interface FlightSender {
     }
 
     void enqueue(byte[] input);
-
+    void addRow(JavaRow row);
     long getMaxInMemorySize();
 
     long getMaxOnDiskSize();
@@ -42,17 +43,19 @@ public interface FlightSender {
         private Duration maxDataSendInterval;
 
         private Instant lastSent;
-
-        private Bucket currentBucket =  new Bucket();
+        private Bucket currentBucket;
+        final Schema schema;
 
         private ScheduledExecutorService executorService = Executors.newSingleThreadScheduledExecutor();
 
-        public AbstractFlightSender(long maxBatchSize, Duration maxDataSendInterval, Clock clock){
+        public AbstractFlightSender(long maxBatchSize, Duration maxDataSendInterval, Clock clock, Schema schema){
             System.out.println("Started at %s and scheduled %s".formatted(clock.instant(), maxDataSendInterval));
             this.maxBatchSize = maxBatchSize;
             this.maxDataSendInterval = maxDataSendInterval;
             this.clock = clock;
+            this.schema = schema;
             this.lastSent = clock.instant();
+            this.currentBucket = new Bucket(schema);
             this.senderThread = new Thread(() -> {
                 while (!shutdown || !queue.isEmpty()) {
                     try {
@@ -126,7 +129,7 @@ public interface FlightSender {
                 var arrowBytes = currentBucket.getArrowBytes();
                 this.lastSent = Clock.systemDefaultZone().instant();
                 enqueue(arrowBytes);
-                currentBucket = new Bucket();
+                currentBucket = new Bucket(schema);
             }
         }
 

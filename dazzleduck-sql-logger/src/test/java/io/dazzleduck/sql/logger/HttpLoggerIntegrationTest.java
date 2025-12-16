@@ -30,7 +30,7 @@ public class HttpLoggerIntegrationTest {
         serverThread.setDaemon(true);
         serverThread.start();
 
-        Thread.sleep(3000);
+        waitForHttpServer(config);
     }
 
     @Test
@@ -41,9 +41,9 @@ public class HttpLoggerIntegrationTest {
             for (int i = 0; i < 10; i++) {
                 logger.info("Test {}", i);
             }
-
-            logger.flush();
-            Thread.sleep(2000);
+        } finally {
+            logger.close();
+        }
 
             String warehousePath = ConfigUtils.getWarehousePath(
                     ConfigFactory.load().getConfig(ConfigUtils.CONFIG_PATH)
@@ -61,12 +61,8 @@ public class HttpLoggerIntegrationTest {
                            'MyApplication'     as applicationName,
                            'localhost'         as host
                     """, "select level, logger, thread, message, applicationId, applicationName, host\n" +
-                            "from read_parquet('%s') limit 1".formatted(logFile.toAbsolutePath())
+                            "from read_parquet('%s') where message = 'Test 0'".formatted(logFile.toAbsolutePath())
             );
-        } finally {
-            // Ensure proper cleanup of logger resources
-            logger.close();
-        }
     }
 
     @AfterAll
@@ -102,6 +98,20 @@ public class HttpLoggerIntegrationTest {
                     .findFirst()
                     .orElseThrow(() -> new IllegalStateException(
                             "No log file found in " + logsDir));
+        }
+    }
+
+    private void waitForHttpServer(Config config) throws Exception {
+        int port = 8081;
+
+        long deadline = System.currentTimeMillis() + 10_000;
+
+        while (System.currentTimeMillis() < deadline) {
+            try (var socket = new java.net.Socket("localhost", port)) {
+                return; // port is open
+            } catch (IOException e) {
+                Thread.sleep(100);
+            }
         }
     }
 }

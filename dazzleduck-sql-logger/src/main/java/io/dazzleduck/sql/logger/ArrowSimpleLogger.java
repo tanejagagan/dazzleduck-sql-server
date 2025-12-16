@@ -5,33 +5,21 @@ import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.client.HttpSender;
 import io.dazzleduck.sql.common.ingestion.FlightSender;
 import io.dazzleduck.sql.common.types.JavaRow;
-import io.dazzleduck.sql.commons.types.VectorSchemaRootWriter;
-import org.apache.arrow.memory.RootAllocator;
-import org.apache.arrow.vector.VectorSchemaRoot;
-import org.apache.arrow.vector.ipc.ArrowStreamWriter;
 import org.apache.arrow.vector.types.pojo.*;
 import org.slf4j.Marker;
 import org.slf4j.event.Level;
 import org.slf4j.event.LoggingEvent;
 import org.slf4j.helpers.LegacyAbstractLogger;
 
-import java.io.ByteArrayOutputStream;
 import java.io.Serial;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.Queue;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 
 public class ArrowSimpleLogger extends LegacyAbstractLogger {
 
     @Serial
     private static final long serialVersionUID = 1L;
-
-    private static final int MAX_BATCH_SIZE = 10;
-    private static final RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
 
     private static final Schema schema = new Schema(java.util.List.of(
             new Field("timestamp", FieldType.nullable(new ArrowType.Utf8()), null),
@@ -54,15 +42,9 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger {
 
     private final String name;
     private final FlightSender flightSender;
-    private final Queue<JavaRow> batchBuffer = new ConcurrentLinkedQueue<>();
-    final AtomicInteger batchCounter = new AtomicInteger(0);
-    final String applicationId;
-    final String applicationName;
-    final String host;
-
-    // DEBUG: Track how many times flushBatch is called
-    private final AtomicLong flushCounter = new AtomicLong(0);
-    private final AtomicLong enqueueCounter = new AtomicLong(0);
+    private final String applicationId;
+    private final String applicationName;
+    private final String host;
 
     public ArrowSimpleLogger(String name) {
         this(name, createSenderFromConfig());
@@ -74,16 +56,13 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger {
         this.applicationId = CONFIG_APPLICATION_ID;
         this.applicationName = CONFIG_APPLICATION_NAME;
         this.host = CONFIG_HOST;
-
-        if (sender instanceof FlightSender.AbstractFlightSender afs) {
-            afs.start();
-        }
     }
 
     private static FlightSender createSenderFromConfig() {
         Config http = config.getConfig("http");
 
         return new HttpSender(
+                schema,
                 http.getString("base_url"),
                 http.getString("username"),
                 http.getString("password"),
@@ -93,7 +72,6 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger {
                 http.getLong("max_on_disk_bytes")
         );
     }
-
 
     @Override
     protected String getFullyQualifiedCallerName() {
@@ -130,53 +108,15 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger {
                     host
             });
 
-            batchBuffer.add(row);
-            if (batchCounter.incrementAndGet() >= MAX_BATCH_SIZE) {
-                flushBatch();
-            }
+            // FlightSender handles batching, serialization, and sending
+            flightSender.addRow(row);
 
         } catch (Exception e) {
-            System.err.println("[ArrowSimpleLogger] enqueue failed: " + e.getMessage());
-        }
-    }
-
-    private void flushBatch() {
-        if (batchBuffer.isEmpty()) return;
-
-        long flushNum = flushCounter.incrementAndGet();
-
-        try (VectorSchemaRoot root = VectorSchemaRoot.create(schema, allocator);
-             ByteArrayOutputStream out = new ByteArrayOutputStream();
-             ArrowStreamWriter streamWriter = new ArrowStreamWriter(root, null, out)) {
-
-            JavaRow[] rows = batchBuffer.toArray(new JavaRow[0]);
-            batchBuffer.clear();
-            batchCounter.set(0);
-
-            var writer = VectorSchemaRootWriter.of(schema);
-            writer.writeToVector(rows, root);
-            root.setRowCount(rows.length);
-
-            streamWriter.start();
-            streamWriter.writeBatch();
-            streamWriter.end();
-
-            byte[] data = out.toByteArray();
-            long enqNum = enqueueCounter.incrementAndGet();
-            flightSender.enqueue(data);
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
-
-    public void flush() {
-        while (!batchBuffer.isEmpty()) {
-            flushBatch();
+            System.err.println("[ArrowSimpleLogger] Failed to log: " + e.getMessage());
         }
     }
 
     public void close() {
-        flush();
         if (flightSender instanceof FlightSender.AbstractFlightSender afs) {
             try {
                 afs.close();
@@ -191,6 +131,7 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger {
             writeArrowAsync(event.getLevel(), event.getMessage());
         }
     }
+
     // === Log level controls ===
     @Override public boolean isTraceEnabled() { return isLevelEnabled(0); }
     @Override public boolean isDebugEnabled() { return isLevelEnabled(10); }
