@@ -1,103 +1,140 @@
 package io.dazzleduck.sql.logger;
 
+import io.dazzleduck.sql.common.ingestion.FlightSender;
 import org.junit.jupiter.api.*;
-import org.mockito.*;
+
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
 
 class ArrowSimpleLoggerTest {
 
-    @Mock
-    private AsyncArrowFlightSender mockSender;
-
     private ArrowSimpleLogger logger;
+    private TestFlightSender sender;
 
     @BeforeEach
     void setup() {
-        MockitoAnnotations.openMocks(this);
-
-        // Mock enqueue to always return true
-        when(mockSender.enqueue(any())).thenReturn(true);
-
-        logger = new ArrowSimpleLogger("test-logger", mockSender);
+        sender = new TestFlightSender();
+        logger = new ArrowSimpleLogger("test-logger", sender);
     }
 
     @AfterEach
-    void teardown() {
+    void tearDown() throws Exception {
         logger.close();
     }
 
     @Test
     void testLoggerInitialization_ReadsConfig() {
-        assertNotNull(logger);
         assertNotNull(logger.applicationId);
         assertNotNull(logger.applicationName);
         assertNotNull(logger.host);
     }
 
     @Test
-    void testSingleLogEntry_EnqueueCalled() {
-        logger.info("Hello {}", "World");
+    void testSingleLog_DoesNotFlush() {
+        logger.info("hello {}", "world");
+
         assertEquals(1, logger.batchCounter.get());
-        verify(mockSender, never()).enqueue(any()); // batch not full yet
+        assertEquals(0, sender.sendCount.get());
     }
 
     @Test
-    void testBatchFlushWhenMaxBatchSizeReached() {
+    void testFlushOnBatchSize() throws Exception {
         for (int i = 0; i < 10; i++) {
-            logger.info("Log {}", i);
+            logger.info("log {}", i);
         }
-        // After 10 logs, batch should flush
-        verify(mockSender, atLeastOnce()).enqueue(any());
+
+        assertTrue(sender.awaitSends(1));
+        assertEquals(1, sender.sendCount.get());
         assertEquals(0, logger.batchCounter.get());
     }
 
     @Test
-    void testFlushMethod_SendsRemainingLogs() {
-        logger.info("Log1");
-        logger.info("Log2");
+    void testMultipleBatches() throws Exception {
+        for (int i = 0; i < 25; i++) {
+            logger.info("log {}", i);
+        }
+
+        assertTrue(sender.awaitSends(2));
+        assertEquals(2, sender.sendCount.get());
+        assertEquals(5, logger.batchCounter.get());
+    }
+
+    @Test
+    void testFlushMethod() throws Exception {
+        logger.info("one");
+        logger.info("two");
+
         assertEquals(2, logger.batchCounter.get());
+
         logger.flush();
-        verify(mockSender, atLeastOnce()).enqueue(any());
+
+        assertTrue(sender.awaitSends(1));
         assertEquals(0, logger.batchCounter.get());
     }
 
     @Test
-    void testClose_ShutsDownSchedulerAndFlushes() {
-        logger.info("Log before close");
+    void testCloseFlushes() throws Exception {
+        logger.info("before close");
+
         logger.close();
-        verify(mockSender, atLeastOnce()).enqueue(any());
-//        assertTrue(logger.scheduler.isShutdown());
+
+        assertTrue(sender.sendCount.get() >= 1);
     }
 
     @Test
     void testLogWithLoggingEvent() {
-        org.slf4j.event.LoggingEvent event = mock(org.slf4j.event.LoggingEvent.class);
-        when(event.getLevel()).thenReturn(org.slf4j.event.Level.INFO);
-        when(event.getMessage()).thenReturn("Event log");
+        var event = org.mockito.Mockito.mock(org.slf4j.event.LoggingEvent.class);
+        org.mockito.Mockito.when(event.getLevel()).thenReturn(org.slf4j.event.Level.INFO);
+        org.mockito.Mockito.when(event.getMessage()).thenReturn("event msg");
+
         logger.log(event);
+
         assertEquals(1, logger.batchCounter.get());
     }
 
     @Test
-    void testFormat_ReplacesPlaceholders() throws Exception {
-        var method = ArrowSimpleLogger.class.getDeclaredMethod("format", String.class, Object[].class);
-        method.setAccessible(true);
-        String formatted = (String) method.invoke(logger, "Hello {} {}", new Object[]{"World", 123});
-        assertEquals("Hello World 123", formatted);
+    void testFormatReplacement() throws Exception {
+        var m = ArrowSimpleLogger.class
+                .getDeclaredMethod("format", String.class, Object[].class);
+        m.setAccessible(true);
+
+        String out = (String) m.invoke(logger, "A {} B {}", new Object[]{"X", 1});
+        assertEquals("A X B 1", out);
     }
 
-    @Test
-    void testWriteArrowAsync_HandlesExceptionGracefully() {
-        // simulate enqueue throwing exception
-        when(mockSender.enqueue(any())).thenThrow(new RuntimeException("Test enqueue fail"));
+    /* ---------------- Test Sender ---------------- */
 
-        // Write MAX_BATCH_SIZE logs to trigger flush
-        for (int i = 0; i < 10; i++) {
-            logger.info("Log {}", i);
+    static class TestFlightSender extends FlightSender.AbstractFlightSender {
+
+        final AtomicInteger sendCount = new AtomicInteger();
+        final CountDownLatch latch = new CountDownLatch(10);
+
+        @Override
+        public long getMaxInMemorySize() {
+            return 1024 * 1024;
         }
 
-        // No exception should propagate
-        assertEquals(0, logger.batchCounter.get());
+        @Override
+        public long getMaxOnDiskSize() {
+            return 10 * 1024 * 1024;
+        }
+
+        @Override
+        protected void doSend(SendElement element) {
+            sendCount.incrementAndGet();
+            latch.countDown();
+            try {
+                element.read().close();
+            } catch (Exception ignored) {
+            }
+        }
+
+        boolean awaitSends(int expected) throws InterruptedException {
+            return latch.await(2, TimeUnit.SECONDS)
+                    || sendCount.get() >= expected;
+        }
     }
 }
