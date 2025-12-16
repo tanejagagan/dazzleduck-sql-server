@@ -687,6 +687,7 @@ public class Transformations {
     }
 
 
+
     private static void getAllTablesOrPathsFromSelect(JsonNode statement, String catalogName, String schemaName, List<CatalogSchemaTable> collector) {
         var fromNode = statement.get("from_table");
         var fromTableType = fromNode.get("type").asText();

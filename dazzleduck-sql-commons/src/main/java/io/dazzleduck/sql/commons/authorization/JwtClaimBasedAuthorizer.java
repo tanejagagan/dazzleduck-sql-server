@@ -44,8 +44,9 @@ public class JwtClaimBasedAuthorizer implements SqlAuthorizer {
 
         // Check function access
         if (catalogSchemaTable.type() == Transformations.TableType.TABLE_FUNCTION &&
-                (path == null || !SqlAuthorizer.hasAccessToPath(path, catalogSchemaTable.tableOrPath()))){
-                throw new UnauthorizedException("No access to %s".formatted(catalogSchemaTable));
+                (path == null || !SqlAuthorizer.hasAccessToPath(path, catalogSchemaTable.tableOrPath())) &&
+                !SqlAuthorizer.hasAccessToTableFunction(functionName, catalogSchemaTable.functionName())){
+            throw new UnauthorizedException("No access to %s".formatted(catalogSchemaTable));
         }
 
 

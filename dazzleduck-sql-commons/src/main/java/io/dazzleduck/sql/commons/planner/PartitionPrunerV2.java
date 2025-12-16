@@ -24,11 +24,16 @@ public interface PartitionPrunerV2 {
         return staticPlanners.get(functionName);
     }
 
-    List<FileStatus> pruneFiles(String path,
-                                JsonNode tree,
+    List<FileStatus> pruneFiles(JsonNode tree,
                                 long maxSplitSize,
                                 Map<String, String> properties) throws SQLException, IOException;
 
+
+    static String getPath(JsonNode tree) {
+        var catalogSchemaAndTables =
+                Transformations.getAllTablesOrPathsFromSelect(Transformations.getFirstStatementNode(tree), null, null);
+        return catalogSchemaAndTables.get(0).tableOrPath();
+    }
 
 }
 
@@ -36,8 +41,9 @@ public interface PartitionPrunerV2 {
 class HiveSplitPlanner implements PartitionPrunerV2 {
 
     @Override
-    public List<FileStatus> pruneFiles(String path, JsonNode tree, long maxSplitSize, Map<String, String> properties) throws SQLException, IOException {
+    public List<FileStatus> pruneFiles(JsonNode tree, long maxSplitSize, Map<String, String> properties) throws SQLException, IOException {
         var partitionDataTypes  = Transformations.getHivePartition(tree);
+        var path  = PartitionPrunerV2.getPath(tree);
         return HivePartitionPruning.pruneFiles(path,
                 tree, partitionDataTypes);
     }
@@ -46,8 +52,9 @@ class HiveSplitPlanner implements PartitionPrunerV2 {
 class DeltaLakeSplitPlanner implements PartitionPrunerV2 {
 
     @Override
-    public List<FileStatus> pruneFiles(String path, JsonNode tree, long maxSplitSize, Map<String, String> properties) throws SQLException, IOException {
+    public List<FileStatus> pruneFiles(JsonNode tree, long maxSplitSize, Map<String, String> properties) throws SQLException, IOException {
         var statement = Transformations.getFirstStatementNode(tree);
+        var path  = PartitionPrunerV2.getPath(tree);
         var filterExpression = Transformations.getWhereClauseForTableFunction(statement);
         return PartitionPruning.pruneFiles(path, filterExpression);
     }
@@ -56,14 +63,14 @@ class DeltaLakeSplitPlanner implements PartitionPrunerV2 {
 class DucklakeSplitPlanner implements PartitionPrunerV2 {
 
     @Override
-    public List<FileStatus> pruneFiles(String path, JsonNode tree, long maxSplitSize, Map<String, String> properties) throws SQLException, IOException {
+    public List<FileStatus> pruneFiles( JsonNode tree, long maxSplitSize, Map<String, String> properties) throws SQLException, IOException {
         var catalogSchemaAndTables =
                 Transformations.getAllTablesOrPathsFromSelect(Transformations.getFirstStatementNode(tree), null, null);
         var first = catalogSchemaAndTables.get(0);
         var catalog = first.catalog();
         var metadata = "__ducklake_metadat_" + catalog;
         try {
-            return DucklakePartitionPruning.pruneFiles(first.schema(), first.tableOrPath(), "", metadata);
+            return DucklakePartitionPruning.pruneFiles(first.schema(), first.tableOrPath(), tree, metadata);
         } catch (NoSuchMethodException e) {
             throw new RuntimeException(e);
         }

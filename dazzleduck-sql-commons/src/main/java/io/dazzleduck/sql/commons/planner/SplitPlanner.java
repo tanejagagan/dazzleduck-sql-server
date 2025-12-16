@@ -28,12 +28,11 @@ public interface SplitPlanner {
         }
         var first = catalogSchemaAndTables.get(0);
         var tableFunction =  first.functionName();
-        var path = first.tableOrPath();
         var splitPlanner = PartitionPrunerV2.getPlanner(tableFunction);
         if(splitPlanner == null) {
             throw new SQLException("unsupported type : " + tableFunction);
         }
-        var fileStatuses = splitPlanner.pruneFiles(path, tree, maxSplitSize, Map.of());
+        var fileStatuses = splitPlanner.pruneFiles(tree, maxSplitSize, Map.of());
         fileStatuses.sort(Comparator.comparing(FileStatus::lastModified));
         return getSplitStatus(maxSplitSize, fileStatuses);
     }
