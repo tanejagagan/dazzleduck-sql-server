@@ -1,6 +1,7 @@
 package io.dazzleduck.sql.flight;
 
-import io.dazzleduck.sql.flight.model.StatementAuditObject;
+import io.dazzleduck.sql.flight.model.StatementAudit;
+import io.dazzleduck.sql.flight.server.DuckDBFlightSqlProducer.CacheKey;
 import io.dazzleduck.sql.flight.server.StatementContext;
 import io.micrometer.core.instrument.*;
 import org.slf4j.MarkerFactory;
@@ -97,62 +98,46 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
     }
 
     @Override
-    public void recordStatementCancel(StatementContext<?> ctx) {
+    public void recordStatementCancel(CacheKey key, StatementContext<?> ctx) {
         cancelStatementCounter.increment();
-        auditor.audit(buildAudit(ctx, "CANCEL", null));
+        auditor.audit(buildAudit(key, ctx, "CANCEL", null));
     }
 
     @Override
-    public void recordPreparedStatementCancel(StatementContext<?> ctx) {
+    public void recordPreparedStatementCancel(CacheKey key, StatementContext<?> ctx) {
         cancelPreparedStatementCounter.increment();
-        auditor.audit(buildAudit(ctx, "CANCEL", null));
+        auditor.audit(buildAudit(key, ctx, "CANCEL", null));
     }
 
     @Override
-    public void recordStatementStart(StatementContext<?> ctx) {
+    public void recordStatementStreamStart(CacheKey key, StatementContext<?> ctx) {
         statementStart.increment();
-        auditor.audit(buildAudit(ctx, "START", null));
+        auditor.audit(buildAudit(key, ctx, "START", null));
     }
 
     @Override
-    public void recordStatementEnd(StatementContext<?> ctx) {
+    public void recordStatementStreamEnd(CacheKey key, StatementContext<?> ctx) {
         statementEnd.increment();
-        auditor.audit(buildAudit(ctx, "END", null));
+        auditor.audit(buildAudit(key, ctx, "END", null));
     }
 
     @Override
-    public void recordStatementError(StatementContext<?> ctx, Throwable error) {
+    public void recordStatementStreamError(CacheKey key, StatementContext<?> ctx, Throwable error) {
         statementError.increment();
         String errorMessage = error.getClass().getSimpleName() + ": " + error.getMessage();
-        auditor.audit(buildAudit(ctx, "ERROR", errorMessage));
+        auditor.audit(buildAudit(key, ctx, "ERROR", errorMessage));
     }
 
     @Override
-    public void recordStatementTimeout(StatementContext<?> ctx) {
+    public void recordStatementTimeout(CacheKey key, StatementContext<?> ctx) {
         timeoutStatementCounter.increment();
-        auditor.audit(buildAudit(ctx, "TIMEOUT", null));
+        auditor.audit(buildAudit(key, ctx, "TIMEOUT", null));
     }
 
     @Override
-    public void recordPreparedStatementTimeout(StatementContext<?> ctx) {
+    public void recordPreparedStatementTimeout(CacheKey key, StatementContext<?> ctx) {
         timeoutPreparedStatementCounter.increment();
-        auditor.audit(buildAudit(ctx, "TIMEOUT", null));
-    }
-
-    @Override
-    public void recordStreamStart(StatementContext<?> ctx) {
-        auditor.audit(buildAudit(ctx, "STREAM_START", null));
-    }
-
-    @Override
-    public void recordStreamEnd(StatementContext<?> ctx) {
-        auditor.audit(buildAudit(ctx, "STREAM_END", null));
-    }
-
-    @Override
-    public void recordStreamError(StatementContext<?> ctx, Throwable error) {
-        String msg = error.getClass().getSimpleName() + ": " + error.getMessage();
-        auditor.audit(buildAudit(ctx, "STREAM_ERROR", msg));
+        auditor.audit(buildAudit(key, ctx, "TIMEOUT", null));
     }
 
     @Override
@@ -254,10 +239,10 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
     // ==========================================================
     //                    HELPER BUILDER
     // ==========================================================
-    private static StatementAuditObject buildAudit(StatementContext<?> ctx, String action, String error) {
-        return new StatementAuditObject(
-                ctx.getStatementId(),
-                ctx.getUser(),
+    private static StatementAudit buildAudit(CacheKey key, StatementContext<?> ctx, String action, String error) {
+        return new StatementAudit(
+                key.id(),
+                key.peerIdentity(),
                 action,
                 ctx.isPreparedStatementContext(),
                 ctx.getQuery(),

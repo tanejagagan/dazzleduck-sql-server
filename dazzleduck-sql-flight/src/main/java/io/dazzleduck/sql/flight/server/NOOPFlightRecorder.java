@@ -2,6 +2,7 @@ package io.dazzleduck.sql.flight.server;
 
 import io.dazzleduck.sql.flight.FlightRecorder;
 import io.dazzleduck.sql.flight.model.FlightMetricsSnapshot;
+import io.dazzleduck.sql.flight.server.DuckDBFlightSqlProducer.CacheKey;
 
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -23,57 +24,39 @@ public class NOOPFlightRecorder implements FlightRecorder {
     private final AtomicLong statementStart = new AtomicLong();
     private final AtomicLong statementEnd = new AtomicLong();
     private final AtomicLong statementError = new AtomicLong();
-    private final AtomicLong StreamStatementStart = new AtomicLong();
-    private final AtomicLong StreamStatementEnd = new AtomicLong();
-    private final AtomicLong StreamStatementError = new AtomicLong();
 
     @Override
-    public void recordStatementCancel(StatementContext<?> ctx) {
+    public void recordStatementCancel(CacheKey key, StatementContext<?> ctx) {
         statementCancelCount.incrementAndGet();
     }
 
     @Override
-    public void recordPreparedStatementCancel(StatementContext<?> ctx) {
+    public void recordPreparedStatementCancel(CacheKey key, StatementContext<?> ctx) {
         preparedStatementCancelCount.incrementAndGet();
     }
 
     @Override
-    public void recordStatementStart(StatementContext<?> ctx) {
+    public void recordStatementStreamStart(CacheKey key, StatementContext<?> ctx) {
         statementStart.incrementAndGet();
     }
 
     @Override
-    public void recordStatementEnd(StatementContext<?> ctx) {
+    public void recordStatementStreamEnd(CacheKey key, StatementContext<?> ctx) {
         statementEnd.incrementAndGet();
     }
 
     @Override
-    public void recordStatementError(StatementContext<?> ctx, Throwable error) {
+    public void recordStatementStreamError(CacheKey key, StatementContext<?> ctx, Throwable error) {
         statementError.incrementAndGet();
     }
 
     @Override
-    public void recordStreamStart(StatementContext<?> ctx) {
-        StreamStatementStart.incrementAndGet();
-    }
-
-    @Override
-    public void recordStreamEnd(StatementContext<?> ctx) {
-        StreamStatementEnd.incrementAndGet();
-    }
-
-    @Override
-    public void recordStreamError(StatementContext<?> ctx, Throwable error) {
-        StreamStatementError.incrementAndGet();
-    }
-
-    @Override
-    public void recordStatementTimeout(StatementContext<?> ctx) {
+    public void recordStatementTimeout(CacheKey key, StatementContext<?> ctx) {
         statementTimeoutCount.incrementAndGet();
     }
 
     @Override
-    public void recordPreparedStatementTimeout(StatementContext<?> ctx) {
+    public void recordPreparedStatementTimeout(CacheKey key, StatementContext<?> ctx) {
         preparedStatementTimeoutCount.incrementAndGet();
     }
 
