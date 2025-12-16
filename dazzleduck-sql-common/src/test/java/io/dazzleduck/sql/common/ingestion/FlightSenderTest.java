@@ -3,8 +3,9 @@ package io.dazzleduck.sql.common.ingestion;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
+import java.time.Clock;
+import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -14,7 +15,14 @@ public class FlightSenderTest {
     private OnDemandSender sender;
 
     @AfterEach
-    void cleanup() {
+    void cleanup() throws InterruptedException {
+        if (sender != null) {
+            try {
+                sender.close();
+            } catch (Exception e) {
+                // Ignore cleanup errors
+            }
+        }
         sender = null;
     }
 
@@ -22,7 +30,7 @@ public class FlightSenderTest {
     private final long MB = 1024 * KB;
 
     private OnDemandSender createSender(long mem, long disk) {
-        return new OnDemandSender(mem, disk, new CountDownLatch(1));
+        return new OnDemandSender(mem, disk, Clock.systemDefaultZone(), new CountDownLatch(1));
     }
 
     @Test
@@ -35,21 +43,23 @@ public class FlightSenderTest {
     @Test
     void testEnqueueInMemory() {
         sender = createSender(10 * MB, 10 * MB);
-        sender.start();
+        // Thread is auto-started in constructor, no need to call start()
         assertDoesNotThrow(() -> sender.enqueue(new byte[1024]));
     }
 
     @Test
     void testEnqueueOnDisk() {
         sender = createSender(100, 10 * MB);
-        sender.start();
-        assertDoesNotThrow(() -> sender.enqueue(new byte[1024]));
+        // Thread is auto-started in constructor, no need to call start()
+        // assertDoesNotThrow(() -> sender.enqueue(new byte[1024]));
+        sender.enqueue(new byte[1024]);
+
     }
 
     @Test
     void testEnqueueThrowsWhenFull() {
         sender = createSender(MB, 5 * MB);
-        sender.start();
+        // Thread is auto-started in constructor, no need to call start()
         sender.enqueue(new byte[(int) MB]); // goes to disk
         sender.release(); // let it process
         IllegalStateException ex = assertThrows(
@@ -62,8 +72,8 @@ public class FlightSenderTest {
 
     @Test
     void testFileCleanupAfterProcessing() throws Exception {
-        sender = new OnDemandSender(100, 10 * MB, new CountDownLatch(1));
-        sender.start();
+        sender = new OnDemandSender(100, 10 * MB, Clock.systemDefaultZone(), new CountDownLatch(1));
+        // Thread is auto-started in constructor, no need to call start()
         sender.enqueue(new byte[1024]);  // goes to ON_DISK
         assertEquals(1, sender.filesCreated.get());
         sender.release();
@@ -73,7 +83,7 @@ public class FlightSenderTest {
 
     @Test
     void testFileCleanupOnEnqueueFailure() {
-        sender = new OnDemandSender(100, 1024, new CountDownLatch(1));
+        sender = new OnDemandSender(100, 1024, Clock.systemDefaultZone(), new CountDownLatch(1));
 
         sender.enqueue(new byte[500]); // fits in ON_DISK
         assertEquals(1, sender.filesCreated.get());
@@ -85,8 +95,8 @@ public class FlightSenderTest {
     @Test
     void testCloseInterruptsInFlightProcessing() throws Exception {
         CountDownLatch blockLatch = new CountDownLatch(1);
-        sender = new OnDemandSender(10 * MB, 10 * MB, blockLatch);
-        sender.start();
+        sender = new OnDemandSender(10 * MB, 10 * MB, Clock.systemDefaultZone(), blockLatch);
+        // Thread is auto-started in constructor, no need to call start()
         sender.enqueue(new byte[1024]);
 
         sender.close();
@@ -103,7 +113,8 @@ public class FlightSenderTest {
     public final AtomicInteger filesCreated = new AtomicInteger();
     public final AtomicInteger filesDeleted = new AtomicInteger();
 
-    public OnDemandSender(long maxInMemorySize, long maxOnDiskSize, CountDownLatch latch) {
+    public OnDemandSender(long maxInMemorySize, long maxOnDiskSize, Clock clock, CountDownLatch latch) {
+        super(1024 * 1024, Duration.ofSeconds(1), clock);
         this.maxInMemorySize = maxInMemorySize;
         this.maxOnDiskSize = maxOnDiskSize;
         this.latch = latch;
@@ -122,7 +133,6 @@ public class FlightSenderTest {
         @Override
         public void enqueue(byte[] input) {
             filesCreated.incrementAndGet(); // always count
-
             try {
                 super.enqueue(input);
             } catch (Exception e) {
