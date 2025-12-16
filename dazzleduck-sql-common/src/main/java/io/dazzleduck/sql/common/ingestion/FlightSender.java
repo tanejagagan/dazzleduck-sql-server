@@ -48,13 +48,11 @@ public interface FlightSender {
         private ScheduledExecutorService executorService = Executors.newSingleThreadScheduledExecutor();
 
         public AbstractFlightSender(long maxBatchSize, Duration maxDataSendInterval, Clock clock){
+            System.out.println("Started at %s and scheduled %s".formatted(clock.instant(), maxDataSendInterval));
             this.maxBatchSize = maxBatchSize;
             this.maxDataSendInterval = maxDataSendInterval;
             this.clock = clock;
             this.lastSent = clock.instant();
-
-
-
             this.senderThread = new Thread(() -> {
                 while (!shutdown || !queue.isEmpty()) {
                     try {
@@ -85,26 +83,38 @@ public interface FlightSender {
             // Set daemon flag before thread is started
             this.senderThread.setDaemon(true);
             this.senderThread.start();
-
-            executorService.schedule(this::sendOrScheduleCurrentBucket, maxDataSendInterval.toMillis(), TimeUnit.MILLISECONDS);
+            executorService.submit(() -> sendOrScheduleCurrentBucket(maxDataSendInterval));
         }
 
         private void sendCurrentBucket(){
-            var bytes = this.currentBucket.getArrowBytes();
-            if (bytes != null && bytes.length > 0) {
-                enqueue(bytes);
-                lastSent = clock.instant();
+            if (this.currentBucket.size() > 0) {
+                var bytes = this.currentBucket.getArrowBytes();
+                if (bytes != null && bytes.length > 0) {
+                    enqueue(bytes);
+                    lastSent = clock.instant();
+                }
             }
         }
 
-        private synchronized void sendOrScheduleCurrentBucket(){
+        private synchronized void sendOrScheduleCurrentBucket(Duration maxDataSendInterval){
+
             var now = clock.instant();
+            System.out.println("Sending at " + now);
             var toBeSent = lastSent.plus(maxDataSendInterval);
-            if(toBeSent.isBefore(now) || toBeSent.equals(now)){
-                sendCurrentBucket();
-            } else {
-                var timeRemaining = Duration.between(now, toBeSent);
-                executorService.schedule(this::sendOrScheduleCurrentBucket, timeRemaining.toMillis(), TimeUnit.MILLISECONDS);
+            var timeRemaining = maxDataSendInterval;
+            try {
+                if (toBeSent.isBefore(now) || toBeSent.equals(now)) {
+                    sendCurrentBucket();
+                } else {
+                    timeRemaining = Duration.between(now, toBeSent);
+                }
+            } finally {
+                System.out.println(timeRemaining);
+                if (!shutdown) {
+                    System.out.println();
+                    executorService.schedule(() -> sendOrScheduleCurrentBucket(maxDataSendInterval),
+                            timeRemaining.toMillis(), TimeUnit.MILLISECONDS);
+                }
             }
         }
         public synchronized void addRow(JavaRow row) {
@@ -171,15 +181,18 @@ public interface FlightSender {
         }
 
         @Override
-        public synchronized void close() throws InterruptedException {
-            sendCurrentBucket();
-            shutdown = true;
+        public void close() throws InterruptedException {
+            synchronized (this) {
+                sendCurrentBucket();
+                shutdown = true;
+            }
 
-            // Shutdown the scheduled executor service
+            // Shutdown the scheduled executor service (outside synchronized block to avoid deadlock)
             executorService.shutdown();
             try {
                 if (!executorService.awaitTermination(5, TimeUnit.SECONDS)) {
-                    executorService.shutdownNow();
+                    var toExecute = executorService.shutdownNow();
+                    System.out.println(toExecute.size());
                 }
             } catch (InterruptedException e) {
                 executorService.shutdownNow();

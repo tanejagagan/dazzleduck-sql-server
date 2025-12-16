@@ -24,4 +24,8 @@ public class Bucket {
         serialized = true;
         return null;
     }
+
+    public synchronized long size(){
+        return size;
+    }
 }

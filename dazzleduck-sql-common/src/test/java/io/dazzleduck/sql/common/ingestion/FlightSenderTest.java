@@ -3,9 +3,9 @@ package io.dazzleduck.sql.common.ingestion;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -30,7 +30,7 @@ public class FlightSenderTest {
     private final long MB = 1024 * KB;
 
     private OnDemandSender createSender(long mem, long disk) {
-        return new OnDemandSender(mem, disk, new CountDownLatch(1));
+        return new OnDemandSender(mem, disk, Clock.systemDefaultZone(), new CountDownLatch(1));
     }
 
     @Test
@@ -51,7 +51,9 @@ public class FlightSenderTest {
     void testEnqueueOnDisk() {
         sender = createSender(100, 10 * MB);
         // Thread is auto-started in constructor, no need to call start()
-        assertDoesNotThrow(() -> sender.enqueue(new byte[1024]));
+        // assertDoesNotThrow(() -> sender.enqueue(new byte[1024]));
+        sender.enqueue(new byte[1024]);
+
     }
 
     @Test
@@ -70,7 +72,7 @@ public class FlightSenderTest {
 
     @Test
     void testFileCleanupAfterProcessing() throws Exception {
-        sender = new OnDemandSender(100, 10 * MB, new CountDownLatch(1));
+        sender = new OnDemandSender(100, 10 * MB, Clock.systemDefaultZone(), new CountDownLatch(1));
         // Thread is auto-started in constructor, no need to call start()
         sender.enqueue(new byte[1024]);  // goes to ON_DISK
         assertEquals(1, sender.filesCreated.get());
@@ -81,7 +83,7 @@ public class FlightSenderTest {
 
     @Test
     void testFileCleanupOnEnqueueFailure() {
-        sender = new OnDemandSender(100, 1024, new CountDownLatch(1));
+        sender = new OnDemandSender(100, 1024, Clock.systemDefaultZone(), new CountDownLatch(1));
 
         sender.enqueue(new byte[500]); // fits in ON_DISK
         assertEquals(1, sender.filesCreated.get());
@@ -93,7 +95,7 @@ public class FlightSenderTest {
     @Test
     void testCloseInterruptsInFlightProcessing() throws Exception {
         CountDownLatch blockLatch = new CountDownLatch(1);
-        sender = new OnDemandSender(10 * MB, 10 * MB, blockLatch);
+        sender = new OnDemandSender(10 * MB, 10 * MB, Clock.systemDefaultZone(), blockLatch);
         // Thread is auto-started in constructor, no need to call start()
         sender.enqueue(new byte[1024]);
 
@@ -111,8 +113,8 @@ public class FlightSenderTest {
     public final AtomicInteger filesCreated = new AtomicInteger();
     public final AtomicInteger filesDeleted = new AtomicInteger();
 
-    public OnDemandSender(long maxInMemorySize, long maxOnDiskSize, CountDownLatch latch) {
-        super(1024 * 1024, Duration.ofMinutes(1));
+    public OnDemandSender(long maxInMemorySize, long maxOnDiskSize, Clock clock, CountDownLatch latch) {
+        super(1024 * 1024, Duration.ofSeconds(1), clock);
         this.maxInMemorySize = maxInMemorySize;
         this.maxOnDiskSize = maxOnDiskSize;
         this.latch = latch;
