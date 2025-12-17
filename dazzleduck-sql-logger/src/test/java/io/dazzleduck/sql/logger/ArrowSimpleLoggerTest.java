@@ -97,14 +97,14 @@ class ArrowSimpleLoggerTest {
             super(
                     1024 * 1024,
                     Duration.ofSeconds(1),
-                    Clock.systemUTC(),
+
                     new Schema(java.util.List.of(
                             new Field(
                                     "dummy",
                                     FieldType.nullable(new ArrowType.Utf8()),
                                     null
                             )
-                    ))
+                    )), Clock.systemUTC()
             );
         }
 

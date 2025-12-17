@@ -50,6 +50,8 @@ public class HttpSenderTest {
                 "test.parquet",
                 Duration.ofSeconds(10),
                 100_000,
+                Duration.ofSeconds(10),
+                100_000,
                 500_000
         );
     }
@@ -100,6 +102,8 @@ public class HttpSenderTest {
                 "admin",
                 "admin",
                 file,
+                Duration.ofSeconds(10),
+                100_000,
                 Duration.ofSeconds(10),
                 100_000,
                 500_000);
@@ -166,7 +170,8 @@ public class HttpSenderTest {
 
     @Test
     void testQueueFullBehavior() throws Exception {
-        var limitedSender = new HttpSender(  schema,"http://localhost:" + PORT, "admin", "admin", "full.parquet", Duration.ofSeconds(10), 100, 200);
+        var limitedSender = new HttpSender(  schema,"http://localhost:" + PORT, "admin", "admin", "full.parquet", Duration.ofSeconds(10), 100_000,
+                Duration.ofSeconds(10),100, 200);
 
         byte[] largeData = arrowBytes("select * from generate_series(1000)");
 
@@ -179,7 +184,8 @@ public class HttpSenderTest {
 
     @Test
     void testTimeoutFailure() throws Exception {
-        var timeoutSender = new HttpSender(  schema,"http://localhost:" + PORT, "admin", "admin", "timeout.parquet", Duration.ofMillis(1), 5_000, 50_000);
+        var timeoutSender = new HttpSender(  schema,"http://localhost:" + PORT, "admin", "admin", "timeout.parquet", Duration.ofMillis(1), 100_000,
+                Duration.ofSeconds(1),5_000, 50_000);
         timeoutSender.enqueue(arrowBytes("select * from generate_series(2000)"));
         await().atMost(10, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> assertThrows(Exception.class, () -> ConnectionPool.collectFirst("select count(*) from read_parquet('%s/timeout.parquet')".formatted(warehouse), Long.class)));
         timeoutSender.close();
@@ -187,7 +193,8 @@ public class HttpSenderTest {
 
     @Test
     void testMemoryDiskSwitching() throws Exception {
-        var spillSender = new HttpSender(  schema,"http://localhost:" + PORT, "admin", "admin", "spill.parquet", Duration.ofSeconds(10), 50, 100_000);
+        var spillSender = new HttpSender(  schema,"http://localhost:" + PORT, "admin", "admin", "spill.parquet", Duration.ofSeconds(10), 100_000,
+                Duration.ofSeconds(10),50, 100_000);
 
 
         spillSender.enqueue(arrowBytes("select * from generate_series(30)"));

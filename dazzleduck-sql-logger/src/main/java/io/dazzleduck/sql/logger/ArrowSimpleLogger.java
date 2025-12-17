@@ -68,8 +68,10 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger {
                 http.getString("password"),
                 http.getString("target_path"),
                 Duration.ofMillis(http.getLong("timeout_ms")),
-                http.getLong("max_in_memory_bytes"),
-                http.getLong("max_on_disk_bytes")
+                config.getLong("min_batch_size"),
+                Duration.ofMillis(config.getLong("max_send_interval_ms")),
+                config.getLong("max_in_memory_bytes"),
+                config.getLong("max_on_disk_bytes")
         );
     }
 
@@ -118,11 +120,7 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger {
 
     public void close() {
         if (flightSender instanceof FlightSender.AbstractFlightSender afs) {
-            try {
-                afs.close();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
+            afs.close();
         }
     }
 
