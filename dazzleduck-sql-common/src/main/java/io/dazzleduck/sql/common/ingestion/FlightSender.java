@@ -1,9 +1,13 @@
 package io.dazzleduck.sql.common.ingestion;
 
 import io.dazzleduck.sql.common.types.JavaRow;
+import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.types.pojo.Schema;  // FIXED: Use Arrow Schema
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayInputStream;
+import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -13,9 +17,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.*;
 
-public interface FlightSender {
+public interface FlightSender extends Closeable {
 
-    void close() throws InterruptedException;
+    void close();
 
     enum StoreStatus {
         IN_MEMORY, ON_DISK, FULL
@@ -28,34 +32,41 @@ public interface FlightSender {
     long getMaxOnDiskSize();
 
     abstract class AbstractFlightSender implements FlightSender {
+
+        private static final Logger logger  = LoggerFactory.getLogger(AbstractFlightSender.class);
         private final BlockingQueue<SendElement> queue = new ArrayBlockingQueue<>(1024 * 1024);
-        private final Clock clock;
+        protected final Clock clock;
         private volatile boolean shutdown = false;
-        private volatile boolean started = false;
 
         protected final Thread senderThread;
 
         private long inMemorySize = 0;
         private long onDiskSize = 0;
 
-        private long maxBatchSize;
+        private final long minBatchSize;
 
-        private Duration maxDataSendInterval;
+        private final Duration maxDataSendInterval;
 
         private Instant lastSent;
         private Bucket currentBucket;
         final Schema schema;
 
-        private ScheduledExecutorService executorService = Executors.newSingleThreadScheduledExecutor();
+        final RootAllocator bufferAllocator = new RootAllocator(Long.MAX_VALUE);
 
-        public AbstractFlightSender(long maxBatchSize, Duration maxDataSendInterval, Clock clock, Schema schema){
-            System.out.println("Started at %s and scheduled %s".formatted(clock.instant(), maxDataSendInterval));
-            this.maxBatchSize = maxBatchSize;
+        private final ScheduledExecutorService executorService;
+
+
+        public AbstractFlightSender(long minBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock){
+            this(minBatchSize, maxDataSendInterval, schema, clock, Executors.newSingleThreadScheduledExecutor());
+        }
+        public AbstractFlightSender(long minBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock, ScheduledExecutorService scheduledExecutorService ){
+            logger.info("FlightSender started at {} with send interval {}", clock.instant(), maxDataSendInterval);
+            this.minBatchSize = minBatchSize;
             this.maxDataSendInterval = maxDataSendInterval;
             this.clock = clock;
             this.schema = schema;
             this.lastSent = clock.instant();
-            this.currentBucket = new Bucket(schema);
+            this.currentBucket = new Bucket();
             this.senderThread = new Thread(() -> {
                 while (!shutdown || !queue.isEmpty()) {
                     try {
@@ -82,27 +93,31 @@ public interface FlightSender {
                     }
                 }
             });
-
+            this.executorService = scheduledExecutorService;
             // Set daemon flag before thread is started
             this.senderThread.setDaemon(true);
             this.senderThread.start();
             executorService.submit(() -> sendOrScheduleCurrentBucket(maxDataSendInterval));
         }
 
-        private void sendCurrentBucket(){
+        private synchronized void sendCurrentBucket(){
             if (this.currentBucket.size() > 0) {
-                var bytes = this.currentBucket.getArrowBytes();
-                if (bytes != null && bytes.length > 0) {
-                    enqueue(bytes);
-                    lastSent = clock.instant();
+                try (var c = bufferAllocator.newChildAllocator("child", minBatchSize, Long.MAX_VALUE)) {
+                    var bytes = this.currentBucket.getArrowBytes(schema, c);
+                    if (bytes != null && bytes.length > 0) {
+                        enqueue(bytes);
+                        lastSent = clock.instant();
+                        currentBucket = new Bucket();
+                    }
                 }
             }
         }
 
+
         private synchronized void sendOrScheduleCurrentBucket(Duration maxDataSendInterval){
 
             var now = clock.instant();
-            System.out.println("Sending at " + now);
+            logger.debug("Checking bucket send at {}", now);
             var toBeSent = lastSent.plus(maxDataSendInterval);
             var timeRemaining = maxDataSendInterval;
             try {
@@ -112,9 +127,8 @@ public interface FlightSender {
                     timeRemaining = Duration.between(now, toBeSent);
                 }
             } finally {
-                System.out.println(timeRemaining);
+                logger.debug("Next bucket send scheduled in {}", timeRemaining);
                 if (!shutdown) {
-                    System.out.println();
                     executorService.schedule(() -> sendOrScheduleCurrentBucket(maxDataSendInterval),
                             timeRemaining.toMillis(), TimeUnit.MILLISECONDS);
                 }
@@ -125,16 +139,18 @@ public interface FlightSender {
                 throw new IllegalStateException("Sender is shutdown, cannot enqueue");
             }
             var currentSize = currentBucket.add(row);
-            if (currentSize > maxBatchSize) {
-                var arrowBytes = currentBucket.getArrowBytes();
-                this.lastSent = Clock.systemDefaultZone().instant();
-                enqueue(arrowBytes);
-                currentBucket = new Bucket(schema);
+            if (currentSize > minBatchSize) {
+                try(var c = bufferAllocator.newChildAllocator("child",  minBatchSize, Long.MAX_VALUE)) {
+                    var arrowBytes = currentBucket.getArrowBytes(schema, c);
+                    enqueue(arrowBytes);
+                    this.lastSent = clock.instant();
+                    currentBucket = new Bucket();
+                }
             }
         }
 
         @Override
-        public void enqueue(byte[] input) {
+        public synchronized void enqueue(byte[] input) {
             if (shutdown) {
                 throw new IllegalStateException("Sender is shutdown, cannot enqueue");
             }
@@ -171,20 +187,9 @@ public interface FlightSender {
 
         abstract protected void doSend(SendElement element) throws InterruptedException;
 
-        public synchronized void start() {
-            if (started) {
-                throw new IllegalStateException("FlightSender has already been started and cannot be restarted");
-            }
-            if (shutdown) {
-                throw new IllegalStateException("FlightSender has been shutdown and cannot be started");
-            }
-
-            started = true;
-            senderThread.start();
-        }
 
         @Override
-        public void close() throws InterruptedException {
+        public void close()  {
             synchronized (this) {
                 sendCurrentBucket();
                 shutdown = true;
@@ -195,16 +200,22 @@ public interface FlightSender {
             try {
                 if (!executorService.awaitTermination(5, TimeUnit.SECONDS)) {
                     var toExecute = executorService.shutdownNow();
-                    System.out.println(toExecute.size());
+                    logger.warn("ExecutorService did not terminate gracefully, forced shutdown of {} tasks", toExecute.size());
                 }
             } catch (InterruptedException e) {
                 executorService.shutdownNow();
                 Thread.currentThread().interrupt();
+                logger.atError().setCause(e).log("error closing executor service");
             }
 
             // Shutdown the sender thread
             senderThread.interrupt();
-            senderThread.join();
+            bufferAllocator.close();
+            try {
+                senderThread.join();
+            } catch (InterruptedException e) {
+                logger.atError().setCause(e).log("error closing sender");
+            }
             cleanupQueue();
         }
 
@@ -226,13 +237,13 @@ public interface FlightSender {
         }
     }
 
-    public interface SendElement {
+    interface SendElement {
         InputStream read();
         long length();
     }
 
-    public class MemoryElement implements SendElement {
-        private byte[] data;
+    class MemoryElement implements SendElement {
+        private final byte[] data;
 
         public MemoryElement(byte[] data) {
             this.data = data;
@@ -249,7 +260,7 @@ public interface FlightSender {
         }
     }
 
-    public class FileMappedMemoryElement implements SendElement {
+    class FileMappedMemoryElement implements SendElement {
         private final Path tempFile;
         private final long length;
 
@@ -269,6 +280,7 @@ public interface FlightSender {
                     Files.delete(tempFile);
                 }
             } catch (IOException e) {
+                throw new RuntimeException(e);
             }
         }
 
