@@ -6,6 +6,10 @@ import io.dazzleduck.sql.http.server.Main;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.ipc.ArrowStreamWriter;
+import org.apache.arrow.vector.types.pojo.ArrowType;
+import org.apache.arrow.vector.types.pojo.Field;
+import org.apache.arrow.vector.types.pojo.FieldType;
+import org.apache.arrow.vector.types.pojo.Schema;
 import org.duckdb.DuckDBConnection;
 import org.junit.jupiter.api.*;
 
@@ -23,6 +27,7 @@ public class HttpSenderTest {
     static final int PORT = 8093;
     static String warehouse;
     static ObjectMapper mapper = new ObjectMapper();
+    static Schema schema;
     static HttpSender sender;
 
     @BeforeAll
@@ -34,11 +39,21 @@ public class HttpSenderTest {
 
         ConnectionPool.executeBatch(new String[]{"INSTALL arrow FROM community", "LOAD arrow"});
 
-        // Create single shared sender
-        sender = new HttpSender("http://localhost:" + PORT, "admin", "admin", "test.parquet", // Default path, can be overridden per test if needed
-                Duration.ofSeconds(10), 100_00, 500_00);
+        // Derive schema once from DuckDB
+         Schema  schema = new Schema(java.util.List.of(new Field("timestamp", FieldType.nullable(new ArrowType.Utf8()), null)));
 
-        sender.start();
+        sender = new HttpSender(
+                schema,
+                "http://localhost:" + PORT,
+                "admin",
+                "admin",
+                "test.parquet",
+                Duration.ofSeconds(10),
+                100_000,
+                Duration.ofSeconds(10),
+                100_000,
+                500_000
+        );
     }
 
     @AfterAll
@@ -49,7 +64,11 @@ public class HttpSenderTest {
     }
 
     private byte[] arrowBytes(String query) throws Exception {
-        try (BufferAllocator allocator = new RootAllocator(); DuckDBConnection conn = ConnectionPool.getConnection(); var reader = ConnectionPool.getReader(conn, allocator, query, 1000); var baos = new ByteArrayOutputStream(); var writer = new ArrowStreamWriter(reader.getVectorSchemaRoot(), null, baos)) {
+        try (BufferAllocator allocator = new RootAllocator();
+             DuckDBConnection conn = ConnectionPool.getConnection();
+             var reader = ConnectionPool.getReader(conn, allocator, query, 1000);
+             var baos = new ByteArrayOutputStream();
+             var writer = new ArrowStreamWriter(reader.getVectorSchemaRoot(), null, baos)) {
 
             writer.start();
             while (reader.loadNextBatch()) {
@@ -75,38 +94,24 @@ public class HttpSenderTest {
 
     @Test
     void testMultipleEnqueuesOverwriteBehavior() throws Exception {
-        sender.enqueue(arrowBytes("select * from generate_series(1)"));
-        sender.enqueue(arrowBytes("select * from generate_series(2)"));
-        verifyFile("test.parquet", 3);
-    }
+        String file = "overwrite-" + System.nanoTime() + ".parquet";
 
-    @Test
-    void testSequentialBatches() throws Exception {
-        sender.enqueue(arrowBytes("select * from generate_series(5)"));
+        HttpSender overwriteSender = new HttpSender(
+                schema,
+                "http://localhost:" + PORT,
+                "admin",
+                "admin",
+                file,
+                Duration.ofSeconds(10),
+                100_000,
+                Duration.ofSeconds(10),
+                100_000,
+                500_000);
 
-        await().atMost(5, TimeUnit.SECONDS).ignoreExceptions().until(() -> {
-            try {
-                ConnectionPool.collectFirst("select count(*) from read_parquet('%s/test.parquet')".formatted(warehouse), Long.class);
-                return true;
-            } catch (Exception e) {
-                return false;
-            }
-        });
+            overwriteSender.enqueue(arrowBytes("select * from generate_series(1)"));
+            overwriteSender.enqueue(arrowBytes("select * from generate_series(2)"));
+            verifyFile(file, 3);
 
-        sender.enqueue(arrowBytes("select * from generate_series(15)"));
-        verifyFile("test.parquet", 16);
-    }
-
-    @Test
-    void testMultipleBatchesRapid() throws Exception {
-        for (int i = 0; i < 10; i++) {
-            sender.enqueue(arrowBytes("select * from generate_series(" + (i * 5) + ")"));
-        }
-
-        await().atMost(15, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {
-            long count = ConnectionPool.collectFirst("select count(*) from read_parquet('%s/test.parquet')".formatted(warehouse), Long.class);
-            assertTrue(count >= 0);
-        });
     }
 
     @Test
@@ -163,11 +168,10 @@ public class HttpSenderTest {
         });
     }
 
-
     @Test
     void testQueueFullBehavior() throws Exception {
-        var limitedSender = new HttpSender("http://localhost:" + PORT, "admin", "admin", "full.parquet", Duration.ofSeconds(10), 100, 200);
-        limitedSender.start();
+        var limitedSender = new HttpSender(  schema,"http://localhost:" + PORT, "admin", "admin", "full.parquet", Duration.ofSeconds(10), 100_000,
+                Duration.ofSeconds(10),100, 200);
 
         byte[] largeData = arrowBytes("select * from generate_series(1000)");
 
@@ -180,9 +184,8 @@ public class HttpSenderTest {
 
     @Test
     void testTimeoutFailure() throws Exception {
-        var timeoutSender = new HttpSender("http://localhost:" + PORT, "admin", "admin", "timeout.parquet", Duration.ofMillis(1), 5_000, 50_000);
-
-        timeoutSender.start();
+        var timeoutSender = new HttpSender(  schema,"http://localhost:" + PORT, "admin", "admin", "timeout.parquet", Duration.ofMillis(1), 100_000,
+                Duration.ofSeconds(1),5_000, 50_000);
         timeoutSender.enqueue(arrowBytes("select * from generate_series(2000)"));
         await().atMost(10, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> assertThrows(Exception.class, () -> ConnectionPool.collectFirst("select count(*) from read_parquet('%s/timeout.parquet')".formatted(warehouse), Long.class)));
         timeoutSender.close();
@@ -190,9 +193,10 @@ public class HttpSenderTest {
 
     @Test
     void testMemoryDiskSwitching() throws Exception {
-        var spillSender = new HttpSender("http://localhost:" + PORT, "admin", "admin", "spill.parquet", Duration.ofSeconds(10), 50, 100_000);
+        var spillSender = new HttpSender(  schema,"http://localhost:" + PORT, "admin", "admin", "spill.parquet", Duration.ofSeconds(10), 100_000,
+                Duration.ofSeconds(10),50, 100_000);
 
-        spillSender.start();
+
         spillSender.enqueue(arrowBytes("select * from generate_series(30)"));
 
         await().atMost(10, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {

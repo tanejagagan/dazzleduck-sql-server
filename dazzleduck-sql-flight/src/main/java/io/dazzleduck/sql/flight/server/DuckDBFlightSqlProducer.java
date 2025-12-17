@@ -205,7 +205,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
 
     record DatabaseSchema ( String database, String schema) {}
-    record CacheKey(String peerIdentity, long id){}
+    public record CacheKey(String peerIdentity, long id){}
 
     protected static final Calendar DEFAULT_CALENDAR = JdbcToArrowUtils.getUtcCalendar();
     public static final String  DEFAULT_DATABASE = "memory";
@@ -398,12 +398,14 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                 var now = clock.instant();
                 preparedStatementLoadingCache.asMap().forEach((key, ctx) -> {
                     if (ctx.startTime().plus(queryTimeout).isBefore(now)) {
+                        recorder.recordPreparedStatementTimeout(key, ctx);
                         cancel(key.id, streamListener, key.peerIdentity);
                     }
                 });
 
                 statementLoadingCache.asMap().forEach((key, ctx) -> {
                     if (ctx.startTime().plus(queryTimeout).isBefore(now)) {
+                        recorder.recordStatementTimeout(key, ctx);
                         cancel(key.id, streamListener, key.peerIdentity);
                     }
                 });
@@ -598,7 +600,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         if (statementContext == null) {
             ErrorHandling.handleContextNotFound();
         }
-        streamResultSet(executorService, statementContext, OptionalResultSetSupplier.of(statementContext.getStatement()),
+        streamResultSet(executorService, statementContext, key, OptionalResultSetSupplier.of(statementContext.getStatement()),
             allocator, getBatchSize(context),
             listener, () -> {}, recorder);
     }
@@ -636,6 +638,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             statementLoadingCache.put(key, statementContext);
             streamResultSet(executorService,
                     statementContext,
+                    key,
                     OptionalResultSetSupplier.of(statement, query, queryOptimizer),
                     allocator,
                     getBatchSize(context),
@@ -1035,6 +1038,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         try {
             Statement statement = context.getStatement();
             listener.onNext(CancelStatus.CANCELLING);
+            recorder.recordStatementCancel(key, context);
             try {
                 statement.cancel();
                 listener.onNext(CancelStatus.CANCELLED);
@@ -1218,6 +1222,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
     private static <T extends Statement> void streamResultSet(ExecutorService executorService,
                                                               StatementContext<T> statementContext,
+                                                              CacheKey key,
                                                               OptionalResultSetSupplier supplier,
                                                               BufferAllocator allocator,
                                                               final int batchSize,
@@ -1230,6 +1235,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             try {
                 statementContext.start();
                 recorder.startStream(statementContext.isPreparedStatementContext());
+                recorder.recordStatementStreamStart(key, statementContext);
                 supplier.execute();
                 if (supplier.hasResultSet()) {
                     try (DuckDBResultSet resultSet = supplier.get();
@@ -1249,6 +1255,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             } catch (Throwable throwable) {
                 error = true;
                 recorder.errorStream(statementContext.isPreparedStatementContext());
+                recorder.recordStatementStreamError(key, statementContext, throwable);
                 ErrorHandling.handleThrowable(listener, throwable);
             } finally {
                 try {
@@ -1257,6 +1264,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                     }
                     statementContext.end();
                     recorder.endStream(statementContext.isPreparedStatementContext());
+                    recorder.recordStatementStreamEnd(key, statementContext);
                     finalBlock.run();
                     childAllocator.close();
                 } catch (Exception e){

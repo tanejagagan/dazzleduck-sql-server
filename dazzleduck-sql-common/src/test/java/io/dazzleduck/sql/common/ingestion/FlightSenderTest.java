@@ -1,28 +1,36 @@
 package io.dazzleduck.sql.common.ingestion;
 
+import org.apache.arrow.vector.types.pojo.ArrowType;
+import org.apache.arrow.vector.types.pojo.Field;
+import org.apache.arrow.vector.types.pojo.FieldType;
+import org.apache.arrow.vector.types.pojo.Schema;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
+import java.time.Clock;
+import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-public class FlightSenderTest {
+class FlightSenderTest {
+
+    private static final long KB = 1024;
+    private static final long MB = 1024 * KB;
 
     private OnDemandSender sender;
 
     @AfterEach
-    void cleanup() {
-        sender = null;
+    void cleanup() throws InterruptedException {
+        if (sender != null) {
+            sender.close();
+        }
     }
 
-    private final long KB = 1024;
-    private final long MB = 1024 * KB;
-
     private OnDemandSender createSender(long mem, long disk) {
-        return new OnDemandSender(mem, disk, new CountDownLatch(1));
+        return new OnDemandSender(mem, disk, Clock.systemDefaultZone(), new CountDownLatch(1),null);
     }
 
     @Test
@@ -35,21 +43,20 @@ public class FlightSenderTest {
     @Test
     void testEnqueueInMemory() {
         sender = createSender(10 * MB, 10 * MB);
-        sender.start();
         assertDoesNotThrow(() -> sender.enqueue(new byte[1024]));
     }
 
     @Test
     void testEnqueueOnDisk() {
         sender = createSender(100, 10 * MB);
-        sender.start();
-        assertDoesNotThrow(() -> sender.enqueue(new byte[1024]));
+        sender.enqueue(new byte[1024]);
+        assertEquals(1, sender.filesCreated.get());
     }
 
     @Test
     void testEnqueueThrowsWhenFull() {
         sender = createSender(MB, 5 * MB);
-        sender.start();
+        // Thread is auto-started in constructor, no need to call start()
         sender.enqueue(new byte[(int) MB]); // goes to disk
         sender.release(); // let it process
         IllegalStateException ex = assertThrows(
@@ -62,18 +69,22 @@ public class FlightSenderTest {
 
     @Test
     void testFileCleanupAfterProcessing() throws Exception {
-        sender = new OnDemandSender(100, 10 * MB, new CountDownLatch(1));
-        sender.start();
-        sender.enqueue(new byte[1024]);  // goes to ON_DISK
+        CountDownLatch sendDone = new CountDownLatch(1);
+        sender = new OnDemandSender(100, 10 * MB, Clock.systemUTC(), new CountDownLatch(1), sendDone
+        );
+
+        sender.enqueue(new byte[1024]);
         assertEquals(1, sender.filesCreated.get());
-        sender.release();
-        Thread.sleep(60);
+
+        sender.release(); // allow doSend()
+
+        assertTrue(sendDone.await(2, TimeUnit.SECONDS));
         assertEquals(1, sender.filesDeleted.get());
     }
 
     @Test
     void testFileCleanupOnEnqueueFailure() {
-        sender = new OnDemandSender(100, 1024, new CountDownLatch(1));
+        sender = createSender(100, 1024);
 
         sender.enqueue(new byte[500]); // fits in ON_DISK
         assertEquals(1, sender.filesCreated.get());
@@ -85,8 +96,8 @@ public class FlightSenderTest {
     @Test
     void testCloseInterruptsInFlightProcessing() throws Exception {
         CountDownLatch blockLatch = new CountDownLatch(1);
-        sender = new OnDemandSender(10 * MB, 10 * MB, blockLatch);
-        sender.start();
+        sender = new OnDemandSender(10 * MB, 10 * MB, Clock.systemDefaultZone(), blockLatch,null);
+        // Thread is auto-started in constructor, no need to call start()
         sender.enqueue(new byte[1024]);
 
         sender.close();
@@ -95,19 +106,22 @@ public class FlightSenderTest {
     }
 
 
-    class OnDemandSender extends FlightSender.AbstractFlightSender {
+    static class OnDemandSender extends FlightSender.AbstractFlightSender {
 
     private final long maxOnDiskSize;
     private final long maxInMemorySize;
     private final CountDownLatch latch;
     public final AtomicInteger filesCreated = new AtomicInteger();
     public final AtomicInteger filesDeleted = new AtomicInteger();
+    private final CountDownLatch sendDone;
 
-    public OnDemandSender(long maxInMemorySize, long maxOnDiskSize, CountDownLatch latch) {
-        this.maxInMemorySize = maxInMemorySize;
-        this.maxOnDiskSize = maxOnDiskSize;
-        this.latch = latch;
-    }
+        OnDemandSender(long maxInMemorySize, long maxOnDiskSize, Clock clock, CountDownLatch blockLatch, CountDownLatch sendDone) {
+            super(1024 * 1024, Duration.ofSeconds(1),  new Schema(java.util.List.of(new Field("ts", FieldType.nullable(new ArrowType.Utf8()), null))), clock);
+            this.maxInMemorySize = maxInMemorySize;
+            this.maxOnDiskSize = maxOnDiskSize;
+            this.latch = blockLatch;
+            this.sendDone = sendDone;
+        }
 
     @Override
     public long getMaxInMemorySize() {
@@ -122,7 +136,6 @@ public class FlightSenderTest {
         @Override
         public void enqueue(byte[] input) {
             filesCreated.incrementAndGet(); // always count
-
             try {
                 super.enqueue(input);
             } catch (Exception e) {
@@ -133,10 +146,14 @@ public class FlightSenderTest {
 
         @Override
         protected void doSend(SendElement element) throws InterruptedException {
-            latch.await();        // wait for release()
-            filesDeleted.incrementAndGet(); // after successful send
+            latch.await();
+            filesDeleted.incrementAndGet();
+            if (sendDone != null) {
+                sendDone.countDown();
+            }
         }
-        public void release() {
+
+        void release() {
             latch.countDown();
         }
     }

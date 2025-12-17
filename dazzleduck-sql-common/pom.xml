@@ -13,4 +13,18 @@
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
+    <dependencies>
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-vector</artifactId>
+            <version>18.3.0</version>
+            <scope>compile</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-memory-netty</artifactId>
+            <version>18.3.0</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
 </project>
