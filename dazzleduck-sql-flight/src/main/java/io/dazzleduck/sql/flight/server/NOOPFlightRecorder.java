@@ -2,6 +2,7 @@ package io.dazzleduck.sql.flight.server;
 
 import io.dazzleduck.sql.flight.FlightRecorder;
 import io.dazzleduck.sql.flight.model.FlightMetricsSnapshot;
+import io.dazzleduck.sql.flight.server.DuckDBFlightSqlProducer.CacheKey;
 
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -20,24 +21,42 @@ public class NOOPFlightRecorder implements FlightRecorder {
     private final AtomicLong failedBulkIngest = new AtomicLong();
     private final AtomicLong bytesIn = new AtomicLong();
     private final AtomicLong bytesOut = new AtomicLong();
+    private final AtomicLong statementStart = new AtomicLong();
+    private final AtomicLong statementEnd = new AtomicLong();
+    private final AtomicLong statementError = new AtomicLong();
 
     @Override
-    public void recordStatementCancel() {
+    public void recordStatementCancel(CacheKey key, StatementContext<?> ctx) {
         statementCancelCount.incrementAndGet();
     }
 
     @Override
-    public void recordPreparedStatementCancel() {
+    public void recordPreparedStatementCancel(CacheKey key, StatementContext<?> ctx) {
         preparedStatementCancelCount.incrementAndGet();
     }
 
     @Override
-    public void recordStatementTimeout() {
+    public void recordStatementStreamStart(CacheKey key, StatementContext<?> ctx) {
+        statementStart.incrementAndGet();
+    }
+
+    @Override
+    public void recordStatementStreamEnd(CacheKey key, StatementContext<?> ctx) {
+        statementEnd.incrementAndGet();
+    }
+
+    @Override
+    public void recordStatementStreamError(CacheKey key, StatementContext<?> ctx, Throwable error) {
+        statementError.incrementAndGet();
+    }
+
+    @Override
+    public void recordStatementTimeout(CacheKey key, StatementContext<?> ctx) {
         statementTimeoutCount.incrementAndGet();
     }
 
     @Override
-    public void recordPreparedStatementTimeout() {
+    public void recordPreparedStatementTimeout(CacheKey key, StatementContext<?> ctx) {
         preparedStatementTimeoutCount.incrementAndGet();
     }
 

@@ -1,15 +1,23 @@
 package io.dazzleduck.sql.flight;
 
-import io.dazzleduck.sql.flight.model.FlightMetricsSnapshot;
+import io.dazzleduck.sql.flight.server.DuckDBFlightSqlProducer.CacheKey;
+import io.dazzleduck.sql.flight.server.StatementContext;
 
 public interface FlightRecorder {
-    void recordStatementCancel();
 
-    void recordPreparedStatementCancel();
+    void recordStatementCancel(CacheKey key, StatementContext<?> ctx);
 
-    void recordStatementTimeout();
+    void recordPreparedStatementCancel(CacheKey key, StatementContext<?> ctx);
 
-    void recordPreparedStatementTimeout();
+    void recordStatementTimeout(CacheKey key, StatementContext<?> ctx);
+
+    void recordPreparedStatementTimeout(CacheKey key, StatementContext<?> ctx);
+
+    void recordStatementStreamStart(CacheKey key, StatementContext<?> ctx);
+
+    void recordStatementStreamEnd(CacheKey key, StatementContext<?> ctx);
+
+    void recordStatementStreamError(CacheKey key, StatementContext<?> ctx, Throwable error);
 
     void startStreamStatement();
 
