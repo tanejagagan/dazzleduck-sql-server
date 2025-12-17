@@ -121,7 +121,12 @@ public enum ConnectionPool {
             for(int i = 0; i <rc.length ; i++  ) {
                 var type  = rc[i].getType();
                 if (type.isArray()) {
-                    read[i] = rs.getArray(i + 1).getArray();
+                    var a = rs.getArray(i + 1);
+                    if (a == null) {
+                        read[i] = null;
+                    } else {
+                        read[i] = a.getArray();
+                    }
                 } else {
                     read[i] = rs.getObject(i + 1, type);
                 }
