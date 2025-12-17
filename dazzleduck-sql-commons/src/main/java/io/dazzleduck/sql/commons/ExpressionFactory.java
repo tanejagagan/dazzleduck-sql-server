@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import java.util.List;
+
 import static io.dazzleduck.sql.commons.ExpressionConstants.FUNCTION_CLASS;
 import static io.dazzleduck.sql.commons.ExpressionConstants.FUNCTION_TYPE;
 
@@ -79,13 +81,30 @@ public class ExpressionFactory {
     }
 
     public static JsonNode andFilters(JsonNode leftFilter, JsonNode rightFilter) {
+        return andFilters(new JsonNode[]{leftFilter, rightFilter});
+    }
+
+    public static JsonNode andFilters(JsonNode[] children) {
         ObjectNode result = withClassType(ExpressionConstants.CONJUNCTION_CLASS, ExpressionConstants.CONJUNCTION_TYPE_AND);
         ArrayNode arrayNode = new ArrayNode(JsonNodeFactory.instance);
-        arrayNode.add(leftFilter);
-        arrayNode.add(rightFilter);
+        for(var c : children) {
+            arrayNode.add(c);
+        }
         result.set("children", arrayNode);
         return result;
     }
+
+    public static <T> JsonNode inStaticList(JsonNode reference, List<T> elements) {
+        ObjectNode result = withClassType(ExpressionConstants.OPERATOR_CLASS, ExpressionConstants.COMPARE_IN_TYPE);
+        var children = new ArrayNode(JsonNodeFactory.instance);
+        children.add(reference);
+        for (var e : elements) {
+            children.add(ExpressionFactory.constant(e));
+        }
+        result.set("children", children);
+        return result;
+    }
+
 
     public static JsonNode orFilters(JsonNode leftFilter, JsonNode rightFilter) {
         ObjectNode result = withClassType(ExpressionConstants.CONJUNCTION_CLASS, ExpressionConstants.CONJUNCTION_TYPE_OR);
@@ -128,8 +147,12 @@ public class ExpressionFactory {
             if (value instanceof String string) {
                 type.put("id", "VARCHAR");
                 valueNode.put("value", string);
-            } else {
-                throw new RuntimeException("Unsupported " + value);
+            } else if (value instanceof Integer i){
+                type.put("id", "INTEGER");
+                valueNode.put("value", i);
+            } else if (value instanceof Long l) {
+                type.put("id", "BIGINT");
+                valueNode.put("value", l);
             }
         }
         return valueNode;
