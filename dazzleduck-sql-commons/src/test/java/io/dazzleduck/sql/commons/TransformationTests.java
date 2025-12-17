@@ -142,4 +142,24 @@ public class TransformationTests {
         }).apply(select);
         return template;
     }
+
+    @Test
+    public void testIn() throws SQLException, JsonProcessingException {
+        var q  = "select * from t where cast(x as BIGINT) in (1, 2, 3)";
+        var tree = Transformations.parseToTree(q);
+        var copy = tree.deepCopy();
+        var f = Transformations.identity().andThen(Transformations::getFirstStatementNode).apply(tree);
+        var where = f.get("where_clause");
+        System.out.println(where);
+    }
+
+    @Test
+    public void testContains() throws SQLException, JsonProcessingException {
+        var q  = "select * from t where contains(x,3) ";
+        var tree = Transformations.parseToTree(q);
+        var copy = tree.deepCopy();
+        var f = Transformations.identity().andThen(Transformations::getFirstStatementNode).apply(tree);
+        var where = f.get("where_clause");
+        System.out.println(where);
+    }
 }

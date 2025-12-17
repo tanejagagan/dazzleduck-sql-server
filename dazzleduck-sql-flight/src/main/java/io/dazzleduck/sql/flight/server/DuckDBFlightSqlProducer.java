@@ -1331,9 +1331,14 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
     private String authorize(CallContext callContext, String sql, Connection connection)
             throws UnauthorizedException, JsonProcessingException, SQLException {
-        var tree = Transformations.parseToTree(connection, sql);
-        var authorizedTree = authorize(callContext, tree);
+        var authorizedTree = authorizeTree(callContext, sql, connection);
         return Transformations.parseToSql(connection, authorizedTree);
+    }
+
+    private JsonNode authorizeTree(CallContext callContext, String sql, Connection connection)
+            throws UnauthorizedException, JsonProcessingException, SQLException {
+        var tree = Transformations.parseToTree(connection, sql);
+        return authorize(callContext, tree);
     }
 
     protected StatementHandle newStatementHandle(String query, long splitSize) {

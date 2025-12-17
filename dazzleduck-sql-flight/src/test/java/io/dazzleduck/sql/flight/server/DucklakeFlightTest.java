@@ -28,8 +28,9 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Executors;
 
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static io.dazzleduck.sql.commons.util.TestConstants.SUPPORTED_HIVE_PATH_QUERY;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 @Disabled
 public class DucklakeFlightTest {
@@ -143,36 +144,12 @@ public class DucklakeFlightTest {
                 QueryOptimizer.NOOP_QUERY_OPTIMIZER);
 
 
-
-        serverClient =  createRestrictedServerClient(serverLocation, USER);
+        FlightTestUtils utils  = FlightTestUtils.createForDatabaseSchema(USER, "admin", CATALOG, SCHEMA);
+        Location location = FlightTestUtils.findNextLocation();
+        serverClient = utils.createRestrictedServerClient(location, Map.of());
         flightServer = serverClient.flightServer();
         sqlClient = serverClient.flightSqlClient();
     }
-
-    private static ServerClient createRestrictedServerClient(Location serverLocation,
-                                                      String user) throws IOException, NoSuchAlgorithmException {
-
-        var testUtil = new FlightTestUtils() {
-            @Override
-            public String testSchema() {
-                return SCHEMA;
-            }
-
-            @Override
-            public String testCatalog() {
-                return CATALOG;
-
-            }
-
-            @Override
-            public String testUser() {
-                return user;
-            }
-        };
-
-        return testUtil.createRestrictedServerClient(serverLocation, Map.of());
-    }
-
     @AfterAll
     public static void cleanup() throws Exception {
         serverClient.close();
@@ -181,20 +158,41 @@ public class DucklakeFlightTest {
 
     @Test
     public void testSimpleReadDucklakeQuery() throws Exception {
-        String query = "SELECT * FROM read_ducklake('%s.%s.%s')".formatted(CATALOG, SCHEMA, NON_PARTITIONED_TABLE);
-        var flightCallHeaders = new FlightCallHeaders();
-        flightCallHeaders.insert(Headers.HEADER_SPLIT_SIZE, "1");
-        final FlightInfo flightInfo = sqlClient.execute(query, new HeaderCallOption(flightCallHeaders));
 
-        int rowCount = 0;
-        try (final FlightStream stream = sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket())) {
-            while (stream.next()) {
-                rowCount += stream.getRoot().getRowCount();
+        final Location serverLocation = Location.forGrpcInsecure(LOCALHOST, 55559);
+        try ( var serverClient = createRestrictedServerClient( serverLocation, "admin" )) {
+            try (var splittableClient = splittableAdminClientForTable(serverLocation, serverClient.clientAllocator(), PARTITIONED_TABLE)) {
+                var flightCallHeaders = new FlightCallHeaders();
+                flightCallHeaders.insert(Headers.HEADER_SPLIT_SIZE, "1");
+                var flightInfo = splittableClient.execute("select * from %s".formatted(PARTITIONED_TABLE),
+                        new HeaderCallOption(flightCallHeaders));
+                assertEquals(3, flightInfo.getEndpoints().size());
+                var size = 0;
+                for (var endpoint : flightInfo.getEndpoints()) {
+                    try (final FlightStream stream = splittableClient.getStream(endpoint.getTicket(), new HeaderCallOption(flightCallHeaders))) {
+                        while (stream.next()) {
+                            size+=stream.getRoot().getRowCount();
+                        }
+                    }
+                }
+                assertEquals(6, size);
             }
         }
+    }
 
-        // We inserted rows in multiple batches, should have data
-        assertTrue(rowCount > 0, "Should have read some rows from ducklake table");
+    private FlightSqlClient splittableAdminClientForTable( Location location, BufferAllocator allocator, String table) {
+        return new FlightSqlClient(FlightClient.builder(allocator, location)
+                .intercept(AuthUtils.createClientMiddlewareFactory(USER,
+                        PASSWORD,
+                        Map.of(Headers.HEADER_DATABASE, CATALOG,
+                                Headers.HEADER_SCHEMA, SCHEMA,
+                                Headers.HEADER_TABLE, table)))
+                .build());
+    }
+    private ServerClient createRestrictedServerClient(Location serverLocation,
+                                                      String user) throws IOException, NoSuchAlgorithmException {
+        var testUtil = FlightTestUtils.createForDatabaseSchema(user, "",  CATALOG, SCHEMA);
+        return testUtil.createRestrictedServerClient(serverLocation, Map.of());
     }
 
     @Test

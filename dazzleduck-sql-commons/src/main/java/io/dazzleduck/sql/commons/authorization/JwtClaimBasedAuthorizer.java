@@ -25,6 +25,19 @@ public class JwtClaimBasedAuthorizer implements SqlAuthorizer {
 
     }
 
+    private JsonNode withUpdatedDatabaseSchema(JsonNode query, String database, String schema ) {
+        // TODO
+        /*
+        var res =  query.deepCopy();
+        Transformations.changeMatching(Transformations.isTableFunction(), f  -> {
+            System.out.println(f);
+        } )
+        Transformations.re
+        return res;
+
+         */
+        return query ;
+    }
     @Override
     public JsonNode authorize(String user, String database, String schema, JsonNode query, Map<String, String> verifiedClaims) throws UnauthorizedException {
 
@@ -34,6 +47,8 @@ public class JwtClaimBasedAuthorizer implements SqlAuthorizer {
         if (catalogSchemaTables.size() != 1) {
             throw new UnauthorizedException("%s TableOrPath/Path found: Only one table or path is supported".formatted(catalogSchemaTables.size()));
         }
+
+        var updatedQuery = withUpdatedDatabaseSchema(query, database, schema );
         var catalogSchemaTable = catalogSchemaTables.get(0);
         var path = verifiedClaims.get("path");
         var functionName = verifiedClaims.get("function");
@@ -57,15 +72,15 @@ public class JwtClaimBasedAuthorizer implements SqlAuthorizer {
         }
         var filter = verifiedClaims.get("filter");
         if (filter == null) {
-            return query;
+            return updatedQuery;
         }
         JsonNode compiledFilter = SqlAuthorizer.compileFilterString(filter);
         switch (catalogSchemaTable.type()) {
             case TABLE_FUNCTION -> {
-                return SqlAuthorizer.addFilterToTableFunction(query, compiledFilter);
+                return SqlAuthorizer.addFilterToTableFunction(updatedQuery, compiledFilter);
             }
             case BASE_TABLE -> {
-                return SqlAuthorizer.addFilterToBaseTable(query, compiledFilter);
+                return SqlAuthorizer.addFilterToBaseTable(updatedQuery, compiledFilter);
             }
             default -> {
                 return null;
