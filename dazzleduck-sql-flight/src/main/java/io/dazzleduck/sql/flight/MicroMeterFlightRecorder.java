@@ -1,13 +1,17 @@
 package io.dazzleduck.sql.flight;
 
-
+import io.dazzleduck.sql.flight.model.StatementAudit;
+import io.dazzleduck.sql.flight.server.DuckDBFlightSqlProducer.CacheKey;
+import io.dazzleduck.sql.flight.server.StatementContext;
 import io.micrometer.core.instrument.*;
+import org.slf4j.MarkerFactory;
 
 import java.util.concurrent.atomic.AtomicLong;
 
 public class MicroMeterFlightRecorder implements FlightRecorder {
 
     private final MeterRegistry registry;
+    private static final Auditor auditor = new Auditor(MarkerFactory.getMarker("flight"));
 
     // -------------------- Counters -------------------------
     private final Counter streamStatementCounter;
@@ -33,7 +37,9 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
     private final Counter streamPreparedStatementCompletedCounter;
     private final Counter bulkIngestCompletedCounter;
 
-
+    private final Counter statementStart;
+    private final Counter statementEnd;
+    private final Counter statementError;
 
     // Start time
     private final AtomicLong startTime = new AtomicLong(0);
@@ -67,6 +73,10 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
 
         this.stremPreparedStatementBytesOutCounter = counter("stream_prepared_statement_bytes_out", producerId);
         this.stremStatementBytesOutCounter = counter("stream_statement_bytes_out", producerId);
+
+        this.statementStart = counter("statement_start", producerId);
+        this.statementEnd = counter("statement_end", producerId);
+        this.statementError = counter("statement_error", producerId);
     }
 
     // ==========================================================
@@ -88,23 +98,46 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
     }
 
     @Override
-    public void recordStatementCancel() {
+    public void recordStatementCancel(CacheKey key, StatementContext<?> ctx) {
         cancelStatementCounter.increment();
+        auditor.audit(buildAudit(key, ctx, "CANCEL", null));
     }
 
     @Override
-    public void recordPreparedStatementCancel() {
+    public void recordPreparedStatementCancel(CacheKey key, StatementContext<?> ctx) {
         cancelPreparedStatementCounter.increment();
+        auditor.audit(buildAudit(key, ctx, "CANCEL", null));
     }
 
     @Override
-    public void recordStatementTimeout() {
+    public void recordStatementStreamStart(CacheKey key, StatementContext<?> ctx) {
+        statementStart.increment();
+        auditor.audit(buildAudit(key, ctx, "START", null));
+    }
+
+    @Override
+    public void recordStatementStreamEnd(CacheKey key, StatementContext<?> ctx) {
+        statementEnd.increment();
+        auditor.audit(buildAudit(key, ctx, "END", null));
+    }
+
+    @Override
+    public void recordStatementStreamError(CacheKey key, StatementContext<?> ctx, Throwable error) {
+        statementError.increment();
+        String errorMessage = error.getClass().getSimpleName() + ": " + error.getMessage();
+        auditor.audit(buildAudit(key, ctx, "ERROR", errorMessage));
+    }
+
+    @Override
+    public void recordStatementTimeout(CacheKey key, StatementContext<?> ctx) {
         timeoutStatementCounter.increment();
+        auditor.audit(buildAudit(key, ctx, "TIMEOUT", null));
     }
 
     @Override
-    public void recordPreparedStatementTimeout() {
+    public void recordPreparedStatementTimeout(CacheKey key, StatementContext<?> ctx) {
         timeoutPreparedStatementCounter.increment();
+        auditor.audit(buildAudit(key, ctx, "TIMEOUT", null));
     }
 
     @Override
@@ -119,7 +152,7 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
 
     @Override
     public void errorStreamStatement() {
-
+        streamStatementErrorCounter.increment();
     }
 
     @Override
@@ -201,5 +234,22 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
     @Override
     public long getCancelledPreparedStatements() {
         return (long) cancelPreparedStatementCounter.count();
+    }
+
+    // ==========================================================
+    //                    HELPER BUILDER
+    // ==========================================================
+    private static StatementAudit buildAudit(CacheKey key, StatementContext<?> ctx, String action, String error) {
+        return new StatementAudit(
+                key.id(),
+                key.peerIdentity(),
+                action,
+                ctx.isPreparedStatementContext(),
+                ctx.getQuery(),
+                ctx.startTime(),
+                ctx.endTime(),
+                ctx.bytesOut(),
+                error
+        );
     }
 }

@@ -14,16 +14,12 @@ import java.util.List;
 
 public final class Bucket {
 
-    private final Schema schema;
-    private final BufferAllocator allocator;
-
     private final List<JavaRow> buffer = new ArrayList<>();
     private long size = 0;
     private boolean serialized = false;
 
-    public Bucket(Schema schema) {
-        this.schema = schema;
-        this.allocator = new RootAllocator(Long.MAX_VALUE);
+    public Bucket() {
+
     }
 
     public synchronized long add(JavaRow row) {
@@ -39,32 +35,25 @@ public final class Bucket {
         return size;
     }
 
-    public synchronized byte[] getArrowBytes() {
+    public synchronized byte[] getArrowBytes(Schema schema, BufferAllocator allocator) {
         if (serialized || buffer.isEmpty()) {
             return null;
         }
         serialized = true;
 
-        try (
-                VectorSchemaRoot root = VectorSchemaRoot.create(schema, allocator);
-                ByteArrayOutputStream out = new ByteArrayOutputStream();
-                ArrowStreamWriter writer = new ArrowStreamWriter(root, null, out)
-        ) {
+        try (VectorSchemaRoot root = VectorSchemaRoot.create(schema, allocator);
+             ByteArrayOutputStream out = new ByteArrayOutputStream();
+             ArrowStreamWriter writer = new ArrowStreamWriter(root, null, out)) {
             JavaRow[] rows = buffer.toArray(JavaRow[]::new);
             VectorSchemaRootWriter.of(schema).writeToVector(rows, root);
             root.setRowCount(rows.length);
-
             writer.start();
             writer.writeBatch();
             writer.end();
-
             return out.toByteArray();
 
         } catch (Exception e) {
             throw new RuntimeException("Arrow serialization failed", e);
-        } finally {
-            buffer.clear();
-            allocator.close();
         }
     }
 }

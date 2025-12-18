@@ -2,12 +2,15 @@ package io.dazzleduck.sql.flight.server;
 
 import io.dazzleduck.sql.flight.MicroMeterFlightRecorder;
 import io.dazzleduck.sql.flight.model.FlightMetricsSnapshot;
+import io.dazzleduck.sql.flight.server.DuckDBFlightSqlProducer.CacheKey;
 import io.micrometer.core.instrument.*;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.util.concurrent.TimeUnit;
+import java.lang.reflect.Proxy;
+import java.sql.PreparedStatement;
+import java.sql.Statement;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -30,7 +33,7 @@ public class MicroMeterFlightRecorderTest {
 
     @Test
     void testRecordStatementCancel() {
-        recorder.recordStatementCancel();
+        recorder.recordStatementCancel(dummyKey(), dummyContext(false, "SELECT 1"));
 
         Counter c = counter("cancel_statement");
         assertNotNull(c);
@@ -39,7 +42,7 @@ public class MicroMeterFlightRecorderTest {
 
     @Test
     void testRecordPreparedStatementCancel() {
-        recorder.recordPreparedStatementCancel();
+        recorder.recordPreparedStatementCancel(dummyKey(), dummyContext(true, "SELECT 1"));
 
         Counter c = counter("cancel_prepared_statement");
         assertNotNull(c);
@@ -76,4 +79,16 @@ public class MicroMeterFlightRecorderTest {
         recorder.recordGetStreamPreparedStatement(123);
     }
 
+    private static StatementContext<Statement> dummyContext(boolean prepared, String query) {
+        Statement dummyStmt = (Statement) Proxy.newProxyInstance(MicroMeterFlightRecorderTest.class.getClassLoader(), new Class<?>[]{prepared ? PreparedStatement.class : Statement.class}, (proxy, method, args) -> 0);
+        StatementContext<Statement> ctx = new StatementContext<>(dummyStmt, query);
+        ctx.start();
+        ctx.bytesOut(100);
+        ctx.end();
+        return ctx;
+    }
+
+    private static CacheKey dummyKey() {
+        return new CacheKey("test-user", 42L);
+    }
 }

@@ -6,6 +6,8 @@ import io.dazzleduck.sql.common.ingestion.FlightSender;
 import io.dazzleduck.sql.login.LoginRequest;
 import io.dazzleduck.sql.login.LoginResponse;
 import org.apache.arrow.vector.types.pojo.Schema;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -17,6 +19,7 @@ import java.time.Instant;
 
 public final class HttpSender extends FlightSender.AbstractFlightSender  {
 
+    private static final Logger logger = LoggerFactory.getLogger(HttpSender.class);
     private final HttpClient client = HttpClient.newHttpClient();
     private final ObjectMapper mapper = new ObjectMapper();
 
@@ -33,6 +36,7 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
     private volatile Instant jwtExpiry = Instant.EPOCH;
     private static final Duration REFRESH_SKEW = Duration.ofSeconds(60);
     private static final Duration DEFAULT_TOKEN_LIFETIME = Duration.ofHours(5);
+    private static final int MAX_AUTH_RETRIES = 2;
 
     public HttpSender(
             Schema schema,
@@ -41,10 +45,27 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
             String password,
             String targetPath,
             Duration timeout,
+            long minBatchSize,
+            Duration maxSendInterval,
             long maxInMemorySize,
             long maxOnDiskSize
     ) {
-        super(maxInMemorySize, Duration.ofSeconds(2), Clock.systemUTC(), schema);
+        this(schema, baseUrl, username, password, targetPath, timeout, minBatchSize, maxSendInterval, maxInMemorySize, maxOnDiskSize, Clock.systemUTC());
+    }
+    public HttpSender(
+            Schema schema,
+            String baseUrl,
+            String username,
+            String password,
+            String targetPath,
+            Duration timeout,
+            long minBatchSize,
+            Duration maxSendInterval,
+            long maxInMemorySize,
+            long maxOnDiskSize,
+            Clock clock
+    ) {
+        super(minBatchSize, maxSendInterval, schema, clock);
         this.baseUrl = baseUrl;
         this.username = username;
         this.password = password;
@@ -64,7 +85,8 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
         return maxDisk;
     }
 
-    private synchronized void login() throws Exception {
+    private void login() throws Exception {
+        logger.debug("Attempting login to {}", baseUrl);
         var body = mapper.writeValueAsBytes(new LoginRequest(username, password));
 
         var req = HttpRequest.newBuilder()
@@ -78,6 +100,7 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
         var resp = client.send(req, HttpResponse.BodyHandlers.ofString());
 
         if (resp.statusCode() != 200) {
+            logger.error("Login failed with status {}", resp.statusCode());
             throw new RuntimeException("Login failed: " + resp.body());
         }
 
@@ -90,13 +113,15 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
                 ? json.get("expiresIn").asLong()
                 : DEFAULT_TOKEN_LIFETIME.toSeconds();
 
-        this.jwtExpiry = Instant.now().plusSeconds(expiresIn);
+        this.jwtExpiry = clock.instant().plusSeconds(expiresIn);
+        logger.info("Login successful, JWT expires in {} seconds", expiresIn);
     }
 
     private String getJwt() throws Exception {
-        if (jwt == null || Instant.now().isAfter(jwtExpiry.minus(REFRESH_SKEW))) {
+        if (jwt == null || clock.instant().isAfter(jwtExpiry.minus(REFRESH_SKEW))) {
             synchronized (this) {
-                if (jwt == null || Instant.now().isAfter(jwtExpiry.minus(REFRESH_SKEW))) {
+                if (jwt == null || clock.instant().isAfter(jwtExpiry.minus(REFRESH_SKEW))) {
+                    logger.debug("JWT refresh needed");
                     login();
                 }
             }
@@ -112,24 +137,42 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
                 payload = in.readAllBytes();
             }
 
-            HttpResponse<String> resp = post(payload);
+            HttpResponse<String> resp = null;
+            int authRetries = 0;
 
-            if (resp.statusCode() == 401 || resp.statusCode() == 403) {
-                synchronized (this) {
-                    jwt = null;
-                }
+            while (authRetries <= MAX_AUTH_RETRIES) {
                 resp = post(payload);
+
+                if (resp.statusCode() == 401 || resp.statusCode() == 403) {
+                    if (authRetries >= MAX_AUTH_RETRIES) {
+                        logger.error("Max auth retries ({}) exceeded for {}{}", MAX_AUTH_RETRIES, baseUrl, targetPath);
+                        break;
+                    }
+                    logger.warn("Received auth failure ({}) on attempt {}, invalidating JWT and retrying",
+                            resp.statusCode(), authRetries + 1);
+                    synchronized (this) {
+                        jwt = null;
+                    }
+                    authRetries++;
+                } else {
+                    // Non-auth response, break the retry loop
+                    break;
+                }
             }
 
             if (resp.statusCode() != 200) {
+                logger.error("Ingestion failed with status {} to {}{}", resp.statusCode(), baseUrl, targetPath);
                 throw new RuntimeException("Ingestion failed: " + resp.body());
             }
+
+            logger.debug("Successfully sent data to {}{}", baseUrl, targetPath);
 
         } catch (InterruptedException e) {
             // Re-throw to allow graceful shutdown
             throw e;
         } catch (Exception e) {
-            throw new RuntimeException(e);
+            logger.error("Failed to send data to {}{}", baseUrl, targetPath, e);
+            throw new RuntimeException("Failed to send data to " + baseUrl + targetPath, e);
         }
     }
 
