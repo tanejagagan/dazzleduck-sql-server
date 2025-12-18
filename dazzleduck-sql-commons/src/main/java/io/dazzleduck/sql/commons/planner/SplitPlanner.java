@@ -36,7 +36,7 @@ public interface SplitPlanner {
             throw new SQLException("unsupported type : " + tableFunction);
         }
         var fileStatuses = splitPlanner.pruneFiles(tree, maxSplitSize, Map.of());
-        fileStatuses.sort(Comparator.comparing(FileStatus::lastModified));
+        //fileStatuses.sort(Comparator.comparing(FileStatus::lastModified));
         return getSplitStatus(maxSplitSize, fileStatuses);
     }
 

@@ -451,7 +451,7 @@ public class DuckDBFlightSqlProducerTest {
                         PASSWORD,
                         Map.of(Headers.HEADER_DATABASE, TEST_CATALOG,
                                 Headers.HEADER_SCHEMA, TEST_SCHEMA,
-                        "path", path, "filter", filter)))
+                        Headers.HEADER_PATH, path, Headers.HEADER_FILTER, filter)))
                 .build());
     }
 }

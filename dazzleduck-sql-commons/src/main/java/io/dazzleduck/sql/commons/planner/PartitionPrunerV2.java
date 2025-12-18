@@ -11,10 +11,8 @@ import io.dazzleduck.sql.commons.hive.HivePartitionPruning;
 import java.io.IOException;
 import java.sql.Connection;
 import java.sql.SQLException;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 public interface PartitionPrunerV2 {
 
@@ -47,6 +45,15 @@ public interface PartitionPrunerV2 {
         }
     }
 
+    /**
+     *
+     * @param tree
+     * @param maxSplitSize
+     * @param properties
+     * @return Sorted FileStatus by lastModified time
+     * @throws SQLException
+     * @throws IOException
+     */
     List<FileStatus> pruneFiles(JsonNode tree,
                                 long maxSplitSize,
                                 Map<String, String> properties) throws SQLException, IOException;
@@ -85,6 +92,7 @@ class DeltaLakeSplitPlanner implements PartitionPrunerV2 {
 
 class DucklakeSplitPlanner implements PartitionPrunerV2 {
 
+    private Map<String, DucklakePartitionPruning> cache = new ConcurrentHashMap<>();
     @Override
     public List<FileStatus> pruneFiles( JsonNode tree, long maxSplitSize, Map<String, String> properties) throws SQLException, IOException {
         var catalogSchemaAndTables =
@@ -92,10 +100,14 @@ class DucklakeSplitPlanner implements PartitionPrunerV2 {
         var first = catalogSchemaAndTables.get(0);
         var catalog = first.catalog();
         var metadata = "__ducklake_metadata_" + catalog;
-        try {
-            return DucklakePartitionPruning.pruneFiles(first.schema(), first.tableOrPath(), tree, metadata);
-        } catch (NoSuchMethodException e) {
-            throw new RuntimeException(e);
-        }
+        var pruner = cache.compute(metadata, (key, oldValue) -> {
+            if (oldValue == null){
+                return new DucklakePartitionPruning(metadata);
+            } else {
+                return oldValue;
+            }
+        });
+       return pruner.pruneFiles(first.schema(), first.tableOrPath(), tree);
+
     }
 }

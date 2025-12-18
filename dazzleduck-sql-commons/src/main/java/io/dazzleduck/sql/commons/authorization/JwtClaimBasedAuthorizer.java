@@ -41,7 +41,6 @@ public class JwtClaimBasedAuthorizer implements SqlAuthorizer {
     }
     @Override
     public JsonNode authorize(String user, String database, String schema, JsonNode query, Map<String, String> verifiedClaims) throws UnauthorizedException {
-
         var catalogSchemaTables =
                 Transformations.getAllTablesOrPathsFromSelect(Transformations.getFirstStatementNode(query), database, schema);
 

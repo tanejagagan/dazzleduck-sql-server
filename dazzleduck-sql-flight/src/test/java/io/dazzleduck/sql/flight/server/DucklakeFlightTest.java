@@ -2,68 +2,37 @@ package io.dazzleduck.sql.flight.server;
 
 import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.commons.ConnectionPool;
-import io.dazzleduck.sql.commons.authorization.AccessMode;
-import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactoryProvider;
-import io.dazzleduck.sql.commons.util.TestUtils;
-import io.dazzleduck.sql.flight.FlightRecorder;
-import io.dazzleduck.sql.flight.MicroMeterFlightRecorder;
-import io.dazzleduck.sql.flight.optimizer.QueryOptimizer;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.apache.arrow.flight.*;
 import org.apache.arrow.flight.sql.FlightSqlClient;
 import org.apache.arrow.memory.BufferAllocator;
-import org.apache.arrow.memory.RootAllocator;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.security.NoSuchAlgorithmException;
-import java.time.Clock;
-import java.time.Duration;
 import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.Executors;
 
-import static io.dazzleduck.sql.commons.util.TestConstants.SUPPORTED_HIVE_PATH_QUERY;
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assertions.assertEquals;
 
-@Disabled
 public class DucklakeFlightTest {
-    private static final String LOCALHOST = "localhost";
     private static final String USER = "admin";
     private static final String PASSWORD = "password";
     private static final String CATALOG = "test_ducklake";
     private static final String SCHEMA = "main";
     private static final String PARTITIONED_TABLE = "tt_p";
     private static final String NON_PARTITIONED_TABLE = "tt";
-    private static final String METADATA_DATABASE = "__ducklake_metadata_" + CATALOG;
-
-    private static final BufferAllocator clientAllocator = new RootAllocator(Integer.MAX_VALUE);
-    private static final BufferAllocator serverAllocator = new RootAllocator(Integer.MAX_VALUE);
-
-    private static FlightServer flightServer;
-    private static FlightSqlClient sqlClient;
-    private static DuckDBFlightSqlProducer producer;
-    private static String warehousePath;
     private static String workspace;
-    private static ServerClient serverClient;
 
     @BeforeAll
     public static void setup() throws Exception {
         // Create workspace and warehouse directories
         workspace = Files.createTempDirectory("ducklake_test_workspace_").toString();
-        warehousePath = Files.createTempDirectory("ducklake_warehouse_").toString();
 
         // Setup ducklake database
         setupDucklakeDatabase();
-
-        // Setup Flight server and client
-        setupFlightServerAndClient();
     }
 
     private static void setupDucklakeDatabase() {
@@ -123,48 +92,19 @@ public class DucklakeFlightTest {
         ConnectionPool.executeBatch(batch);
     }
 
-    private static void setupFlightServerAndClient() throws Exception {
-        final Location serverLocation = Location.forGrpcInsecure(LOCALHOST, 55580);
-        String producerId = UUID.randomUUID().toString();
-        FlightRecorder recorder = new MicroMeterFlightRecorder(new SimpleMeterRegistry(), producerId);
 
-        producer = new DuckDBFlightSqlProducer(
-                serverLocation,
-                producerId,
-                "change me",
-                serverAllocator,
-                warehousePath,
-                AccessMode.RESTRICTED,
-                DuckDBFlightSqlProducer.newTempDir(),
-                PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(),
-                Executors.newSingleThreadScheduledExecutor(),
-                Duration.ofMinutes(2),
-                Clock.systemDefaultZone(),
-                recorder,
-                QueryOptimizer.NOOP_QUERY_OPTIMIZER);
-
-
-        FlightTestUtils utils  = FlightTestUtils.createForDatabaseSchema(USER, "admin", CATALOG, SCHEMA);
-        Location location = FlightTestUtils.findNextLocation();
-        serverClient = utils.createRestrictedServerClient(location, Map.of());
-        flightServer = serverClient.flightServer();
-        sqlClient = serverClient.flightSqlClient();
-    }
     @AfterAll
-    public static void cleanup() throws Exception {
-        serverClient.close();
+    public static void cleanup()  {
         ConnectionPool.execute("DETACH %s".formatted( CATALOG));
     }
 
     @Test
     public void testSimpleReadDucklakeQuery() throws Exception {
-
-        final Location serverLocation = Location.forGrpcInsecure(LOCALHOST, 55559);
-        try ( var serverClient = createRestrictedServerClient( serverLocation, "admin" )) {
-            try (var splittableClient = splittableAdminClientForTable(serverLocation, serverClient.clientAllocator(), PARTITIONED_TABLE)) {
-
+        try ( var serverClient = createRestrictedServerClient( "admin" )) {
+            try (var splittableClient = splittableAdminClientForTable(serverClient.location(), serverClient.clientAllocator(), PARTITIONED_TABLE)) {
                 var flightCallHeaders = new FlightCallHeaders();
                 flightCallHeaders.insert(Headers.HEADER_SPLIT_SIZE, "1");
+                flightCallHeaders.insert(Headers.HEADER_TABLE, PARTITIONED_TABLE);
                 var flightInfo = splittableClient.execute("select * from %s where key = 'k51'".formatted(PARTITIONED_TABLE),
                         new HeaderCallOption(flightCallHeaders));
                 assertEquals(2, flightInfo.getEndpoints().size());
@@ -181,7 +121,42 @@ public class DucklakeFlightTest {
         }
     }
 
-    private FlightSqlClient splittableAdminClientForTable( Location location, BufferAllocator allocator, String table) {
+    @Test
+    public void testFilterReadDucklakeQuery() throws Exception {
+        try ( var serverClient = createRestrictedServerClient(  "admin" )) {
+            try (var splittableClient = splittableAdminClientForTable(serverClient.location(), serverClient.clientAllocator(), PARTITIONED_TABLE)) {
+                var flightCallHeaders = new FlightCallHeaders();
+                flightCallHeaders.insert(Headers.HEADER_SPLIT_SIZE, "1");
+                flightCallHeaders.insert(Headers.HEADER_TABLE, PARTITIONED_TABLE);
+                flightCallHeaders.insert(Headers.HEADER_FILTER, "key = 'k51'");
+                var flightInfo = splittableClient.execute("select * from %s".formatted(PARTITIONED_TABLE),
+                        new HeaderCallOption(flightCallHeaders));
+                assertEquals(2, flightInfo.getEndpoints().size());
+                var size = 0;
+                for (var endpoint : flightInfo.getEndpoints()) {
+                    try (final FlightStream stream = splittableClient.getStream(endpoint.getTicket(), new HeaderCallOption(flightCallHeaders))) {
+                        while (stream.next()) {
+                            size+=stream.getRoot().getRowCount();
+                        }
+                    }
+                }
+                assertEquals(2, size);
+            }
+        }
+    }
+
+    @Test
+    public void testNoAccessReadDucklakeQuery() throws Exception {
+        try ( var serverClient = createRestrictedServerClient(  "admin" )) {
+            try (var splittableClient = splittableAdminClientForTable(serverClient.location(), serverClient.clientAllocator(), PARTITIONED_TABLE)) {
+                var flightCallHeaders = new FlightCallHeaders();
+                flightCallHeaders.insert(Headers.HEADER_SPLIT_SIZE, "1");
+                assertThrows(FlightRuntimeException.class, () -> splittableClient.execute("select * from %s".formatted(NON_PARTITIONED_TABLE)));
+            }
+        }
+    }
+
+    private FlightSqlClient splittableAdminClientForTable(Location location, BufferAllocator allocator, String table) {
         return new FlightSqlClient(FlightClient.builder(allocator, location)
                 .intercept(AuthUtils.createClientMiddlewareFactory(USER,
                         PASSWORD,
@@ -190,61 +165,11 @@ public class DucklakeFlightTest {
                                 Headers.HEADER_TABLE, table)))
                 .build());
     }
-    private ServerClient createRestrictedServerClient(Location serverLocation,
-                                                      String user) throws IOException, NoSuchAlgorithmException {
+
+
+    private ServerClient createRestrictedServerClient(String user) throws IOException, NoSuchAlgorithmException {
+        final Location serverLocation = FlightTestUtils.findNextLocation();
         var testUtil = FlightTestUtils.createForDatabaseSchema(user, "",  CATALOG, SCHEMA);
-        return testUtil.createRestrictedServerClient(serverLocation, Map.of());
-    }
-
-    @Test
-    public void testReadDucklakeWithFilter() throws Exception {
-        String query = "SELECT * FROM read_ducklake('%s.%s.%s') WHERE key = 'k51'".formatted(CATALOG, SCHEMA, PARTITIONED_TABLE);
-        final FlightInfo flightInfo = sqlClient.execute(query);
-
-        int rowCount = 0;
-        try (final FlightStream stream = sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket())) {
-            while (stream.next()) {
-                rowCount += stream.getRoot().getRowCount();
-            }
-        }
-
-        // Should find the rows with key = 'k51'
-        assertTrue(rowCount > 0, "Should have found rows matching filter");
-    }
-
-    @Test
-    public void testDucklakeSplittableQuery() throws Exception {
-        String query = "SELECT * FROM read_ducklake('%s.%s.%s')".formatted(CATALOG, SCHEMA, PARTITIONED_TABLE);
-
-        var flightCallHeaders = new FlightCallHeaders();
-        flightCallHeaders.insert(Headers.HEADER_SPLIT_SIZE, "1");
-        var callOption = new HeaderCallOption(flightCallHeaders);
-
-        final FlightInfo flightInfo = sqlClient.execute(query, callOption);
-
-        // Should have multiple endpoints due to splitting
-        assertTrue(flightInfo.getEndpoints().size() > 0, "Should have at least one endpoint");
-
-        int totalRows = 0;
-        for (var endpoint : flightInfo.getEndpoints()) {
-            try (final FlightStream stream = sqlClient.getStream(endpoint.getTicket(), callOption)) {
-                while (stream.next()) {
-                    totalRows += stream.getRoot().getRowCount();
-                }
-            }
-        }
-
-        assertTrue(totalRows > 0, "Should have read data from all endpoints");
-    }
-
-    @Test
-    public void testDucklakeMetadataExists() throws Exception {
-        // Verify that the metadata database was created properly
-        String query = "SELECT count(*) as cnt FROM %s.ducklake_table".formatted(METADATA_DATABASE);
-        ConnectionPool.printResult(query);
-
-        Long count = ConnectionPool.collectFirst(query, Long.class);
-        assertNotNull(count);
-        assertTrue(count >= 2, "Should have at least 2 tables created (partitioned and non-partitioned)");
+        return testUtil.createRestrictedServerClient(serverLocation, Map.of(Headers.HEADER_SPLIT_SIZE, "1"));
     }
 }

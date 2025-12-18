@@ -47,11 +47,6 @@ public interface FlightTestUtils {
         return createRestrictedServerClient(serverLocation, additionalClientHeaders, getTestJWTTokenAuthenticator());
     }
 
-    default ServerClient createRestrictedServerClient(ProducerFactory producerFactory,
-                                                      Location serverLocation,
-                                                      Map<String, String> additionalClientHeaders) throws IOException, NoSuchAlgorithmException {
-        return createRestrictedServerClient(producerFactory, serverLocation, additionalClientHeaders, getTestJWTTokenAuthenticator());
-    }
 
 
     interface ProducerFactory {
