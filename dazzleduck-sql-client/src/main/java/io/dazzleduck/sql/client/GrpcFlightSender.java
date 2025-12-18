@@ -29,7 +29,7 @@ public final class GrpcFlightSender extends FlightSender.AbstractFlightSender im
 
     public GrpcFlightSender(
             Schema schema,
-            long maxBatchSize,
+            long minBatchSize,
             Duration maxInterval,
             Clock clock,
             long maxInMemorySize,
@@ -42,7 +42,7 @@ public final class GrpcFlightSender extends FlightSender.AbstractFlightSender im
             String schemaName,
             Map<String, String> ingestParams
     ) {
-        super(maxBatchSize, maxInterval, schema, clock);
+        super(minBatchSize, maxInterval, schema, clock);
 
         this.maxMem = maxInMemorySize;
         this.maxDisk = maxOnDiskSize;
