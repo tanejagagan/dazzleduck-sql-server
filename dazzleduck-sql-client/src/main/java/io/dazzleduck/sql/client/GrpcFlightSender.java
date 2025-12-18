@@ -42,7 +42,7 @@ public final class GrpcFlightSender extends FlightSender.AbstractFlightSender im
             String schemaName,
             Map<String, String> ingestParams
     ) {
-        super(maxBatchSize, maxInterval, clock, schema);
+        super(maxBatchSize, maxInterval, schema, clock);
 
         this.maxMem = maxInMemorySize;
         this.maxDisk = maxOnDiskSize;
@@ -96,12 +96,14 @@ public final class GrpcFlightSender extends FlightSender.AbstractFlightSender im
     }
 
     @Override
-    public void close() throws InterruptedException {
+    public void close() {
         try {
-            super.close();   // may throw InterruptedException
+            super.close();
+        } catch (RuntimeException e) {
+            throw e;
         } finally {
             try {
-                client.close();   // throws Exception
+                client.close();
             } catch (Exception e) {
                 throw new RuntimeException("Failed to close FlightSqlClient", e);
             }
