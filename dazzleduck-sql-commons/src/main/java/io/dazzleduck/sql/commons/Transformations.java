@@ -248,6 +248,8 @@ public class Transformations {
             var firstStatementNode = (ObjectNode) Transformations.getFirstStatementNode(query);
             ObjectNode from_table = (ObjectNode) firstStatementNode.get("from_table");
             from_table.put("table_name", statTable);
+            from_table.put("schema_name", "");
+            from_table.put("catalog_name", "");
             JsonNode where = firstStatementNode.get("where_clause");
             if (where == null || where instanceof NullNode) {
                 return query;
@@ -584,6 +586,30 @@ public class Transformations {
     public static Function<JsonNode, JsonNode> FIRST_STATEMENT_NODE = Transformations::getFirstStatementNode;
 
     public static JsonNode getTableFunction(JsonNode tree) {
+        var fromNode = tree.get("from_table");
+        var fromTableType = fromNode.get("type").asText();
+        switch (fromTableType) {
+            case "BASE_TABLE" -> {
+                throw new IllegalStateException("Reached BASE_TABLE");
+            }
+            case "TABLE_FUNCTION" -> {
+                return fromNode.get("function");
+            }
+            case "SUBQUERY" -> {
+                var node = fromNode.get("subquery").get("node");
+                var type = node.get("type").asText();
+                if (type.equals("SET_OPERATION_NODE")) {
+                    return getTableFunction(node.get("right"));
+                } else if (type.equals("SELECT_NODE")) {
+                    getTableFunction(node);
+                }
+                return null;
+            }
+        }
+        return null;
+    }
+
+    public static JsonNode getBaseTable(JsonNode tree) {
         var fromNode = tree.get("from_table");
         var fromTableType = fromNode.get("type").asText();
         switch (fromTableType) {

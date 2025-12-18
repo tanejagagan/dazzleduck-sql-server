@@ -18,6 +18,7 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static io.dazzleduck.sql.commons.ExpressionConstants.*;
+import static io.dazzleduck.sql.commons.ExpressionFactory.createFunction;
 
 public class TransformationTests {
 
@@ -159,7 +160,40 @@ public class TransformationTests {
         var tree = Transformations.parseToTree(q);
         var copy = tree.deepCopy();
         var f = Transformations.identity().andThen(Transformations::getFirstStatementNode).apply(tree);
-        var where = f.get("where_clause");
-        System.out.println(where);
+        var table = Transformations.getBaseTable(f);
+    }
+
+    @Test
+    public void testCatalog() throws SQLException, JsonProcessingException {
+        var q  = "select * from t";
+        var tree = Transformations.parseToTree(q);
+        var copy = tree.deepCopy();
+        var f = Transformations.identity().andThen(Transformations::getFirstStatementNode).apply(tree);
+        var select = f.get("from_table");
+        //var where = f.get("where_clause");
+        System.out.println(select);
+        String[] paths = {"/abc/x/file.parquet"};
+        System.out.println(copy.toPrettyString());
+        replacePathInFromTableClause(copy, paths);
+        System.out.println(copy.toPrettyString());
+        System.out.println(Transformations.parseToSql(copy));
+    }
+
+    private static void replacePathInFromTableClause(JsonNode tree, String[] paths) {
+        var firstStatement = Transformations.getFirstStatementNode(tree);
+        var tableFunction = (ObjectNode)firstStatement.get("from_table");
+
+        var listChildren = new ArrayNode(JsonNodeFactory.instance);
+        for (String path : paths) {
+            listChildren.add(ExpressionFactory.constant(path));
+        }
+        var listFunction = createFunction("list_value", "main", "", listChildren);
+        var parquetChildren = new ArrayNode(JsonNodeFactory.instance);
+        parquetChildren.add(listFunction);
+
+        var readParquetFunction = createFunction("read_parquet", "", "", parquetChildren);
+        tableFunction.remove("table_name");
+        tableFunction.set("function", readParquetFunction);
+        tableFunction.put("type", TABLE_FUNCTION_TYPE);
     }
 }

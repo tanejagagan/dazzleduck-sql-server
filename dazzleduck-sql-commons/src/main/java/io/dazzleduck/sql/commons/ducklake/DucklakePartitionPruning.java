@@ -2,11 +2,13 @@ package io.dazzleduck.sql.commons.ducklake;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.NullNode;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.FileStatus;
 import io.dazzleduck.sql.commons.Transformations;
 
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -38,15 +40,20 @@ public class DucklakePartitionPruning {
             "and s.schema_id  = t.schema_id";
 
     private static final String QUERY =
-            " WITH L AS (SELECT data_file_id, path, path_is_relative, file_format,record_count, file_size_bytes, mapping_id FROM %s.ducklake_data_file WHERE table_id = %s and end_snapshot is null),\n" +
+            " WITH L AS (SELECT data_file_id, path, path_is_relative, file_format,record_count, file_size_bytes, mapping_id, table_id FROM %s.ducklake_data_file WHERE table_id = %s and end_snapshot is null),\n" +
                     "M AS (SELECT mapping_id, type FROM %s.ducklake_column_mapping WHERE table_id = %s),\n"  +
                     "B AS (SELECT data_file_id, unnest([" + NESTED + "]) AS  nested, column_id FROM %s.ducklake_file_column_stats WHERE table_id = %s and column_id in (%s)),\n" +
                     " AA AS (SELECT  data_file_id, nested.key as column_id, nested.value as value, column_id from B),\n" +
                     " P AS (PIVOT AA ON column_id IN (%s) USING first(value) GROUP BY data_file_id),\n" +
                     " R AS (%s)\n" +
-                    " SELECT L.path, L.file_size_bytes, cast(0  as  bigint) FROM L INNER JOIN R ON L.data_file_id = R.data_file_id LEFT OUTER JOIN M ON M.mapping_id = L.mapping_id";
+                    " SELECT L.path, L.file_size_bytes, cast(0  as  bigint), L.path_is_relative, L.table_id, L.mapping_id FROM L INNER JOIN R ON L.data_file_id = R.data_file_id LEFT OUTER JOIN M ON M.mapping_id = L.mapping_id";
                     //" SELECT L.path, L.path_is_relative, L.file_format, L.record_count, L.file_size_bytes, M.type FROM L INNER JOIN R ON L.data_file_id = R.data_file_id LEFT OUTER JOIN M ON M.mapping_id = L.mapping_id";
+    private static final String NO_FILTER_QUERY = "SELECT L.path, L.file_size_bytes, cast(0  as  bigint), L.path_is_relative, L.table_id, L.mapping_id FROM %s.ducklake_data_file L WHERE table_id = %s";
+    private static final String RELATIVE_PATH_QUERY = "select if(s.path_is_relative, concat(m.\"value\", s.path, t.path), concat(s.path, t.path)) as path from %s.main.ducklake_schema s join %s.main.ducklake_table t on  (s.schema_id = t.schema_id) cross join  %s.main.ducklake_metadata m where m.key =  'data_path' and t.table_id = %s";
 
+    private static String getNoFilterQuery(long tableId, String metadataDatabase){
+        return NO_FILTER_QUERY.formatted(metadataDatabase, tableId);
+    }
     public static String partitionSql(String innerSql, Long tableId, List<Long> columnId, String metadataDatabase) {
         var columnString = columnId.stream().map( l -> "min_%s, max_%s".formatted(l, l)).collect(Collectors.joining(","));
         var columnIdString = columnId.stream().map("%s"::formatted).collect(Collectors.joining(","));
@@ -75,6 +82,28 @@ public class DucklakePartitionPruning {
     public record ColumnInfo(Long id, String name, String type, Long schemaVersion){ }
     public record VersionEntity<E>(long version, E entity){}
     public static Map<String, VersionEntity<Map<String, ColumnInfo>>> tableIds = new ConcurrentHashMap<>();
+
+    public static Map<Long, VersionEntity<String>> relativePath = new ConcurrentHashMap<>();
+
+    private static String getTablePathQuery(long tableId, String metadataDatabase){
+        return RELATIVE_PATH_QUERY.formatted(metadataDatabase, metadataDatabase, metadataDatabase, tableId);
+    }
+    private static String getTablePath(long tableId, String metadataDatabase) throws SQLException {
+        var schemaVersionQuery = getSchemaVersionQuery(metadataDatabase);
+        var latestSchemaVersion = ConnectionPool.collectFirst(schemaVersionQuery, Long.class);
+        var versionEntity = relativePath.compute(tableId, (key, oldValue) -> {
+            if(oldValue == null || oldValue.version() < latestSchemaVersion ){
+                return new VersionEntity<>(latestSchemaVersion, getRelativePathFromDB(tableId, metadataDatabase));
+            } else {
+                return oldValue;
+            }
+        });
+        return versionEntity.entity;
+    }
+
+    private static String getRelativePathFromDB(long tableId, String metadataDatabase ) {
+        return ConnectionPool.collectFirst(ConnectionPool.getConnection(), getTablePathQuery(tableId, metadataDatabase), String.class);
+    }
 
     private static Map<String, ColumnInfo> getColumnIdMap(String schema, String table, String metadataDatabase) throws SQLException {
         var schemaTable = "%s.%s".formatted(schema, table);
@@ -121,37 +150,47 @@ public class DucklakePartitionPruning {
                                               String table,
                                               JsonNode tree,
                                               String metadataDatabase) throws SQLException, NoSuchMethodException, JsonProcessingException {
-
-        var columnMap = getColumnIdMap(schema, table, metadataDatabase);
-        var tableId = getTableId(schema, table, metadataDatabase);
-        var maxMap = new HashMap<String, String>();
-        var minMap = new HashMap<String, String>();
-        var typeMap = new HashMap<String, String>();
-        for(var e : columnMap.entrySet()) {
-            minMap.put(e.getKey(), "min_" + e.getValue().id());
-            maxMap.put(e.getKey(), "max_" + e.getValue().id());
-            typeMap.put(e.getKey(), e.getValue().type());
-        }
-
-        var statTable = "P";
-        var partitionQuery = Transformations.replaceEqualMinMaxInQuery(statTable, minMap, maxMap, typeMap)
-                .apply(tree);
         var where = Transformations.identity()
                 .andThen(Transformations::getFirstStatementNode)
                 .andThen(Transformations::getWhereClauseForBaseTable)
                 .apply(tree);
-        var references = Transformations.collectReferences(where);
-        var columnIds = references.stream().map(n -> columnMap.get(Transformations.getReferenceName(n)[0]).id())
-                .toList();
+        var tableId = getTableId(schema, table, metadataDatabase);
+        String relativePath = getTablePath(tableId, metadataDatabase);
+        String toRun;
+        if (where == null || where instanceof NullNode) {
+            toRun = getNoFilterQuery(tableId, metadataDatabase);
+        } else {
+            var columnMap = getColumnIdMap(schema, table, metadataDatabase);
 
-        var partitionSql = Transformations.parseToSql(partitionQuery);
-        var toRun = partitionSql(partitionSql, tableId, columnIds,metadataDatabase);
-        try (var connection = ConnectionPool.getConnection()) {
-            var res = ConnectionPool.collectAll(connection, toRun, FileStatus.class );
-            return (List<FileStatus>) res;
+            var maxMap = new HashMap<String, String>();
+            var minMap = new HashMap<String, String>();
+            var typeMap = new HashMap<String, String>();
+            for (var e : columnMap.entrySet()) {
+                minMap.put(e.getKey(), "min_" + e.getValue().id());
+                maxMap.put(e.getKey(), "max_" + e.getValue().id());
+                typeMap.put(e.getKey(), e.getValue().type());
+            }
+
+            var statTable = "P";
+            var partitionQuery = Transformations.replaceEqualMinMaxInQuery(statTable, minMap, maxMap, typeMap)
+                    .apply(tree);
+
+            var references = Transformations.collectReferences(where);
+            var columnIds = references.stream().map(n -> columnMap.get(Transformations.getReferenceName(n)[0]).id())
+                    .toList();
+
+            var partitionSql = Transformations.parseToSql(partitionQuery);
+            toRun = partitionSql(partitionSql, tableId, columnIds, metadataDatabase);
         }
-
+        try (var connection = ConnectionPool.getConnection()) {
+            var res = ConnectionPool.collectAll(connection, toRun, DucklakeFileStatus.class);
+            var resList = new ArrayList<FileStatus>();
+            res.forEach(x -> resList.add(x.resolvedFileStatue(relativePath)));
+            return resList;
+        }
     }
+
+
     public static List<FileStatus> pruneFiles(String schema,
                                               String table,
                                               String sql,

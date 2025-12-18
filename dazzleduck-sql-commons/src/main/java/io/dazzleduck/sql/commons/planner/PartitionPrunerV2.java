@@ -1,6 +1,7 @@
 package io.dazzleduck.sql.commons.planner;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.FileStatus;
 import io.dazzleduck.sql.commons.Transformations;
 import io.dazzleduck.sql.commons.delta.PartitionPruning;
@@ -8,20 +9,42 @@ import io.dazzleduck.sql.commons.ducklake.DucklakePartitionPruning;
 import io.dazzleduck.sql.commons.hive.HivePartitionPruning;
 
 import java.io.IOException;
+import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public interface PartitionPrunerV2 {
-    Map<String, PartitionPrunerV2> staticPlanners = Map.of(
+
+    Set<String> ducklakeDatabases = new HashSet<>();
+
+    static final String DUCKLAKE_DATABASE_QUERY = "SELECT SUBSTRING(database_name, 21) AS database_name from duckdb_databases()  where database_name like '__ducklake_metadata_%'";
+    Map<String, PartitionPrunerV2> tableFunctionPlanners = Map.of(
             "read_hive", new HiveSplitPlanner(),
             "read_parquet", new HiveSplitPlanner(),
-            "read_delta", new DeltaLakeSplitPlanner(),
-            "read_ducklake", new DucklakeSplitPlanner()
+            "read_delta", new DeltaLakeSplitPlanner()
     );
 
-    static PartitionPrunerV2 getPlanner(String functionName) {
-        return staticPlanners.get(functionName);
+    static PartitionPrunerV2 getPlannerForTableFunction(String functionName) {
+        return tableFunctionPlanners.get(functionName);
+    }
+
+    static PartitionPrunerV2 getPlannerForTable(Transformations.CatalogSchemaTable table) throws SQLException {
+        if (ducklakeDatabases.isEmpty()) {
+            try (Connection c = ConnectionPool.getConnection()) {
+                var database = ConnectionPool.collectFirstColumn(c, DUCKLAKE_DATABASE_QUERY, String.class);
+                for (var d : database) {
+                    ducklakeDatabases.add(d);
+                }
+            }
+        }
+        if (ducklakeDatabases.contains(table.catalog())) {
+            return new DucklakeSplitPlanner();
+        } else {
+            throw new IllegalStateException("Database Not supported" + table.catalog());
+        }
     }
 
     List<FileStatus> pruneFiles(JsonNode tree,
@@ -68,7 +91,7 @@ class DucklakeSplitPlanner implements PartitionPrunerV2 {
                 Transformations.getAllTablesOrPathsFromSelect(Transformations.getFirstStatementNode(tree), null, null);
         var first = catalogSchemaAndTables.get(0);
         var catalog = first.catalog();
-        var metadata = "__ducklake_metadat_" + catalog;
+        var metadata = "__ducklake_metadata_" + catalog;
         try {
             return DucklakePartitionPruning.pruneFiles(first.schema(), first.tableOrPath(), tree, metadata);
         } catch (NoSuchMethodException e) {

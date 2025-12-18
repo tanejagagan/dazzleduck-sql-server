@@ -119,6 +119,13 @@ public class DuckLakePartitionPruningTest {
         Assertions.assertEquals(2, files.size());
     }
 
+    @Test
+    public void testTransformationNoFilter() throws SQLException, JsonProcessingException, NoSuchMethodException {
+        var sql = "select * from %s".formatted(PARTITIONED_TABLE);
+        var files = DucklakePartitionPruning.pruneFiles("main", PARTITIONED_TABLE, sql, METADATA_DATABASE );
+        Assertions.assertEquals(8, files.size());
+    }
+
 
 
     public static void createNonPartitionedTable() {

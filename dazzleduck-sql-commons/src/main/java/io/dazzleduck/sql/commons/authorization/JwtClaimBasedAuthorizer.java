@@ -1,7 +1,9 @@
 package io.dazzleduck.sql.commons.authorization;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.dazzleduck.sql.common.auth.UnauthorizedException;
+import io.dazzleduck.sql.commons.ExpressionConstants;
 import io.dazzleduck.sql.commons.Transformations;
 
 import java.util.Map;
@@ -25,18 +27,17 @@ public class JwtClaimBasedAuthorizer implements SqlAuthorizer {
 
     }
 
-    private JsonNode withUpdatedDatabaseSchema(JsonNode query, String database, String schema ) {
-        // TODO
-        /*
-        var res =  query.deepCopy();
-        Transformations.changeMatching(Transformations.isTableFunction(), f  -> {
-            System.out.println(f);
-        } )
-        Transformations.re
-        return res;
-
-         */
-        return query ;
+    private JsonNode withUpdatedDatabaseSchema(JsonNode tree, String database, String schema ) {
+        var copy = tree.deepCopy();
+        var f = Transformations.identity().andThen(Transformations::getFirstStatementNode).apply(copy);
+        var fromTable = (ObjectNode)f.get("from_table");
+        var type = fromTable.get("type").asText();
+        if( type.equals( ExpressionConstants.BASE_TABLE_TYPE)) {
+            fromTable.put("catalog_name", database);
+            fromTable.put("schema_name",  schema);
+            return copy;
+        }
+        return tree;
     }
     @Override
     public JsonNode authorize(String user, String database, String schema, JsonNode query, Map<String, String> verifiedClaims) throws UnauthorizedException {

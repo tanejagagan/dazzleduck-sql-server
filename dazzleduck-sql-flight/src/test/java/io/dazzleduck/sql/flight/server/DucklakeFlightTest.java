@@ -162,11 +162,12 @@ public class DucklakeFlightTest {
         final Location serverLocation = Location.forGrpcInsecure(LOCALHOST, 55559);
         try ( var serverClient = createRestrictedServerClient( serverLocation, "admin" )) {
             try (var splittableClient = splittableAdminClientForTable(serverLocation, serverClient.clientAllocator(), PARTITIONED_TABLE)) {
+
                 var flightCallHeaders = new FlightCallHeaders();
                 flightCallHeaders.insert(Headers.HEADER_SPLIT_SIZE, "1");
-                var flightInfo = splittableClient.execute("select * from %s".formatted(PARTITIONED_TABLE),
+                var flightInfo = splittableClient.execute("select * from %s where key = 'k51'".formatted(PARTITIONED_TABLE),
                         new HeaderCallOption(flightCallHeaders));
-                assertEquals(3, flightInfo.getEndpoints().size());
+                assertEquals(2, flightInfo.getEndpoints().size());
                 var size = 0;
                 for (var endpoint : flightInfo.getEndpoints()) {
                     try (final FlightStream stream = splittableClient.getStream(endpoint.getTicket(), new HeaderCallOption(flightCallHeaders))) {
@@ -175,7 +176,7 @@ public class DucklakeFlightTest {
                         }
                     }
                 }
-                assertEquals(6, size);
+                assertEquals(2, size);
             }
         }
     }
