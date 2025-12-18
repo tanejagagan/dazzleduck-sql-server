@@ -73,10 +73,10 @@ public enum ConnectionPool {
                 }
             }
             catch (SQLException e ){
-                throw new RuntimeException("Error collecting result set for sql " + sql, e);
+                throw new RuntimeException(e);
             }
         } catch (SQLException e) {
-            throw new RuntimeException("Error running sql" + sql, e);
+            throw new RuntimeException(e);
         }
     }
 
