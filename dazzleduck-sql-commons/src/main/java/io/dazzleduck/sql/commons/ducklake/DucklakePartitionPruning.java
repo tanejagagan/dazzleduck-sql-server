@@ -136,7 +136,11 @@ public class DucklakePartitionPruning {
     private List<ColumnInfo> getInfo(String schema, String table) throws SQLException {
         var query = getColumnInfoQuery(schema, table);
         try (var connection = ConnectionPool.getConnection()) {
-            return (List<ColumnInfo>)ConnectionPool.collectAll(connection, query, ColumnInfo.class);
+            var result = new java.util.ArrayList<ColumnInfo>();
+            for (var info : ConnectionPool.collectAll(connection, query, ColumnInfo.class)) {
+                result.add(info);
+            }
+            return result;
         }
     }
 
@@ -180,10 +184,12 @@ public class DucklakePartitionPruning {
             }
         }
         try (var connection = ConnectionPool.getConnection()) {
-            var res = (List<DucklakeFileStatus>)ConnectionPool.collectAll(connection, toRun, DucklakeFileStatus.class);
-            return res.stream()
-                    .map(x -> x.resolvedFileStatue(tableRelativePath))
-                    .toList();
+            var res = ConnectionPool.collectAll(connection, toRun, DucklakeFileStatus.class);
+            var result = new java.util.ArrayList<FileStatus>();
+            for (var x : res) {
+                result.add(x.resolvedFileStatue(tableRelativePath));
+            }
+            return result;
         }
     }
 
