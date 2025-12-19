@@ -11,7 +11,7 @@ import java.util.Objects;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.stream.Collectors;
 
-public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResult> {
+public class ParquetIngestionQueue extends BulkIngestQueueV2<String, IngestionResult> {
 
     private final String path;
     private final PostIngestionTaskFactory postIngestionTaskFactory;
@@ -26,7 +26,7 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
      * @param inputFormat
      * @param path
      * @param identifier      identify the queue. Generally this will the path of the bucket
-     * @param maxBucketSize   size of the bucket. Write will be performed as soon as bucket is full or overflowing
+     * @param minBucketSize   size of the bucket. Write will be performed as soon as bucket is reached to this size  or more
      * @param maxDelay        write will be performed just after this delay.
      * @param postIngestionTaskFactory
      * @param executorService Executor service.
@@ -36,12 +36,12 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
                                  String inputFormat,
                                  String path,
                                  String identifier,
-                                 long maxBucketSize,
+                                 long minBucketSize,
                                  Duration maxDelay,
                                  PostIngestionTaskFactory postIngestionTaskFactory,
                                  ScheduledExecutorService executorService,
                                  Clock clock) {
-        super(identifier, maxBucketSize, maxDelay, executorService, clock);
+        super(identifier, minBucketSize, maxDelay, executorService, clock);
         this.path = path;
         this.postIngestionTaskFactory = postIngestionTaskFactory;
         this.applicationId = applicationId;
@@ -49,7 +49,7 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
     }
 
     @Override
-    protected void write(WriteTask<String, IngestionResult> writeTask) {
+    public void write(WriteTask<String, IngestionResult> writeTask) {
         var batches = writeTask.bucket().batches();
         // All Arrow files
         var arrowFiles = batches.stream().map(Batch::record).map("'%s'"::formatted).collect(Collectors.joining(","));

@@ -223,7 +223,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     private final SqlAuthorizer sqlAuthorizer;
 
     private final SqlInfoBuilder sqlInfoBuilder;
-    private final ConcurrentHashMap<String, BulkIngestQueue<String, IngestionResult>> ingestionQueueMap =
+
+    private final IngestionConfig ingestionConfig = new IngestionConfig(1024 * 1024, Duration.ofSeconds(2));
+    private final ConcurrentHashMap<String, BulkIngestQueueV2<String, IngestionResult>> ingestionQueueMap =
             new ConcurrentHashMap<>();
 
     private final PostIngestionTaskFactory postIngestionTaskFactory;
@@ -770,8 +772,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                 var batch = ingestionParameters.constructBatch(Files.size(tempFile), tempFile.toAbsolutePath().toString());
                 var ingestionQueue = ingestionQueueMap.computeIfAbsent(ingestionParameters.completePath(warehousePath), p -> {
                     return new ParquetIngestionQueue(producerId, TEMP_WRITE_FORMAT, p, p,
-                            IngestionParameters.DEFAULT_MAX_BUCKET_SIZE,
-                            IngestionParameters.DEFAULT_MAX_DELAY,
+                            ingestionConfig.minBucketSize(),
+                            ingestionConfig.maxDelay(),
                             postIngestionTaskFactory,
                             Executors.newSingleThreadScheduledExecutor(),
                             Clock.systemDefaultZone());
