@@ -75,20 +75,18 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
                     (FORMAT %s %s, RETURN_FILES);
                 """.formatted(selectClause, this.inputFormat, arrowFiles, lastSortOrder, this.path, outputFormat, lastPartition);
         Iterable<CopyResult> copyResult;
+        List<String> files = new ArrayList<>();
+        long count = 0;
         try(var conn = ConnectionPool.getConnection()){
             copyResult = ConnectionPool.collectAll(conn, sql, CopyResult.class);
-
+            for(var r : copyResult) {
+                count += r.count();
+                files.addAll(Arrays.stream(r.files()).map(Object::toString).toList());
+            }
         } catch (Exception e ) {
             writeTask.bucket().futures().forEach(action -> action.completeExceptionally(e));
             return;
         }
-        long count = 0;
-        List<String> files = new ArrayList<>();
-        for(var r : copyResult) {
-            count += r.count();
-            files.addAll(Arrays.stream(r.files()).map(Object::toString).toList());
-        }
-
         var ingestionResult = new IngestionResult(this.path, writeTask.taskId(), this.applicationId,
                 writeTask.bucket().getProducerMaxBatchId(),
                 count,
