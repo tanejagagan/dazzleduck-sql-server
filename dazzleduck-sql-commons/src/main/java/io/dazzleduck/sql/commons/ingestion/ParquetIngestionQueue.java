@@ -74,14 +74,39 @@ public class ParquetIngestionQueue extends BulkIngestQueueV2<String, IngestionRe
                     TO '%s'
                     (FORMAT %s %s, RETURN_FILES);
                 """.formatted(selectClause, this.inputFormat, arrowFiles, lastSortOrder, this.path, outputFormat, lastPartition);
-        Iterable<CopyResult> copyResult;
         List<String> files = new ArrayList<>();
         long count = 0;
-        try(var conn = ConnectionPool.getConnection()){
-            copyResult = ConnectionPool.collectAll(conn, sql, CopyResult.class);
-            for(var r : copyResult) {
-                count += r.count();
-                files.addAll(Arrays.stream(r.files()).map(Object::toString).toList());
+        try(var conn = ConnectionPool.getConnection();
+            var stmt = conn.createStatement()){
+
+            // Set up cancellation hook
+            var cancelHookSet = writeTask.setCancelHook(() -> {
+                try {
+                    stmt.cancel();
+                } catch (Exception e) {
+                    // Ignore cancellation errors
+                }
+            });
+
+            // If cancel was already called, don't execute the query
+            if (!cancelHookSet) {
+                writeTask.bucket().futures().forEach(action ->
+                    action.completeExceptionally(new IllegalStateException("Write task was cancelled")));
+                return;
+            }
+
+            // Execute the query using our statement so the cancel hook works
+            stmt.execute(sql);
+            try (var rs = stmt.getResultSet()) {
+                while (rs.next()) {
+                    var rowCount = rs.getLong("count");
+                    var rowFilesArray = rs.getArray("files");
+                    count += rowCount;
+                    if (rowFilesArray != null) {
+                        var rowFiles = (Object[]) rowFilesArray.getArray();
+                        files.addAll(Arrays.stream(rowFiles).map(Object::toString).toList());
+                    }
+                }
             }
         } catch (Exception e ) {
             writeTask.bucket().futures().forEach(action -> action.completeExceptionally(e));

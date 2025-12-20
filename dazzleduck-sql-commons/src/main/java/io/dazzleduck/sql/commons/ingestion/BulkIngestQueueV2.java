@@ -24,7 +24,9 @@ public abstract class BulkIngestQueueV2<T, R> implements BulkIngestQueueInterfac
     private final Clock clock;
     private Instant lastWrite = Instant.EPOCH;
     private Bucket<T, R> currentBucket;
-    private boolean terminating;
+    private volatile boolean terminating;
+
+    private volatile WriteTask<T, R> runningWrite;
     private long writeTaskId;
 
     private final BlockingQueue<WriteTask<T, R>> writeQueue = new LinkedBlockingQueue<>();
@@ -32,7 +34,7 @@ public abstract class BulkIngestQueueV2<T, R> implements BulkIngestQueueInterfac
     private final AtomicLong totalWriteBatches = new AtomicLong();
     private final AtomicLong totalWriteBuckets = new AtomicLong();
     private final AtomicLong acceptedBatches = new AtomicLong();
-    private final AtomicLong bucketsCreated;
+    private final AtomicLong bucketsCreated =  new AtomicLong();
 
     public BulkIngestQueueV2(String identifier,
                              long minBucketSize,
@@ -44,25 +46,38 @@ public abstract class BulkIngestQueueV2<T, R> implements BulkIngestQueueInterfac
         this.executorService = executorService;
         this.maxDelay = maxDelay;
         this.clock = clock;
-        this.currentBucket = new Bucket<>(minBucketSize, maxDelay);
-        this.bucketsCreated =  new AtomicLong(1);
+        createNewBucket();
         this.writeThread = new Thread(this::processWriteQueue, "BulkIngestQueue-" + identifier + "-writer");
+        this.writeThread.setDaemon(true);
         this.writeThread.start();
         executorService.schedule(this::triggerWriteIfRequired, maxDelay.toMillis(), TimeUnit.MILLISECONDS);
     }
 
+    private void createNewBucket(){
+        this.currentBucket = new Bucket<>(minBucketSize, maxDelay);
+        bucketsCreated.incrementAndGet();
+    }
+
+
     private void processWriteQueue() {
-        while (!Thread.currentThread().isInterrupted()) {
+        while (!terminating) {
             try {
                 var task = writeQueue.take();
+                runningWrite = task;
                 try {
                     write(task);
                     totalWriteBatches.addAndGet(task.bucket().batches().size());
                     totalWriteBuckets.incrementAndGet();
                 } catch (Exception e) {
+                    // Complete futures with exception but continue processing remaining tasks
                     for (var future : task.bucket().futures()) {
-                        future.completeExceptionally(e);
+                        if (!future.isDone()) {
+                            future.completeExceptionally(e);
+                        }
                     }
+                    // Don't break - continue processing the next task in the queue
+                } finally {
+                    runningWrite = null;
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -71,16 +86,19 @@ public abstract class BulkIngestQueueV2<T, R> implements BulkIngestQueueInterfac
         }
     }
 
+    @Override
     public Stats getStats(){
         var totalWrite = totalWriteBatches.get();
         var accepted = acceptedBatches.get();
         return new Stats(identifier, 0, totalWriteBatches.get(), totalWriteBuckets.get(), 0,accepted - totalWrite, writeQueue.size());
     }
+
+    @Override
     public String identifier() {
         return identifier;
     }
 
-    public synchronized Future<R> addToQueue(Batch<T> batch) {
+    public synchronized CompletableFuture<R> add(Batch<T> batch) {
         if (terminating) {
             throw new IllegalStateException("The queue is closed");
         }
@@ -104,8 +122,11 @@ public abstract class BulkIngestQueueV2<T, R> implements BulkIngestQueueInterfac
     }
 
     private synchronized void triggerWriteIfRequired() {
+        if (terminating) {
+            return;
+        }
         var now = clock.instant();
-        if (currentBucket.isEmpty() && !terminating) {
+        if (currentBucket.isEmpty()) {
                 scheduleNextTrigger(now);
                 return;
         }
@@ -125,33 +146,46 @@ public abstract class BulkIngestQueueV2<T, R> implements BulkIngestQueueInterfac
     }
 
     private synchronized void submitWriteTask() {
+        if (currentBucket.isEmpty()) {
+            return;
+        }
         var toWrite = currentBucket;
         toWrite.markFinalized();
-        currentBucket = new Bucket<>(minBucketSize, maxDelay);
-        bucketsCreated.incrementAndGet();
+        createNewBucket();
         var writeTask = new WriteTask<T, R>(writeTaskId++, clock.instant(), toWrite);
         lastWrite = clock.instant();
         writeQueue.offer(writeTask);
-        scheduleNextTrigger(clock.instant());
+        if (!terminating) {
+            scheduleNextTrigger(clock.instant());
+        }
     }
     @Override
     public synchronized void close() throws Exception {
         terminating = true;
-        writeThread.interrupt();
-        writeThread.join(5000);
+        var c = runningWrite;
+        if (c != null) {
+            c.cancel();
+        }
 
-        // Fail any remaining tasks in the queue
-        var exception = new IllegalStateException("Queue closed before batch could be written");
-        WriteTask<T, R> remaining;
-        while ((remaining = writeQueue.poll()) != null) {
-            for (var future : remaining.bucket().futures()) {
+        // Interrupt and wait for write thread to finish processing
+        // The write thread will exit the loop when it sees terminating=true,
+        // or when interrupted if it's blocked waiting for a task
+        writeThread.interrupt();
+        writeThread.join();
+
+        // Fail any futures in the current bucket
+        var exception = new IllegalStateException("Server shutting down before batch could be written");
+        if (!currentBucket.isEmpty()) {
+            for (var future : currentBucket.futures()) {
                 future.completeExceptionally(exception);
             }
         }
 
-        // Fail any futures in the current bucket
-        if (!currentBucket.isEmpty()) {
-            for (var future : currentBucket.futures()) {
+
+        // Fail any remaining tasks that weren't processed
+        WriteTask<T, R> remaining;
+        while ((remaining = writeQueue.poll()) != null) {
+            for (var future : remaining.bucket().futures()) {
                 future.completeExceptionally(exception);
             }
         }

@@ -25,7 +25,7 @@ public class BulkIngestQueueTest {
     @Test
     public void testSingleLargeBatchBiggerThanBucket() throws Exception {
         withServiceAndQueue((service, queue, clock) -> {
-            var res = queue.addToQueue(mockBatch("123",
+            var res = queue.add(mockBatch("123",
                     0, DEFAULT_MIN_BATCH_SIZE + 1));
             service.tick(1, TimeUnit.MILLISECONDS);
             Thread.sleep(5);
@@ -40,7 +40,7 @@ public class BulkIngestQueueTest {
         var numBatches = 10;
         withServiceAndQueue((service, queue, clock) -> {
             for (int i = 0; i < numBatches; i++) {
-                var res = queue.addToQueue(mockBatch("123",
+                var res = queue.add(mockBatch("123",
                         i, DEFAULT_SMALL_BATCH_SIZE));
                 list.add(res);
             }
@@ -65,7 +65,7 @@ public class BulkIngestQueueTest {
         var numBatches = 25;
         withServiceAndQueue((service, queue, clock) -> {
             for (int i = 0; i < numBatches; i++) {
-                var res = queue.addToQueue(mockBatch("123",
+                var res = queue.add(mockBatch("123",
                         i, DEFAULT_SMALL_BATCH_SIZE));
                 list.add(res);
             }
@@ -95,7 +95,7 @@ public class BulkIngestQueueTest {
         var numBatches = 5;
         withServiceAndQueue((service, queue, clock) -> {
             for (int i = 0; i < numBatches; i++) {
-                var res = queue.addToQueue(mockBatch("123",
+                var res = queue.add(mockBatch("123",
                         i, DEFAULT_SMALL_BATCH_SIZE));
                 list.add(res);
             }
@@ -121,8 +121,8 @@ public class BulkIngestQueueTest {
     @Test
     public void testSmallLargeBatchToFillTheBucket() throws Exception {
         withServiceAndQueue((service, queue, clock) -> {
-            var smallBatch = queue.addToQueue(mockBatch("123", 0, DEFAULT_SMALL_BATCH_SIZE));
-            var largeBatch = queue.addToQueue(mockBatch("124", 1, 11 * DEFAULT_SMALL_BATCH_SIZE));
+            var smallBatch = queue.add(mockBatch("123", 0, DEFAULT_SMALL_BATCH_SIZE));
+            var largeBatch = queue.add(mockBatch("124", 1, 11 * DEFAULT_SMALL_BATCH_SIZE));
             service.tick(1, TimeUnit.MILLISECONDS);
             Thread.sleep(2);
             assertTrue(smallBatch.isDone());
