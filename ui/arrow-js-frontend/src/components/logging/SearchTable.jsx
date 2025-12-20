@@ -3,21 +3,9 @@ import { BsSearch } from "react-icons/bs";
 import { IoIosSave } from "react-icons/io";
 import { formatPossibleDate } from "../utils/DateNormalizer";
 
-/**
- * SearchTable
- *
- * UI-only reusable table component.
- * - No context
- * - No backend calls
- * - Data passed via props
- *
- * Later:
- * - Plug SearchContext
- * - Wire search + time range logic
- */
 const SearchTable = ({
     title = "Search Results",
-    data = [],              // array of objects
+    data = [],
     loading = false,
     error = "",
 }) => {
