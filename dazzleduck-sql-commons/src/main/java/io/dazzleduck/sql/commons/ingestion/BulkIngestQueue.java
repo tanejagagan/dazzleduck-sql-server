@@ -69,7 +69,7 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
         return identifier;
     }
 
-    public synchronized Future<R> addToQueue(Batch<T> batch) {
+    public synchronized Future<R> add(Batch<T> batch) {
         if (terminating) {
             throw new IllegalStateException("Queue is terminating");
         }
