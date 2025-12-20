@@ -1,5 +1,6 @@
 package io.dazzleduck.sql.http.server;
 
+import io.dazzleduck.sql.commons.ingestion.Stats;
 import io.dazzleduck.sql.flight.server.SqlProducerMBean;
 import io.dazzleduck.sql.flight.model.RunningStatementInfo;
 import io.helidon.webserver.http.HttpRules;
@@ -231,14 +232,56 @@ public class UIService implements HttpService {
     }
 
     private String buildRunningBulkIngestTable() {
-        List<RunningStatementInfo> statements = producerMBean.getRunningBulkIngestDetails();
-        String rows = statements.isEmpty()
-                ? "<tr><td colspan=\"6\" style=\"text-align: center;\">No running bulk ingestion</td></tr>"
-                : statements.stream()
-                .map(info -> buildStatementRow(info, true))
+        List<Stats> stats = producerMBean.getIngestionDetails();
+        String rows = stats.isEmpty()
+                ? "<tr><td colspan=\"7\" style=\"text-align: center;\">No running bulk ingestion</td></tr>"
+                : stats.stream()
+                .map(this::buildBulkIngestRow)
                 .collect(Collectors.joining());
 
-        return buildTableWithCaption("Running Bulk Ingestion", rows);
+        return """
+            <table>
+                <caption>Running Bulk Ingestion</caption>
+                <thead>
+                    <tr>
+                        <th>Identifier</th>
+                        <th>Total Write Bytes</th>
+                        <th>Total Batches</th>
+                        <th>Total Buckets</th>
+                        <th>Time Writing (ms)</th>
+                        <th>Scheduled Batches</th>
+                        <th>Queue Depth</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    %s
+                </tbody>
+            </table>
+            """.formatted(rows);
+    }
+
+    private String buildBulkIngestRow(Stats stats) {
+        long queueDepth = stats.scheduledWriteBatches() - stats.totalWriteBatches();
+
+        return """
+            <tr>
+                <td>%s</td>
+                <td>%d</td>
+                <td>%d</td>
+                <td>%d</td>
+                <td>%d</td>
+                <td>%d</td>
+                <td>%d</td>
+            </tr>
+            """.formatted(
+                escapeHtml(stats.identifier()),
+                stats.totalWriteBytes(),
+                stats.totalWriteBatches(),
+                stats.totalWriteBuckets(),
+                stats.timeSpendWriting(),
+                stats.scheduledWriteBatches(),
+                queueDepth
+        );
     }
 
     private String buildStatementRow(RunningStatementInfo info, boolean withCancelButton) {

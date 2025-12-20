@@ -1,5 +1,6 @@
 package io.dazzleduck.sql.flight.server;
 
+import io.dazzleduck.sql.commons.ingestion.Stats;
 import io.dazzleduck.sql.flight.model.RunningStatementInfo;
 
 import java.time.Instant;
@@ -20,5 +21,5 @@ public interface SqlProducerMBean {
     List<RunningStatementInfo> getRunningStatementDetails();
     List<RunningStatementInfo> getOpenPreparedStatementDetails();
     List<RunningStatementInfo> getRunningBulkIngestDetails();
-
+    List<Stats> getIngestionDetails();
 }
