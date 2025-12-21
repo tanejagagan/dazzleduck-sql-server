@@ -185,6 +185,11 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     }
 
     @Override
+    public List<Stats> getIngestionDetails() {
+        return ingestionQueueMap.values().stream().map(x -> x.getStats()).toList();
+    }
+
+    @Override
     public double getBytesIn() {
         return recorder.getBytesIn();
     }
