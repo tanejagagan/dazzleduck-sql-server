@@ -40,7 +40,6 @@ import org.apache.arrow.vector.ipc.WriteChannel;
 import org.apache.arrow.vector.ipc.message.MessageSerializer;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.duckdb.DuckDBConnection;
-import org.duckdb.DuckDBResultSet;
 import org.duckdb.DuckDBResultSetMetaData;
 import org.duckdb.StatementReturnType;
 import org.slf4j.Logger;
@@ -607,7 +606,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         if (statementContext == null) {
             ErrorHandling.handleContextNotFound();
         }
-        streamResultSet(executorService, statementContext, key, OptionalResultSetSupplier.of(statementContext.getStatement()),
+        ResultSetStreamUtil.streamResultSet(executorService, statementContext, key, OptionalResultSetSupplier.of(statementContext.getStatement()),
             allocator, getBatchSize(context),
             listener, () -> {}, recorder);
     }
@@ -643,7 +642,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             var statementContext = new StatementContext<>(statement, query);
             var key = new CacheKey(context.peerIdentity(), statementHandle.queryId());
             statementLoadingCache.put(key, statementContext);
-            streamResultSet(executorService,
+            ResultSetStreamUtil.streamResultSet(executorService,
                     statementContext,
                     key,
                     OptionalResultSetSupplier.of(statement, query, queryOptimizer),
@@ -864,7 +863,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         if (checkAccessModeAndRespond(listener)) {
             return;
         }
-        streamResultSet(executorService, DuckDBDatabaseMetadataUtil::getCatalogs, context, accessMode, allocator, listener, recorder);
+        ResultSetStreamUtil.streamResultSet(executorService, DuckDBDatabaseMetadataUtil::getCatalogs, context, accessMode, allocator, listener, recorder);
     }
 
     @Override
@@ -882,7 +881,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         final String catalog = command.hasCatalog() ? command.getCatalog() : null;
         final String schemaFilterPattern =
                 command.hasDbSchemaFilterPattern() ? command.getDbSchemaFilterPattern() : null;
-        streamResultSet(executorService, connection ->
+        ResultSetStreamUtil.streamResultSet(executorService, connection ->
                         DuckDBDatabaseMetadataUtil.getSchemas(connection, catalog, schemaFilterPattern),
                 context, accessMode, allocator, listener, recorder);
     }
@@ -918,7 +917,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         final int protocolSize = protocolStringList.size();
         final String[] tableTypes =
                 protocolSize == 0 ? null : protocolStringList.toArray(new String[protocolSize]);
-        streamResultSet(executorService, connection ->
+        ResultSetStreamUtil.streamResultSet(executorService, connection ->
             DuckDBDatabaseMetadataUtil.getTables(connection, catalog, schemaFilterPattern, tableFilterPattern, tableTypes),
                 context, accessMode, allocator, listener, recorder);
     }
@@ -936,7 +935,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         if (checkAccessModeAndRespond(listener)) {
             return;
         }
-        streamResultSet(executorService, DuckDBDatabaseMetadataUtil::getTableTypes, context, accessMode, allocator, listener, recorder);
+        ResultSetStreamUtil.streamResultSet(executorService, DuckDBDatabaseMetadataUtil::getTableTypes, context, accessMode, allocator, listener, recorder);
     }
 
     @Override
@@ -1106,7 +1105,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         return new FlightInfo(schema, descriptor, endpoints, -1, -1);
     }
 
-    private static DuckDBConnection getConnection(final CallContext context, AccessMode accessMode) throws NoSuchCatalogSchemaError {
+    public static DuckDBConnection getConnection(final CallContext context, AccessMode accessMode) throws NoSuchCatalogSchemaError {
         var databaseSchema = getDatabaseSchema(context, accessMode);
         String dbSchema = format("%s.%s", databaseSchema.database, databaseSchema.schema);
         String[] sqls = {format("USE %s", dbSchema)};
@@ -1146,139 +1145,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         return middleware.getAuthResultWithClaims().verifiedClaims();
     }
 
-    private static int getBatchSize(final CallContext context) {
+    public static int getBatchSize(final CallContext context) {
         return ContextUtils.getValue(context, Headers.HEADER_FETCH_SIZE, Headers.DEFAULT_ARROW_FETCH_SIZE, Integer.class);
-    }
-
-    private interface ResultSetSupplierFromConnection {
-        DuckDBResultSet get(DuckDBConnection connection) throws SQLException;
-    }
-
-    private interface ResultSetSupplier {
-        DuckDBResultSet get() throws SQLException;
-    }
-
-    private static void streamResultSet(ExecutorService executorService,
-                                        ResultSetSupplierFromConnection supplier,
-                                        CallContext context, AccessMode accessMode,
-                                        BufferAllocator allocator,
-                                        final ServerStreamListener listener, FlightRecorder recorder) {
-
-        streamResultSet(executorService, supplier, context, accessMode, allocator, listener, () -> {}, recorder);
-    }
-    private static void streamResultSet( ExecutorService executorService,
-                                         ResultSetSupplierFromConnection supplier,
-                                         CallContext context,
-                                         AccessMode  accessMode,
-                                         BufferAllocator allocator,
-                                         final ServerStreamListener listener,
-                                         Runnable finalBlock,
-                                         FlightRecorder recorder) {
-        try {
-            DuckDBConnection connection = getConnection(context, accessMode );
-            streamResultSet(executorService,
-                    () -> supplier.get(connection),
-                    allocator,
-                    getBatchSize(context),
-                    listener,
-                    () -> {
-                        try {
-                            connection.close();
-                        } catch (SQLException e) {
-                            logger.atError().setCause(e).log("Error closing connection");
-                        }
-                        finalBlock.run();
-                    }, recorder);
-        } catch (Throwable t) {
-            ErrorHandling.handleThrowable(listener, t);
-        }
-    }
-
-    private static void streamResultSet(ExecutorService executorService,
-                                        ResultSetSupplier supplier,
-                                        BufferAllocator allocator,
-                                        final int batchSize,
-                                        final ServerStreamListener listener,
-                                        Runnable finalBlock,
-                                        FlightRecorder recorder) {
-        var childAllocator = allocator.newChildAllocator("statement-allocator", 0, allocator.getLimit());
-        executorService.submit(() -> {
-            var error = false ;
-            recorder.startStream(false);
-            try (DuckDBResultSet resultSet = supplier.get();
-                 ArrowReader reader = (ArrowReader) resultSet.arrowExportStream(childAllocator, batchSize)) {
-                listener.start(reader.getVectorSchemaRoot());
-                while (reader.loadNextBatch()) {
-                    var size = childAllocator.getAllocatedMemory();
-                    recorder.recordGetStream(false,
-                            size);
-                    listener.putNext();
-                }
-            }  catch (Throwable throwable) {
-                recorder.errorStream(false);
-                ErrorHandling.handleThrowable(listener, throwable);
-            } finally {
-                if (!error) {
-                    listener.completed();
-                }
-                recorder.endStream(false);
-                finalBlock.run();
-            }
-        });
-    }
-
-    private static <T extends Statement> void streamResultSet(ExecutorService executorService,
-                                                              StatementContext<T> statementContext,
-                                                              CacheKey key,
-                                                              OptionalResultSetSupplier supplier,
-                                                              BufferAllocator allocator,
-                                                              final int batchSize,
-                                                              final ServerStreamListener listener,
-                                                              Runnable finalBlock, FlightRecorder recorder) {
-
-        var childAllocator = allocator.newChildAllocator("statement-allocator", 0, allocator.getLimit());
-        executorService.submit(() -> {
-            var error = false;
-            try {
-                statementContext.start();
-                recorder.startStream(statementContext.isPreparedStatementContext());
-                recorder.recordStatementStreamStart(key, statementContext);
-                supplier.execute();
-                if (supplier.hasResultSet()) {
-                    try (DuckDBResultSet resultSet = supplier.get();
-                         ArrowReader reader = (ArrowReader) resultSet.arrowExportStream(childAllocator, batchSize)) {
-                        listener.start(reader.getVectorSchemaRoot());
-                        while (reader.loadNextBatch()) {
-                            listener.putNext();
-                            var size = childAllocator.getAllocatedMemory();
-                            statementContext.bytesOut(size);
-                            recorder.recordGetStream(statementContext.isPreparedStatementContext(),
-                                    size);
-                        }
-                    }
-                } else {
-                    listener.start(new VectorSchemaRoot(List.of()));
-                }
-            } catch (Throwable throwable) {
-                error = true;
-                recorder.errorStream(statementContext.isPreparedStatementContext());
-                recorder.recordStatementStreamError(key, statementContext, throwable);
-                ErrorHandling.handleThrowable(listener, throwable);
-            } finally {
-                try {
-                    if (!error) {
-                        listener.completed();
-                    }
-                    statementContext.end();
-                    recorder.endStream(statementContext.isPreparedStatementContext());
-                    recorder.recordStatementStreamEnd(key, statementContext);
-                    finalBlock.run();
-                    childAllocator.close();
-                } catch (Exception e){
-                    logger.atError().setCause(e).log("Error running finally block");
-                }
-            }
-        });
     }
 
     private FlightInfo getFlightInfoStatement(String query,
