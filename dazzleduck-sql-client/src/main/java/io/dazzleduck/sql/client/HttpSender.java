@@ -8,35 +8,41 @@ import io.dazzleduck.sql.login.LoginResponse;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Objects;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 public final class HttpSender extends FlightSender.AbstractFlightSender  {
 
     private static final Logger logger = LoggerFactory.getLogger(HttpSender.class);
-    private final HttpClient client = HttpClient.newHttpClient();
-    private final ObjectMapper mapper = new ObjectMapper();
+    private static final ObjectMapper mapper = new ObjectMapper();
+    private static final Duration REFRESH_SKEW = Duration.ofSeconds(60);
+    private static final Duration DEFAULT_TOKEN_LIFETIME = Duration.ofHours(5);
+    private static final int MAX_AUTH_RETRIES = 2;
 
+    private final HttpClient client;
+    private final ExecutorService executorService;
     private final String baseUrl;
     private final String username;
     private final String password;
     private final String targetPath;
     private final Duration timeout;
-
     private final long maxMem;
     private final long maxDisk;
 
     private volatile String jwt = null;
     private volatile Instant jwtExpiry = Instant.EPOCH;
-    private static final Duration REFRESH_SKEW = Duration.ofSeconds(60);
-    private static final Duration DEFAULT_TOKEN_LIFETIME = Duration.ofHours(5);
-    private static final int MAX_AUTH_RETRIES = 2;
 
     public HttpSender(
             Schema schema,
@@ -66,6 +72,27 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
             Clock clock
     ) {
         super(minBatchSize, maxSendInterval, schema, clock);
+
+        // Issue #3: Parameter validation
+        Objects.requireNonNull(baseUrl, "baseUrl must not be null");
+        Objects.requireNonNull(username, "username must not be null");
+        Objects.requireNonNull(password, "password must not be null");
+        Objects.requireNonNull(targetPath, "targetPath must not be null");
+        Objects.requireNonNull(timeout, "timeout must not be null");
+
+        if (baseUrl.trim().isEmpty()) {
+            throw new IllegalArgumentException("baseUrl must not be empty");
+        }
+        if (username.trim().isEmpty()) {
+            throw new IllegalArgumentException("username must not be empty");
+        }
+        if (targetPath.trim().isEmpty()) {
+            throw new IllegalArgumentException("targetPath must not be empty");
+        }
+        if (timeout.isNegative() || timeout.isZero()) {
+            throw new IllegalArgumentException("timeout must be positive");
+        }
+
         this.baseUrl = baseUrl;
         this.username = username;
         this.password = password;
@@ -73,6 +100,21 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
         this.timeout = timeout;
         this.maxMem = maxInMemorySize;
         this.maxDisk = maxOnDiskSize;
+
+        // Issue #1: Configure HttpClient with proper settings
+        this.executorService = Executors.newCachedThreadPool(r -> {
+            Thread t = new Thread(r, "http-sender-client");
+            t.setDaemon(true);
+            return t;
+        });
+
+        this.client = HttpClient.newBuilder()
+                .executor(executorService)
+                .connectTimeout(timeout)
+                .build();
+
+        logger.info("Initializing HttpSender with baseUrl={}, targetPath={}, timeout={}",
+                    baseUrl, targetPath, timeout);
     }
 
     @Override
@@ -85,11 +127,19 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
         return maxDisk;
     }
 
-    private void login() throws Exception {
+    // Issue #6: Improved error handling with specific exceptions
+    private void login() throws IOException, InterruptedException {
         logger.debug("Attempting login to {}", baseUrl);
-        var body = mapper.writeValueAsBytes(new LoginRequest(username, password));
 
-        var req = HttpRequest.newBuilder()
+        final byte[] body;
+        try {
+            body = mapper.writeValueAsBytes(new LoginRequest(username, password));
+        } catch (IOException e) {
+            logger.error("Failed to serialize login request", e);
+            throw new IOException("Failed to serialize login request", e);
+        }
+
+        HttpRequest req = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + "/login"))
                 .timeout(timeout)
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
@@ -97,49 +147,89 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
                 .header("Accept", "application/json")
                 .build();
 
-        var resp = client.send(req, HttpResponse.BodyHandlers.ofString());
-
-        if (resp.statusCode() != 200) {
-            logger.error("Login failed with status {}", resp.statusCode());
-            throw new RuntimeException("Login failed: " + resp.body());
+        HttpResponse<String> resp;
+        try {
+            resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+        } catch (HttpTimeoutException e) {
+            logger.error("Login request timed out after {}", timeout, e);
+            throw new IOException("Login request timed out", e);
+        } catch (IOException e) {
+            logger.error("Network error during login to {}", baseUrl, e);
+            throw new IOException("Network error during login", e);
         }
 
-        JsonNode json = mapper.readTree(resp.body());
-        LoginResponse lr = mapper.treeToValue(json, LoginResponse.class);
+        if (resp.statusCode() == 401 || resp.statusCode() == 403) {
+            logger.error("Authentication failed with status {}: invalid credentials", resp.statusCode());
+            throw new SecurityException("Invalid username or password");
+        }
 
-        this.jwt = lr.tokenType() + " " + lr.accessToken();
+        if (resp.statusCode() != 200) {
+            logger.error("Login failed with status {}: {}", resp.statusCode(), resp.body());
+            throw new IOException("Login failed with status " + resp.statusCode() + ": " + resp.body());
+        }
 
-        long expiresIn = json.hasNonNull("expiresIn")
-                ? json.get("expiresIn").asLong()
-                : DEFAULT_TOKEN_LIFETIME.toSeconds();
+        try {
+            JsonNode json = mapper.readTree(resp.body());
+            LoginResponse lr = mapper.treeToValue(json, LoginResponse.class);
 
-        this.jwtExpiry = clock.instant().plusSeconds(expiresIn);
-        logger.info("Login successful, JWT expires in {} seconds", expiresIn);
+            this.jwt = lr.tokenType() + " " + lr.accessToken();
+
+            long expiresIn = json.hasNonNull("expiresIn")
+                    ? json.get("expiresIn").asLong()
+                    : DEFAULT_TOKEN_LIFETIME.toSeconds();
+
+            this.jwtExpiry = clock.instant().plusSeconds(expiresIn);
+            logger.info("Login successful, JWT expires in {} seconds", expiresIn);
+        } catch (IOException e) {
+            logger.error("Failed to parse login response", e);
+            throw new IOException("Failed to parse login response", e);
+        }
     }
 
-    private String getJwt() throws Exception {
-        if (jwt == null || clock.instant().isAfter(jwtExpiry.minus(REFRESH_SKEW))) {
+    // Issue #8: Fixed race condition - synchronized access to jwt
+    private String getJwt() throws IOException, InterruptedException {
+        // Check outside synchronized block first (performance optimization)
+        String currentJwt = jwt;
+        Instant currentExpiry = jwtExpiry;
+
+        if (currentJwt == null || clock.instant().isAfter(currentExpiry.minus(REFRESH_SKEW))) {
             synchronized (this) {
-                if (jwt == null || clock.instant().isAfter(jwtExpiry.minus(REFRESH_SKEW))) {
+                // Re-check inside synchronized block (double-checked locking)
+                currentJwt = jwt;
+                currentExpiry = jwtExpiry;
+
+                if (currentJwt == null || clock.instant().isAfter(currentExpiry.minus(REFRESH_SKEW))) {
                     logger.debug("JWT refresh needed");
                     login();
+                    currentJwt = jwt; // Get the newly refreshed token
                 }
             }
         }
-        return jwt;
+        return currentJwt;
     }
 
     @Override
     protected void doSend(SendElement element) throws InterruptedException {
+        // Issue #4: Check if thread was interrupted before attempting send
+        if (Thread.currentThread().isInterrupted()) {
+            throw new InterruptedException("Thread interrupted before send");
+        }
+
+        HttpResponse<String> resp = null;
+        int authRetries = 0;
+
+        // Issue #2: Read payload into memory for retry capability
+        // Note: We need the full payload in memory to support auth retries
+        final byte[] payload;
+        try (InputStream in = element.read()) {
+            payload = in.readAllBytes();
+        } catch (IOException e) {
+            logger.error("Failed to read element data", e);
+            throw new RuntimeException("Failed to read element data", e);
+        }
+
+        // Issue #7: Specific exception handling
         try {
-            final byte[] payload;
-            try (InputStream in = element.read()) {
-                payload = in.readAllBytes();
-            }
-
-            HttpResponse<String> resp = null;
-            int authRetries = 0;
-
             while (authRetries <= MAX_AUTH_RETRIES) {
                 resp = post(payload);
 
@@ -152,6 +242,7 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
                             resp.statusCode(), authRetries + 1);
                     synchronized (this) {
                         jwt = null;
+                        jwtExpiry = Instant.EPOCH;
                     }
                     authRetries++;
                 } else {
@@ -162,22 +253,29 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
 
             if (resp.statusCode() != 200) {
                 logger.error("Ingestion failed with status {} to {}{}", resp.statusCode(), baseUrl, targetPath);
-                throw new RuntimeException("Ingestion failed: " + resp.body());
+                throw new RuntimeException("Ingestion failed with status " + resp.statusCode() + ": " + resp.body());
             }
 
             logger.debug("Successfully sent data to {}{}", baseUrl, targetPath);
 
-        } catch (InterruptedException e) {
-            // Re-throw to allow graceful shutdown
-            throw e;
-        } catch (Exception e) {
-            logger.error("Failed to send data to {}{}", baseUrl, targetPath, e);
-            throw new RuntimeException("Failed to send data to " + baseUrl + targetPath, e);
+        } catch (HttpTimeoutException e) {
+            logger.error("HTTP request timed out after {} to {}{}", timeout, baseUrl, targetPath, e);
+            throw new RuntimeException("HTTP request timed out to " + baseUrl + targetPath, e);
+        } catch (IOException e) {
+            // Check if interrupted during IO
+            if (Thread.currentThread().isInterrupted()) {
+                throw new InterruptedException("Thread interrupted during HTTP send");
+            }
+            logger.error("Network error sending data to {}{}", baseUrl, targetPath, e);
+            throw new RuntimeException("Network error sending data to " + baseUrl + targetPath, e);
+        } catch (SecurityException e) {
+            logger.error("Authentication failed for {}{}", baseUrl, targetPath, e);
+            throw new RuntimeException("Authentication failed for " + baseUrl + targetPath, e);
         }
     }
 
-    private HttpResponse<String> post(byte[] payload) throws Exception {
-        var req = HttpRequest.newBuilder()
+    private HttpResponse<String> post(byte[] payload) throws IOException, InterruptedException {
+        HttpRequest req = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + "/ingest?path=" + targetPath))
                 .timeout(timeout)
                 .POST(HttpRequest.BodyPublishers.ofByteArray(payload))
@@ -186,5 +284,47 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
                 .build();
 
         return client.send(req, HttpResponse.BodyHandlers.ofString());
+    }
+
+    // Issue #1: Override close() to cleanup HttpClient resources
+    @Override
+    public void close() {
+        Exception superCloseException = null;
+
+        // Close parent resources first
+        try {
+            super.close();
+        } catch (Exception e) {
+            superCloseException = e;
+            logger.error("Error closing FlightSender resources", e);
+        }
+
+        // Shutdown the executor service
+        try {
+            executorService.shutdown();
+            if (!executorService.awaitTermination(5, TimeUnit.SECONDS)) {
+                logger.warn("ExecutorService did not terminate gracefully, forcing shutdown");
+                executorService.shutdownNow();
+            }
+            logger.debug("HttpClient executor service closed successfully");
+        } catch (InterruptedException e) {
+            logger.warn("Interrupted while waiting for executor service shutdown", e);
+            executorService.shutdownNow();
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            logger.error("Failed to shutdown executor service", e);
+            if (superCloseException != null) {
+                superCloseException.addSuppressed(e);
+            }
+        }
+
+        // Rethrow the first exception if any occurred
+        if (superCloseException != null) {
+            if (superCloseException instanceof RuntimeException) {
+                throw (RuntimeException) superCloseException;
+            } else {
+                throw new RuntimeException("Failed to close HttpSender", superCloseException);
+            }
+        }
     }
 }

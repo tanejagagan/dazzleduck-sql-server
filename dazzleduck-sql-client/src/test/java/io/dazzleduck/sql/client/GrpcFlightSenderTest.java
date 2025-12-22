@@ -87,7 +87,8 @@ class GrpcFlightSenderTest {
                 PASSWORD,
                 CATALOG,
                 SCHEMA,
-                Map.of("path", path)
+                Map.of("path", path),
+                Duration.ofSeconds(30)
         )) {
             sender.addRow(new JavaRow(new Object[]{"Aman"}));
             sender.addRow(new JavaRow(new Object[]{"Yash"}));
