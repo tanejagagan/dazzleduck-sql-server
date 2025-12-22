@@ -783,7 +783,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                             Executors.newSingleThreadScheduledExecutor(),
                             Clock.systemDefaultZone());
                 });
-                var result = ingestionQueue.addToQueue(batch);
+                var result = ingestionQueue.add(batch);
                 result.get();
                 ackStream.onNext(PutResult.empty());
                 ackStream.onCompleted();

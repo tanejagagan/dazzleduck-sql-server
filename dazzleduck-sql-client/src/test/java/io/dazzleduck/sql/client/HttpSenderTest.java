@@ -28,7 +28,6 @@ public class HttpSenderTest {
     static String warehouse;
     static ObjectMapper mapper = new ObjectMapper();
     static Schema schema;
-    static HttpSender sender;
 
     @BeforeAll
     static void setup() throws Exception {
@@ -45,26 +44,6 @@ public class HttpSenderTest {
         ConnectionPool.executeBatch(new String[]{"INSTALL arrow FROM community", "LOAD arrow"});
 
         schema = new Schema(java.util.List.of(new Field("timestamp", FieldType.nullable(new ArrowType.Utf8()), null)));
-
-        sender = new HttpSender(
-                schema,
-                "http://localhost:" + PORT,
-                "admin",
-                "admin",
-                "test.parquet",
-                Duration.ofSeconds(10),
-                100_000,
-                Duration.ofSeconds(10),
-                100_000,
-                500_000,Clock.systemDefaultZone()
-        );
-    }
-
-    @AfterEach
-    void teardown() throws Exception {
-        if (sender != null) {
-            sender.close();
-        }
     }
 
     @BeforeEach
@@ -123,16 +102,20 @@ public class HttpSenderTest {
 
     @Test
     void testAsyncIngestionSingleBatch() throws Exception {
-        HttpSender IngestionSingleBatch = newSender("test.parquet",Duration.ofSeconds(10));
-        IngestionSingleBatch.enqueue(arrowBytes("select * from generate_series(4)"));
-        verifyFile("test.parquet", 5);
+        String file = "async-single-" + System.nanoTime() + ".parquet";
+        try (HttpSender sender = newSender(file, Duration.ofSeconds(10))) {
+            sender.enqueue(arrowBytes("select * from generate_series(4)"));
+        }
+
+        // Verify after close() has flushed all data
+        verifyFile(file, 5);
     }
 
     @Test
     void testMultipleEnqueuesOverwriteBehavior() throws Exception {
         String file = "overwrite-" + System.nanoTime() + ".parquet";
 
-        HttpSender overwriteSender = new HttpSender(
+        try (HttpSender overwriteSender = new HttpSender(
                 schema,
                 "http://localhost:" + PORT,
                 "admin",
@@ -142,65 +125,76 @@ public class HttpSenderTest {
                 100_000,
                 Duration.ofSeconds(10),
                 100_000,
-                500_000);
+                500_000)) {
 
             overwriteSender.enqueue(arrowBytes("select * from generate_series(1)"));
             overwriteSender.enqueue(arrowBytes("select * from generate_series(2)"));
-            verifyFile(file, 3);
+        }
 
+        // Verify after close() has flushed all data
+        verifyFile(file, 3);
     }
 
     @Test
     void testConcurrentEnqueues() throws Exception {
+        String file = "concurrent-" + System.nanoTime() + ".parquet";
         CountDownLatch latch = new CountDownLatch(5);
         AtomicInteger errors = new AtomicInteger(0);
-        HttpSender concurrentEnqueues=  newSender("test.parquet",Duration.ofSeconds(5));
-        for (int i = 0; i < 5; i++) {
-            final int index = i;
-            new Thread(() -> {
-                try {
-                    concurrentEnqueues.enqueue(arrowBytes("select * from generate_series(" + (index * 10) + ")"));
-                } catch (Exception e) {
-                    errors.incrementAndGet();
-                } finally {
-                    latch.countDown();
-                }
-            }).start();
-        }
 
-        assertTrue(latch.await(5, TimeUnit.SECONDS));
-        assertEquals(0, errors.get());
-        await().atMost(10, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {
-            long count = ConnectionPool.collectFirst("select count(*) from read_parquet('%s/test.parquet')".formatted(warehouse), Long.class);
-            assertTrue(count >= 0);
-        });
+        try (HttpSender concurrentEnqueues = newSender(file, Duration.ofSeconds(5))) {
+            for (int i = 0; i < 5; i++) {
+                final int index = i;
+                new Thread(() -> {
+                    try {
+                        concurrentEnqueues.enqueue(arrowBytes("select * from generate_series(" + (index * 10) + ")"));
+                    } catch (Exception e) {
+                        errors.incrementAndGet();
+                    } finally {
+                        latch.countDown();
+                    }
+                }).start();
+            }
+
+            assertTrue(latch.await(5, TimeUnit.SECONDS));
+            assertEquals(0, errors.get());
+            await().atMost(10, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {
+                long count = ConnectionPool.collectFirst("select count(*) from read_parquet('%s/%s')".formatted(warehouse, file), Long.class);
+                assertTrue(count >= 0);
+            });
+        }
     }
 
     @Test
     void testJWTTokenReuse() throws Exception {
-        // Multiple requests should reuse the same token
-        HttpSender ReuseSender = newSender("test.parquet",Duration.ofSeconds(5));
-        for (int i = 0; i < 10; i++) {
-            ReuseSender.enqueue(arrowBytes("select " + i + " as val"));
-        }
+        String file = "jwt-reuse-" + System.nanoTime() + ".parquet";
 
-        await().atMost(15, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {
-            long count = ConnectionPool.collectFirst("select count(*) from read_parquet('%s/test.parquet')".formatted(warehouse), Long.class);
-            assertTrue(count >= 1);
-        });
+        // Multiple requests should reuse the same token
+        try (HttpSender ReuseSender = newSender(file, Duration.ofSeconds(5))) {
+            for (int i = 0; i < 10; i++) {
+                ReuseSender.enqueue(arrowBytes("select " + i + " as val"));
+            }
+
+            await().atMost(15, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {
+                long count = ConnectionPool.collectFirst("select count(*) from read_parquet('%s/%s')".formatted(warehouse, file), Long.class);
+                assertTrue(count >= 1);
+            });
+        }
     }
 
     @Test
     void testHighThroughput() throws Exception {
-        // Rapid fire 50 small batches
-        HttpSender HighThroughput =  newSender("test.parquet",Duration.ofSeconds(5));
-        for (int i = 0; i < 20; i++) {
-            HighThroughput.enqueue(arrowBytes("select " + i + " as val"));
+        String file = "high-throughput-" + System.nanoTime() + ".parquet";
+
+        // Rapid fire 20 small batches
+        try (HttpSender HighThroughput = newSender(file, Duration.ofSeconds(5))) {
+            for (int i = 0; i < 20; i++) {
+                HighThroughput.enqueue(arrowBytes("select " + i + " as val"));
+            }
+            await().atMost(10, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {
+                long count = ConnectionPool.collectFirst("select count(*) from read_parquet('%s/%s')".formatted(warehouse, file), Long.class);
+                assertTrue(count >= 1);
+            });
         }
-        await().atMost(10, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {
-            long count = ConnectionPool.collectFirst("select count(*) from read_parquet('%s/test.parquet')".formatted(warehouse), Long.class);
-            assertTrue(count >= 1);
-        });
     }
 
     @Test
@@ -219,12 +213,17 @@ public class HttpSenderTest {
 
     @Test
     void testTimeoutFailure() throws Exception {
-        // Set an impossibly short timeout of 1ms to force the exception
-        var timeoutSender =  newSender("test.parquet",Duration.ofSeconds(5));
+        String file = "timeout-" + System.nanoTime() + ".parquet";
 
-        timeoutSender.enqueue(arrowBytes("select * from generate_series(2000)"));
-        await().atMost(10, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> assertThrows(Exception.class, () -> ConnectionPool.collectFirst("select count(*) from read_parquet('%s/timeout.parquet')".formatted(warehouse), Long.class)));
-        timeoutSender.close();
+        // Set an impossibly short timeout of 1ms to force the exception
+        try (var timeoutSender = newSender(file, Duration.ofSeconds(5))) {
+            timeoutSender.enqueue(arrowBytes("select * from generate_series(2000)"));
+            await().atMost(10, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() ->
+                assertThrows(Exception.class, () ->
+                    ConnectionPool.collectFirst("select count(*) from read_parquet('%s/%s')".formatted(warehouse, file), Long.class)
+                )
+            );
+        }
     }
 
     @Test

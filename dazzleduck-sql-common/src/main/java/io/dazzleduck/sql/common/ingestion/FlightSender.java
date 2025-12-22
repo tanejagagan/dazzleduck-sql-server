@@ -75,8 +75,13 @@ public interface FlightSender extends Closeable {
                     try {
                         var current = queue.poll(100, java.util.concurrent.TimeUnit.MILLISECONDS);
                         if (current != null) {
-                            doSend(current);
-                            updateState(current);
+                            try {
+                                doSend(current);
+                                updateState(current);
+                            } finally {
+                                // Always close the element after sending (successful or not)
+                                current.close();
+                            }
                         }
                     } catch (InterruptedException e) {
                         if (shutdown) {
@@ -89,6 +94,8 @@ public interface FlightSender extends Closeable {
                                 } catch (InterruptedException ex) {
                                     // If interrupted again, exit
                                     break;
+                                } finally {
+                                    element.close();
                                 }
                             }
                         }
@@ -185,7 +192,6 @@ public interface FlightSender extends Closeable {
                 inMemorySize -= sendElement.length();
             } else {
                 onDiskSize -= sendElement.length();
-                ((FileMappedMemoryElement) sendElement).cleanup();
             }
         }
 
@@ -233,17 +239,18 @@ public interface FlightSender extends Closeable {
                         onDiskSize -= element.length();
                     }
                 }
-
-                if (element instanceof FileMappedMemoryElement) {
-                    ((FileMappedMemoryElement) element).cleanup();
-                }
+                // Close the element to cleanup resources
+                element.close();
             }
         }
     }
 
-    interface SendElement {
+    interface SendElement extends Closeable {
         InputStream read();
         long length();
+
+        @Override
+        void close();
     }
 
     class MemoryElement implements SendElement {
@@ -262,9 +269,15 @@ public interface FlightSender extends Closeable {
         public long length() {
             return data.length;
         }
+
+        @Override
+        public void close() {
+            // No-op: in-memory elements don't require cleanup
+        }
     }
 
     class FileMappedMemoryElement implements SendElement {
+        private static final Logger logger = LoggerFactory.getLogger(FileMappedMemoryElement.class);
         private final Path tempFile;
         private final long length;
 
@@ -278,13 +291,14 @@ public interface FlightSender extends Closeable {
             }
         }
 
-        public void cleanup() {
+        @Override
+        public void close() {
             try {
                 if (tempFile != null && Files.exists(tempFile)) {
                     Files.delete(tempFile);
                 }
             } catch (IOException e) {
-                throw new RuntimeException(e);
+                logger.warn("Failed to delete temporary file: {}", tempFile, e);
             }
         }
 
