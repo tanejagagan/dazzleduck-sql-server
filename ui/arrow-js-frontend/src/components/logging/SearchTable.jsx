@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { BsSearch } from "react-icons/bs";
 import { IoIosSave } from "react-icons/io";
 import { formatPossibleDate } from "../utils/DateNormalizer";
@@ -7,9 +7,11 @@ const SearchTable = ({
     title = "Search Results",
     data = [],
     loading = false,
+    searchQuery,
+    setSearchQuery,
+    onSearch,
     error = "",
 }) => {
-    const [searchQuery, setSearchQuery] = useState("");
     const [timeRange, setTimeRange] = useState("Last 24 hours");
     const [expandedRows, setExpandedRows] = useState({});
     const [currentPage, setCurrentPage] = useState(1);
@@ -26,6 +28,10 @@ const SearchTable = ({
         (currentPage - 1) * rowsPerPage,
         currentPage * rowsPerPage
     );
+
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [data]);
 
     return (
         <div className="min-h-screen font-sans flex flex-col">
@@ -49,6 +55,7 @@ const SearchTable = ({
                             placeholder="Search data here..."
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
+                            onKeyDown={(e) => e.key === "Enter" && onSearch(searchQuery)}
                             className="w-[80%] p-2 outline-none px-4 py-2"
                         />
 
@@ -63,7 +70,9 @@ const SearchTable = ({
                                 <option>Last 30 days</option>
                             </select>
 
-                            <button className="px-5 py-2 border-l border-gray-400 hover:bg-gray-100">
+                            <button
+                                onClick={() => onSearch(searchQuery)}
+                                className="px-5 py-2 border-l border-gray-400 hover:bg-gray-100">
                                 <BsSearch className="text-xl" />
                             </button>
                         </div>
@@ -149,8 +158,8 @@ const SearchTable = ({
                                                 <React.Fragment key={i}>
                                                     <tr
                                                         className={`${i % 2 === 0
-                                                                ? "bg-white"
-                                                                : "bg-gray-100"
+                                                            ? "bg-white"
+                                                            : "bg-gray-100"
                                                             } hover:bg-green-50 cursor-pointer`}
                                                         onClick={() => toggleRow(i)}
                                                     >
@@ -177,7 +186,11 @@ const SearchTable = ({
                                                                 className="p-3"
                                                             >
                                                                 <pre className="text-xs font-mono text-gray-700">
-                                                                    {JSON.stringify(row, null, 2)}
+                                                                    {JSON.stringify(
+                                                                        row,
+                                                                        (_, value) => (typeof value === "bigint" ? value.toString() : value),
+                                                                        2
+                                                                    )}
                                                                 </pre>
                                                             </td>
                                                         </tr>
@@ -208,8 +221,8 @@ const SearchTable = ({
                                             key={n}
                                             onClick={() => setCurrentPage(n)}
                                             className={`px-3 py-1 border rounded ${currentPage === n
-                                                    ? "bg-green-600 text-white"
-                                                    : ""
+                                                ? "bg-green-600 text-white"
+                                                : ""
                                                 }`}
                                         >
                                             {n}

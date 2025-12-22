@@ -155,24 +155,12 @@ const Logging = () => {
                 <div className="">
                     <SearchTable
                         title="Search Logs"
-                        data={[
-                            { time: 1760342400000, value: 18, host: 'h1' },
-                            { time: 1760432400000, value: 920000, host: 'h2' },
-                            { time: 1760522400000, value: 310, host: 'h3' },
-                            { time: 1760612400000, value: 150, host: 'h1' },
-                            { time: 1760702400000, value: 24, host: 'h2' },
-                            { time: 1760792400000, value: 870000, host: 'h3' },
-                            { time: 1760882400000, value: 295, host: 'h4' },
-                            { time: 1760972400000, value: 170, host: 'h1' },
-                            { time: 1761033600000, value: 22, host: 'h2' },
-                            { time: 1761123600000, value: 910000, host: 'h3' },
-                            { time: 1761213600000, value: 280, host: 'h4' },
-                            { time: 1761303600000, value: 160, host: 'h1' },
-                            { time: 1761393600000, value: 26, host: 'h2' },
-                            { time: 1761483600000, value: 940000, host: 'h3' }
-                        ]}
-                        loading={false}
-                        error=""
+                        data={queryManagement.searchData}
+                        loading={queryManagement.searchLoading}
+                        searchQuery={queryManagement.searchQuery}
+                        setSearchQuery={queryManagement.setSearchQuery}
+                        onSearch={queryManagement.runSearchQuery}
+                        error={queryManagement.searchError}
                     />
                 </div>
             )}
