@@ -9,7 +9,7 @@ import org.apache.arrow.vector.types.pojo.Schema;
 import java.io.IOException;
 
 public class FlightStreamReader extends ArrowReader {
-    public FlightStream flightStream;
+    private final FlightStream flightStream;
 
     public static FlightStreamReader of(FlightStream flightStream, BufferAllocator bufferAllocator) {
         return new FlightStreamReader(flightStream, bufferAllocator);
@@ -26,6 +26,15 @@ public class FlightStreamReader extends ArrowReader {
     }
 
 
+    /**
+     * Returns the number of bytes read from the stream.
+     *
+     * <p>Note: FlightStream does not provide byte-level metrics, so this method
+     * always returns 0. This is a known limitation when wrapping FlightStream
+     * as an ArrowReader.
+     *
+     * @return 0 (byte tracking not supported for FlightStream)
+     */
     @Override
     public long bytesRead() {
         return 0;
@@ -35,8 +44,10 @@ public class FlightStreamReader extends ArrowReader {
     protected void closeReadSource() throws IOException {
         try {
             flightStream.close();
+        } catch (IOException e) {
+            throw e;
         } catch (Exception e) {
-            throw new RuntimeException(e);
+            throw new IOException("Failed to close FlightStream", e);
         }
     }
 
