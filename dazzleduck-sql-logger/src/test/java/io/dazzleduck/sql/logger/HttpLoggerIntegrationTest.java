@@ -15,6 +15,7 @@ import java.util.Comparator;
 public class HttpLoggerIntegrationTest {
 
     private Thread serverThread;
+    String warehousePath = ConfigUtils.getWarehousePath(ConfigFactory.load().getConfig(ConfigUtils.CONFIG_PATH));
 
     @BeforeAll
     void startServers() throws Exception {
@@ -45,10 +46,6 @@ public class HttpLoggerIntegrationTest {
             logger.close();
         }
 
-            String warehousePath = ConfigUtils.getWarehousePath(
-                    ConfigFactory.load().getConfig(ConfigUtils.CONFIG_PATH)
-            );
-
             Path logFile = findFirstLogFile(warehousePath);
 
             TestUtils.isEqual(
@@ -63,6 +60,137 @@ public class HttpLoggerIntegrationTest {
                     """, "select level, logger, thread, message, applicationId, applicationName, host\n" +
                             "from read_parquet('%s') where message = 'Test 0'".formatted(logFile.toAbsolutePath())
             );
+    }
+
+    @Test
+    void testMultipleLogLevels() throws Exception {
+        ArrowSimpleLogger logger = new ArrowSimpleLogger("multi-level-test");
+
+        try {
+            logger.trace("Trace message");
+            logger.debug("Debug message");
+            logger.info("Info message");
+            logger.warn("Warning message");
+            logger.error("Error message");
+        } finally {
+            logger.close();
+        }
+
+        // Verify all levels are persisted correctly
+        Path logFile = findFirstLogFile(warehousePath);
+        TestUtils.isEqual(
+                "select 5 as count",
+                "select count(*) as count from read_parquet('%s') where logger = 'multi-level-test'"
+                        .formatted(logFile.toAbsolutePath())
+        );
+    }
+
+    @Test
+    void testExceptionLogging() throws Exception {
+        ArrowSimpleLogger logger = new ArrowSimpleLogger("exception-test");
+
+        try {
+            Exception ex = new RuntimeException("Test exception");
+            logger.error("Error occurred", ex);
+        } finally {
+            logger.close();
+        }
+
+        Path logFile = findFirstLogFile(warehousePath);
+        // Verify stack trace is included in message
+        TestUtils.isEqual(
+                "select true as has_stacktrace",
+                "select message like '%RuntimeException%' and message like '%Test exception%' as has_stacktrace " +
+                        "from read_parquet('%s') where logger = 'exception-test'".formatted(logFile.toAbsolutePath())
+        );
+    }
+
+    @Test
+    void testHighVolumeBatching() throws Exception {
+        ArrowSimpleLogger logger = new ArrowSimpleLogger("batch-test");
+
+        try {
+            for (int i = 0; i < 1000; i++) {
+                logger.info("Batch message {}", i);
+            }
+        } finally {
+            logger.close();
+        }
+
+        Path logFile = findFirstLogFile(warehousePath);
+        TestUtils.isEqual(
+                "select 1000 as count",
+                "select count(*) as count from read_parquet('%s') where logger = 'batch-test'"
+                        .formatted(logFile.toAbsolutePath())
+        );
+    }
+
+    @Test
+    void testEmptyAndNullMessages() throws Exception {
+        ArrowSimpleLogger logger = new ArrowSimpleLogger("empty-test");
+
+        try {
+            logger.info("");
+            logger.info(null);
+        } finally {
+            logger.close();
+        }
+
+        // Should not throw exceptions
+    }
+
+    @Test
+    void testParameterizedMessages() throws Exception {
+        ArrowSimpleLogger logger = new ArrowSimpleLogger("param-test");
+
+        try {
+            logger.info("User {} logged in from {}", "john.doe", "192.168.1.1");
+            logger.info("Order {} for customer {} total: {}", 12345, "jane", 99.99);
+        } finally {
+            logger.close();
+        }
+
+        String warehousePath = ConfigUtils.getWarehousePath(
+                ConfigFactory.load().getConfig(ConfigUtils.CONFIG_PATH)
+        );
+
+        Path logFile = findFirstLogFile(warehousePath);
+        TestUtils.isEqual(
+                "select 'User john.doe logged in from 192.168.1.1' as message",
+                "select message from read_parquet('" + logFile.toAbsolutePath() +
+                        "') where logger = 'param-test' and message like 'User%'"
+        );
+    }
+
+    @Test
+    void testConcurrentLogging() throws Exception {
+        ArrowSimpleLogger logger = new ArrowSimpleLogger("concurrent-test");
+
+        try {
+            Thread[] threads = new Thread[5];
+            for (int t = 0; t < threads.length; t++) {
+                final int threadNum = t;
+                threads[t] = new Thread(() -> {
+                    for (int i = 0; i < 20; i++) {
+                        logger.info("Thread {} message {}", threadNum, i);
+                    }
+                });
+                threads[t].start();
+            }
+
+            for (Thread thread : threads) {
+                thread.join();
+            }
+        } finally {
+            logger.close();
+        }
+
+        Path logFile = findFirstLogFile(warehousePath);
+        TestUtils.isEqual(
+                "select 100 as count",
+                "select count(*) as count from read_parquet('%s') where logger = 'concurrent-test'"
+                        .formatted(logFile.toAbsolutePath())
+        );
     }
 
     @AfterAll
