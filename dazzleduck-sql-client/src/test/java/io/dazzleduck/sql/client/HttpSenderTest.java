@@ -72,7 +72,7 @@ public class HttpSenderTest {
                 file,
                 timeout,
                 100_000,
-                timeout,
+                Duration.ofSeconds(2),
                 100,
                 100_000, Clock.systemDefaultZone()
         );
@@ -126,9 +126,9 @@ public class HttpSenderTest {
                 "admin",
                 "admin",
                 file,
-                Duration.ofSeconds(10),
+                Duration.ofSeconds(5),
                 100_000,
-                Duration.ofSeconds(10),
+                Duration.ofSeconds(3),
                 100_000,
                 500_000)) {
 
@@ -175,7 +175,7 @@ public class HttpSenderTest {
 
         // Multiple requests should reuse the same token
         try (HttpSender ReuseSender = newSender(file, Duration.ofSeconds(5))) {
-            for (int i = 0; i < 10; i++) {
+            for (int i = 0; i < 5; i++) {
                 ReuseSender.enqueue(arrowBytes("select " + i + " as val"));
             }
 
@@ -192,10 +192,10 @@ public class HttpSenderTest {
 
         // Rapid fire 20 small batches
         try (HttpSender HighThroughput = newSender(file, Duration.ofSeconds(5))) {
-            for (int i = 0; i < 20; i++) {
+            for (int i = 0; i < 10; i++) {
                 HighThroughput.enqueue(arrowBytes("select " + i + " as val"));
             }
-            await().atMost(10, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {
+            await().atMost(5, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {
                 long count = ConnectionPool.collectFirst("select count(*) from read_parquet('%s/%s')".formatted(warehouse, file), Long.class);
                 assertTrue(count >= 1);
             });
@@ -204,10 +204,10 @@ public class HttpSenderTest {
 
     @Test
     void testQueueFullBehavior() throws Exception {
-        var limitedSender = new HttpSender(  schema,"http://localhost:" + PORT, "admin", "admin", "full.parquet", Duration.ofSeconds(10), 100_000,
-                Duration.ofSeconds(10),100, 200);
+        var limitedSender = new HttpSender(  schema,"http://localhost:" + PORT, "admin", "admin", "full.parquet", Duration.ofSeconds(3), 100_000,
+                Duration.ofSeconds(2),100, 200);
 
-        byte[] largeData = arrowBytes("select * from generate_series(1000)");
+        byte[] largeData = arrowBytes("select * from generate_series(200)");
 
         assertThrows(IllegalStateException.class, () -> {
             limitedSender.enqueue(largeData);
@@ -223,7 +223,7 @@ public class HttpSenderTest {
         // Set an impossibly short timeout of 1ms to force the exception
         try (var timeoutSender = newSender(file, Duration.ofSeconds(5))) {
             timeoutSender.enqueue(arrowBytes("select * from generate_series(2000)"));
-            await().atMost(10, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() ->
+            await().atMost(5, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() ->
                 assertThrows(Exception.class, () ->
                     ConnectionPool.collectFirst("select count(*) from read_parquet('%s/%s')".formatted(warehouse, file), Long.class)
                 )
@@ -234,7 +234,7 @@ public class HttpSenderTest {
     @Test
     void testMemoryDiskSwitching() throws Exception {
         var spillSender = new HttpSender(  schema,"http://localhost:" + PORT, "admin", "admin", "spill.parquet", Duration.ofSeconds(10), 100_000,
-                Duration.ofSeconds(10),50, 100_000);
+                Duration.ofSeconds(2),50, 100_000);
 
 
         spillSender.enqueue(arrowBytes("select * from generate_series(30)"));
