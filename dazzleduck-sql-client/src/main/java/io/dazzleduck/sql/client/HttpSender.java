@@ -19,6 +19,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -275,8 +276,9 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
     }
 
     private HttpResponse<String> post(byte[] payload) throws IOException, InterruptedException {
+        String uuid = UUID.randomUUID().toString();
         HttpRequest req = HttpRequest.newBuilder()
-                .uri(URI.create(baseUrl + "/ingest?path=" + targetPath))
+                .uri(URI.create(baseUrl + "/ingest?path=" + targetPath + uuid ))
                 .timeout(timeout)
                 .POST(HttpRequest.BodyPublishers.ofByteArray(payload))
                 .header("Authorization", getJwt())

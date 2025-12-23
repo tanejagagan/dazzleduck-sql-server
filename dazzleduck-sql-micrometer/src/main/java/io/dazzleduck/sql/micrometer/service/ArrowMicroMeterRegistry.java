@@ -1,153 +1,158 @@
 package io.dazzleduck.sql.micrometer.service;
 
-import io.dazzleduck.sql.micrometer.config.ArrowRegistryConfig;
-import io.dazzleduck.sql.micrometer.server.ArrowReceiverServer;
-import io.dazzleduck.sql.micrometer.util.ArrowFileWriterUtil;
-import io.micrometer.core.instrument.Clock;
-import io.micrometer.core.instrument.Meter;
-import io.micrometer.core.instrument.config.NamingConvention;
+import io.dazzleduck.sql.common.ingestion.FlightSender;
+import io.dazzleduck.sql.common.types.JavaRow;
+import io.micrometer.core.instrument.*;
+import io.micrometer.core.instrument.distribution.DistributionStatisticConfig;
+import io.micrometer.core.instrument.distribution.HistogramSnapshot;
 import io.micrometer.core.instrument.step.StepMeterRegistry;
+import io.micrometer.core.instrument.step.StepRegistryConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.net.http.HttpClient;
 import java.time.Duration;
-import java.util.*;
-import java.util.concurrent.ThreadFactory;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
-/**
- * Custom Micrometer registry that exports metrics to Arrow format,
- * optionally writes to file, and posts over HTTP.
- */
-public class ArrowMicroMeterRegistry extends StepMeterRegistry {
-    private static final Logger log = LoggerFactory.getLogger(ArrowMicroMeterRegistry.class);
+public final class ArrowMicroMeterRegistry extends StepMeterRegistry implements AutoCloseable {
 
-    private final ArrowRegistryConfig arrowConfig;
-    private final String endpoint;
-    private final java.net.http.HttpClient httpClient;
-    private final Duration httpTimeout;
-    private final boolean testMode;
-    private final String outputPath;
-    private final ArrowReceiverServer receiver;
+    private static final Logger log =
+            LoggerFactory.getLogger(ArrowMicroMeterRegistry.class);
+
+    private final FlightSender sender;
     private final String applicationId;
     private final String applicationName;
     private final String host;
 
-    private ArrowMicroMeterRegistry(
-            ArrowRegistryConfig config,
+    public ArrowMicroMeterRegistry(
+            FlightSender sender,
             Clock clock,
-            ThreadFactory threadFactory,
-            HttpClient httpClient,
-            String endpoint,
-            Duration httpTimeout,
-            String outputPath,
-            boolean testMode,
-            ArrowReceiverServer receiver,
+            Duration step,
             String applicationId,
             String applicationName,
             String host
     ) {
-        super(config, clock);
-        this.arrowConfig = Objects.requireNonNull(config, "config");
-        this.endpoint = Objects.requireNonNull(endpoint, "endpoint");
-        this.httpClient = (httpClient != null) ? httpClient : HttpClient.newHttpClient();
-        this.httpTimeout = (httpTimeout != null) ? httpTimeout : Duration.ofSeconds(20);
-        this.outputPath = outputPath;
-        this.testMode = testMode;
-        this.receiver = receiver;
+        super(new StepRegistryConfig() {
+            @Override public String prefix() { return "arrow"; }
+            @Override public Duration step() { return step; }
+            @Override public String get(String key) { return null; }
+        }, clock);
+
+        this.sender = sender;
         this.applicationId = applicationId;
         this.applicationName = applicationName;
         this.host = host;
-        this.config().namingConvention(NamingConvention.dot);
-
-        if (!testMode) {
-            start(threadFactory);
-        }
     }
 
     @Override
     protected void publish() {
-        if (!arrowConfig.enabled()) return;
-
-        List<Meter> meters = new ArrayList<>(getMeters());
-        if (meters.isEmpty()) {
-            log.debug("No meters to publish");
-            return;
+        for (Meter meter : getMeters()) {
+            try {
+                sender.addRow(toRow(meter));
+            } catch (Exception e) {
+                log.warn("Failed to publish meter {}", meter.getId(), e);
+            }
         }
+    }
+
+    private JavaRow toRow(Meter meter) {
+        Meter.Id id = meter.getId();
+
+        Map<String, String> tags = new LinkedHashMap<>();
+        for (Tag t : id.getTags()) {
+            tags.put(t.getKey(), t.getValue());
+        }
+
+        double value = 0, min = 0, max = 0, mean = 0;
 
         try {
-            byte[] payload = ArrowFileWriterUtil.convertMetersToArrowBytes(meters, applicationId, applicationName, host);
+            switch (meter) {
+                case Counter c -> value = c.count();
+                case Gauge g -> value = g.value();
 
-            // Write to file if configured
-            if (outputPath != null && !outputPath.isBlank()) {
-                ArrowFileWriterUtil.writeMetersToFile(meters, outputPath, applicationId, applicationName, host);
-                log.info("Wrote {} meters to Arrow file: {}", meters.size(), outputPath);
-            }
-
-            // Optionally post to HTTP endpoint
-            if (endpoint != null && !endpoint.isBlank()) {
-                if (receiver != null && !testMode) {
-                    receiver.start();
+                case Timer t -> {
+                    HistogramSnapshot s = t.takeSnapshot();
+                    value = t.count();
+                    max = s.max(TimeUnit.SECONDS);
+                    mean = s.mean(TimeUnit.SECONDS);
                 }
 
-                int status = ArrowHttpPoster.postBytes(httpClient, payload, endpoint, httpTimeout);
-                log.info("Published {} meters to {} (HTTP {})", meters.size(), endpoint, status);
+                case DistributionSummary ds -> {
+                    value = ds.count();
+                    max = ds.max();
+                    mean = ds.mean();
+                }
 
-                if (receiver != null && !testMode) {
-                    receiver.stop(0);
+                case LongTaskTimer ltt -> {
+                    value = ltt.activeTasks();
+                    double total = ltt.duration(TimeUnit.SECONDS);
+                    max = total;
+                    if (value > 0) mean = total / value;
+                }
+
+                case FunctionCounter fc -> value = fc.count();
+
+                case FunctionTimer ft -> {
+                    value = ft.count();
+                    double total = ft.totalTime(TimeUnit.SECONDS);
+                    max = total;
+                    if (value > 0) mean = total / value;
+                }
+
+                default -> {
+                    double total = 0;
+                    int c = 0;
+                    for (Measurement m : meter.measure()) {
+                        total += m.getValue();
+                        c++;
+                    }
+                    if (c > 0) {
+                        value = total;
+                        mean = total / c;
+                    }
                 }
             }
-
         } catch (Exception e) {
-            log.error("Error publishing Arrow metrics", e);
+            log.debug("Metric evaluation error: {}", id.getName(), e);
         }
+
+        return new JavaRow(new Object[]{
+                id.getName(),
+                id.getType().name().toLowerCase(),
+                applicationId,
+                applicationName,
+                host,
+                tags,
+                value,
+                min,
+                max,
+                mean
+        });
     }
 
     @Override
     protected TimeUnit getBaseTimeUnit() {
         return TimeUnit.SECONDS;
     }
-
-    // -------- Builder ----------
-    public static class Builder {
-        private ArrowRegistryConfig config = (k) -> null;
-        private Clock clock = Clock.SYSTEM;
-        private ThreadFactory threadFactory = r -> {
-            Thread t = new Thread(r, "arrow-metrics-publisher");
-            t.setDaemon(true);
-            return t;
-        };
-        private java.net.http.HttpClient httpClient;
-        private String endpoint;
-        private Duration httpTimeout = Duration.ofSeconds(20);
-        private String outputPath;
-        private boolean testMode = false;
-        private ArrowReceiverServer receiver;
-        private String applicationId;
-        private String applicationName;
-        private String host;
-
-        public Builder config(ArrowRegistryConfig cfg) { this.config = cfg; return this; }
-        public Builder clock(Clock c) { this.clock = c; return this; }
-        public Builder threadFactory(ThreadFactory tf) { this.threadFactory = tf; return this; }
-        public Builder httpClient(java.net.http.HttpClient client) { this.httpClient = client; return this; }
-        public Builder endpoint(String endpoint) { this.endpoint = endpoint; return this; }
-        public Builder httpTimeout(Duration timeout) { this.httpTimeout = timeout; return this; }
-        public Builder outputPath(String path) { this.outputPath = path; return this; }
-        public Builder testMode(boolean t) { this.testMode = t; return this; }
-        public Builder receiver(ArrowReceiverServer receiver) { this.receiver = receiver; return this; }
-        public Builder applicationId(String id) { this.applicationId = id; return this; }
-        public Builder applicationName(String name) { this.applicationName = name; return this; }
-        public Builder host(String host) { this.host = host; return this; }
-
-        public ArrowMicroMeterRegistry build() {
-            if (endpoint == null) throw new IllegalStateException("endpoint is required");
-            return new ArrowMicroMeterRegistry(
-                    config, clock, threadFactory, httpClient,
-                    endpoint, httpTimeout, outputPath, testMode, receiver, applicationId,
-                    applicationName, host
-            );
+    @Override
+    public void close() {
+        try {
+            log.info("Closing ArrowMicroMeterRegistry");
+            super.close();          // stops scheduler & publish loop
+        } catch (Exception e) {
+            log.warn("Error while closing StepMeterRegistry", e);
         }
+
+        try {
+            sender.close();         // flush + shutdown HttpSender
+        } catch (Exception e) {
+            log.warn("Error while closing HttpSender", e);
+        }
+    }
+
+    @Override
+    protected DistributionStatisticConfig defaultHistogramConfig() {
+        return DistributionStatisticConfig.DEFAULT;
     }
 }

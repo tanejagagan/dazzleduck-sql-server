@@ -59,10 +59,9 @@
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>io.dazzleduck.sql</groupId>
-            <artifactId>dazzleduck-sql-micrometer</artifactId>
-            <version>0.0.13-SNAPSHOT</version>
-            <scope>compile</scope>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+            <version>1.12.7</version>
         </dependency>
     </dependencies>
 </project>
