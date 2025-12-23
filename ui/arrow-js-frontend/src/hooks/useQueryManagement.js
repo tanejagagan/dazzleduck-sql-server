@@ -11,6 +11,10 @@ export const useQueryManagement = (executeQuery, cancelQuery, isConnected, conne
     const [queryIds, setQueryIds] = useState({});
     const [cancellingQueries, setCancellingQueries] = useState({});
     const [isRunningAll, setIsRunningAll] = useState(false);
+    const [searchData, setSearchData] = useState([]);
+    const [searchLoading, setSearchLoading] = useState(false);
+    const [searchError, setSearchError] = useState("");
+    const [searchQuery, setSearchQuery] = useState("");
 
     const nextId = useRef(2);
     const queryIdCounter = useRef(1);
@@ -185,6 +189,36 @@ export const useQueryManagement = (executeQuery, cancelQuery, isConnected, conne
         setIsRunningAll(false);
     };
 
+    const runSearchQuery = async (query) => {
+        setSearchError("");
+        if (!isConnected) {
+            setSearchData([]);
+            setSearchError("Not connected — Connect first to search");
+            return;
+        }
+        if (!query?.trim()) {
+            setSearchData([]);
+            setSearchError("Enter a query to search");
+            return;
+        }
+        try {
+            setSearchLoading(true);
+            const { url } = connection;
+            const result = await executeQuery(url, query, 0, null, null);
+            const rows = Array.isArray(result?.data) ? result.data : [];
+            setSearchData(rows);
+
+            if (rows.length === 0) {
+                setSearchError("No results found");
+            }
+        } catch (err) {
+            setSearchData([]);
+            setSearchError(err?.message || "Search query failed");
+        } finally {
+            setSearchLoading(false);
+        }
+    };
+
     const clearRowLogs = (id) => {
         setResults((prev) => ({
             ...prev,
@@ -229,5 +263,11 @@ export const useQueryManagement = (executeQuery, cancelQuery, isConnected, conne
         clearRowLogs,
         resetRows,
         restoreRows,
+        searchData,
+        searchLoading,
+        searchError,
+        searchQuery,
+        setSearchQuery,
+        runSearchQuery,
     };
 };
