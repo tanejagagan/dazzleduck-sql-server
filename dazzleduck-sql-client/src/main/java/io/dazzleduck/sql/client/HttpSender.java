@@ -64,7 +64,7 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
             String username,
             String password,
             String targetPath,
-            Duration timeout,
+            Duration httpClientTimeout,
             long minBatchSize,
             Duration maxSendInterval,
             long maxInMemorySize,
@@ -78,7 +78,7 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
         Objects.requireNonNull(username, "username must not be null");
         Objects.requireNonNull(password, "password must not be null");
         Objects.requireNonNull(targetPath, "targetPath must not be null");
-        Objects.requireNonNull(timeout, "timeout must not be null");
+        Objects.requireNonNull(httpClientTimeout, "httpClientTimeout must not be null");
 
         if (baseUrl.trim().isEmpty()) {
             throw new IllegalArgumentException("baseUrl must not be empty");
@@ -89,15 +89,15 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
         if (targetPath.trim().isEmpty()) {
             throw new IllegalArgumentException("targetPath must not be empty");
         }
-        if (timeout.isNegative() || timeout.isZero()) {
-            throw new IllegalArgumentException("timeout must be positive");
+        if (httpClientTimeout.isNegative() || httpClientTimeout.isZero()) {
+            throw new IllegalArgumentException("httpClientTimeout must be positive");
         }
 
         this.baseUrl = baseUrl;
         this.username = username;
         this.password = password;
         this.targetPath = targetPath;
-        this.timeout = timeout;
+        this.timeout = httpClientTimeout;
         this.maxMem = maxInMemorySize;
         this.maxDisk = maxOnDiskSize;
 
@@ -110,11 +110,11 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
 
         this.client = HttpClient.newBuilder()
                 .executor(executorService)
-                .connectTimeout(timeout)
+                .connectTimeout(httpClientTimeout)
                 .build();
 
-        logger.info("Initializing HttpSender with baseUrl={}, targetPath={}, timeout={}",
-                    baseUrl, targetPath, timeout);
+        logger.info("Initializing HttpSender with baseUrl={}, targetPath={}, httpClientTimeout={}",
+                    baseUrl, targetPath, httpClientTimeout);
     }
 
     @Override
