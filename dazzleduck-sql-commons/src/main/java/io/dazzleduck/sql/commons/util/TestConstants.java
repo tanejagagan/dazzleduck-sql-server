@@ -1,6 +1,8 @@
 package io.dazzleduck.sql.commons.util;
 
 public class TestConstants {
+
+    public static final String SUPPORTED_HIVE_PATH = "'example/hive_table";
     public static final String SUPPORTED_HIVE_PATH_QUERY = "FROM (FROM (VALUES(NULL::DATE, NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR)) t( dt, p, key, value) \n" +
             "WHERE false\n" +
             "UNION ALL BY NAME\n" +

@@ -29,9 +29,12 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.*;
-import java.util.concurrent.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static io.dazzleduck.sql.common.Headers.*;
 import static org.junit.jupiter.api.Assertions.*;
@@ -40,11 +43,11 @@ public class HttpServerTest {
     static HttpClient client;
     static ObjectMapper objectMapper = new ObjectMapper();
 
-
     private static String warehousePath;
 
     public static final int TEST_PORT1 = 8090;
     public static final int TEST_PORT2 = 8091;
+    public static final int TEST_PLANNING_PORT = 8092;
 
     private static final String LONG_RUNNING_QUERY = "with t as " +
             "(select len(split(concat('abcdefghijklmnopqrstuvwxyz:', generate_series), ':')) as len  from generate_series(1, 1000000000) )" +
@@ -55,11 +58,21 @@ public class HttpServerTest {
         warehousePath = "/tmp/" + UUID.randomUUID();
         new File(warehousePath).mkdir();
         String[] args1 = {"--conf", "dazzleduck_server.http.port=%s".formatted(TEST_PORT1),
-                "--conf", "dazzleduck_server.%s=%s".formatted(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath)};
+                "--conf", "dazzleduck_server.%s=%s".formatted(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath),
+                "--conf", "dazzleduck_server.ingestion.max_delay_ms=500"};
         Main.main(args1);
         client = HttpClient.newHttpClient();
-        String[] args = {"--conf", "dazzleduck_server.http.port=%s".formatted(TEST_PORT2), "--conf", "dazzleduck_server.http.%s=jwt".formatted(ConfigUtils.AUTHENTICATION_KEY), "--conf", "dazzleduck_server.%s=%s".formatted(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath) };
-        Main.main(args);
+        String[] args2 = {"--conf", "dazzleduck_server.http.port=%s".formatted(TEST_PORT2),
+                "--conf", "dazzleduck_server.http.%s=jwt".formatted(ConfigUtils.AUTHENTICATION_KEY),
+                "--conf", "dazzleduck_server.%s=%s".formatted(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath),
+                "--conf", "dazzleduck_server.ingestion.max_delay_ms=500"};
+        Main.main(args2);
+
+        String[] args3 = {"--conf", "dazzleduck_server.http.port=%s".formatted(TEST_PLANNING_PORT),
+                "--conf", "dazzleduck_server.%s=%s".formatted(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath),
+                "--conf", "dazzleduck_server.ingestion.max_delay_ms=500",
+                "--conf", "dazzleduck_server.access_mode=RESTRICTED"};
+        Main.main(args3);
         String[] sqls = {"INSTALL arrow FROM community", "LOAD arrow"};
         ConnectionPool.executeBatch(sqls);
     }
@@ -162,47 +175,76 @@ public class HttpServerTest {
         ConnectionPool.executeBatch(sqls);
         ConnectionPool.execute(httpAuthSql);
         ConnectionPool.execute(viewSql);
+        ConnectionPool.execute("DROP SECRET http_auth");
     }
 
     @Test
     public void testLogin() throws IOException, InterruptedException {
-        var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/login".formatted(TEST_PORT1)))
+        getJWTToken(TEST_PORT1);
+    }
+
+    public String getJWTToken(int port) throws IOException, InterruptedException {
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/login".formatted(port)))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(objectMapper.writeValueAsBytes(new LoginRequest("admin", "admin", Map.of("org", "123")))))
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
         var inputStreamResponse = client.send(request, HttpResponse.BodyHandlers.ofString());
         assertEquals(200, inputStreamResponse.statusCode());
-        System.out.println(inputStreamResponse.body());
+        var object = objectMapper.readValue(inputStreamResponse.body(), LoginResponse.class);
+        return object.accessToken();
     }
 
     @ParameterizedTest
     @ValueSource(strings = { TestConstants.SUPPORTED_HIVE_PATH_QUERY, TestConstants.SUPPORTED_AGGREGATED_HIVE_PATH_QUERY})
     public void testPlanning(String query) throws IOException, InterruptedException {
+        var loginResponse = login(TEST_PLANNING_PORT, new LoginRequest("admin", "admin",
+                Map.of(HEADER_PATH, TestConstants.SUPPORTED_HIVE_PATH, HEADER_FUNCTION, "read_parquet")));
+        String auth = loginResponse.tokenType() + " " + loginResponse.accessToken();
         var body = objectMapper.writeValueAsBytes(new QueryRequest(query));
-        var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/plan".formatted(TEST_PORT1)))
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/plan".formatted(TEST_PLANNING_PORT)))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
-                .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
+                .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values())
+                .header(HeaderNames.AUTHORIZATION.defaultCase(), auth)
+                .build();
         var inputStreamResponse = client.send(request, HttpResponse.BodyHandlers.ofString());
+        System.out.println(inputStreamResponse.body());
+        System.out.println(inputStreamResponse);
         var res = objectMapper.readValue(inputStreamResponse.body(), StatementHandle[].class);
         assertEquals(1, res.length);
     }
 
     @Test
-    public void testPrintPlaning() throws SQLException {
-        var query = "%s where p='1'".formatted(TestConstants.SUPPORTED_HIVE_PATH_QUERY);
-        var request = "http://localhost:%s/plan?%s=1&q=".formatted(TEST_PORT1, HEADER_SPLIT_SIZE);
-        var toExecute = "SELECT splitSize FROM read_json(concat('%s', url_encode('%s')))".formatted(request, query.replaceAll("'", "''"));
-        ConnectionPool.printResult(toExecute);
-        assertEquals(254, ConnectionPool.collectFirst(toExecute, Long.class));
+    public void testPrintPlaning() throws SQLException, IOException, InterruptedException {
+        var loginResponse = login(TEST_PLANNING_PORT, new LoginRequest("admin", "admin",
+                Map.of(HEADER_PATH, TestConstants.SUPPORTED_HIVE_PATH, HEADER_FUNCTION, "read_parquet")));
+        var secretQuery = """
+                CREATE SECRET jwt_secret (
+                    TYPE http,
+                    BEARER_TOKEN '%s'
+                )""".formatted(loginResponse.accessToken());
+        try (Connection connection  = ConnectionPool.getConnection();
+        RootAllocator allocator = new RootAllocator(Long.MAX_VALUE)) {
+            ConnectionPool.execute(connection, secretQuery);
+            var query = "%s where p='1'".formatted(TestConstants.SUPPORTED_HIVE_PATH_QUERY);
+            var request = "http://localhost:%s/plan?%s=1&q=".formatted(TEST_PLANNING_PORT, HEADER_SPLIT_SIZE);
+            var toExecute = "SELECT splitSize FROM read_json(concat('%s', url_encode('%s')))".formatted(request, query.replaceAll("'", "''"));
+            ConnectionPool.printResult(connection, allocator, toExecute);
+            assertEquals(254, ConnectionPool.collectFirst(toExecute, Long.class));
+            ConnectionPool.execute(connection, "DROP SECRET jwt_secret");
+        }
     }
 
 
     @ParameterizedTest
     @ValueSource(strings = { TestConstants.SUPPORTED_HIVE_PATH_QUERY, TestConstants.SUPPORTED_AGGREGATED_HIVE_PATH_QUERY})
     public void testPlanningWithSmallPartition(String query) throws IOException, InterruptedException {
+        var loginResponse = login(TEST_PLANNING_PORT, new LoginRequest("admin", "admin",
+                Map.of(HEADER_PATH, TestConstants.SUPPORTED_HIVE_PATH, HEADER_FUNCTION, "read_parquet")));
+        String auth = loginResponse.tokenType() + " " + loginResponse.accessToken();
         var body = objectMapper.writeValueAsBytes(new QueryRequest(query));
-        var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/plan".formatted(TEST_PORT1)))
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/plan".formatted(TEST_PLANNING_PORT)))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                 .header(HEADER_SPLIT_SIZE, "1")
+                .header(HeaderNames.AUTHORIZATION.defaultCase(), auth)
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
         var inputStreamResponse = client.send(request, HttpResponse.BodyHandlers.ofString());
         var res = objectMapper.readValue(inputStreamResponse.body(), StatementHandle[].class);
@@ -211,11 +253,15 @@ public class HttpServerTest {
 
     @Test
     public void testPlanningWithFilter() throws IOException, InterruptedException {
+        var loginResponse = login(TEST_PLANNING_PORT, new LoginRequest("admin", "admin",
+                Map.of(HEADER_PATH, TestConstants.SUPPORTED_HIVE_PATH, HEADER_FUNCTION, "read_parquet")));
+        String auth = loginResponse.tokenType() + " " + loginResponse.accessToken();
         var filter = "WHERE dt = '2025-01-01'";
         var body = objectMapper.writeValueAsBytes(new QueryRequest(TestConstants.SUPPORTED_HIVE_PATH_QUERY + filter));
-        var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/plan".formatted(TEST_PORT1)))
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/plan".formatted(TEST_PLANNING_PORT)))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                 .header(HEADER_SPLIT_SIZE, "1")
+                .header(HeaderNames.AUTHORIZATION.defaultCase(), auth)
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
         var inputStreamResponse = client.send(request, HttpResponse.BodyHandlers.ofString());
         var res = objectMapper.readValue(inputStreamResponse.body(), StatementHandle[].class);
@@ -224,11 +270,15 @@ public class HttpServerTest {
 
     @Test
     public void testPlanningWithError() throws IOException, InterruptedException {
+        var loginResponse = login(TEST_PLANNING_PORT, new LoginRequest("admin", "admin",
+                Map.of(HEADER_PATH, TestConstants.SUPPORTED_HIVE_PATH, HEADER_FUNCTION, "read_parquet")));
+        String auth = loginResponse.tokenType() + " " + loginResponse.accessToken();
         var errorFilter = "WHEREdt = '2025-01-01'";
         var body = objectMapper.writeValueAsBytes(new QueryRequest(TestConstants.SUPPORTED_HIVE_PATH_QUERY + errorFilter));
-        var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/plan".formatted(TEST_PORT1)))
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/plan".formatted(TEST_PLANNING_PORT)))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                 .header(HEADER_SPLIT_SIZE, "1")
+                .header(HeaderNames.AUTHORIZATION.defaultCase(), auth)
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
         var inputStreamResponse = client.send(request, HttpResponse.BodyHandlers.ofString());
         assertEquals(500, inputStreamResponse.statusCode());
@@ -381,7 +431,7 @@ public class HttpServerTest {
 
     @Test
     public void testCancelWithGet() throws Exception {
-        var jwt = login();
+        var jwt = login(TEST_PORT2);
         String auth = jwt.tokenType() + " " + jwt.accessToken();
 
         String q = URLEncoder.encode(LONG_RUNNING_QUERY, StandardCharsets.UTF_8);
@@ -416,7 +466,7 @@ public class HttpServerTest {
 
     @Test
     public void testCancelWithPost() throws Exception {
-        var jwt = login();
+        var jwt = login(TEST_PORT2);
         String auth = jwt.tokenType() + " " + jwt.accessToken();
 
         var body = objectMapper.writeValueAsBytes(new QueryRequest(LONG_RUNNING_QUERY, 12L));
@@ -457,7 +507,7 @@ public class HttpServerTest {
      * By the time cancel is requested the query is already completed
      */
     public void testCancelWithPlanning() throws Exception {
-        var jwt = login();
+        var jwt = login(TEST_PLANNING_PORT);
         String auth = jwt.tokenType() + " " + jwt.accessToken();
         var planBody = objectMapper.writeValueAsBytes(new QueryRequest(TestConstants.SUPPORTED_HIVE_PATH_QUERY));
         var planReq = HttpRequest.newBuilder(URI.create("http://localhost:%s/plan".formatted(TEST_PORT2)))
@@ -503,7 +553,7 @@ public class HttpServerTest {
     @Test
     public void testIngestionWithJwt() throws Exception {
         // 1. Login to get JWT (your helper method)
-        var jwt = login();
+        var jwt = login(TEST_PORT2);
         String auth = jwt.tokenType() + " " + jwt.accessToken();
 
         // 2. Build Arrow payload
@@ -544,9 +594,13 @@ public class HttpServerTest {
     }
 
 
-    private LoginResponse login() throws IOException, InterruptedException {
-        var loginRequest = HttpRequest.newBuilder(URI.create("http://localhost:%s/login".formatted(TEST_PORT2)))
-                .POST(HttpRequest.BodyPublishers.ofByteArray(objectMapper.writeValueAsBytes(new LoginRequest("admin", "admin"))))
+    private LoginResponse login(int port) throws IOException, InterruptedException {
+        return login(port, new LoginRequest("admin", "admin"));
+    }
+
+    private LoginResponse login(int port, LoginRequest loginRequestPayload) throws IOException, InterruptedException {
+        var loginRequest = HttpRequest.newBuilder(URI.create("http://localhost:%s/login".formatted(port)))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(objectMapper.writeValueAsBytes(loginRequestPayload)))
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values())
                 .build();
         var jwtResponse = client.send(loginRequest, HttpResponse.BodyHandlers.ofString());

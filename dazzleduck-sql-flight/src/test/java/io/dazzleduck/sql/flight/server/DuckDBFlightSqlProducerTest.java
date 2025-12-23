@@ -109,7 +109,7 @@ public class DuckDBFlightSqlProducerTest {
                 Executors.newSingleThreadScheduledExecutor(),
                 Duration.ofMinutes(2),
                 Clock.systemDefaultZone(),
-                recorder, QueryOptimizer.NOOP_QUERY_OPTIMIZER);
+                recorder, QueryOptimizer.NOOP_QUERY_OPTIMIZER, DuckDBFlightSqlProducer.DEFAULT_INGESTION_CONFIG);
 
         flightServer = FlightServer.builder(
                         serverAllocator,

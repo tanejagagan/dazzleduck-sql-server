@@ -10,6 +10,7 @@ import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactoryProvider;
 import io.dazzleduck.sql.flight.optimizer.QueryOptimizerProvider;
 import io.dazzleduck.sql.flight.server.DuckDBFlightSqlProducer;
+import io.dazzleduck.sql.flight.server.IngestionConfig;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
 import io.dazzleduck.sql.login.LoginService;
 import io.dazzleduck.sql.login.ProxyLoginService;
@@ -81,8 +82,9 @@ public class Main {
         var factory = provider.getPostIngestionTaskFactory();
         QueryOptimizerProvider optimizer = ConfigBasedProvider.load(appConfig, QueryOptimizerProvider.QUERY_OPTIMIZER_PROVIDER_CONFIG_PREFIX,
                 QueryOptimizerProvider.NOOPOptimizerProvider);
+        var ingestionConfig = IngestionConfig.fromConfig(appConfig.getConfig(IngestionConfig.KEY));
         var producer = DuckDBFlightSqlProducer.createProducer(Location.forGrpcInsecure(host, port), producerId,
-                base64SecretKey, allocator, warehousePath, accessMode, factory, optimizer.getOptimizer());
+                base64SecretKey, allocator, warehousePath, accessMode, factory, optimizer.getOptimizer(), ingestionConfig);
         HttpService loginService;
         if (appConfig.hasPath(AuthUtils.PROXY_LOGIN_URL_KEY)) {
             var proxyUrl = appConfig.getString(AuthUtils.PROXY_LOGIN_URL_KEY);
@@ -102,8 +104,8 @@ public class Main {
                             .register("/cancel", new CancelService(producer, accessMode))
                             .register("/ingest", new IngestionService(producer, warehousePath, allocator))
                             .register("/ui", new UIService(producer));
-                    if ("jwt".equals(auth)) {
-                        b.addFilter(new JwtAuthenticationFilter(List.of("/query", "/plan", "/ingest", "/cancel"), appConfig, secretKey));
+                    if ("jwt".equals(auth) || accessMode == AccessMode.RESTRICTED) {
+                        b.addFilter(new JwtAuthenticationFilter(List.of("/query", "/plan", "/ingest", "/cancel", "/ui"), appConfig, secretKey));
                     }
                 })
                 .port(port)
