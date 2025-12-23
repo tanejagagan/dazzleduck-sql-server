@@ -3,14 +3,10 @@ package io.dazzleduck.sql.http.server;
 
 
 import com.typesafe.config.ConfigFactory;
-import io.dazzleduck.sql.common.ConfigBasedProvider;
 import io.dazzleduck.sql.common.auth.Validator;
 import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
-import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactoryProvider;
-import io.dazzleduck.sql.flight.optimizer.QueryOptimizerProvider;
 import io.dazzleduck.sql.flight.server.DuckDBFlightSqlProducer;
-import io.dazzleduck.sql.flight.server.IngestionConfig;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
 import io.dazzleduck.sql.login.LoginService;
 import io.dazzleduck.sql.login.ProxyLoginService;
@@ -75,16 +71,16 @@ public class Main {
                         .build())
                 .build();
 
-        var producerId = UUID.randomUUID().toString();
-        PostIngestionTaskFactoryProvider provider = ConfigBasedProvider.load(appConfig,
-                PostIngestionTaskFactoryProvider.POST_INGESTION_CONFIG_PREFIX,
-                PostIngestionTaskFactoryProvider.NO_OP);
-        var factory = provider.getPostIngestionTaskFactory();
-        QueryOptimizerProvider optimizer = ConfigBasedProvider.load(appConfig, QueryOptimizerProvider.QUERY_OPTIMIZER_PROVIDER_CONFIG_PREFIX,
-                QueryOptimizerProvider.NOOPOptimizerProvider);
-        var ingestionConfig = IngestionConfig.fromConfig(appConfig.getConfig(IngestionConfig.KEY));
-        var producer = DuckDBFlightSqlProducer.createProducer(Location.forGrpcInsecure(host, port), producerId,
-                base64SecretKey, allocator, warehousePath, accessMode, factory, optimizer.getOptimizer(), ingestionConfig);
+        // Create producer using factory with custom settings for HTTP server
+        var producer = io.dazzleduck.sql.flight.server.FlightSqlProducerFactory.builder(appConfig)
+                .withLocation(Location.forGrpcInsecure(host, port))
+                .withProducerId(UUID.randomUUID().toString())
+                .withSecretKey(base64SecretKey)
+                .withAllocator(allocator)
+                .withWarehousePath(warehousePath)
+                .withTempWriteDir(tempWriteDir)
+                .withAccessMode(accessMode)
+                .build();
         HttpService loginService;
         if (appConfig.hasPath(AuthUtils.PROXY_LOGIN_URL_KEY)) {
             var proxyUrl = appConfig.getString(AuthUtils.PROXY_LOGIN_URL_KEY);
