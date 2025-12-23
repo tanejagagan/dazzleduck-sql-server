@@ -34,16 +34,6 @@ public class Main {
         return createServer(config);
     }
     public static FlightServer createServer(Config config) throws Exception {
-        AdvanceJWTTokenAuthenticator authenticator = AuthUtils.getAuthenticator(config);
-        boolean useEncryption = config.getBoolean("flight_sql.use_encryption");
-        String keystoreLocation = config.getString("keystore");
-        String serverCertLocation = config.getString("server_cert");
-        String warehousePath = ConfigUtils.getWarehousePath(config);
-
-        if(!checkWarehousePath(warehousePath)) {
-            System.out.printf("Warehouse dir does not exist %s. Create the dir to proceed", warehousePath);
-        }
-
         // Execute startup script if provided
         StartupScriptProvider startupScriptProvider = ConfigBasedProvider.load(config,
                 StartupScriptProvider.STARTUP_SCRIPT_CONFIG_PREFIX,
@@ -57,6 +47,30 @@ public class Main {
         DuckDBFlightSqlProducer producer = FlightSqlProducerFactory.builder(config)
                 .withAllocator(allocator)
                 .build();
+
+        return createServer(config, producer, allocator);
+    }
+
+    /**
+     * Creates a FlightServer with a pre-existing producer instance.
+     * This allows sharing the same producer between multiple servers.
+     *
+     * @param config the configuration
+     * @param producer the FlightSqlProducer instance to use
+     * @param allocator the BufferAllocator associated with the producer
+     * @return a configured FlightServer
+     * @throws Exception if server creation fails
+     */
+    public static FlightServer createServer(Config config, DuckDBFlightSqlProducer producer, BufferAllocator allocator) throws Exception {
+        AdvanceJWTTokenAuthenticator authenticator = AuthUtils.getAuthenticator(config);
+        boolean useEncryption = config.getBoolean("flight_sql.use_encryption");
+        String keystoreLocation = config.getString("keystore");
+        String serverCertLocation = config.getString("server_cert");
+        String warehousePath = ConfigUtils.getWarehousePath(config);
+
+        if(!checkWarehousePath(warehousePath)) {
+            System.out.printf("Warehouse dir does not exist %s. Create the dir to proceed", warehousePath);
+        }
 
         var certStream = getInputStreamForResource(serverCertLocation);
         var keyStream = getInputStreamForResource(keystoreLocation);
@@ -73,6 +87,29 @@ public class Main {
 
     public static void start(Config config) throws Exception {
         var flightServer = createServer(config);
+        Thread severThread = new Thread(() -> {
+            try {
+                flightServer.start();
+                System.out.println("Flight Server is up: Listening on URI: " + flightServer.getLocation().getUri());
+                flightServer.awaitTermination();
+            } catch (IOException | InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        });
+        severThread.start();
+    }
+
+    /**
+     * Starts the Flight server with a pre-existing producer instance.
+     * This allows sharing the same producer between multiple servers.
+     *
+     * @param config the configuration
+     * @param producer the FlightSqlProducer instance to use
+     * @param allocator the BufferAllocator associated with the producer
+     * @throws Exception if server startup fails
+     */
+    public static void start(Config config, DuckDBFlightSqlProducer producer, BufferAllocator allocator) throws Exception {
+        var flightServer = createServer(config, producer, allocator);
         Thread severThread = new Thread(() -> {
             try {
                 flightServer.start();

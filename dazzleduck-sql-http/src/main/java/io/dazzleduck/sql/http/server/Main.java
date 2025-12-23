@@ -46,30 +46,16 @@ public class Main {
     }
 
     public static void start(com.typesafe.config.Config appConfig) throws Exception {
-        LogConfig.configureRuntime();
-        Config helidonConfig = Config.create();
-        var httpConfig =  appConfig.getConfig("http");
-        var port = httpConfig.getInt(ConfigUtils.PORT_KEY);
-        var host = httpConfig.getString(ConfigUtils.HOST_KEY);
-        var auth = httpConfig.hasPath(ConfigUtils.AUTHENTICATION_KEY) ? httpConfig.getString(ConfigUtils.AUTHENTICATION_KEY) : "none";
+        // Create allocator and producer
+        var allocator = new RootAllocator();
         String warehousePath = ConfigUtils.getWarehousePath(appConfig);
         String base64SecretKey = appConfig.getString(ConfigUtils.SECRET_KEY_KEY);
-        var secretKey = Validator.fromBase64String(base64SecretKey);
-        var allocator = new RootAllocator();
-        String location = "http://%s:%s".formatted(host, port);
         var tempWriteDir = DuckDBFlightSqlProducer.getTempWriteDir(appConfig);
         AccessMode accessMode = DuckDBFlightSqlProducer.getAccessMode(appConfig);
-        if (Files.exists(tempWriteDir)) {
-            Files.createDirectories(tempWriteDir);
-        }
-        var jwtExpiration = appConfig.getDuration("jwt_token.expiration");
-        var cors = CorsSupport.builder()
-                .addCrossOrigin(CrossOriginConfig.builder()
-                        .allowOrigins(appConfig.hasPath("allow-origin") ? appConfig.getString("allow-origin") : "*")
-                        .allowMethods("GET", "POST")
-                        .allowHeaders("Content-Type", "Authorization")
-                        .build())
-                .build();
+
+        var httpConfig = appConfig.getConfig("http");
+        var port = httpConfig.getInt(ConfigUtils.PORT_KEY);
+        var host = httpConfig.getString(ConfigUtils.HOST_KEY);
 
         // Create producer using factory with custom settings for HTTP server
         var producer = io.dazzleduck.sql.flight.server.FlightSqlProducerFactory.builder(appConfig)
@@ -80,6 +66,39 @@ public class Main {
                 .withWarehousePath(warehousePath)
                 .withTempWriteDir(tempWriteDir)
                 .withAccessMode(accessMode)
+                .build();
+
+        start(appConfig, producer, allocator);
+    }
+
+    /**
+     * Starts the HTTP server with a pre-existing producer instance.
+     * This allows sharing the same producer between multiple servers.
+     *
+     * @param appConfig the configuration
+     * @param producer the FlightSqlProducer instance to use
+     * @param allocator the BufferAllocator associated with the producer
+     * @throws Exception if server startup fails
+     */
+    public static void start(com.typesafe.config.Config appConfig, DuckDBFlightSqlProducer producer, org.apache.arrow.memory.BufferAllocator allocator) throws Exception {
+        LogConfig.configureRuntime();
+        Config helidonConfig = Config.create();
+        var httpConfig =  appConfig.getConfig("http");
+        var port = httpConfig.getInt(ConfigUtils.PORT_KEY);
+        var host = httpConfig.getString(ConfigUtils.HOST_KEY);
+        var auth = httpConfig.hasPath(ConfigUtils.AUTHENTICATION_KEY) ? httpConfig.getString(ConfigUtils.AUTHENTICATION_KEY) : "none";
+        String warehousePath = ConfigUtils.getWarehousePath(appConfig);
+        String base64SecretKey = appConfig.getString(ConfigUtils.SECRET_KEY_KEY);
+        var secretKey = Validator.fromBase64String(base64SecretKey);
+        String location = "http://%s:%s".formatted(host, port);
+        AccessMode accessMode = DuckDBFlightSqlProducer.getAccessMode(appConfig);
+        var jwtExpiration = appConfig.getDuration("jwt_token.expiration");
+        var cors = CorsSupport.builder()
+                .addCrossOrigin(CrossOriginConfig.builder()
+                        .allowOrigins(appConfig.hasPath("allow-origin") ? appConfig.getString("allow-origin") : "*")
+                        .allowMethods("GET", "POST")
+                        .allowHeaders("Content-Type", "Authorization")
+                        .build())
                 .build();
         HttpService loginService;
         if (appConfig.hasPath(AuthUtils.PROXY_LOGIN_URL_KEY)) {
