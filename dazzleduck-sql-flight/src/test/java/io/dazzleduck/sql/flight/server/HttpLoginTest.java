@@ -39,7 +39,7 @@ public class HttpLoginTest {
         Thread.sleep(100);
         var confOverload = new String[]{"--conf", "dazzleduck_server.flight_sql.port=55569",
                 "--conf", "dazzleduck_server.login_url=\"http://localhost:%s/login\"".formatted(HTTP_PORT),
-                "--conf", "dazzleduck_server.use_encryption=false",
+                "--conf", "dazzleduck_server.flight_sql.use_encryption=false",
                 "--conf", "dazzleduck_server.jwt_token.generation=false",
                 "--conf", "dazzleduck_server.jwt_token.claims.generate.headers=[%s]".formatted(CLUSTER_HEADER_KEY),
                 "--conf", "dazzleduck_server.jwt_token.claims.validate.headers=[%s]".formatted(CLUSTER_HEADER_KEY)};

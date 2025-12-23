@@ -27,8 +27,8 @@ public class DuckDBFlightJDBCTest {
             "(select len(split(concat('abcdefghijklmnopqrstuvwxyz:', generate_series), ':')) as len  from generate_series(1, 1000000000) )" +
             " select count(*) from t where len = 10";
     private static final int port = 55556;
-    static String url = String.format("jdbc:arrow-flight-sql://localhost:%s/?database=memory&useEncryption=0&user=admin&password=admin", port);
-    static String urlWithS3Path = String.format("jdbc:arrow-flight-sql://localhost:%s/?database=memory&useEncryption=0&user=admin&password=admin&path=s3://bucket/my/folder", port);
+    static String url = String.format("jdbc:arrow-flight-sql://localhost:%s/?database=memory&useEncryption=1&disableCertificateVerification=true&user=admin&password=admin", port);
+    static String urlWithS3Path = String.format("jdbc:arrow-flight-sql://localhost:%s/?database=memory&useEncryption=1&disableCertificateVerification=true&user=admin&password=admin&path=s3://bucket/my/folder", port);
     @BeforeAll
     public static void beforeAll() throws Exception {
         String[] args = {"--conf", "dazzleduck_server.flight_sql.port=" + port, "--conf", "dazzleduck_server.use_encryption=false"};

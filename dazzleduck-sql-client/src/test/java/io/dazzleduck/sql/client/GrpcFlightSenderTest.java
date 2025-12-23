@@ -40,7 +40,7 @@ class GrpcFlightSenderTest {
         Main.main(new String[]{
                 "--conf", "dazzleduck_server.flight_sql.port=" + PORT,
                 "--conf", "dazzleduck_server.flight_sql.host=localhost",
-                "--conf", "dazzleduck_server.use_encryption=false",
+                "--conf", "dazzleduck_server.flight_sql.use_encryption=false",
                 "--conf", "dazzleduck_server.ingestion.max_delay_ms = 500",
                 "--conf", "dazzleduck_server.warehouse=\"" + warehouse.replace("\\", "\\\\") + "\"",
         });

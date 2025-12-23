@@ -5,27 +5,17 @@ import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.common.ConfigBasedProvider;
 import io.dazzleduck.sql.common.ConfigBasedStartupScriptProvider;
 import io.dazzleduck.sql.common.StartupScriptProvider;
-import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.commons.ConnectionPool;
-import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactory;
-import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactoryProvider;
-import io.dazzleduck.sql.flight.optimizer.QueryOptimizerProvider;
-import io.dazzleduck.sql.flight.optimizer.QueryOptimizer;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceJWTTokenAuthenticator;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceServerCallHeaderAuthMiddleware;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
 import org.apache.arrow.flight.FlightServer;
-import org.apache.arrow.flight.Location;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.file.Path;
-import java.time.Duration;
-import java.util.UUID;
-import java.util.concurrent.Executors;
 
 import static io.dazzleduck.sql.common.util.ConfigUtils.CONFIG_PATH;
 
@@ -44,42 +34,34 @@ public class Main {
         return createServer(config);
     }
     public static FlightServer createServer(Config config) throws Exception {
-        int port = config.getInt("flight_sql.port");
-        String host = config.getString("flight_sql.host");
         AdvanceJWTTokenAuthenticator authenticator = AuthUtils.getAuthenticator(config);
-        boolean useEncryption = config.getBoolean("use_encryption");
-        Location location = useEncryption ? Location.forGrpcTls(host, port) : Location.forGrpcInsecure(host, port);
+        boolean useEncryption = config.getBoolean("flight_sql.use_encryption");
         String keystoreLocation = config.getString("keystore");
         String serverCertLocation = config.getString("server_cert");
         String warehousePath = ConfigUtils.getWarehousePath(config);
-        String secretKey = config.getString(ConfigUtils.SECRET_KEY_KEY);
-        String producerId = config.hasPath("producerId") ? config.getString("producerId") : UUID.randomUUID().toString();
+
         if(!checkWarehousePath(warehousePath)) {
             System.out.printf("Warehouse dir does not exist %s. Create the dir to proceed", warehousePath);
         }
-        AccessMode accessMode = DuckDBFlightSqlProducer.getAccessMode(config);
+
+        // Execute startup script if provided
         StartupScriptProvider startupScriptProvider = ConfigBasedProvider.load(config,
                 StartupScriptProvider.STARTUP_SCRIPT_CONFIG_PREFIX,
                 new ConfigBasedStartupScriptProvider());
         if (startupScriptProvider.getStartupScript() != null) {
             ConnectionPool.execute(startupScriptProvider.getStartupScript());
         }
-        BufferAllocator allocator = new RootAllocator();
-        PostIngestionTaskFactoryProvider postIngestionTaskFactorProvider =
-                ConfigBasedProvider.load(config, PostIngestionTaskFactoryProvider.POST_INGESTION_CONFIG_PREFIX, PostIngestionTaskFactoryProvider.NO_OP);
 
-        var postIngestionTaskFactor = postIngestionTaskFactorProvider.getPostIngestionTaskFactory();
-        QueryOptimizerProvider queryOptimizerProvider = ConfigBasedProvider.load(config,
-                QueryOptimizerProvider.QUERY_OPTIMIZER_PROVIDER_CONFIG_PREFIX,
-                QueryOptimizerProvider.NOOPOptimizerProvider);
-        var queryOptimizer = queryOptimizerProvider.getOptimizer();
-        var tempWriteDirector = DuckDBFlightSqlProducer.getTempWriteDir(config);
-        var ingestionConfig = IngestionConfig.fromConfig(config.getConfig(IngestionConfig.KEY));
-        var producer = createProducer(location, producerId, secretKey, allocator, warehousePath, tempWriteDirector, accessMode, postIngestionTaskFactor, queryOptimizer, ingestionConfig);
+        // Create allocator and producer using factory
+        BufferAllocator allocator = new RootAllocator();
+        DuckDBFlightSqlProducer producer = FlightSqlProducerFactory.builder(config)
+                .withAllocator(allocator)
+                .build();
+
         var certStream = getInputStreamForResource(serverCertLocation);
         var keyStream = getInputStreamForResource(keystoreLocation);
 
-        var builder = FlightServer.builder(allocator, location, producer)
+        var builder = FlightServer.builder(allocator, producer.getLocation(), producer)
                 .middleware(AdvanceServerCallHeaderAuthMiddleware.KEY,
                         new AdvanceServerCallHeaderAuthMiddleware.Factory(authenticator));
         if (useEncryption) {
@@ -103,18 +85,6 @@ public class Main {
         severThread.start();
     }
 
-    public static DuckDBFlightSqlProducer createProducer(Location location,
-                                                         String producerId,
-                                                         String secretKey,
-                                                         BufferAllocator allocator,
-                                                         String warehousePath,
-                                                         Path tempWriteDir,
-                                                         AccessMode accessMode,
-                                                         PostIngestionTaskFactory postIngestionTaskFactory,
-                                                         QueryOptimizer queryOptimizer, IngestionConfig ingestionConfig) {
-        return new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, tempWriteDir,
-                postIngestionTaskFactory, Executors.newSingleThreadScheduledExecutor(), Duration.ofMinutes(2), queryOptimizer, ingestionConfig);
-    }
 
 
 
