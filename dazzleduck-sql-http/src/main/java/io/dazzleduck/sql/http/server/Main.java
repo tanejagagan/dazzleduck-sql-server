@@ -3,12 +3,9 @@ package io.dazzleduck.sql.http.server;
 
 
 import com.typesafe.config.ConfigFactory;
-import io.dazzleduck.sql.common.ConfigBasedProvider;
 import io.dazzleduck.sql.common.auth.Validator;
 import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
-import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactoryProvider;
-import io.dazzleduck.sql.flight.optimizer.QueryOptimizerProvider;
 import io.dazzleduck.sql.flight.server.DuckDBFlightSqlProducer;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
 import io.dazzleduck.sql.login.LoginService;
@@ -49,6 +46,41 @@ public class Main {
     }
 
     public static void start(com.typesafe.config.Config appConfig) throws Exception {
+        // Create allocator and producer
+        var allocator = new RootAllocator();
+        String warehousePath = ConfigUtils.getWarehousePath(appConfig);
+        String base64SecretKey = appConfig.getString(ConfigUtils.SECRET_KEY_KEY);
+        var tempWriteDir = DuckDBFlightSqlProducer.getTempWriteDir(appConfig);
+        AccessMode accessMode = DuckDBFlightSqlProducer.getAccessMode(appConfig);
+
+        var httpConfig = appConfig.getConfig("http");
+        var port = httpConfig.getInt(ConfigUtils.PORT_KEY);
+        var host = httpConfig.getString(ConfigUtils.HOST_KEY);
+
+        // Create producer using factory with custom settings for HTTP server
+        var producer = io.dazzleduck.sql.flight.server.FlightSqlProducerFactory.builder(appConfig)
+                .withLocation(Location.forGrpcInsecure(host, port))
+                .withProducerId(UUID.randomUUID().toString())
+                .withSecretKey(base64SecretKey)
+                .withAllocator(allocator)
+                .withWarehousePath(warehousePath)
+                .withTempWriteDir(tempWriteDir)
+                .withAccessMode(accessMode)
+                .build();
+
+        start(appConfig, producer, allocator);
+    }
+
+    /**
+     * Starts the HTTP server with a pre-existing producer instance.
+     * This allows sharing the same producer between multiple servers.
+     *
+     * @param appConfig the configuration
+     * @param producer the FlightSqlProducer instance to use
+     * @param allocator the BufferAllocator associated with the producer
+     * @throws Exception if server startup fails
+     */
+    public static void start(com.typesafe.config.Config appConfig, DuckDBFlightSqlProducer producer, org.apache.arrow.memory.BufferAllocator allocator) throws Exception {
         LogConfig.configureRuntime();
         Config helidonConfig = Config.create();
         var httpConfig =  appConfig.getConfig("http");
@@ -58,13 +90,8 @@ public class Main {
         String warehousePath = ConfigUtils.getWarehousePath(appConfig);
         String base64SecretKey = appConfig.getString(ConfigUtils.SECRET_KEY_KEY);
         var secretKey = Validator.fromBase64String(base64SecretKey);
-        var allocator = new RootAllocator();
         String location = "http://%s:%s".formatted(host, port);
-        var tempWriteDir = DuckDBFlightSqlProducer.getTempWriteDir(appConfig);
         AccessMode accessMode = DuckDBFlightSqlProducer.getAccessMode(appConfig);
-        if (Files.exists(tempWriteDir)) {
-            Files.createDirectories(tempWriteDir);
-        }
         var jwtExpiration = appConfig.getDuration("jwt_token.expiration");
         var cors = CorsSupport.builder()
                 .addCrossOrigin(CrossOriginConfig.builder()
@@ -73,16 +100,6 @@ public class Main {
                         .allowHeaders("Content-Type", "Authorization")
                         .build())
                 .build();
-
-        var producerId = UUID.randomUUID().toString();
-        PostIngestionTaskFactoryProvider provider = ConfigBasedProvider.load(appConfig,
-                PostIngestionTaskFactoryProvider.POST_INGESTION_CONFIG_PREFIX,
-                PostIngestionTaskFactoryProvider.NO_OP);
-        var factory = provider.getPostIngestionTaskFactory();
-        QueryOptimizerProvider optimizer = ConfigBasedProvider.load(appConfig, QueryOptimizerProvider.QUERY_OPTIMIZER_PROVIDER_CONFIG_PREFIX,
-                QueryOptimizerProvider.NOOPOptimizerProvider);
-        var producer = DuckDBFlightSqlProducer.createProducer(Location.forGrpcInsecure(host, port), producerId,
-                base64SecretKey, allocator, warehousePath, accessMode, factory, optimizer.getOptimizer());
         HttpService loginService;
         if (appConfig.hasPath(AuthUtils.PROXY_LOGIN_URL_KEY)) {
             var proxyUrl = appConfig.getString(AuthUtils.PROXY_LOGIN_URL_KEY);
@@ -102,8 +119,8 @@ public class Main {
                             .register("/cancel", new CancelService(producer, accessMode))
                             .register("/ingest", new IngestionService(producer, warehousePath, allocator))
                             .register("/ui", new UIService(producer));
-                    if ("jwt".equals(auth)) {
-                        b.addFilter(new JwtAuthenticationFilter(List.of("/query", "/plan", "/ingest", "/cancel"), appConfig, secretKey));
+                    if ("jwt".equals(auth) || accessMode == AccessMode.RESTRICTED) {
+                        b.addFilter(new JwtAuthenticationFilter(List.of("/query", "/plan", "/ingest", "/cancel", "/ui"), appConfig, secretKey));
                     }
                 })
                 .port(port)

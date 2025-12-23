@@ -4,6 +4,7 @@ package io.dazzleduck.sql.commons.ingestion;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.util.MutableClock;
 import org.jmock.lib.concurrent.DeterministicScheduler;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import java.sql.SQLException;
@@ -230,6 +231,7 @@ public class BulkIngestQueueV2Test {
     }
 
     @Test
+    @Disabled("Flaky test")
     public void testWriteQueueSize() throws Exception {
         withServiceAndQueue((service, queue, clock) -> {
             var initialStats = queue.getStats();

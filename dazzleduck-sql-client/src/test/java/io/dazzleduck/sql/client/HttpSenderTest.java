@@ -11,8 +11,10 @@ import org.apache.arrow.vector.types.pojo.FieldType;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.duckdb.DuckDBConnection;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.ByteArrayOutputStream;
+import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
@@ -29,6 +31,8 @@ public class HttpSenderTest {
     static ObjectMapper mapper = new ObjectMapper();
     static Schema schema;
 
+    @TempDir
+    Path tempDir;
     @BeforeAll
     static void setup() throws Exception {
         warehouse = "/tmp/" + java.util.UUID.randomUUID();
@@ -38,7 +42,8 @@ public class HttpSenderTest {
         io.dazzleduck.sql.runtime.Main.main(new String[]{
                 "--conf", "dazzleduck_server.http.port=" + PORT,
                 "--conf", "dazzleduck_server.http.auth=jwt",
-                "--conf", "dazzleduck_server.warehouse=" + warehouse,// Specify networking mode
+                "--conf", "dazzleduck_server.warehouse=" + warehouse,
+                "--conf", "dazzleduck_server.ingestion.max_delay_ms = 500"
         });
 
         ConnectionPool.executeBatch(new String[]{"INSTALL arrow FROM community", "LOAD arrow"});

@@ -21,6 +21,7 @@ import java.net.ServerSocket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.NoSuchAlgorithmException;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.Executors;
@@ -83,15 +84,17 @@ public interface FlightTestUtils {
                                                       Map<String, String> additionalClientHeaders,
                                                       AdvanceJWTTokenAuthenticator testAuthenticator) throws IOException, NoSuchAlgorithmException {
 
+        var producerId = UUID.randomUUID().toString();
         return createRestrictedServerClient((allocator, warehousePath) ->
-            new DuckDBFlightSqlProducer(serverLocation,
-                    UUID.randomUUID().toString(),
+            new RestrictedFlightSqlProducer(serverLocation,
+                    producerId,
                     "change me",
-                    allocator, warehousePath, AccessMode.RESTRICTED,
+                    allocator, warehousePath,
                     Path.of(System.getProperty("java.io.tmpdir"), UUID.randomUUID().toString()),
                     NOOPPostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(),
-                    Executors.newSingleThreadScheduledExecutor(), Duration.ofMinutes(2),
-                    QueryOptimizer.NOOP_QUERY_OPTIMIZER),
+                    Executors.newSingleThreadScheduledExecutor(), Duration.ofMinutes(2), Clock.systemDefaultZone(),
+                    DuckDBFlightSqlProducer.buildRecorder(producerId),
+                    QueryOptimizer.NOOP_QUERY_OPTIMIZER,  DuckDBFlightSqlProducer.DEFAULT_INGESTION_CONFIG),
                 serverLocation, additionalClientHeaders, testAuthenticator);
     }
 
