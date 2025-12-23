@@ -8,14 +8,14 @@ import org.apache.arrow.vector.types.pojo.Schema;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.io.InputStream;
+import java.util.Objects;
 
 public class ArrowStreamReaderWrapper extends ArrowStreamReader {
-    ArrowReader arrowReader;
+    private final ArrowReader arrowReader;
 
     public ArrowStreamReaderWrapper(ArrowReader reader, BufferAllocator allocator) {
-        super((InputStream) new ByteArrayInputStream(new byte[0]), allocator);
-        this.arrowReader = reader;
+        super(new ByteArrayInputStream(new byte[0]), allocator);
+        this.arrowReader = Objects.requireNonNull(reader, "reader must not be null");
     }
 
     @Override
@@ -31,5 +31,19 @@ public class ArrowStreamReaderWrapper extends ArrowStreamReader {
     @Override
     public boolean loadNextBatch() throws IOException {
         return arrowReader.loadNextBatch();
+    }
+
+    @Override
+    public long bytesRead() {
+        return arrowReader.bytesRead();
+    }
+
+    @Override
+    public void close() throws IOException {
+        try {
+            arrowReader.close();
+        } finally {
+            super.close();
+        }
     }
 }
