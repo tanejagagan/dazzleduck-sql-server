@@ -6,6 +6,7 @@ import java.time.Duration;
 
 public record IngestionConfig(long minBucketSize, Duration maxDelay) {
 
+    public static String KEY = "ingestion";
     public static IngestionConfig fromConfig(Config config){
         return new IngestionConfig(config.getLong("min_bucket_size"),
                 Duration.ofMillis(config.getLong("max_delay_ms")));

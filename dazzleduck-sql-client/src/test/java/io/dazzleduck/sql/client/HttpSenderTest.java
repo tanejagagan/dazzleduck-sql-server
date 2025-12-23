@@ -38,7 +38,8 @@ public class HttpSenderTest {
         io.dazzleduck.sql.runtime.Main.main(new String[]{
                 "--conf", "dazzleduck_server.http.port=" + PORT,
                 "--conf", "dazzleduck_server.http.auth=jwt",
-                "--conf", "dazzleduck_server.warehouse=" + warehouse,// Specify networking mode
+                "--conf", "dazzleduck_server.warehouse=" + warehouse,
+                "--conf", "dazzleduck_server.ingestion.max_delay_ms = 500"
         });
 
         ConnectionPool.executeBatch(new String[]{"INSTALL arrow FROM community", "LOAD arrow"});

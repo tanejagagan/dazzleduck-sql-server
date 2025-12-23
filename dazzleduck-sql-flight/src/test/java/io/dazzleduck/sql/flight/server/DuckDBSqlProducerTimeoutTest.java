@@ -84,7 +84,7 @@ public class DuckDBSqlProducerTimeoutTest {
                                 Duration.ofSeconds(5),
                                 mutableClock,
                                 new NOOPFlightRecorder(),
-                                QueryOptimizer.NOOP_QUERY_OPTIMIZER
+                                QueryOptimizer.NOOP_QUERY_OPTIMIZER,  DuckDBFlightSqlProducer.DEFAULT_INGESTION_CONFIG
                         ))
                 .headerAuthenticator(AuthUtils.getTestAuthenticator())
                 .build()

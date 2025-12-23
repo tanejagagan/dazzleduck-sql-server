@@ -74,7 +74,8 @@ public class Main {
                 QueryOptimizerProvider.NOOPOptimizerProvider);
         var queryOptimizer = queryOptimizerProvider.getOptimizer();
         var tempWriteDirector = DuckDBFlightSqlProducer.getTempWriteDir(config);
-        var producer = createProducer(location, producerId, secretKey, allocator, warehousePath, tempWriteDirector, accessMode, postIngestionTaskFactor, queryOptimizer);
+        var ingestionConfig = IngestionConfig.fromConfig(config.getConfig(IngestionConfig.KEY));
+        var producer = createProducer(location, producerId, secretKey, allocator, warehousePath, tempWriteDirector, accessMode, postIngestionTaskFactor, queryOptimizer, ingestionConfig);
         var certStream = getInputStreamForResource(serverCertLocation);
         var keyStream = getInputStreamForResource(keystoreLocation);
 
@@ -110,10 +111,12 @@ public class Main {
                                                          Path tempWriteDir,
                                                          AccessMode accessMode,
                                                          PostIngestionTaskFactory postIngestionTaskFactory,
-                                                         QueryOptimizer queryOptimizer) {
+                                                         QueryOptimizer queryOptimizer, IngestionConfig ingestionConfig) {
         return new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, tempWriteDir,
-                postIngestionTaskFactory, Executors.newSingleThreadScheduledExecutor(), Duration.ofMinutes(2), queryOptimizer);
+                postIngestionTaskFactory, Executors.newSingleThreadScheduledExecutor(), Duration.ofMinutes(2), queryOptimizer, ingestionConfig);
     }
+
+
 
     private static InputStream getInputStreamForResource(String filename) {
         InputStream inputStream = Thread.currentThread().getContextClassLoader().getResourceAsStream(filename);
