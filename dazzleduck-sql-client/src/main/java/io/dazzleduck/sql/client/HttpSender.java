@@ -276,9 +276,8 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
     }
 
     private HttpResponse<String> post(byte[] payload) throws IOException, InterruptedException {
-        String uuid = UUID.randomUUID().toString();
         HttpRequest req = HttpRequest.newBuilder()
-                .uri(URI.create(baseUrl + "/ingest?path=" + targetPath + uuid ))
+                .uri(URI.create(baseUrl + "/ingest?path=" + targetPath))
                 .timeout(timeout)
                 .POST(HttpRequest.BodyPublishers.ofByteArray(payload))
                 .header("Authorization", getJwt())
