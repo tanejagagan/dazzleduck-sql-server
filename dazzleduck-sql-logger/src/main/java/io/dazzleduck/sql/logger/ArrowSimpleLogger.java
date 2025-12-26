@@ -10,13 +10,16 @@ import org.slf4j.Marker;
 import org.slf4j.event.Level;
 import org.slf4j.event.LoggingEvent;
 import org.slf4j.helpers.LegacyAbstractLogger;
+import org.slf4j.helpers.MessageFormatter;
 
+import java.io.PrintWriter;
 import java.io.Serial;
+import java.io.StringWriter;
 import java.time.Duration;
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 
-public class ArrowSimpleLogger extends LegacyAbstractLogger {
+public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoCloseable {
 
     @Serial
     private static final long serialVersionUID = 1L;
@@ -37,8 +40,7 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger {
     private static final String CONFIG_APPLICATION_NAME = config.getString("application_name");
     private static final String CONFIG_HOST = config.getString("host");
 
-    private static final DateTimeFormatter TS_FORMAT =
-            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
+    private static final DateTimeFormatter TS_FORMAT = DateTimeFormatter.ISO_INSTANT;
 
     private final String name;
     private final FlightSender flightSender;
@@ -60,14 +62,15 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger {
 
     private static FlightSender createSenderFromConfig() {
         Config http = config.getConfig("http");
-
+        String prefix = http.getString("target_path");
+        String file = prefix + java.util.UUID.randomUUID() + ".parquet";
         return new HttpSender(
                 schema,
                 http.getString("base_url"),
                 http.getString("username"),
                 http.getString("password"),
-                http.getString("target_path"),
-                Duration.ofMillis(http.getLong("timeout_ms")),
+                file,
+                Duration.ofMillis(http.getLong("http_client_timeout_ms")),
                 config.getLong("min_batch_size"),
                 Duration.ofMillis(config.getLong("max_send_interval_ms")),
                 config.getLong("max_in_memory_bytes"),
@@ -86,21 +89,27 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger {
             Object[] args, Throwable throwable) {
 
         String message = format(messagePattern, args);
+        if (throwable != null) {
+            StringWriter sw = new StringWriter();
+            PrintWriter pw = new PrintWriter(sw);
+            throwable.printStackTrace(pw);
+            message += "\n" + sw.toString();
+        }
+        if (marker != null) {
+            message = "[Marker:" + marker.getName() + "] " + message;
+        }
         writeArrowAsync(level, message);
     }
-
     private String format(String pattern, Object[] args) {
-        if (args == null || args.length == 0) return pattern;
-        String msg = pattern;
-        for (Object arg : args)
-            msg = msg.replaceFirst("\\{}", arg == null ? "null" : arg.toString());
-        return msg;
+        if (args == null || args.length == 0)
+            return pattern;
+        return MessageFormatter.arrayFormat(pattern, args).getMessage();
     }
     /** Collect logs in batches of 10 and send to Flight */
     private void writeArrowAsync(Level level, String message) {
         try {
             JavaRow row = new JavaRow(new Object[]{
-                    TS_FORMAT.format(LocalDateTime.now()),
+                    TS_FORMAT.format(Instant.now()),
                     level.toString(),
                     name,
                     Thread.currentThread().getName(),
@@ -114,7 +123,8 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger {
             flightSender.addRow(row);
 
         } catch (Exception e) {
-            System.err.println("[ArrowSimpleLogger] Failed to log: " + e.getMessage());
+            System.err.println("[ArrowSimpleLogger] Failed to log:");
+            e.printStackTrace(System.err);
         }
     }
 
@@ -137,8 +147,7 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger {
     @Override public boolean isWarnEnabled()  { return isLevelEnabled(30); }
     @Override public boolean isErrorEnabled() { return isLevelEnabled(40); }
 
-    private boolean isLevelEnabled(int levelInt) {
-        int defaultLevel = 20; // INFO
-        return levelInt >= defaultLevel;
+    protected boolean isLevelEnabled(int levelInt) {
+        return true; // let backend decide
     }
 }

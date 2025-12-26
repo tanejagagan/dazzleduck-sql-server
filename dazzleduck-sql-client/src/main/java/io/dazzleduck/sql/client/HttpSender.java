@@ -37,7 +37,7 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
     private final String username;
     private final String password;
     private final String targetPath;
-    private final Duration timeout;
+    private final Duration httpClientTimeout;
     private final long maxMem;
     private final long maxDisk;
 
@@ -50,13 +50,13 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
             String username,
             String password,
             String targetPath,
-            Duration timeout,
+            Duration httpClientTimeout,
             long minBatchSize,
             Duration maxSendInterval,
             long maxInMemorySize,
             long maxOnDiskSize
     ) {
-        this(schema, baseUrl, username, password, targetPath, timeout, minBatchSize, maxSendInterval, maxInMemorySize, maxOnDiskSize, Clock.systemUTC());
+        this(schema, baseUrl, username, password, targetPath, httpClientTimeout, minBatchSize, maxSendInterval, maxInMemorySize, maxOnDiskSize, Clock.systemUTC());
     }
     public HttpSender(
             Schema schema,
@@ -64,7 +64,7 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
             String username,
             String password,
             String targetPath,
-            Duration timeout,
+            Duration httpClientTimeout,
             long minBatchSize,
             Duration maxSendInterval,
             long maxInMemorySize,
@@ -78,7 +78,7 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
         Objects.requireNonNull(username, "username must not be null");
         Objects.requireNonNull(password, "password must not be null");
         Objects.requireNonNull(targetPath, "targetPath must not be null");
-        Objects.requireNonNull(timeout, "timeout must not be null");
+        Objects.requireNonNull(httpClientTimeout, "httpClientTimeout must not be null");
 
         if (baseUrl.trim().isEmpty()) {
             throw new IllegalArgumentException("baseUrl must not be empty");
@@ -89,15 +89,15 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
         if (targetPath.trim().isEmpty()) {
             throw new IllegalArgumentException("targetPath must not be empty");
         }
-        if (timeout.isNegative() || timeout.isZero()) {
-            throw new IllegalArgumentException("timeout must be positive");
+        if (httpClientTimeout.isNegative() || httpClientTimeout.isZero()) {
+            throw new IllegalArgumentException("httpClientTimeout must be positive");
         }
 
         this.baseUrl = baseUrl;
         this.username = username;
         this.password = password;
         this.targetPath = targetPath;
-        this.timeout = timeout;
+        this.httpClientTimeout = httpClientTimeout;
         this.maxMem = maxInMemorySize;
         this.maxDisk = maxOnDiskSize;
 
@@ -110,11 +110,11 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
 
         this.client = HttpClient.newBuilder()
                 .executor(executorService)
-                .connectTimeout(timeout)
+                .connectTimeout(httpClientTimeout)
                 .build();
 
-        logger.info("Initializing HttpSender with baseUrl={}, targetPath={}, timeout={}",
-                    baseUrl, targetPath, timeout);
+        logger.info("Initializing HttpSender with baseUrl={}, targetPath={}, httpClientTimeout={}",
+                    baseUrl, targetPath, httpClientTimeout);
     }
 
     @Override
@@ -141,7 +141,7 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
 
         HttpRequest req = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + "/login"))
-                .timeout(timeout)
+                .timeout(httpClientTimeout)
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                 .header("Content-Type", "application/json")
                 .header("Accept", "application/json")
@@ -151,7 +151,7 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
         try {
             resp = client.send(req, HttpResponse.BodyHandlers.ofString());
         } catch (HttpTimeoutException e) {
-            logger.error("Login request timed out after {}", timeout, e);
+            logger.error("Login request timed out after {}", httpClientTimeout, e);
             throw new IOException("Login request timed out", e);
         } catch (IOException e) {
             logger.error("Network error during login to {}", baseUrl, e);
@@ -259,7 +259,7 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
             logger.debug("Successfully sent data to {}{}", baseUrl, targetPath);
 
         } catch (HttpTimeoutException e) {
-            logger.error("HTTP request timed out after {} to {}{}", timeout, baseUrl, targetPath, e);
+            logger.error("HTTP request timed out after {} to {}{}", httpClientTimeout, baseUrl, targetPath, e);
             throw new RuntimeException("HTTP request timed out to " + baseUrl + targetPath, e);
         } catch (IOException e) {
             // Check if interrupted during IO
@@ -277,7 +277,7 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
     private HttpResponse<String> post(byte[] payload) throws IOException, InterruptedException {
         HttpRequest req = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + "/ingest?path=" + targetPath))
-                .timeout(timeout)
+                .timeout(httpClientTimeout)
                 .POST(HttpRequest.BodyPublishers.ofByteArray(payload))
                 .header("Authorization", getJwt())
                 .header("Content-Type", "application/vnd.apache.arrow.stream")

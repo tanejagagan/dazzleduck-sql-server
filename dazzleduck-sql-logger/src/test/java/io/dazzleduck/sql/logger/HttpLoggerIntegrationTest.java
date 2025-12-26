@@ -1,36 +1,31 @@
 package io.dazzleduck.sql.logger;
 
-import com.typesafe.config.Config;
-import com.typesafe.config.ConfigFactory;
-import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import org.junit.jupiter.api.*;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Comparator;
+import java.util.UUID;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class HttpLoggerIntegrationTest {
 
-    private Thread serverThread;
+    private static final int PORT = 8081;
+    static String warehousePath;
 
     @BeforeAll
-    void startServers() throws Exception {
-        Config config = ConfigFactory.load().getConfig(ConfigUtils.CONFIG_PATH);
+    void startServer() throws Exception {
+        warehousePath = "/tmp/" + UUID.randomUUID();
+        new java.io.File(warehousePath).mkdirs();
 
-        serverThread = new Thread(() -> {
-            try {
-                io.dazzleduck.sql.runtime.Main.start(config);
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
+        io.dazzleduck.sql.runtime.Main.main(new String[]{
+                "--conf", "dazzleduck_server.networking_modes=[http]",
+                "--conf", "dazzleduck_server.http.port=" + PORT,
+                "--conf", "dazzleduck_server.http.auth=jwt",
+                "--conf", "dazzleduck_server.warehouse=" + warehousePath,
+                "--conf", "dazzleduck_server.ingestion.max_delay_ms=200"
         });
-        serverThread.setDaemon(true);
-        serverThread.start();
-
-        waitForHttpServer(config);
     }
 
     @Test
@@ -45,11 +40,7 @@ public class HttpLoggerIntegrationTest {
             logger.close();
         }
 
-            String warehousePath = ConfigUtils.getWarehousePath(
-                    ConfigFactory.load().getConfig(ConfigUtils.CONFIG_PATH)
-            );
-
-            Path logFile = findFirstLogFile(warehousePath);
+            Path logFile = findFirstLogFile(warehousePath,"integration-test");
 
             TestUtils.isEqual(
                     """
@@ -65,53 +56,121 @@ public class HttpLoggerIntegrationTest {
             );
     }
 
-    @AfterAll
-    void cleanupAndStop() throws Exception {
-        cleanupWarehouse();
-    }
+    @Test
+    void testMultipleLogLevels() throws Exception {
+        ArrowSimpleLogger logger = new ArrowSimpleLogger("multi-level-test");
 
-    private void cleanupWarehouse() throws IOException {
-        String warehousePath = ConfigUtils.getWarehousePath(
-                ConfigFactory.load().getConfig(ConfigUtils.CONFIG_PATH)
+        try {
+            logger.trace("Trace message");
+            logger.debug("Debug message");
+            logger.info("Info message");
+        } finally {
+            logger.close();
+        }
+
+        // Verify all levels are persisted correctly
+        Path logFile = findFirstLogFile(warehousePath,"multi-level-test");
+        TestUtils.isEqual("select 3 as count", "select count(*) as count from read_parquet('%s') where logger = 'multi-level-test'".formatted(logFile.toAbsolutePath())
         );
-
-        Path path = Path.of(warehousePath);
-        if (Files.exists(path)) {
-            Files.walk(path)
-                    .sorted(Comparator.reverseOrder())
-                    .forEach(p -> {
-                        try {
-                            Files.deleteIfExists(p);
-                        } catch (IOException ignored) {}
-                    });
-        }
-
-        Files.createDirectories(path);
     }
 
-    private Path findFirstLogFile(String warehousePath) throws IOException {
-        Path logsDir = Path.of(warehousePath);
+    @Test
+    void testExceptionLogging() throws Exception {
+        ArrowSimpleLogger logger = new ArrowSimpleLogger("exception-test");
 
-        try (var stream = Files.list(logsDir)) {
-            return stream
-                    .filter(Files::isRegularFile)
-                    .findFirst()
-                    .orElseThrow(() -> new IllegalStateException(
-                            "No log file found in " + logsDir));
+        try {
+            Exception ex = new RuntimeException("Test exception");
+            logger.error("Error occurred", ex);
+        } finally {
+            logger.close();
         }
+
+        Path logFile = findFirstLogFile(warehousePath,"exception-test");
+        // Verify stack trace is included in message
+        TestUtils.isEqual(
+                "select true as has_stacktrace",
+                "select message like '%RuntimeException%' and message like '%Test exception%' as has_stacktrace " +
+                        "from read_parquet('%s') where logger = 'exception-test'".formatted(logFile.toAbsolutePath())
+        );
     }
 
-    private void waitForHttpServer(Config config) throws Exception {
-        int port = 8081;
+    @Test
+    void testEmptyAndNullMessages() throws Exception {
+        ArrowSimpleLogger logger = new ArrowSimpleLogger("empty-test");
 
-        long deadline = System.currentTimeMillis() + 10_000;
+        try {
+            logger.info("");
+            logger.info(null);
+        } finally {
+            logger.close();
+        }
+    }
+    @Test
+    void testParameterizedMessages() throws Exception {
+        ArrowSimpleLogger logger = new ArrowSimpleLogger("param-test");
 
-        while (System.currentTimeMillis() < deadline) {
-            try (var socket = new java.net.Socket("localhost", port)) {
-                return; // port is open
-            } catch (IOException e) {
-                Thread.sleep(100);
+        try {
+            logger.info("User {} logged in from {}", "john.doe", "192.168.1.1");
+        } finally {
+            logger.close();
+        }
+
+        Path logFile = findFirstLogFile(warehousePath,"param-test");
+        TestUtils.isEqual(
+                "select 'User john.doe logged in from 192.168.1.1' as message",
+                """
+                 select trim(message) as message from read_parquet('%s') where logger = 'param-test'
+                """.formatted(logFile.toAbsolutePath())
+        );
+    }
+    @Test
+    void testConcurrentLogging() throws Exception {
+        ArrowSimpleLogger logger = new ArrowSimpleLogger("concurrent-test");
+
+        try {
+            Thread[] threads = new Thread[5];
+            for (int t = 0; t < threads.length; t++) {
+                final int threadNum = t;
+                threads[t] = new Thread(() -> {
+                    for (int i = 0; i < 20; i++) {
+                        logger.info("Thread {} message {}", threadNum, i);
+                    }
+                });
+                threads[t].start();
+            }
+
+            for (Thread thread : threads) {
+                thread.join();
+            }
+        } finally {
+            logger.close();
+        }
+
+        Path logFile = findFirstLogFile(warehousePath,"concurrent-test");
+        TestUtils.isEqual(
+                "select 100 as count",
+                "select count(*) as count from read_parquet('%s') where logger = 'concurrent-test'"
+                        .formatted(logFile.toAbsolutePath())
+        );
+    }
+
+    private Path findFirstLogFile(String warehousePath, String loggerName) throws Exception {
+        try (var stream = Files.list(Path.of(warehousePath))) {
+            for (Path file : stream.filter(p -> p.toString().endsWith(".parquet")).toList()) {
+                try {
+                    TestUtils.isEqual(
+                            "select 1 as ok",
+                            "select 1 as ok from read_parquet('%s') where logger = '%s' limit 1"
+                                    .formatted(file.toAbsolutePath(), loggerName)
+                    );
+                    return file; // this file contains the logger
+                } catch (AssertionError ignored) {
+                    // not the right file, keep scanning
+                }
             }
         }
+        throw new IllegalStateException(
+                "No parquet file found for logger=" + loggerName + " in " + warehousePath);
     }
+
 }
