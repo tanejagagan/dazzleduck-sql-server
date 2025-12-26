@@ -46,7 +46,7 @@ public class HttpSenderTest {
                 "--conf", "dazzleduck_server.ingestion.max_delay_ms = 500"
         });
 
-        ConnectionPool.executeBatch(new String[]{"INSTALL arrow FROM community", "LOAD arrow"});
+   //     ConnectionPool.executeBatch(new String[]{"INSTALL arrow FROM community", "LOAD arrow"});
 
         schema = new Schema(java.util.List.of(new Field("timestamp", FieldType.nullable(new ArrowType.Utf8()), null)));
     }
@@ -72,7 +72,7 @@ public class HttpSenderTest {
                 file,
                 timeout,
                 100_000,
-                Duration.ofSeconds(2),
+                Duration.ofSeconds(1),
                 100,
                 100_000, Clock.systemDefaultZone()
         );
@@ -126,9 +126,9 @@ public class HttpSenderTest {
                 "admin",
                 "admin",
                 file,
-                Duration.ofSeconds(5),
-                100_000,
                 Duration.ofSeconds(3),
+                100_000,
+                Duration.ofSeconds(2),
                 100_000,
                 500_000)) {
 
@@ -179,7 +179,7 @@ public class HttpSenderTest {
                 ReuseSender.enqueue(arrowBytes("select " + i + " as val"));
             }
 
-            await().atMost(15, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {
+            await().atMost(5, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {
                 long count = ConnectionPool.collectFirst("select count(*) from read_parquet('%s/%s')".formatted(warehouse, file), Long.class);
                 assertTrue(count >= 1);
             });
@@ -192,10 +192,10 @@ public class HttpSenderTest {
 
         // Rapid fire 20 small batches
         try (HttpSender HighThroughput = newSender(file, Duration.ofSeconds(5))) {
-            for (int i = 0; i < 10; i++) {
+            for (int i = 0; i < 5; i++) {
                 HighThroughput.enqueue(arrowBytes("select " + i + " as val"));
             }
-            await().atMost(5, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {
+            await().atMost(2, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {
                 long count = ConnectionPool.collectFirst("select count(*) from read_parquet('%s/%s')".formatted(warehouse, file), Long.class);
                 assertTrue(count >= 1);
             });

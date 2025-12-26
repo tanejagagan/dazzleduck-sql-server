@@ -62,13 +62,14 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
 
     private static FlightSender createSenderFromConfig() {
         Config http = config.getConfig("http");
-
+        String prefix = http.getString("target_path");
+        String file = prefix + java.util.UUID.randomUUID() + ".parquet";
         return new HttpSender(
                 schema,
                 http.getString("base_url"),
                 http.getString("username"),
                 http.getString("password"),
-                http.getString("target_path"),
+                file,
                 Duration.ofMillis(http.getLong("http_client_timeout_ms")),
                 config.getLong("min_batch_size"),
                 Duration.ofMillis(config.getLong("max_send_interval_ms")),

@@ -31,18 +31,19 @@ class GrpcFlightSenderTest {
 
     private RootAllocator allocator;
     private FlightSqlClient client;
-    private String warehouse;
+    static String warehouse;
 
     @BeforeAll
     void setup() throws Exception {
         allocator = new RootAllocator(Long.MAX_VALUE);
-        warehouse = Files.createTempDirectory("grpc-test").toString();
+        warehouse = "/tmp/" + java.util.UUID.randomUUID();
+        new java.io.File(warehouse).mkdirs();
         Main.main(new String[]{
                 "--conf", "dazzleduck_server.flight_sql.port=" + PORT,
                 "--conf", "dazzleduck_server.flight_sql.host=localhost",
                 "--conf", "dazzleduck_server.flight_sql.use_encryption=false",
                 "--conf", "dazzleduck_server.ingestion.max_delay_ms = 500",
-                "--conf", "dazzleduck_server.warehouse=\"" + warehouse.replace("\\", "\\\\") + "\"",
+                "--conf", "dazzleduck_server.warehouse=" + warehouse,
         });
 
 
@@ -78,7 +79,7 @@ class GrpcFlightSenderTest {
         try (GrpcFlightSender sender = new GrpcFlightSender(
                 schema,
                 1024,
-                Duration.ofSeconds(1),
+                Duration.ofSeconds(2),
                 Clock.systemUTC(),
                 5_000_000,
                 20_000_000,

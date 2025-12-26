@@ -30,12 +30,6 @@
         </dependency>
         <dependency>
             <groupId>io.dazzleduck.sql</groupId>
-            <artifactId>dazzleduck-sql-commons</artifactId>
-            <version>0.0.13-SNAPSHOT</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>io.dazzleduck.sql</groupId>
             <artifactId>dazzleduck-sql-login</artifactId>
             <version>0.0.13-SNAPSHOT</version>
         </dependency>
