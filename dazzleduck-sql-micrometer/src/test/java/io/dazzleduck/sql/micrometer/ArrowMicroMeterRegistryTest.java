@@ -2,13 +2,17 @@ package io.dazzleduck.sql.micrometer;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
+import io.dazzleduck.sql.client.HttpSender;
 import io.dazzleduck.sql.commons.ConnectionPool;
-import io.dazzleduck.sql.micrometer.config.ArrowRegistryConfig;
 import io.dazzleduck.sql.micrometer.service.ArrowMicroMeterRegistry;
 import io.dazzleduck.sql.micrometer.util.ArrowFileWriterUtil;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.micrometer.core.instrument.*;
 import io.micrometer.core.instrument.MockClock;
+import org.apache.arrow.vector.types.pojo.ArrowType;
+import org.apache.arrow.vector.types.pojo.Field;
+import org.apache.arrow.vector.types.pojo.FieldType;
+import org.apache.arrow.vector.types.pojo.Schema;
 import org.junit.jupiter.api.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,42 +37,43 @@ class ArrowMicroMeterRegistryTest {
     private String applicationId;
     private String applicationName;
     private String host;
-
+    static Schema schema;
     @BeforeEach
     void setup() {
 
         // Load test metadata EXACTLY like production
         Config dazzConfig = ConfigFactory.load().getConfig("dazzleduck_micrometer");
-        applicationId = dazzConfig.getString("applicationId");
-        applicationName = dazzConfig.getString("applicationName");
+        applicationId = dazzConfig.getString("application_id");
+        applicationName = dazzConfig.getString("application_name");
         host = dazzConfig.getString("host");
 
         testClock = new MockClock();
 
-        ArrowRegistryConfig config = new ArrowRegistryConfig() {
-            @Override
-            public String get(String k) {
-                if ("arrow.enabled".equals(k)) return "true";
-                return null;
-            }
-
-            @Override
-            public Duration step() {
-                return Duration.ofSeconds(5);
-            }
-        };
+        schema = new Schema(java.util.List.of(new Field("timestamp", FieldType.nullable(new ArrowType.Utf8()), null)));
         ConnectionPool.execute("load arrow");
-        registry = new ArrowMicroMeterRegistry.Builder()
-                .config(config)
-                .endpoint("http://localhost:8080/arrow")
-                .httpTimeout(Duration.ofSeconds(2))
-                .outputPath("arrow.outputFile")
-                .testMode(true)
-                .clock(testClock)
-                .applicationId(applicationId)
-                .applicationName(applicationName)
-                .host(host)
-                .build();
+        HttpSender sender = new HttpSender(
+                schema,
+                "http://localhost:8080",
+                "admin",
+                "admin",
+                "arrow.outputFile",
+                Duration.ofSeconds(6),
+                1024,                          // minBatchSize (test)
+                Duration.ofSeconds(6),      // maxSendInterval
+                10_000_000,                 // maxInMemoryBytes
+                10_000_000,                 // maxOnDiskBytes
+                java.time.Clock.systemUTC()       // or testClock if desired
+        );
+
+        registry = new ArrowMicroMeterRegistry(
+                sender,
+                testClock,
+                Duration.ofSeconds(5),      // step interval
+                applicationId,
+                applicationName,
+                host
+        );
+
     }
 
     @Test
@@ -210,7 +215,10 @@ class ArrowMicroMeterRegistryTest {
         DistributionSummary summary = DistributionSummary.builder("test.summary").register(registry);
         summary.record(5);
         summary.record(15);
+        Thread.sleep(100);
+        // Advance step window
         testClock.add(Duration.ofSeconds(6));
+
         tempFile = File.createTempFile("test-metrics-", ".arrow");
 
         ArrowFileWriterUtil.writeMetersToFile(

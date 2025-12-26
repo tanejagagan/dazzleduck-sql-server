@@ -1,9 +1,7 @@
 package io.dazzleduck.sql.micrometer.util;
 
-import com.typesafe.config.Config;
-import com.typesafe.config.ConfigFactory;
-import io.dazzleduck.sql.commons.types.JavaRow;
-import io.dazzleduck.sql.commons.types.VectorSchemaRootWriter;
+import io.dazzleduck.sql.common.types.JavaRow;
+import io.dazzleduck.sql.common.types.VectorSchemaRootWriter;
 import io.micrometer.core.instrument.*;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.distribution.HistogramSnapshot;
@@ -65,7 +63,7 @@ public final class ArrowFileWriterUtil {
         }
     }
 
-    private static void writeMetersInternal(BufferAllocator allocator, List<Meter> meters, OutputStream os,  String applicationId, String applicationName, String host) throws IOException {
+    private static void writeMetersInternal(BufferAllocator allocator, List<Meter> meters, OutputStream os, String applicationId, String applicationName, String host) throws IOException {
         try (VectorSchemaRoot root = VectorSchemaRoot.create(METER_SCHEMA, allocator);
              ArrowStreamWriter writer = new ArrowStreamWriter(root, null, os)) {
 
@@ -81,7 +79,7 @@ public final class ArrowFileWriterUtil {
 
             List<JavaRow> rows = new ArrayList<>(sortedMeters.size());
             for (Meter meter : sortedMeters) {
-                rows.add(toRow(meter,applicationId, applicationName, host));
+                rows.add(toRow(meter, applicationId, applicationName, host));
             }
 
             vectorWriter.writeToVector(rows.toArray(JavaRow[]::new), root);
@@ -93,7 +91,7 @@ public final class ArrowFileWriterUtil {
     /**
      * Converts a single Micrometer Meter to a JavaRow (Arrow record).
      */
-    private static JavaRow toRow(Meter meter,  String applicationId, String applicationName, String host) {
+    private static JavaRow toRow(Meter meter, String applicationId, String applicationName, String host) {
         Meter.Id id = meter.getId();
         Map<String, String> tagsMap = new LinkedHashMap<>();
         for (Tag t : id.getTags()) {
@@ -109,10 +107,8 @@ public final class ArrowFileWriterUtil {
                 case Timer tmr -> {
                     HistogramSnapshot snap = tmr.takeSnapshot();
                     value = tmr.count();
-                    Double totalTime = snap.total(TimeUnit.SECONDS);
                     max = snap.max(TimeUnit.SECONDS);
                     mean = snap.mean(TimeUnit.SECONDS);
-
                 }
                 case DistributionSummary ds -> {
                     value = ds.count();

@@ -2,43 +2,46 @@ package io.dazzleduck.sql.micrometer.metrics;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
-import io.dazzleduck.sql.micrometer.config.ArrowRegistryConfig;
+import io.dazzleduck.sql.client.HttpSender;
+import io.dazzleduck.sql.micrometer.util.ArrowMetricSchema;
 import io.dazzleduck.sql.micrometer.service.ArrowMicroMeterRegistry;
-import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Clock;
+import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.composite.CompositeMeterRegistry;
 
 import java.time.Duration;
 
-public class MetricsRegistryFactory {
+public final class MetricsRegistryFactory {
+
+    private static final Config config = ConfigFactory.load().getConfig("dazzleduck_micrometer");
+
+    private MetricsRegistryFactory() {}
 
     public static MeterRegistry create() {
-        Config dazzConfig = ConfigFactory.load().getConfig("dazzleduck_micrometer");
 
-        String applicationId = dazzConfig.getString("application_id");
-        String applicationName = dazzConfig.getString("application_name");
-        String host = dazzConfig.getString("host");
-        ArrowRegistryConfig config = new ArrowRegistryConfig() {
-            @Override
-            public String get(String key) {
-                return switch (key) {
-                    case "arrow.enabled"     -> "true";
-                    case "arrow.endpoint"    -> "http://localhost:8080/ingest?path=metrics";
-                    default -> null;
-                };
-            }
-        };
+        Config http = config.getConfig("http");
 
-        ArrowMicroMeterRegistry arrow =
-                new ArrowMicroMeterRegistry.Builder()
-                        .config(config)
-                        .endpoint(config.uri())
-                        .httpTimeout(Duration.ofMinutes(2))
-                        .applicationId(applicationId)
-                        .applicationName(applicationName)
-                        .host(host)
-                        .clock(Clock.SYSTEM)
-                        .build();
+        HttpSender sender = new HttpSender(
+                ArrowMetricSchema.SCHEMA,
+                http.getString("base_url"),
+                http.getString("username"),
+                http.getString("password"),
+                http.getString("target_path"),
+                Duration.ofMillis(http.getLong("http_client_timeout_ms")),
+                config.getLong("min_batch_size"),
+                Duration.ofMillis(config.getLong("max_send_interval_ms")),
+                config.getLong("max_in_memory_bytes"),
+                config.getLong("max_on_disk_bytes")
+        );
+
+        ArrowMicroMeterRegistry arrow = new ArrowMicroMeterRegistry(
+                        sender,
+                        Clock.SYSTEM,
+                        Duration.ofMillis(config.getLong("max_send_interval_ms")),
+                        config.getString("application_id"),
+                        config.getString("application_name"),
+                        config.getString("host")
+                );
 
         CompositeMeterRegistry composite = new CompositeMeterRegistry();
         composite.add(arrow);
