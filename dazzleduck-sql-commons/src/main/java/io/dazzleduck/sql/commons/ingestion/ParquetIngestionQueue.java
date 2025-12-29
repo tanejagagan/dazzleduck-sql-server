@@ -2,6 +2,10 @@ package io.dazzleduck.sql.commons.ingestion;
 
 import io.dazzleduck.sql.commons.ConnectionPool;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -47,6 +51,11 @@ public class ParquetIngestionQueue extends BulkIngestQueueV2<String, IngestionRe
         this.postIngestionTaskFactory = postIngestionTaskFactory;
         this.applicationId = applicationId;
         this.inputFormat = inputFormat;
+        try {
+            Files.createDirectories(Path.of(path));
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     @Override
