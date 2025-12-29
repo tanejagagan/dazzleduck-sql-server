@@ -761,7 +761,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             Path tempFile;
             try (inputReader) {
                 tempFile = BulkIngestQueue.writeAndValidateTempArrowFile(tempDir, inputReader);
-
                 var batch = ingestionParameters.constructBatch(Files.size(tempFile), tempFile.toAbsolutePath().toString());
                 var ingestionQueue = ingestionQueueMap.computeIfAbsent(ingestionParameters.completePath(warehousePath), p -> {
                     return new ParquetIngestionQueue(producerId, TEMP_WRITE_FORMAT, p, p,
