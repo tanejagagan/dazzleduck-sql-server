@@ -15,14 +15,14 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Main processor that continuously:
- * 1. Reads new log lines from file (tracking byte position)
- * 2. Converts JSON to Apache Arrow
- * 3. Sends to server via HttpSender
+ * 1. Monitors a directory for log files (tracking new file creation)
+ * 2. Reads new log lines from all matching files (tracking byte position per file)
+ * 3. Converts JSON to Apache Arrow
+ * 4. Sends to server via HttpSender
  */
 public final class LogTailToArrowProcessor implements AutoCloseable {
 
     private static final Logger logger = LoggerFactory.getLogger(LogTailToArrowProcessor.class);
-    private static final long DEFAULT_POLL_INTERVAL_MS = 30_000; // 30 seconds
 
     private final LogFileTailReader tailReader;
     private final JsonToArrowConverter arrowConverter;
@@ -32,19 +32,28 @@ public final class LogTailToArrowProcessor implements AutoCloseable {
 
     private volatile boolean running = false;
 
+    /**
+     * Create processor for directory monitoring
+     * @param logDirectory Directory containing log files
+     * @param filePattern Glob pattern to match files (e.g., "*.log")
+     * @param httpSender HTTP sender for Arrow data
+     * @param pollIntervalMs Polling interval in milliseconds
+     */
     public LogTailToArrowProcessor(
-            String logFilePath,
+            String logDirectory,
+            String filePattern,
             HttpSender httpSender,
             long pollIntervalMs
     ) {
-        Objects.requireNonNull(logFilePath, "logFilePath must not be null");
+        Objects.requireNonNull(logDirectory, "logDirectory must not be null");
+        Objects.requireNonNull(filePattern, "filePattern must not be null");
         Objects.requireNonNull(httpSender, "httpSender must not be null");
 
         if (pollIntervalMs <= 0) {
             throw new IllegalArgumentException("pollIntervalMs must be positive");
         }
 
-        this.tailReader = new LogFileTailReader(logFilePath);
+        this.tailReader = new LogFileTailReader(logDirectory, filePattern);
         this.arrowConverter = new JsonToArrowConverter();
         this.httpSender = httpSender;
         this.pollIntervalMs = pollIntervalMs;
@@ -54,12 +63,8 @@ public final class LogTailToArrowProcessor implements AutoCloseable {
             return t;
         });
 
-        logger.info("Initialized LogTailToArrowProcessor: file={}, pollInterval={}ms",
-                logFilePath, pollIntervalMs);
-    }
-
-    public LogTailToArrowProcessor(String logFilePath, HttpSender httpSender) {
-        this(logFilePath, httpSender, DEFAULT_POLL_INTERVAL_MS);
+        logger.info("Initialized LogTailToArrowProcessor: directory={}, pattern={}, pollInterval={}ms",
+                logDirectory, filePattern, pollIntervalMs);
     }
 
     /**
@@ -109,15 +114,20 @@ public final class LogTailToArrowProcessor implements AutoCloseable {
 
     private void processNewLogs() {
         try {
-            // Step 1: Read new lines from log file
+            // Step 1: Read new lines from all log files in directory
             List<String> newLines = tailReader.readNewLines();
 
             if (newLines.isEmpty()) {
                 return;
             }
 
-            logger.info("Processing {} new log entries (file position: {} bytes)",
-                    newLines.size(), tailReader.getLastReadPosition());
+            logger.info("Processing {} new log entries from {} monitored file(s)",
+                    newLines.size(), tailReader.getMonitoredFileCount());
+
+            if (logger.isDebugEnabled()) {
+                tailReader.getFilePositions().forEach((file, pos) ->
+                        logger.debug("  {} -> {} bytes", file, pos));
+            }
 
             // Step 2: Convert JSON to Arrow
             VectorSchemaRoot arrowBatch = arrowConverter.convertToArrow(newLines);
@@ -137,7 +147,6 @@ public final class LogTailToArrowProcessor implements AutoCloseable {
                         arrowBatch.getRowCount(),
                         arrowBytes.length
                 );
-                logger.debug("Successfully queued {} records for sending", arrowBatch.getRowCount());
             } finally {
                 arrowBatch.close();
             }

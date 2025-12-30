@@ -59,9 +59,7 @@ public final class JsonToArrowConverter implements Closeable {
 
         VectorSchemaRoot root = VectorSchemaRoot.create(schema, allocator);
         root.setRowCount(logMessages.size());
-
         populateVectors(root, logMessages);
-
         return root;
     }
 

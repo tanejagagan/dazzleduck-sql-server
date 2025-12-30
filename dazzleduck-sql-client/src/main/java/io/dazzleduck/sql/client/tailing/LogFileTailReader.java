@@ -5,56 +5,125 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.List;
+import java.nio.file.*;
+import java.util.*;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
- * Continuously reads new lines from a log file, tracking byte position.
- * Only reads newly appended data since last read.
+ * Monitors a directory for log files and reads new lines from all matching files.
+ * Tracks byte position for each file individually and detects new files.
  */
 public final class LogFileTailReader {
 
     private static final Logger logger = LoggerFactory.getLogger(LogFileTailReader.class);
 
-    private final Path logFilePath;
-    private long lastReadPosition;
+    private final Path logDirectory;
+    private final PathMatcher fileMatcher;
+    // Track last read position for each file
+    private final Map<Path, Long> filePositions;
+    // Track known files to detect new ones
+    private final Set<Path> knownFiles;
 
-    public LogFileTailReader(String logFilePath) {
-        this.logFilePath = Paths.get(logFilePath);
-        this.lastReadPosition = 0;
+    /**
+     * Create a reader that monitors a directory for log files
+     * @param directoryPath Path to the directory containing log files
+     * @param filePattern Glob pattern to match files (e.g., "*.log", "app*.json")
+     */
+    public LogFileTailReader(String directoryPath, String filePattern) {
+        this.logDirectory = Paths.get(directoryPath);
+        this.fileMatcher = FileSystems.getDefault().getPathMatcher("glob:" + filePattern);
+        this.filePositions = new HashMap<>();
+        this.knownFiles = new HashSet<>();
+
+        if (!Files.exists(logDirectory)) {
+            logger.warn("Log directory does not exist: {}", logDirectory);
+        } else if (!Files.isDirectory(logDirectory)) {
+            throw new IllegalArgumentException("Path is not a directory: " + logDirectory);
+        }
+        logger.info("Initialized LogFileTailReader: directory={}, pattern={}", directoryPath, filePattern);
     }
 
     /**
-     * Reads new lines appended since last read.
-     * @return List of new JSON log lines
+     * Reads new lines from all matching log files in the directory.
+     * Detects new files and handles file rotation.
+     *
+     * @return List of new JSON log lines from all files
      */
     public List<String> readNewLines() throws IOException {
-        List<String> newLines = new ArrayList<>();
+        List<String> allNewLines = new ArrayList<>();
 
-        if (!Files.exists(logFilePath)) {
-            logger.debug("Log file not found: {}", logFilePath);
-            return newLines;
+        if (!Files.exists(logDirectory)) {
+            logger.debug("Log directory not found: {}", logDirectory);
+            return allNewLines;
+        }
+        // Get all matching files in directory
+        Set<Path> currentFiles = getMatchingFiles();
+        // Detect new files
+        Set<Path> newFiles = new HashSet<>(currentFiles);
+        newFiles.removeAll(knownFiles);
+
+        if (!newFiles.isEmpty()) {
+            logger.info("Detected {} new log file(s): {}", newFiles.size(), newFiles.stream().map(Path::getFileName).collect(Collectors.toList()));
         }
 
-        try (RandomAccessFile raf = new RandomAccessFile(logFilePath.toFile(), "r")) {
+        // Update known files
+        knownFiles.addAll(currentFiles);
+
+        // Remove files that no longer exist
+        Set<Path> removedFiles = new HashSet<>(filePositions.keySet());
+        removedFiles.removeAll(currentFiles);
+        for (Path removed : removedFiles) {
+            filePositions.remove(removed);
+            knownFiles.remove(removed);
+            logger.info("File removed from monitoring: {}", removed.getFileName());
+        }
+
+        // Read from each file
+        for (Path filePath : currentFiles) {
+            try {
+                List<String> newLines = readNewLinesFromFile(filePath);
+                allNewLines.addAll(newLines);
+            } catch (IOException e) {
+                logger.error("Error reading file {}: {}", filePath.getFileName(), e.getMessage());
+            }
+        }
+
+        return allNewLines;
+    }
+
+    private Set<Path> getMatchingFiles() throws IOException {
+        if (!Files.exists(logDirectory)) {
+            return Collections.emptySet();
+        }
+
+        try (Stream<Path> paths = Files.list(logDirectory)) {
+            return paths
+                    .filter(Files::isRegularFile)
+                    .filter(path -> fileMatcher.matches(path.getFileName()))
+                    .collect(Collectors.toSet());
+        }
+    }
+
+    private List<String> readNewLinesFromFile(Path filePath) throws IOException {
+        List<String> newLines = new ArrayList<>();
+
+        try (RandomAccessFile raf = new RandomAccessFile(filePath.toFile(), "r")) {
             long currentFileLength = raf.length();
+            long lastPosition = filePositions.getOrDefault(filePath, 0L);
 
             // Handle file truncation or rotation
-            if (currentFileLength < lastReadPosition) {
-                logger.warn("File truncated or rotated. Resetting position from {} to 0", lastReadPosition);
-                lastReadPosition = 0;
+            if (currentFileLength < lastPosition) {
+                logger.warn("File {} truncated or rotated. Resetting position from {} to 0", filePath.getFileName(), lastPosition);
+                lastPosition = 0;
             }
 
             // Read only if there's new data
-            if (currentFileLength > lastReadPosition) {
-                long bytesToRead = currentFileLength - lastReadPosition;
-                logger.debug("Reading bytes {} to {} ({} bytes)",
-                        lastReadPosition, currentFileLength, bytesToRead);
+            if (currentFileLength > lastPosition) {
+                long bytesToRead = currentFileLength - lastPosition;
+                logger.debug("Reading file {}: bytes {} to {} ({} bytes)", filePath.getFileName(), lastPosition, currentFileLength, bytesToRead);
 
-                raf.seek(lastReadPosition);
+                raf.seek(lastPosition);
 
                 String line;
                 while ((line = raf.readLine()) != null) {
@@ -64,19 +133,43 @@ public final class LogFileTailReader {
                     }
                 }
 
-                lastReadPosition = raf.getFilePointer();
+                filePositions.put(filePath, raf.getFilePointer());
             }
         }
-
         return newLines;
     }
 
-    public long getLastReadPosition() {
-        return lastReadPosition;
+    /**
+     * Get current read positions for all monitored files
+     * @return Map of filename to byte position
+     */
+    public Map<String, Long> getFilePositions() {
+        Map<String, Long> positions = new HashMap<>();
+        filePositions.forEach((path, pos) -> positions.put(path.getFileName().toString(), pos));
+        return positions;
     }
 
+    /**
+     * Get the last read position (for backward compatibility, returns total from first file)
+     * @deprecated Use getFilePositions() for multi-file monitoring
+     */
+    @Deprecated
+    public long getLastReadPosition() {
+        return filePositions.values().stream().findFirst().orElse(0L);
+    }
+
+    /**
+     * Get count of files currently being monitored
+     */
+    public int getMonitoredFileCount() {
+        return knownFiles.size();
+    }
+
+    /**
+     * Reset all file positions to 0
+     */
     public void reset() {
-        lastReadPosition = 0;
-        logger.info("Reader position reset to 0");
+        filePositions.clear();
+        logger.info("All file positions reset to 0");
     }
 }

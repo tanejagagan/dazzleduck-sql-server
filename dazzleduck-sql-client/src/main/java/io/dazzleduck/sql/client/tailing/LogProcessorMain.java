@@ -1,5 +1,7 @@
 package io.dazzleduck.sql.client.tailing;
 
+import com.typesafe.config.Config;
+import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.client.HttpSender;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -7,69 +9,58 @@ import org.slf4j.LoggerFactory;
 import java.time.Duration;
 
 /**
- * Main entry point for log tail to Arrow processor
- *
- * Usage:
- *   java LogProcessorMain <log-file-path> <server-url> <username> <password> <target-path> [poll-interval-ms]
- *
- * Example:
- *   java LogProcessorMain /var/log/app.log http://localhost:8094 admin secret123 /logs/app 30000
+ * Main entry point for log tail to Arrow processor.
  */
 public final class LogProcessorMain {
 
     private static final Logger logger = LoggerFactory.getLogger(LogProcessorMain.class);
-    private static final long DEFAULT_POLL_INTERVAL_MS = 30_000; // 30 seconds
-    private static final Duration HTTP_TIMEOUT = Duration.ofSeconds(30);
-    private static final long MIN_BATCH_SIZE = 1;
-    private static final Duration MAX_SEND_INTERVAL = Duration.ofSeconds(10);
-    private static final long MAX_IN_MEMORY_SIZE = 100 * 1024 * 1024; // 100MB
-    private static final long MAX_ON_DISK_SIZE = 1024 * 1024 * 1024; // 1GB
+
+    private static final Config config = ConfigFactory.load().getConfig("dazzleduck_logger");
+    // Application config
+    private static final String CONFIG_APPLICATION_ID = config.getString("application_id");
+    private static final String CONFIG_APPLICATION_NAME = config.getString("application_name");
+    private static final String CONFIG_HOST = config.getString("host");
+    private static final String CONFIG_PORT = config.getString("port");
+    // Log monitoring config
+    private static final String CONFIG_LOG_DIRECTORY = config.getString("log_directory");
+    private static final String CONFIG_LOG_FILE_PATTERN = config.getString("log_file_pattern");
+    private static final long CONFIG_POLL_INTERVAL_MS = config.getLong("poll_interval_ms");
+    // HTTP config
+    private static final String CONFIG_HTTP_BASE_URL = config.getString("http.base_url");
+    private static final String CONFIG_HTTP_USERNAME = config.getString("http.username");
+    private static final String CONFIG_HTTP_PASSWORD = config.getString("http.password");
+    private static final String CONFIG_HTTP_TARGET_PATH = config.getString("http.target_path");
+    private static final long CONFIG_HTTP_TIMEOUT_MS = config.getLong("http.http_client_timeout_ms");
+    // Batch and memory config
+    private static final long CONFIG_MIN_BATCH_SIZE = config.getLong("min_batch_size");
+    private static final long CONFIG_MAX_SEND_INTERVAL_MS = config.getLong("max_send_interval_ms");
+    private static final long CONFIG_MAX_IN_MEMORY_BYTES = config.getLong("max_in_memory_bytes");
+    private static final long CONFIG_MAX_ON_DISK_BYTES = config.getLong("max_on_disk_bytes");
 
     public static void main(String[] args) throws InterruptedException {
-        if (args.length < 5) {
-            System.err.println("Usage: java LogProcessorMain <log-file-path> <server-url> <username> <password> <target-path> [poll-interval-ms]");
-            System.err.println("Example: java LogProcessorMain /var/log/app.log http://localhost:8080 admin secret123 /logs/app 30000");
-            System.exit(1);
-        }
-
-        String logFilePath = args[0];
-        String serverUrl = args[1];
-        String username = args[2];
-        String password = args[3];
-        String targetPath = args[4];
-        long pollIntervalMs = args.length > 5 ? Long.parseLong(args[5]) : DEFAULT_POLL_INTERVAL_MS;
-
-        logger.info("=== DazzleDuck Log Tail to Arrow Processor ===");
-        logger.info("Log file: {}", logFilePath);
-        logger.info("Server URL: {}", serverUrl);
-        logger.info("Username: {}", username);
-        logger.info("Target path: {}", targetPath);
-        logger.info("Poll interval: {}ms", pollIntervalMs);
-
         // Create converter to get schema
         JsonToArrowConverter converter = new JsonToArrowConverter();
 
-        // Create HttpSender with existing implementation
+        // Create HttpSender with configuration
         HttpSender httpSender = new HttpSender(
                 converter.getSchema(),
-                serverUrl,
-                username,
-                password,
-                targetPath,
-                HTTP_TIMEOUT,
-                MIN_BATCH_SIZE,
-                MAX_SEND_INTERVAL,
-                MAX_IN_MEMORY_SIZE,
-                MAX_ON_DISK_SIZE
+                CONFIG_HTTP_BASE_URL,
+                CONFIG_HTTP_USERNAME,
+                CONFIG_HTTP_PASSWORD,
+                CONFIG_LOG_DIRECTORY,
+                Duration.ofMillis(CONFIG_HTTP_TIMEOUT_MS),
+                CONFIG_MIN_BATCH_SIZE,
+                Duration.ofMillis(CONFIG_MAX_SEND_INTERVAL_MS),
+                CONFIG_MAX_IN_MEMORY_BYTES,
+                CONFIG_MAX_ON_DISK_BYTES
         );
-
         converter.close(); // Close temporary converter
-
-        // Create and start processor
+        // Create and start processor with directory monitoring
         LogTailToArrowProcessor processor = new LogTailToArrowProcessor(
-                logFilePath,
+                CONFIG_LOG_DIRECTORY,
+                CONFIG_LOG_FILE_PATTERN,
                 httpSender,
-                pollIntervalMs
+                CONFIG_POLL_INTERVAL_MS
         );
 
         // Add shutdown hook
@@ -81,7 +72,7 @@ public final class LogProcessorMain {
         // Start processing
         processor.start();
 
-        logger.info("Processor started. Press Ctrl+C to stop.");
+        logger.info("Processor started. Monitoring directory for log files 💽📂...");
 
         // Keep main thread alive
         while (processor.isRunning()) {
