@@ -26,6 +26,8 @@ public class HttpLoggerIntegrationTest {
                 "--conf", "dazzleduck_server.warehouse=" + warehousePath,
                 "--conf", "dazzleduck_server.ingestion.max_delay_ms=200"
         });
+
+        Files.createDirectories(Path.of(warehousePath + "/dazzleduck_"));
     }
 
     @Test

@@ -51,11 +51,6 @@ public class ParquetIngestionQueue extends BulkIngestQueueV2<String, IngestionRe
         this.postIngestionTaskFactory = postIngestionTaskFactory;
         this.applicationId = applicationId;
         this.inputFormat = inputFormat;
-        try {
-            Files.createDirectories(Path.of(path));
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
     }
 
     @Override
