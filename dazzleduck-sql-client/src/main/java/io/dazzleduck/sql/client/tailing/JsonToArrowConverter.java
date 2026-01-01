@@ -16,7 +16,6 @@ import org.slf4j.LoggerFactory;
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -29,9 +28,15 @@ public final class JsonToArrowConverter implements Closeable {
 
     private final BufferAllocator allocator;
     private final Schema schema;
+    private final String application_id;
+    private final String application_name;
+    private final String application_host;
 
-    public JsonToArrowConverter() {
+    public JsonToArrowConverter(String applicationId, String applicationName, String applicationHost) {
         this.allocator = new RootAllocator(Long.MAX_VALUE);
+        this.application_id = applicationId;
+        this.application_name = applicationName;
+        this.application_host = applicationHost;
         this.schema = createArrowSchema();
     }
 
@@ -44,8 +49,10 @@ public final class JsonToArrowConverter implements Closeable {
 
     /**
      * Convert list of JSON log lines to Arrow VectorSchemaRoot
+     * @param jsonLines List of JSON log lines
+     * @param fileName Name of the file these logs came from
      */
-    public VectorSchemaRoot convertToArrow(List<String> jsonLines) {
+    public VectorSchemaRoot convertToArrow(List<String> jsonLines, String fileName) {
         if (jsonLines == null || jsonLines.isEmpty()) {
             return null;
         }
@@ -59,7 +66,7 @@ public final class JsonToArrowConverter implements Closeable {
 
         VectorSchemaRoot root = VectorSchemaRoot.create(schema, allocator);
         root.setRowCount(logMessages.size());
-        populateVectors(root, logMessages);
+        populateVectors(root, logMessages, fileName);
         return root;
     }
 
@@ -79,30 +86,41 @@ public final class JsonToArrowConverter implements Closeable {
     }
 
     private Schema createArrowSchema() {
-        return new Schema(Arrays.asList(
+        return new Schema(List.of(
                 new Field("timestamp", FieldType.nullable(new ArrowType.Utf8()), null),
                 new Field("level", FieldType.nullable(new ArrowType.Utf8()), null),
-                new Field("thread", FieldType.nullable(new ArrowType.Utf8()), null),
                 new Field("logger", FieldType.nullable(new ArrowType.Utf8()), null),
-                new Field("message", FieldType.nullable(new ArrowType.Utf8()), null)
-        ));
+                new Field("thread", FieldType.nullable(new ArrowType.Utf8()), null),
+                new Field("message", FieldType.nullable(new ArrowType.Utf8()), null),
+                new Field("application_id", FieldType.nullable(new ArrowType.Utf8()), null),
+                new Field("application_name", FieldType.nullable(new ArrowType.Utf8()), null),
+                new Field("application_host", FieldType.nullable(new ArrowType.Utf8()), null),
+                new Field("file_name", FieldType.nullable(new ArrowType.Utf8()), null)));
     }
 
-    private void populateVectors(VectorSchemaRoot root, List<LogMessage> logMessages) {
+    private void populateVectors(VectorSchemaRoot root, List<LogMessage> logMessages, String fileName) {
         VarCharVector timestampVec = (VarCharVector) root.getVector("timestamp");
         VarCharVector levelVec = (VarCharVector) root.getVector("level");
-        VarCharVector threadVec = (VarCharVector) root.getVector("thread");
         VarCharVector loggerVec = (VarCharVector) root.getVector("logger");
+        VarCharVector threadVec = (VarCharVector) root.getVector("thread");
         VarCharVector messageVec = (VarCharVector) root.getVector("message");
+        VarCharVector applicationIdVec = (VarCharVector) root.getVector("application_id");
+        VarCharVector applicationNameVec = (VarCharVector) root.getVector("application_name");
+        VarCharVector applicationHostVec = (VarCharVector) root.getVector("application_host");
+        VarCharVector fileNameVec = (VarCharVector) root.getVector("file_name");
 
         for (int i = 0; i < logMessages.size(); i++) {
             LogMessage log = logMessages.get(i);
 
             setVectorValue(timestampVec, i, log.timestamp());
             setVectorValue(levelVec, i, log.level());
-            setVectorValue(threadVec, i, log.thread());
             setVectorValue(loggerVec, i, log.logger());
+            setVectorValue(threadVec, i, log.thread());
             setVectorValue(messageVec, i, log.message());
+            setVectorValue(applicationIdVec, i, application_id);
+            setVectorValue(applicationNameVec, i, application_name);
+            setVectorValue(applicationHostVec, i, application_host);
+            setVectorValue(fileNameVec, i, fileName);
         }
     }
 

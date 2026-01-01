@@ -23,6 +23,9 @@ class LogTailToArrowProcessorTest {
     static Path warehouse;
     @TempDir
     Path tempDir;
+    static final String APPLICATION_ID = "test-app-id";
+    static final String APPLICATION_NAME = "TestApplication";
+    static final String APPLICATION_HOST = "localhost";
 
     @BeforeAll
     static void setup() throws Exception {
@@ -34,8 +37,7 @@ class LogTailToArrowProcessorTest {
                 "--conf", "dazzleduck_server.ingestion.max_delay_ms=500"
         });
 
-        JsonToArrowConverter converter = new JsonToArrowConverter();
-        schema = converter.getSchema();
+        JsonToArrowConverter converter = new JsonToArrowConverter(APPLICATION_ID, APPLICATION_NAME, APPLICATION_HOST);        schema = converter.getSchema();
         converter.close();
     }
 
@@ -63,8 +65,8 @@ class LogTailToArrowProcessorTest {
                 """);
         // Create REAL HttpSender
         try (HttpSender sender = new HttpSender(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(5), 1, Duration.ofSeconds(1), 10_000_000, 10_000_000)) {
-            // Start processor
-            LogTailToArrowProcessor processor = new LogTailToArrowProcessor(tempDir.toString(), "*.log", sender, 100);
+            JsonToArrowConverter converter = new JsonToArrowConverter(APPLICATION_ID, APPLICATION_NAME, APPLICATION_HOST);
+            LogTailToArrowProcessor processor = new LogTailToArrowProcessor(tempDir.toString(), "*.log", converter, sender, 100);
             processor.start();
             // Verify ingestion via DuckDB
             await().ignoreExceptions().untilAsserted(() -> {
@@ -82,6 +84,7 @@ class LogTailToArrowProcessorTest {
         Path logFile1 = tempDir.resolve("first.log");
         Path logFile2 = tempDir.resolve("second.log");
         Path logFile3 = tempDir.resolve("third.log");
+        // add application_name , application_id, application_host, application_name -->> in log columns.
         Files.writeString(logFile1, """
                 {"timestamp":"2024-01-01T10:00:00Z","level":"INFO","thread":"main","logger":"App","message":"Hello file1"}
                 {"timestamp":"2024-01-01T10:00:01Z","level":"WARN","thread":"main","logger":"App","message":"World"}
@@ -97,7 +100,8 @@ class LogTailToArrowProcessorTest {
 
         try (HttpSender sender = new HttpSender(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(5), 1, Duration.ofSeconds(1), 10_000_000, 10_000_000)) {
             // Start processor
-            LogTailToArrowProcessor processor = new LogTailToArrowProcessor(tempDir.toString(), "*.log", sender, 100);
+            JsonToArrowConverter converter = new JsonToArrowConverter(APPLICATION_ID, APPLICATION_NAME, APPLICATION_HOST);
+            LogTailToArrowProcessor processor = new LogTailToArrowProcessor(tempDir.toString(), "*.log", converter, sender, 100);
             processor.start();
             // Verify ingestion via DuckDB
             await().ignoreExceptions().untilAsserted(() -> {
@@ -120,7 +124,8 @@ class LogTailToArrowProcessorTest {
                 """);
 
         try (HttpSender sender = new HttpSender(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(5), 1, Duration.ofSeconds(1), 10_000_000, 10_000_000)) {
-            LogTailToArrowProcessor processor = new LogTailToArrowProcessor(tempDir.toString(), "*.log", sender, 100);
+            JsonToArrowConverter converter = new JsonToArrowConverter(APPLICATION_ID, APPLICATION_NAME, APPLICATION_HOST);
+            LogTailToArrowProcessor processor = new LogTailToArrowProcessor(tempDir.toString(), "*.log", converter, sender, 100);
             processor.start();
             await().ignoreExceptions().untilAsserted(() -> {
                 long count = ConnectionPool.collectFirst("select count(*) from read_parquet('%s/%s/*.parquet')".formatted(warehouse, targetDir), Long.class);
@@ -138,7 +143,8 @@ class LogTailToArrowProcessorTest {
         Files.createFile(logFile);
 
         try (HttpSender sender = new HttpSender(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(3), 1, Duration.ofSeconds(1), 10_000_000, 10_000_000)) {
-            LogTailToArrowProcessor processor = new LogTailToArrowProcessor(tempDir.toString(), "*.log", sender, 100);
+            JsonToArrowConverter converter = new JsonToArrowConverter(APPLICATION_ID, APPLICATION_NAME, APPLICATION_HOST);
+            LogTailToArrowProcessor processor = new LogTailToArrowProcessor(tempDir.toString(), "*.log", converter, sender, 100);
             processor.start();
             // Wait briefly and assert file does NOT exist
             await().during(1, TimeUnit.SECONDS).untilAsserted(() -> {
@@ -154,7 +160,8 @@ class LogTailToArrowProcessorTest {
         tempDir.resolve("missing.log"); // not created
 
         try (HttpSender sender = new HttpSender(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(3), 1, Duration.ofSeconds(1), 10_000_000, 10_000_000)) {
-            LogTailToArrowProcessor processor = new LogTailToArrowProcessor(tempDir.toString(), "*.log", sender, 100);
+            JsonToArrowConverter converter = new JsonToArrowConverter(APPLICATION_ID, APPLICATION_NAME, APPLICATION_HOST);
+            LogTailToArrowProcessor processor = new LogTailToArrowProcessor(tempDir.toString(), "*.log", converter, sender, 100);
             processor.start();
             // Just ensure no ingestion happens and no crash
             await().during(1, TimeUnit.SECONDS).untilAsserted(() -> assertTrue(processor.isRunning()));

@@ -1,6 +1,7 @@
 package io.dazzleduck.sql.client.tailing;
 
 import io.dazzleduck.sql.client.HttpSender;
+import io.dazzleduck.sql.client.tailing.model.LogFileWithLines;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.ipc.ArrowStreamWriter;
 import org.slf4j.Logger;
@@ -34,19 +35,23 @@ public final class LogTailToArrowProcessor implements AutoCloseable {
 
     /**
      * Create processor for directory monitoring
-     * @param logDirectory Directory containing log files
-     * @param filePattern Glob pattern to match files (e.g., "*.log")
-     * @param httpSender HTTP sender for Arrow data
+     *
+     * @param logDirectory   Directory containing log files
+     * @param filePattern    Glob pattern to match files (e.g., "*.log")
+     * @param arrowConverter JsonToArrowConverter
+     * @param httpSender     HTTP sender for Arrow data
      * @param pollIntervalMs Polling interval in milliseconds
      */
     public LogTailToArrowProcessor(
             String logDirectory,
             String filePattern,
+            JsonToArrowConverter arrowConverter,
             HttpSender httpSender,
             long pollIntervalMs
     ) {
         Objects.requireNonNull(logDirectory, "logDirectory must not be null");
         Objects.requireNonNull(filePattern, "filePattern must not be null");
+        Objects.requireNonNull(arrowConverter, "arrowConverter must not be null");
         Objects.requireNonNull(httpSender, "httpSender must not be null");
 
         if (pollIntervalMs <= 0) {
@@ -54,7 +59,7 @@ public final class LogTailToArrowProcessor implements AutoCloseable {
         }
 
         this.tailReader = new LogFileTailReader(logDirectory, filePattern);
-        this.arrowConverter = new JsonToArrowConverter();
+        this.arrowConverter = arrowConverter;
         this.httpSender = httpSender;
         this.pollIntervalMs = pollIntervalMs;
         this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -114,41 +119,38 @@ public final class LogTailToArrowProcessor implements AutoCloseable {
 
     private void processNewLogs() {
         try {
-            // Step 1: Read new lines from all log files in directory
-            List<String> newLines = tailReader.readNewLines();
+            List<LogFileWithLines> filesWithLines = tailReader.readNewLinesGroupedByFile();
 
-            if (newLines.isEmpty()) {
+            if (filesWithLines.isEmpty()) {
                 return;
             }
 
-            logger.info("Processing {} new log entries from {} monitored file(s)",
-                    newLines.size(), tailReader.getMonitoredFileCount());
+            int totalLines = filesWithLines.stream().mapToInt(f -> f.lines().size()).sum();
+            logger.info("Processing {} new log entries from {} file(s)", totalLines, filesWithLines.size());
 
             if (logger.isDebugEnabled()) {
                 tailReader.getFilePositions().forEach((file, pos) ->
                         logger.debug("  {} -> {} bytes", file, pos));
             }
 
-            // Step 2: Convert JSON to Arrow
-            VectorSchemaRoot arrowBatch = arrowConverter.convertToArrow(newLines);
+            for (LogFileWithLines fileWithLines : filesWithLines) {
+                // Convert JSON to Arrow
+                VectorSchemaRoot arrowBatch = arrowConverter.convertToArrow(fileWithLines.lines(), fileWithLines.fileName());
 
-            if (arrowBatch == null) {
-                logger.error("Failed to convert logs to Arrow format");
-                return;
-            }
+                if (arrowBatch == null) {
+                    logger.error("Failed to convert logs to Arrow format for file: {}", fileWithLines.fileName());
+                    continue;
+                }
 
-            try {
-                // Step 3: Send to server using existing HttpSender
-                byte[] arrowBytes = toArrowBytes(arrowBatch);
-                httpSender.enqueue(arrowBytes);
+                try {
+                    // Send to server using existing HttpSender
+                    byte[] arrowBytes = toArrowBytes(arrowBatch);
+                    httpSender.enqueue(arrowBytes);
 
-                logger.debug(
-                        "Successfully queued {} records ({} bytes) for sending",
-                        arrowBatch.getRowCount(),
-                        arrowBytes.length
-                );
-            } finally {
-                arrowBatch.close();
+                    logger.debug("Successfully queued {} records ({} bytes) from file {} for sending", arrowBatch.getRowCount(), arrowBytes.length, fileWithLines.fileName());
+                } finally {
+                    arrowBatch.close();
+                }
             }
 
         } catch (Exception e) {

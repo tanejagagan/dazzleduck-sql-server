@@ -1,5 +1,6 @@
 package io.dazzleduck.sql.client.tailing;
 
+import io.dazzleduck.sql.client.tailing.model.LogFileWithLines;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -46,16 +47,14 @@ public final class LogFileTailReader {
 
     /**
      * Reads new lines from all matching log files in the directory.
-     * Detects new files and handles file rotation.
-     *
-     * @return List of new JSON log lines from all files
+     * Returns a list of LogFileWithLines objects, each containing the file name and its new lines.
      */
-    public List<String> readNewLines() throws IOException {
-        List<String> allNewLines = new ArrayList<>();
+    public List<LogFileWithLines> readNewLinesGroupedByFile() throws IOException {
+        List<LogFileWithLines> result = new ArrayList<>();
 
         if (!Files.exists(logDirectory)) {
             logger.debug("Log directory not found: {}", logDirectory);
-            return allNewLines;
+            return result;
         }
         // Get all matching files in directory
         Set<Path> currentFiles = getMatchingFiles();
@@ -83,13 +82,15 @@ public final class LogFileTailReader {
         for (Path filePath : currentFiles) {
             try {
                 List<String> newLines = readNewLinesFromFile(filePath);
-                allNewLines.addAll(newLines);
+                if (!newLines.isEmpty()) {
+                    result.add(new LogFileWithLines(filePath.getFileName().toString(), newLines));
+                }
             } catch (IOException e) {
                 logger.error("Error reading file {}: {}", filePath.getFileName(), e.getMessage());
             }
         }
 
-        return allNewLines;
+        return result;
     }
 
     private Set<Path> getMatchingFiles() throws IOException {
@@ -147,15 +148,6 @@ public final class LogFileTailReader {
         Map<String, Long> positions = new HashMap<>();
         filePositions.forEach((path, pos) -> positions.put(path.getFileName().toString(), pos));
         return positions;
-    }
-
-    /**
-     * Get the last read position (for backward compatibility, returns total from first file)
-     * @deprecated Use getFilePositions() for multi-file monitoring
-     */
-    @Deprecated
-    public long getLastReadPosition() {
-        return filePositions.values().stream().findFirst().orElse(0L);
     }
 
     /**

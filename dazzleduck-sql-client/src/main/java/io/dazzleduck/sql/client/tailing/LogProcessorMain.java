@@ -19,8 +19,7 @@ public final class LogProcessorMain {
     // Application config
     private static final String CONFIG_APPLICATION_ID = config.getString("application_id");
     private static final String CONFIG_APPLICATION_NAME = config.getString("application_name");
-    private static final String CONFIG_HOST = config.getString("host");
-    private static final String CONFIG_PORT = config.getString("port");
+    private static final String CONFIG_APPLICATION_HOST = config.getString("application_host");
     // Log monitoring config
     private static final String CONFIG_LOG_DIRECTORY = config.getString("log_directory");
     private static final String CONFIG_LOG_FILE_PATTERN = config.getString("log_file_pattern");
@@ -39,7 +38,11 @@ public final class LogProcessorMain {
 
     public static void main(String[] args) throws InterruptedException {
         // Create converter to get schema
-        JsonToArrowConverter converter = new JsonToArrowConverter();
+        JsonToArrowConverter converter = new JsonToArrowConverter(
+                CONFIG_APPLICATION_ID,
+                CONFIG_APPLICATION_NAME,
+                CONFIG_APPLICATION_HOST
+        );
 
         // Create HttpSender with configuration
         HttpSender httpSender = new HttpSender(
@@ -47,18 +50,18 @@ public final class LogProcessorMain {
                 CONFIG_HTTP_BASE_URL,
                 CONFIG_HTTP_USERNAME,
                 CONFIG_HTTP_PASSWORD,
-                CONFIG_LOG_DIRECTORY,
+                CONFIG_HTTP_TARGET_PATH,
                 Duration.ofMillis(CONFIG_HTTP_TIMEOUT_MS),
                 CONFIG_MIN_BATCH_SIZE,
                 Duration.ofMillis(CONFIG_MAX_SEND_INTERVAL_MS),
                 CONFIG_MAX_IN_MEMORY_BYTES,
                 CONFIG_MAX_ON_DISK_BYTES
         );
-        converter.close(); // Close temporary converter
         // Create and start processor with directory monitoring
         LogTailToArrowProcessor processor = new LogTailToArrowProcessor(
                 CONFIG_LOG_DIRECTORY,
                 CONFIG_LOG_FILE_PATTERN,
+                converter,
                 httpSender,
                 CONFIG_POLL_INTERVAL_MS
         );
