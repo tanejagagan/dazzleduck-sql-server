@@ -8,7 +8,7 @@ import java.util.*;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.stream.Collectors;
 
-public class ParquetIngestionQueue extends BulkIngestQueueV2<String, IngestionResult> {
+public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResult> {
 
     private final String path;
     private final PostIngestionTaskFactory postIngestionTaskFactory;
@@ -61,8 +61,13 @@ public class ParquetIngestionQueue extends BulkIngestQueueV2<String, IngestionRe
         var selectClause = lastTransformation.isEmpty() ? "*" : "*, " + lastTransformation;
         // Last format
         var outputFormat = batches.isEmpty() ? "" : batches.get(batches.size() - 1).format();
-        String uniqueFileName = "dd_" + UUID.randomUUID() + "." + outputFormat;
-        String fullFilePath = this.path + "/" + uniqueFileName;
+        String fullFilePath;
+        if (lastPartition.isEmpty()) {
+            String uniqueFileName = "dd_" + UUID.randomUUID() + "." + outputFormat;
+            fullFilePath = this.path + "/" + uniqueFileName;
+        } else {
+            fullFilePath = this.path;
+        }
 
         // Build SQL
         // https://duckdb.org/docs/stable/sql/statements/copy
