@@ -1,5 +1,7 @@
 package io.dazzleduck.sql.logger;
 
+import com.typesafe.config.Config;
+import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import org.junit.jupiter.api.*;
 
@@ -13,6 +15,8 @@ public class HttpLoggerIntegrationTest {
 
     private static final int PORT = 8081;
     static String warehousePath;
+    private static final Config config = ConfigFactory.load().getConfig("dazzleduck_logger");
+    private static final String CONFIG_HTTP_TARGET_PATH = config.getString("http.target_path");
 
     @BeforeAll
     void startServer() throws Exception {
@@ -27,7 +31,7 @@ public class HttpLoggerIntegrationTest {
                 "--conf", "dazzleduck_server.ingestion.max_delay_ms=200"
         });
 
-        Files.createDirectories(Path.of(warehousePath + "/dazzleduck_"));
+        Files.createDirectories(Path.of(warehousePath + "/" + CONFIG_HTTP_TARGET_PATH));
     }
 
     @Test
