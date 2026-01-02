@@ -1,4 +1,4 @@
-package io.dazzleduck.sql.client.tailing.model;
+package io.dazzleduck.sql.logger.tailing.model;
 
 public record LogMessage(
         String timestamp,

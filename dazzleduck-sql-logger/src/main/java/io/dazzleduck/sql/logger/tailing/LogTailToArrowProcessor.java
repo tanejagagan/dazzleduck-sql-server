@@ -1,7 +1,7 @@
-package io.dazzleduck.sql.client.tailing;
+package io.dazzleduck.sql.logger.tailing;
 
 import io.dazzleduck.sql.client.HttpSender;
-import io.dazzleduck.sql.client.tailing.model.LogFileWithLines;
+import io.dazzleduck.sql.logger.tailing.model.LogFileWithLines;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.ipc.ArrowStreamWriter;
 import org.slf4j.Logger;

@@ -1,7 +1,7 @@
-package io.dazzleduck.sql.client.tailing;
+package io.dazzleduck.sql.logger.tailing;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.dazzleduck.sql.client.tailing.model.LogMessage;
+import io.dazzleduck.sql.logger.tailing.model.LogMessage;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.VarCharVector;

@@ -1,6 +1,6 @@
-package io.dazzleduck.sql.client.tailing;
+package io.dazzleduck.sql.logger.tailing;
 
-import io.dazzleduck.sql.client.tailing.model.LogFileWithLines;
+import io.dazzleduck.sql.logger.tailing.model.LogFileWithLines;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

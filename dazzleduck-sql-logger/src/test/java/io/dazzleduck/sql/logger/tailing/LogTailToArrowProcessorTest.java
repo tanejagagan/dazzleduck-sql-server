@@ -1,4 +1,4 @@
-package io.dazzleduck.sql.client.tailing;
+package io.dazzleduck.sql.logger.tailing;
 
 import io.dazzleduck.sql.client.HttpSender;
 import io.dazzleduck.sql.commons.ConnectionPool;
@@ -56,6 +56,8 @@ class LogTailToArrowProcessorTest {
     void withSingleFile_endToEndTest() throws Exception {
         // targetDir where dd_uuid.parquet will be created
         String targetDir = "withSingleFileDir";
+        // because target directory must exist
+        Files.createDirectories(Path.of(warehouse.toString(), targetDir));
 
         // Create temp log file
         Path logFile = tempDir.resolve("app.log");
@@ -80,6 +82,7 @@ class LogTailToArrowProcessorTest {
     @Test
     void withMultipleFiles_endToEndTest() throws Exception {
         String targetDir = "withMultipleFileDir";
+        Files.createDirectories(Path.of(warehouse.toString(), targetDir));
         // Creating and writing logs in 3 files inside same directory.
         Path logFile1 = tempDir.resolve("first.log");
         Path logFile2 = tempDir.resolve("second.log");
@@ -115,7 +118,7 @@ class LogTailToArrowProcessorTest {
     @Test
     void invalidJsonLines_areSkipped_andNotIngested() throws Exception {
         String targetDir = "invalidJsonLinesDir";
-
+        Files.createDirectories(Path.of(warehouse.toString(), targetDir));
         Path logFile = tempDir.resolve("bad.log");
         Files.writeString(logFile, """
                 {"timestamp":"2024-01-01","level":"INFO","message":"OK"}
@@ -139,6 +142,7 @@ class LogTailToArrowProcessorTest {
     @Test
     void emptyLogFile_doesNotCreateParquet() throws Exception {
         String targetDir = "emptyLogFileDir";
+        Files.createDirectories(Path.of(warehouse.toString(), targetDir));
         Path logFile = tempDir.resolve("empty.log");
         Files.createFile(logFile);
 
@@ -157,6 +161,7 @@ class LogTailToArrowProcessorTest {
     @Test
     void missingLogFile_doesNotCrashProcessor() throws Exception {
         String targetDir = "missingLogFileDir";
+        Files.createDirectories(Path.of(warehouse.toString(), targetDir));
         tempDir.resolve("missing.log"); // not created
 
         try (HttpSender sender = new HttpSender(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(3), 1, Duration.ofSeconds(1), 10_000_000, 10_000_000)) {

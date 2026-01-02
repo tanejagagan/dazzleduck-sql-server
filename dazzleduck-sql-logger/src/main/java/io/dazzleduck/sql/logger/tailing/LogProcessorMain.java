@@ -1,4 +1,4 @@
-package io.dazzleduck.sql.client.tailing;
+package io.dazzleduck.sql.logger.tailing;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
