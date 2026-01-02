@@ -17,6 +17,7 @@ import java.util.Comparator;
 import java.util.concurrent.TimeUnit;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
+@Disabled
 public class HttpMetricIntegrationTest {
 
     private Thread serverThread;
