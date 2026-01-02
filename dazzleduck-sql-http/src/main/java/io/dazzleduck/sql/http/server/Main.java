@@ -113,7 +113,7 @@ public class Main {
                 .config(helidonConfig.get("flight_sql"))
                 .routing(routing -> {
                     routing.register(cors);
-                    var b = routing.register("/health", new HealthCheckService())
+                    var b = routing.register("/health", new HealthCheckService(producer))
                             .register("/query", new QueryService(producer, accessMode))
                             .register("/login", loginService)
                             .register("/plan", new PlaningService(producer, location, allocator, accessMode))
