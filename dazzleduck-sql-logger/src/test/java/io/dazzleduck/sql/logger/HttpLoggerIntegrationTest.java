@@ -26,6 +26,8 @@ public class HttpLoggerIntegrationTest {
                 "--conf", "dazzleduck_server.warehouse=" + warehousePath,
                 "--conf", "dazzleduck_server.ingestion.max_delay_ms=200"
         });
+
+        Files.createDirectories(Path.of(warehousePath + "/dazzleduck_"));
     }
 
     @Test
@@ -155,7 +157,7 @@ public class HttpLoggerIntegrationTest {
     }
 
     private Path findFirstLogFile(String warehousePath, String loggerName) throws Exception {
-        try (var stream = Files.list(Path.of(warehousePath))) {
+        try (var stream = Files.walk(Path.of(warehousePath))) {
             for (Path file : stream.filter(p -> p.toString().endsWith(".parquet")).toList()) {
                 try {
                     TestUtils.isEqual(
