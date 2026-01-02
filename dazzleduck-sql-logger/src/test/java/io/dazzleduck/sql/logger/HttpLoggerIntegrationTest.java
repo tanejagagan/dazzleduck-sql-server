@@ -50,10 +50,10 @@ public class HttpLoggerIntegrationTest {
                            'integration-test'  as logger,
                            'main'              as thread,
                            'Test 0'            as message,
-                           'ap101'             as applicationId,
-                           'MyApplication'     as applicationName,
-                           'localhost'         as host
-                    """, "select level, logger, thread, message, applicationId, applicationName, host\n" +
+                           'ap101'             as application_id,
+                           'MyApplication'     as application_name,
+                           'localhost'         as application_host
+                    """, "select level, logger, thread, message, application_id, application_name, application_host\n" +
                             "from read_parquet('%s') where message = 'Test 0'".formatted(logFile.toAbsolutePath())
             );
     }
