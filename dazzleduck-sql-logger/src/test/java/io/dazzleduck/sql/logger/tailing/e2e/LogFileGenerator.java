@@ -1,7 +1,7 @@
-package io.dazzleduck.sql.client.tailing.E2E;
+package io.dazzleduck.sql.logger.tailing.e2e;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.dazzleduck.sql.client.tailing.model.LogMessage;
+import io.dazzleduck.sql.logger.tailing.model.LogMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

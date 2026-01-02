@@ -1,4 +1,4 @@
-package io.dazzleduck.sql.client.tailing;
+package io.dazzleduck.sql.logger.tailing;
 
 import io.dazzleduck.sql.client.HttpSender;
 import io.dazzleduck.sql.commons.ConnectionPool;

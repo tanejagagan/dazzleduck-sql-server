@@ -1,8 +1,8 @@
-package io.dazzleduck.sql.client.tailing.E2E;
+package io.dazzleduck.sql.logger.tailing.e2e;
 
 import io.dazzleduck.sql.client.HttpSender;
-import io.dazzleduck.sql.client.tailing.JsonToArrowConverter;
-import io.dazzleduck.sql.client.tailing.LogTailToArrowProcessor;
+import io.dazzleduck.sql.logger.tailing.JsonToArrowConverter;
+import io.dazzleduck.sql.logger.tailing.LogTailToArrowProcessor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -36,6 +36,7 @@ public class EndToEndTest {
     private static final String APPLICATION_NAME = "E2ETestApp";
     private static final String APPLICATION_HOST = "localhost";
 
+    private static final String TARGET_PATH = "e2eTestDir";
     private static final long MAX_FILE_SIZE = 5 * 1024; // 5 KB (small for testing)
     private static final int LOG_ENTRIES_PER_BATCH = 10;
     private static final long LOG_GENERATION_INTERVAL_MS = 2000; // Generate logs every 2 seconds
@@ -96,13 +97,14 @@ public class EndToEndTest {
                     APPLICATION_NAME,
                     APPLICATION_HOST
             );
-
+            // because target path must exist
+            Files.createDirectories(Path.of(warehouseDir.toString(), TARGET_PATH));
             HttpSender httpSender = new HttpSender(
                     converter.getSchema(),
                     "http://localhost:" + SERVER_PORT,
                     USERNAME,
                     PASSWORD,
-                    "test_logs",
+                    TARGET_PATH,
                     Duration.ofSeconds(5),
                     1024, // 1 KB min batch
                     Duration.ofSeconds(10),
@@ -149,12 +151,6 @@ public class EndToEndTest {
             logger.info("   - Total Log Files Created: {}", finalLogGenerator.getCurrentFileNumber());
             logger.info("   - Total Log Lines Generated: {}", finalLogGenerator.getTotalLinesGenerated());
             logger.info("");
-            logger.info("📈 Server Stats:");
-            logger.info("");
-
-            // Validation
-            int linesGenerated = finalLogGenerator.getTotalLinesGenerated();
-
         } catch (Exception e) {
             logger.error("Test failed with exception", e);
             throw e;
