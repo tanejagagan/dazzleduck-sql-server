@@ -2,7 +2,7 @@ package io.dazzleduck.sql.micrometer.metrics;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
-import io.dazzleduck.sql.client.HttpSender;
+import io.dazzleduck.sql.client.HttpProducer;
 import io.dazzleduck.sql.micrometer.util.ArrowMetricSchema;
 import io.dazzleduck.sql.micrometer.service.ArrowMicroMeterRegistry;
 import io.micrometer.core.instrument.Clock;
@@ -21,7 +21,7 @@ public final class MetricsRegistryFactory {
 
         Config http = config.getConfig("http");
 
-        HttpSender sender = new HttpSender(
+        HttpProducer sender = new HttpProducer(
                 ArrowMetricSchema.SCHEMA,
                 http.getString("base_url"),
                 http.getString("username"),

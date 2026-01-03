@@ -1,4 +1,4 @@
-package io.dazzleduck.sql.common.ingestion;
+package io.dazzleduck.sql.client;
 
 import io.dazzleduck.sql.common.types.JavaRow;
 import io.dazzleduck.sql.common.types.VectorSchemaRootWriter;
@@ -20,7 +20,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.*;
 
-public interface FlightSender extends Closeable {
+public interface FlightProducer extends Closeable {
 
     void close();
 
@@ -34,9 +34,9 @@ public interface FlightSender extends Closeable {
 
     long getMaxOnDiskSize();
 
-    abstract class AbstractFlightSender implements FlightSender {
+    abstract class AbstractFlightProducer implements FlightProducer {
 
-        private static final Logger logger  = LoggerFactory.getLogger(AbstractFlightSender.class);
+        private static final Logger logger  = LoggerFactory.getLogger(AbstractFlightProducer.class);
         private final BlockingQueue<SendElement> queue = new ArrayBlockingQueue<>(1024 * 1024);
         protected final Clock clock;
         private volatile boolean shutdown = false;
@@ -67,10 +67,10 @@ public interface FlightSender extends Closeable {
         private final ScheduledExecutorService executorService;
 
 
-        public AbstractFlightSender(long minBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock, int retryCount, long retryIntervalMillis, java.util.List<String> transformations, java.util.List<String> partitionBy){
+        public AbstractFlightProducer(long minBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock, int retryCount, long retryIntervalMillis, java.util.List<String> transformations, java.util.List<String> partitionBy){
             this(minBatchSize, maxDataSendInterval, schema, clock, retryCount, retryIntervalMillis, transformations, partitionBy, Executors.newSingleThreadScheduledExecutor());
         }
-        public AbstractFlightSender(long minBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock, int retryCount, long retryIntervalMillis, java.util.List<String> transformations, java.util.List<String> partitionBy, ScheduledExecutorService scheduledExecutorService ){
+        public AbstractFlightProducer(long minBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock, int retryCount, long retryIntervalMillis, java.util.List<String> transformations, java.util.List<String> partitionBy, ScheduledExecutorService scheduledExecutorService ){
             logger.info("FlightSender started at {} with send interval {}, retryCount {}, retryIntervalMillis {}, transformations {}, partitionBy {}", clock.instant(), maxDataSendInterval, retryCount, retryIntervalMillis, transformations, partitionBy);
             this.minBatchSize = minBatchSize;
             this.maxDataSendInterval = maxDataSendInterval;
