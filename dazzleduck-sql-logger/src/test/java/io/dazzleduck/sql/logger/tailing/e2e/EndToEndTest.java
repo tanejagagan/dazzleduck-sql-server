@@ -107,6 +107,7 @@ public class EndToEndTest {
                     TARGET_PATH,
                     Duration.ofSeconds(5),
                     1024, // 1 KB min batch
+                    2048, // max batch size
                     Duration.ofSeconds(10),
                     3, // retry count
                     1000, // retry interval ms

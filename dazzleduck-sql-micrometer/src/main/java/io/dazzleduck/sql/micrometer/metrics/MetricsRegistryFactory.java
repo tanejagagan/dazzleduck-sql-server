@@ -29,6 +29,7 @@ public final class MetricsRegistryFactory {
                 http.getString("target_path"),
                 Duration.ofMillis(http.getLong("http_client_timeout_ms")),
                 config.getLong("min_batch_size"),
+                config.getLong("max_batch_size"),
                 Duration.ofMillis(config.getLong("max_send_interval_ms")),
                 config.getInt("retry_count"),
                 config.getLong("retry_interval_ms"),
