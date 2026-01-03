@@ -33,6 +33,95 @@ public interface FlightProducer extends Closeable {
     }
 
     void enqueue(byte[] input);
+
+    /**
+     * Creates combined Arrow stream bytes from a list of SendElements.
+     * This utility method reads all Arrow batches from the input elements and combines them
+     * into a single Arrow stream byte array.
+     *
+     * @param elements List of SendElements to combine
+     * @param schema The Arrow schema for the data (used only if elements list is empty)
+     * @param allocator Buffer allocator for Arrow operations
+     * @return byte array containing the combined Arrow stream
+     * @throws IOException if reading or writing Arrow data fails
+     */
+    static ProducerElement createCombinedReader(
+            List<ProducerElement> elements,
+            Schema schema,
+            BufferAllocator allocator) throws IOException {
+
+        if (elements.isEmpty()) {
+            throw new IllegalArgumentException("Cannot create combined reader from empty list");
+        }
+
+        // If only one element, return it directly
+        if (elements.size() == 1) {
+            return elements.get(0);
+        }
+
+        // Calculate min and max batch IDs from all elements
+        long minBatchId = Long.MAX_VALUE;
+        long maxBatchId = Long.MIN_VALUE;
+        for (ProducerElement element : elements) {
+            minBatchId = Math.min(minBatchId, element.getMinBatchId());
+            maxBatchId = Math.max(maxBatchId, element.getMaxBatchId());
+        }
+
+        ByteArrayOutputStream combinedOutput = new ByteArrayOutputStream();
+        Schema actualSchema = null;
+        VectorSchemaRoot root = null;
+        ArrowStreamWriter writer = null;
+
+        try {
+            // Process all elements in a single pass
+            for (int i = 0; i < elements.size(); i++) {
+                ProducerElement element = elements.get(i);
+                try (InputStream in = element.read();
+                     ArrowStreamReader reader = new ArrowStreamReader(in, allocator)) {
+
+                    if (i == 0) {
+                        // First element - get schema and initialize writer
+                        actualSchema = reader.getVectorSchemaRoot().getSchema();
+                        root = VectorSchemaRoot.create(actualSchema, allocator);
+                        writer = new ArrowStreamWriter(root, null, combinedOutput);
+                        writer.start();
+                    }
+
+                    // Process all batches from this element
+                    while (reader.loadNextBatch()) {
+                        VectorSchemaRoot sourceBatch = reader.getVectorSchemaRoot();
+
+                        // Use VectorUnloader/VectorLoader pattern to copy the batch
+                        try (ArrowRecordBatch recordBatch =
+                                     new VectorUnloader(sourceBatch).getRecordBatch()) {
+
+                            new VectorLoader(root).load(recordBatch);
+                            writer.writeBatch();
+                        }
+                    }
+                }
+            }
+
+            if (writer != null) {
+                writer.end();
+            }
+        } finally {
+            // Ensure resources are closed to prevent memory leaks
+            if (writer != null) {
+                try {
+                    writer.close();
+                } catch (Exception e) {
+                    AbstractFlightProducer.logger.warn("Failed to close ArrowStreamWriter", e);
+                }
+            }
+            if (root != null) {
+                root.close();
+            }
+        }
+
+        return new MemoryElement(combinedOutput.toByteArray(), minBatchId, maxBatchId);
+    }
+
     void addRow(JavaRow row);
     long getMaxInMemorySize();
 
@@ -41,7 +130,7 @@ public interface FlightProducer extends Closeable {
     abstract class AbstractFlightProducer implements FlightProducer {
 
         private static final Logger logger  = LoggerFactory.getLogger(AbstractFlightProducer.class);
-        private final BlockingQueue<SendElement> queue = new ArrayBlockingQueue<>(1024 * 1024);
+        private final BlockingQueue<ProducerElement> queue = new ArrayBlockingQueue<>(1024 * 1024);
         protected final Clock clock;
         private volatile boolean shutdown = false;
 
@@ -77,6 +166,41 @@ public interface FlightProducer extends Closeable {
             this(minBatchSize, maxBatchSize, maxDataSendInterval, schema, clock, retryCount, retryIntervalMillis, transformations, partitionBy, Executors.newSingleThreadScheduledExecutor());
         }
         public AbstractFlightProducer(long minBatchSize, long maxBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock, int retryCount, long retryIntervalMillis, java.util.List<String> transformations, java.util.List<String> partitionBy, ScheduledExecutorService scheduledExecutorService ){
+            // Validate parameters
+            if (minBatchSize <= 0) {
+                throw new IllegalArgumentException("minBatchSize must be positive, got: " + minBatchSize);
+            }
+            if (maxBatchSize <= 0) {
+                throw new IllegalArgumentException("maxBatchSize must be positive, got: " + maxBatchSize);
+            }
+            if (maxBatchSize < minBatchSize) {
+                throw new IllegalArgumentException("maxBatchSize must be >= minBatchSize, got: " + maxBatchSize + " < " + minBatchSize);
+            }
+            if (maxDataSendInterval == null || maxDataSendInterval.isNegative() || maxDataSendInterval.isZero()) {
+                throw new IllegalArgumentException("maxDataSendInterval must be positive, got: " + maxDataSendInterval);
+            }
+            if (schema == null) {
+                throw new IllegalArgumentException("schema must not be null");
+            }
+            if (clock == null) {
+                throw new IllegalArgumentException("clock must not be null");
+            }
+            if (retryCount < 0) {
+                throw new IllegalArgumentException("retryCount must be non-negative, got: " + retryCount);
+            }
+            if (retryIntervalMillis < 0) {
+                throw new IllegalArgumentException("retryIntervalMillis must be non-negative, got: " + retryIntervalMillis);
+            }
+            if (transformations == null) {
+                throw new IllegalArgumentException("transformations must not be null");
+            }
+            if (partitionBy == null) {
+                throw new IllegalArgumentException("partitionBy must not be null");
+            }
+            if (scheduledExecutorService == null) {
+                throw new IllegalArgumentException("scheduledExecutorService must not be null");
+            }
+
             logger.info("FlightSender started at {} with send interval {}, retryCount {}, retryIntervalMillis {}, transformations {}, partitionBy {}", clock.instant(), maxDataSendInterval, retryCount, retryIntervalMillis, transformations, partitionBy);
             this.minBatchSize = minBatchSize;
             this.maxBatchSize = maxBatchSize;
@@ -95,13 +219,13 @@ public interface FlightProducer extends Closeable {
                     try {
                         var current = queue.poll(100, java.util.concurrent.TimeUnit.MILLISECONDS);
                         if (current != null) {
-                            java.util.List<SendElement> batch = new java.util.ArrayList<>();
+                            java.util.List<ProducerElement> batch = new java.util.ArrayList<>();
                             batch.add(current);
                             long batchSize = current.length();
 
                             // Try to batch additional elements from the queue
                             // Stop batching if we reach 100 elements or maxBatchSize bytes
-                            SendElement additional;
+                            ProducerElement additional;
                             while (batch.size() < 100 && (additional = queue.peek()) != null) {
                                 long additionalSize = additional.length();
                                 if (batchSize + additionalSize > maxBatchSize) {
@@ -115,8 +239,11 @@ public interface FlightProducer extends Closeable {
                             }
 
                             try {
+                                // Send the batch (combining will happen inside doSendWithRetry if needed)
                                 doSendWithRetry(batch);
-                                for (SendElement element : batch) {
+
+                                // Update state for all original elements
+                                for (ProducerElement element : batch) {
                                     updateState(element);
                                 }
                             } catch (Exception e) {
@@ -126,32 +253,42 @@ public interface FlightProducer extends Closeable {
                                 logger.atError().setCause(e).log("Shutting down because of exception");
                                 throw e;
                             } finally {
-                                // Always close all elements after sending (successful or not)
-                                for (SendElement element : batch) {
+                                // Always close all original elements after sending (successful or not)
+                                for (ProducerElement element : batch) {
                                     element.close();
                                 }
                             }
                         }
                     } catch (InterruptedException | IOException e) {
                         if (shutdown) {
+                            // Restore interrupt status before draining
+                            if (e instanceof InterruptedException) {
+                                Thread.currentThread().interrupt();
+                            }
+
                             // Drain and process remaining items
-                            java.util.List<SendElement> batch = new java.util.ArrayList<>();
-                            SendElement element;
+                            java.util.List<ProducerElement> batch = new java.util.ArrayList<>();
+                            ProducerElement element;
                             while ((element = queue.poll()) != null) {
                                 batch.add(element);
                             }
                             if (!batch.isEmpty() && !error) {
                                 try {
+                                    // Send the batch (combining will happen inside doSendWithRetry if needed)
                                     doSendWithRetry(batch);
-                                    for (SendElement el : batch) {
+
+                                    // Update state for all original elements
+                                    for (ProducerElement el : batch) {
                                         updateState(el);
                                     }
                                 } catch (InterruptedException ex) {
-                                    // If interrupted again, just close all elements
+                                    // If interrupted again, restore interrupt status and close all elements
+                                    Thread.currentThread().interrupt();
                                 } catch (IOException ex) {
                                     logger.atError().setCause(ex).log("Error sending message while closing");
                                 } finally {
-                                    for (SendElement el : batch) {
+                                    // Close all original elements
+                                    for (ProducerElement el : batch) {
                                         el.close();
                                     }
                                 }
@@ -165,86 +302,10 @@ public interface FlightProducer extends Closeable {
             // Set daemon flag before thread is started
             this.senderThread.setDaemon(true);
             this.senderThread.start();
-            executorService.submit(() -> sendOrScheduleCurrentBucket(maxDataSendInterval));
+            executorService.submit(() -> enqueueOrScheduleCurrentBucket(maxDataSendInterval));
         }
 
-        /**
-         * Creates a combined ArrowStreamReader from a list of SendElements.
-         * This utility method reads all Arrow batches from the input elements and combines them
-         * into a single Arrow stream.
-         *
-         * @param elements List of SendElements to combine
-         * @param schema The Arrow schema for the data
-         * @param allocator Buffer allocator for Arrow operations
-         * @return ArrowStreamReader containing all batches from the input elements
-         * @throws IOException if reading or writing Arrow data fails
-         */
-        protected static ArrowStreamReader createCombinedReader(
-                java.util.List<SendElement> elements,
-                Schema schema,
-                BufferAllocator allocator) throws IOException {
-
-            if (elements.isEmpty()) {
-                // For empty list, use the provided schema
-                ByteArrayOutputStream emptyOutput = new ByteArrayOutputStream();
-                try (VectorSchemaRoot root = VectorSchemaRoot.create(schema, allocator);
-                     ArrowStreamWriter writer = new ArrowStreamWriter(root, null, emptyOutput)) {
-                    writer.start();
-                    writer.end();
-                }
-                return new ArrowStreamReader(new ByteArrayInputStream(emptyOutput.toByteArray()), allocator);
-            }
-
-            ByteArrayOutputStream combinedOutput = new ByteArrayOutputStream();
-            Schema actualSchema = null;
-            VectorSchemaRoot root = null;
-            ArrowStreamWriter writer = null;
-
-            try {
-                // Process all elements in a single pass
-                for (int i = 0; i < elements.size(); i++) {
-                    SendElement element = elements.get(i);
-                    try (InputStream in = element.read();
-                         ArrowStreamReader reader = new ArrowStreamReader(in, allocator)) {
-
-                        if (i == 0) {
-                            // First element - get schema and initialize writer
-                            actualSchema = reader.getVectorSchemaRoot().getSchema();
-                            root = VectorSchemaRoot.create(actualSchema, allocator);
-                            writer = new ArrowStreamWriter(root, null, combinedOutput);
-                            writer.start();
-                        }
-
-                        // Process all batches from this element
-                        while (reader.loadNextBatch()) {
-                            VectorSchemaRoot sourceBatch = reader.getVectorSchemaRoot();
-
-                            // Use VectorUnloader/VectorLoader pattern to copy the batch
-                            try (ArrowRecordBatch recordBatch =
-                                         new VectorUnloader(sourceBatch).getRecordBatch()) {
-
-                                new VectorLoader(root).load(recordBatch);
-                                writer.writeBatch();
-                            }
-                        }
-                    }
-                }
-
-                if (writer != null) {
-                    writer.end();
-                }
-            } finally {
-                // Ensure root is closed to prevent memory leaks
-                if (root != null) {
-                    root.close();
-                }
-            }
-
-            byte[] combinedBytes = combinedOutput.toByteArray();
-            return new ArrowStreamReader(new ByteArrayInputStream(combinedBytes), allocator);
-        }
-
-        private synchronized void sendCurrentBucket(){
+        private synchronized void enqueueCurrentBucket(){
             if (this.currentBucket.size() > 0) {
                 try (var c = bufferAllocator.newChildAllocator("child", minBatchSize, Long.MAX_VALUE)) {
                     var bytes = this.currentBucket.getArrowBytes(schema, c);
@@ -258,7 +319,7 @@ public interface FlightProducer extends Closeable {
         }
 
 
-        private synchronized void sendOrScheduleCurrentBucket(Duration maxDataSendInterval){
+        private synchronized void enqueueOrScheduleCurrentBucket(Duration maxDataSendInterval){
 
             var now = clock.instant();
             logger.debug("Checking bucket send at {}", now);
@@ -266,14 +327,14 @@ public interface FlightProducer extends Closeable {
             var timeRemaining = maxDataSendInterval;
             try {
                 if (toBeSent.isBefore(now) || toBeSent.equals(now)) {
-                    sendCurrentBucket();
+                    enqueueCurrentBucket();
                 } else {
                     timeRemaining = Duration.between(now, toBeSent);
                 }
             } finally {
                 logger.debug("Next bucket send scheduled in {}", timeRemaining);
                 if (!shutdown) {
-                    executorService.schedule(() -> sendOrScheduleCurrentBucket(maxDataSendInterval),
+                    executorService.schedule(() -> enqueueOrScheduleCurrentBucket(maxDataSendInterval),
                             timeRemaining.toMillis(), TimeUnit.MILLISECONDS);
                 }
             }
@@ -321,59 +382,83 @@ public interface FlightProducer extends Closeable {
             return StoreStatus.FULL;
         }
 
-        private synchronized void updateState(SendElement sendElement) {
-            if (sendElement instanceof MemoryElement) {
-                inMemorySize -= sendElement.length();
+        private synchronized void updateState(ProducerElement producerElement) {
+            if (producerElement instanceof MemoryElement) {
+                inMemorySize -= producerElement.length();
             } else {
-                onDiskSize -= sendElement.length();
+                onDiskSize -= producerElement.length();
             }
         }
 
-        private void doSendWithRetry(java.util.List<SendElement> elements) throws InterruptedException, IOException {
-            int attempt = 0;
-            Exception lastException = null;
+        private void doSendWithRetry(List<ProducerElement> elements) throws InterruptedException, IOException {
+            ProducerElement elementToSend = null;
+            boolean shouldCloseCombinedElement = false;
 
-            while (attempt <= retryCount) {
-                try {
-                    doSend(elements);
-                    if (attempt > 0) {
-                        logger.info("Successfully sent {} elements after {} retries", elements.size(), attempt);
-                    }
-                    return; // Success, exit the retry loop
-                } catch (InterruptedException e) {
-                    // Don't retry on interruption, propagate immediately
-                    throw e;
-                } catch (Exception e) {
-                    lastException = e;
-                    attempt++;
-
-                    // Don't retry if we're shutting down
-                    if (shutdown) {
-                        logger.warn("Sender is shutting down, skipping retry for failed send: {}", e.getMessage());
-                        return;
-                    }
-
-                    if (attempt <= retryCount) {
-                        logger.warn("Failed to send {} elements (attempt {}/{}): {}", elements.size(), attempt, retryCount + 1, e.getMessage());
-                        try {
-                            Thread.sleep(retryIntervalMillis);
-                        } catch (InterruptedException ie) {
-                            Thread.currentThread().interrupt();
-                            throw ie;
-                        }
-                    } else {
-                        logger.error("Failed to send {} elements after {} attempts", elements.size(), attempt, e);
+            try {
+                // Determine what element to send
+                if (elements.size() == 1) {
+                    // Single element - send it directly without combining
+                    elementToSend = elements.get(0);
+                } else {
+                    // Multiple elements - combine them first
+                    try (org.apache.arrow.memory.BufferAllocator childAllocator =
+                            bufferAllocator.newChildAllocator("combine-batch", 0, Long.MAX_VALUE)) {
+                        elementToSend = createCombinedReader(elements, schema, childAllocator);
+                        shouldCloseCombinedElement = true;
                     }
                 }
-            }
 
-            // If we exhausted all retries, log the final failure
-            if (lastException != null) {
-                logger.error("Exhausted all {} retry attempts, {} elements will be dropped", retryCount + 1, elements.size(), lastException);
+                // Retry logic for sending
+                int attempt = 0;
+                Exception lastException = null;
+
+                while (attempt <= retryCount) {
+                    try {
+                        doSend(elementToSend);
+                        if (attempt > 0) {
+                            logger.info("Successfully sent element after {} retries", attempt);
+                        }
+                        return; // Success, exit the retry loop
+                    } catch (InterruptedException e) {
+                        // Don't retry on interruption, propagate immediately
+                        throw e;
+                    } catch (Exception e) {
+                        lastException = e;
+                        attempt++;
+
+                        // Don't retry if we're shutting down
+                        if (shutdown) {
+                            logger.warn("Sender is shutting down, skipping retry for failed send: {}", e.getMessage());
+                            return;
+                        }
+
+                        if (attempt <= retryCount) {
+                            logger.warn("Failed to send element (attempt {}/{}): {}", attempt, retryCount + 1, e.getMessage());
+                            try {
+                                Thread.sleep(retryIntervalMillis);
+                            } catch (InterruptedException ie) {
+                                Thread.currentThread().interrupt();
+                                throw ie;
+                            }
+                        } else {
+                            logger.error("Failed to send element after {} attempts", attempt, e);
+                        }
+                    }
+                }
+
+                // If we exhausted all retries, log the final failure
+                if (lastException != null) {
+                    logger.error("Exhausted all {} retry attempts, element will be dropped", retryCount + 1, lastException);
+                }
+            } finally {
+                // Only close the combined element if we created one
+                if (shouldCloseCombinedElement && elementToSend != null) {
+                    elementToSend.close();
+                }
             }
         }
 
-        abstract protected void doSend(java.util.List<SendElement> elements) throws InterruptedException;
+        abstract protected void doSend(ProducerElement element) throws InterruptedException;
 
         protected int getRetryCount() {
             return retryCount;
@@ -401,8 +486,11 @@ public interface FlightProducer extends Closeable {
 
         @Override
         public void close()  {
+            // Send final bucket before shutdown
+            enqueueCurrentBucket();
+
+            // Set shutdown flag in minimal synchronized block
             synchronized (this) {
-                sendCurrentBucket();
                 shutdown = true;
             }
 
@@ -419,19 +507,33 @@ public interface FlightProducer extends Closeable {
                 logger.atError().setCause(e).log("error closing executor service");
             }
 
-            // Shutdown the sender thread
-            senderThread.interrupt();
-            bufferAllocator.close();
+            // Wait for the sender thread to finish processing the queue naturally
+            // The sender thread will exit when shutdown=true and queue is empty
             try {
-                senderThread.join();
+                // Give it 5 seconds to finish processing
+                senderThread.join(2000);
+
+                // If it's still running, interrupt it
+                if (senderThread.isAlive()) {
+                    logger.warn("Sender thread did not finish gracefully, interrupting");
+                    senderThread.interrupt();
+                    senderThread.join(1000);
+                }
             } catch (InterruptedException e) {
                 logger.atError().setCause(e).log("error closing sender");
+                senderThread.interrupt();
+                Thread.currentThread().interrupt();
             }
+
+            // Clean up remaining queue items
             cleanupQueue();
+
+            // Close allocator AFTER sender thread has stopped to avoid race condition
+            bufferAllocator.close();
         }
 
         private void cleanupQueue() {
-            SendElement element;
+            ProducerElement element;
             while ((element = queue.poll()) != null) {
                 synchronized(this) {
                     if (element instanceof MemoryElement) {
@@ -446,19 +548,29 @@ public interface FlightProducer extends Closeable {
         }
     }
 
-    interface SendElement extends Closeable {
+    interface ProducerElement extends Closeable {
         InputStream read();
         long length();
+        long getMinBatchId();
+        long getMaxBatchId();
 
         @Override
         void close();
     }
 
-    class MemoryElement implements SendElement {
+    class MemoryElement implements ProducerElement {
         final byte[] data; // package-private for testing
+        private final long minBatchId;
+        private final long maxBatchId;
 
         public MemoryElement(byte[] data) {
+            this(data, 0, 0);
+        }
+
+        public MemoryElement(byte[] data, long minBatchId, long maxBatchId) {
             this.data = data;
+            this.minBatchId = minBatchId;
+            this.maxBatchId = maxBatchId;
         }
 
         @Override
@@ -472,23 +584,51 @@ public interface FlightProducer extends Closeable {
         }
 
         @Override
+        public long getMinBatchId() {
+            return minBatchId;
+        }
+
+        @Override
+        public long getMaxBatchId() {
+            return maxBatchId;
+        }
+
+        @Override
         public void close() {
             // No-op: in-memory elements don't require cleanup
         }
     }
 
-    class FileMappedMemoryElement implements SendElement {
+    class FileMappedMemoryElement implements ProducerElement {
         private static final Logger logger = LoggerFactory.getLogger(FileMappedMemoryElement.class);
         private final Path tempFile;
         private final long length;
+        private final long minBatchId;
+        private final long maxBatchId;
 
         public FileMappedMemoryElement(byte[] data) {
+            this(data, 0, 0);
+        }
+
+        public FileMappedMemoryElement(byte[] data, long minBatchId, long maxBatchId) {
+            this.minBatchId = minBatchId;
+            this.maxBatchId = maxBatchId;
+            Path temp = null;
             try {
-                tempFile = Files.createTempFile("flight-", ".arrow");
-                Files.write(tempFile, data);
+                temp = Files.createTempFile("flight-", ".arrow");
+                Files.write(temp, data);
+                this.tempFile = temp;
                 this.length = data.length;
             } catch (IOException e) {
-                throw new RuntimeException(e);
+                // Clean up temp file if write failed
+                if (temp != null) {
+                    try {
+                        Files.deleteIfExists(temp);
+                    } catch (IOException cleanupException) {
+                        logger.warn("Failed to cleanup temp file after error: {}", temp, cleanupException);
+                    }
+                }
+                throw new RuntimeException("Failed to create file-mapped element", e);
             }
         }
 
@@ -515,6 +655,16 @@ public interface FlightProducer extends Closeable {
         @Override
         public long length() {
             return length;
+        }
+
+        @Override
+        public long getMinBatchId() {
+            return minBatchId;
+        }
+
+        @Override
+        public long getMaxBatchId() {
+            return maxBatchId;
         }
     }
 
