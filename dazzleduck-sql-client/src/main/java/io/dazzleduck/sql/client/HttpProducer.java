@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.dazzleduck.sql.login.LoginRequest;
 import io.dazzleduck.sql.login.LoginResponse;
+import org.apache.arrow.vector.ipc.ArrowStreamReader;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -51,6 +52,7 @@ public final class HttpProducer extends FlightProducer.AbstractFlightProducer {
             String targetPath,
             Duration httpClientTimeout,
             long minBatchSize,
+            long maxBatchSize,
             Duration maxSendInterval,
             int retryCount,
             long retryIntervalMillis,
@@ -59,7 +61,7 @@ public final class HttpProducer extends FlightProducer.AbstractFlightProducer {
             long maxInMemorySize,
             long maxOnDiskSize
     ) {
-        this(schema, baseUrl, username, password, targetPath, httpClientTimeout, minBatchSize, maxSendInterval, retryCount, retryIntervalMillis, transformations, partitionBy, maxInMemorySize, maxOnDiskSize, Clock.systemUTC());
+        this(schema, baseUrl, username, password, targetPath, httpClientTimeout, minBatchSize, maxBatchSize, maxSendInterval, retryCount, retryIntervalMillis, transformations, partitionBy, maxInMemorySize, maxOnDiskSize, Clock.systemUTC());
     }
     public HttpProducer(
             Schema schema,
@@ -69,6 +71,7 @@ public final class HttpProducer extends FlightProducer.AbstractFlightProducer {
             String targetPath,
             Duration httpClientTimeout,
             long minBatchSize,
+            long maxBatchSize,
             Duration maxSendInterval,
             int retryCount,
             long retryIntervalMillis,
@@ -78,7 +81,7 @@ public final class HttpProducer extends FlightProducer.AbstractFlightProducer {
             long maxOnDiskSize,
             Clock clock
     ) {
-        super(minBatchSize, maxSendInterval, schema, clock, retryCount, retryIntervalMillis, transformations, partitionBy);
+        super(minBatchSize, maxBatchSize, maxSendInterval, schema, clock, retryCount, retryIntervalMillis, transformations, partitionBy);
 
         // Issue #3: Parameter validation
         Objects.requireNonNull(baseUrl, "baseUrl must not be null");
@@ -216,7 +219,7 @@ public final class HttpProducer extends FlightProducer.AbstractFlightProducer {
     }
 
     @Override
-    protected void doSend(SendElement element) throws InterruptedException {
+    protected void doSend(java.util.List<FlightProducer.SendElement> elements) throws InterruptedException {
         // Issue #4: Check if thread was interrupted before attempting send
         if (Thread.currentThread().isInterrupted()) {
             throw new InterruptedException("Thread interrupted before send");
@@ -225,14 +228,27 @@ public final class HttpProducer extends FlightProducer.AbstractFlightProducer {
         HttpResponse<String> resp = null;
         int authRetries = 0;
 
-        // Issue #2: Read payload into memory for retry capability
+        // Read the combined Arrow stream into memory for retry capability
         // Note: We need the full payload in memory to support auth retries
+        // Use child allocator for better memory management
         final byte[] payload;
-        try (InputStream in = element.read()) {
-            payload = in.readAllBytes();
+        try (org.apache.arrow.memory.BufferAllocator childAllocator =
+                bufferAllocator.newChildAllocator("http-send", 0, Long.MAX_VALUE);
+             org.apache.arrow.vector.ipc.ArrowStreamReader reader =
+                FlightProducer.AbstractFlightProducer.createCombinedReader(elements, getSchema(), childAllocator);
+             java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+             org.apache.arrow.vector.ipc.ArrowStreamWriter writer =
+                new org.apache.arrow.vector.ipc.ArrowStreamWriter(reader.getVectorSchemaRoot(), null, out)) {
+
+            writer.start();
+            while (reader.loadNextBatch()) {
+                writer.writeBatch();
+            }
+            writer.end();
+            payload = out.toByteArray();
         } catch (IOException e) {
-            logger.error("Failed to read element data", e);
-            throw new RuntimeException("Failed to read element data", e);
+            logger.error("Failed to read combined Arrow stream", e);
+            throw new RuntimeException("Failed to read combined Arrow stream", e);
         }
 
         // Issue #7: Specific exception handling
@@ -263,7 +279,7 @@ public final class HttpProducer extends FlightProducer.AbstractFlightProducer {
                 throw new RuntimeException("Ingestion failed with status " + resp.statusCode() + ": " + resp.body());
             }
 
-            logger.debug("Successfully sent data to {}{}", baseUrl, targetPath);
+            logger.debug("Successfully sent {} combined elements to {}{}", elements.size(), baseUrl, targetPath);
 
         } catch (HttpTimeoutException e) {
             logger.error("HTTP request timed out after {} to {}{}", httpClientTimeout, baseUrl, targetPath, e);

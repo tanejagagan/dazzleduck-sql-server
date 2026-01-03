@@ -73,13 +73,15 @@ public class HttpSenderTest {
                 file,
                 timeout,
                 100_000,
+                200_000,
                 Duration.ofSeconds(1),
                 3,
                 1000,
                 java.util.List.of(),
                 java.util.List.of(),
                 100,
-                100_000, Clock.systemDefaultZone()
+                100_000,
+                Clock.systemDefaultZone()
         );
     }
     private byte[] arrowBytes(String query) throws Exception {
@@ -135,6 +137,7 @@ public class HttpSenderTest {
                 file,
                 Duration.ofSeconds(3),
                 100_000,
+                200_000,
                 Duration.ofSeconds(2),
                 3,
                 1000,
@@ -218,7 +221,7 @@ public class HttpSenderTest {
 
     @Test
     void testQueueFullBehavior() throws Exception {
-        var limitedSender = new HttpProducer(  schema,"http://localhost:" + PORT, "admin", "admin", "full.parquet", Duration.ofSeconds(3), 100_000,
+        var limitedSender = new HttpProducer(  schema,"http://localhost:" + PORT, "admin", "admin", "full.parquet", Duration.ofSeconds(3), 100_000, 200_000,
                 Duration.ofSeconds(2), 3, 1000, java.util.List.of(), java.util.List.of(), 100, 200);
 
         byte[] largeData = arrowBytes("select * from generate_series(200)");
@@ -249,7 +252,7 @@ public class HttpSenderTest {
     void testMemoryDiskSwitching() throws Exception {
         var path = "spill";
         Files.createDirectories(Path.of(warehouse, path));
-        var spillSender = new HttpProducer(  schema,"http://localhost:" + PORT, "admin", "admin", path, Duration.ofSeconds(10), 100_000,
+        var spillSender = new HttpProducer(  schema,"http://localhost:" + PORT, "admin", "admin", path, Duration.ofSeconds(10), 100_000, 200_000,
                 Duration.ofSeconds(2), 3, 1000, java.util.List.of(), java.util.List.of(), 50, 100_000);
 
 
@@ -276,6 +279,7 @@ public class HttpSenderTest {
                 path,
                 Duration.ofSeconds(3),
                 100_000,
+                200_000,
                 Duration.ofSeconds(1),
                 3,
                 1000,
@@ -306,6 +310,7 @@ public class HttpSenderTest {
                 path,
                 Duration.ofSeconds(3),
                 100_000,
+                200_000,
                 Duration.ofSeconds(1),
                 3,
                 1000,
@@ -338,6 +343,7 @@ public class HttpSenderTest {
                 path,
                 Duration.ofSeconds(3),
                 100_000,
+                200_000,
                 Duration.ofSeconds(1),
                 3,
                 1000,

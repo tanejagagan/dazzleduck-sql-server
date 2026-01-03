@@ -59,6 +59,7 @@ class ArrowMicroMeterRegistryTest {
                 "arrow.outputFile",
                 Duration.ofSeconds(6),
                 1024,                          // minBatchSize (test)
+                2048,                          // maxBatchSize (test)
                 Duration.ofSeconds(6),      // maxSendInterval
                 3,                          // retryCount
                 1000,                       // retryIntervalMillis

@@ -66,7 +66,7 @@ class LogTailToArrowProcessorTest {
                 {"timestamp":"2024-01-01T10:00:01Z","level":"WARN","thread":"main","logger":"App","message":"World"}
                 """);
         // Create REAL HttpSender
-        try (HttpProducer sender = new HttpProducer(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(5), 1, Duration.ofSeconds(1), 3, 1000, java.util.List.of(), java.util.List.of(), 10_000_000, 10_000_000)) {
+        try (HttpProducer sender = new HttpProducer(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(5), 1, 2048, Duration.ofSeconds(1), 3, 1000, java.util.List.of(), java.util.List.of(), 10_000_000, 10_000_000)) {
             JsonToArrowConverter converter = new JsonToArrowConverter(APPLICATION_ID, APPLICATION_NAME, APPLICATION_HOST);
             LogTailToArrowProcessor processor = new LogTailToArrowProcessor(tempDir.toString(), "*.log", converter, sender, 100);
             processor.start();
@@ -101,7 +101,7 @@ class LogTailToArrowProcessorTest {
                 {"timestamp":"2024-01-01T10:00:01Z","level":"WARN","thread":"main","logger":"App","message":"file3"}
                 """);
 
-        try (HttpProducer sender = new HttpProducer(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(5), 1, Duration.ofSeconds(1), 3, 1000, java.util.List.of(), java.util.List.of(), 10_000_000, 10_000_000)) {
+        try (HttpProducer sender = new HttpProducer(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(5), 1, 2048, Duration.ofSeconds(1), 3, 1000, java.util.List.of(), java.util.List.of(), 10_000_000, 10_000_000)) {
             // Start processor
             JsonToArrowConverter converter = new JsonToArrowConverter(APPLICATION_ID, APPLICATION_NAME, APPLICATION_HOST);
             LogTailToArrowProcessor processor = new LogTailToArrowProcessor(tempDir.toString(), "*.log", converter, sender, 100);
@@ -126,7 +126,7 @@ class LogTailToArrowProcessorTest {
                 {"timestamp":"2024-01-01","level":"WARN","message":"OK"}
                 """);
 
-        try (HttpProducer sender = new HttpProducer(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(5), 1, Duration.ofSeconds(1), 3, 1000, java.util.List.of(), java.util.List.of(), 10_000_000, 10_000_000)) {
+        try (HttpProducer sender = new HttpProducer(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(5), 1, 2048, Duration.ofSeconds(1), 3, 1000, java.util.List.of(), java.util.List.of(), 10_000_000, 10_000_000)) {
             JsonToArrowConverter converter = new JsonToArrowConverter(APPLICATION_ID, APPLICATION_NAME, APPLICATION_HOST);
             LogTailToArrowProcessor processor = new LogTailToArrowProcessor(tempDir.toString(), "*.log", converter, sender, 100);
             processor.start();
@@ -146,7 +146,7 @@ class LogTailToArrowProcessorTest {
         Path logFile = tempDir.resolve("empty.log");
         Files.createFile(logFile);
 
-        try (HttpProducer sender = new HttpProducer(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(3), 1, Duration.ofSeconds(1), 3, 1000, java.util.List.of(), java.util.List.of(), 10_000_000, 10_000_000)) {
+        try (HttpProducer sender = new HttpProducer(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(3), 1, 2048, Duration.ofSeconds(1), 3, 1000, java.util.List.of(), java.util.List.of(), 10_000_000, 10_000_000)) {
             JsonToArrowConverter converter = new JsonToArrowConverter(APPLICATION_ID, APPLICATION_NAME, APPLICATION_HOST);
             LogTailToArrowProcessor processor = new LogTailToArrowProcessor(tempDir.toString(), "*.log", converter, sender, 100);
             processor.start();
@@ -164,7 +164,7 @@ class LogTailToArrowProcessorTest {
         Files.createDirectories(Path.of(warehouse.toString(), targetDir));
         tempDir.resolve("missing.log"); // not created
 
-        try (HttpProducer sender = new HttpProducer(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(3), 1, Duration.ofSeconds(1), 3, 1000, java.util.List.of(), java.util.List.of(), 10_000_000, 10_000_000)) {
+        try (HttpProducer sender = new HttpProducer(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(3), 1, 2048, Duration.ofSeconds(1), 3, 1000, java.util.List.of(), java.util.List.of(), 10_000_000, 10_000_000)) {
             JsonToArrowConverter converter = new JsonToArrowConverter(APPLICATION_ID, APPLICATION_NAME, APPLICATION_HOST);
             LogTailToArrowProcessor processor = new LogTailToArrowProcessor(tempDir.toString(), "*.log", converter, sender, 100);
             processor.start();

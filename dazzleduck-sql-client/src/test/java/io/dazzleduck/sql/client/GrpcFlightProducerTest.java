@@ -81,6 +81,7 @@ class GrpcFlightProducerTest {
         try (GrpcFlightProducer sender = new GrpcFlightProducer(
                 schema,
                 1024,
+                2048,
                 Duration.ofSeconds(2),
                 Clock.systemUTC(),
                 3,
@@ -132,6 +133,7 @@ class GrpcFlightProducerTest {
         try (GrpcFlightProducer sender = new GrpcFlightProducer(
                 schema,
                 1024,
+                2048,
                 Duration.ofSeconds(2),
                 Clock.systemUTC(),
                 3,
@@ -175,6 +177,7 @@ class GrpcFlightProducerTest {
         try (GrpcFlightProducer sender = new GrpcFlightProducer(
                 schema,
                 1024,
+                2048,
                 Duration.ofSeconds(2),
                 Clock.systemUTC(),
                 3,
@@ -218,6 +221,7 @@ class GrpcFlightProducerTest {
         try (GrpcFlightProducer sender = new GrpcFlightProducer(
                 schema,
                 1024,
+                2048,
                 Duration.ofSeconds(2),
                 Clock.systemUTC(),
                 3,
@@ -262,6 +266,7 @@ class GrpcFlightProducerTest {
         try (GrpcFlightProducer sender = new GrpcFlightProducer(
                 schema,
                 1024,
+                2048,
                 Duration.ofSeconds(2),
                 Clock.systemUTC(),
                 3,
@@ -306,6 +311,7 @@ class GrpcFlightProducerTest {
         try (GrpcFlightProducer sender = new GrpcFlightProducer(
                 schema,
                 1024,
+                2048,
                 Duration.ofSeconds(2),
                 Clock.systemUTC(),
                 3,
