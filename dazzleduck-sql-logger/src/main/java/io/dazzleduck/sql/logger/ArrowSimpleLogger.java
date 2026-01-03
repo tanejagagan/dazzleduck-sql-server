@@ -2,8 +2,8 @@ package io.dazzleduck.sql.logger;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
-import io.dazzleduck.sql.client.HttpSender;
-import io.dazzleduck.sql.client.FlightSender;
+import io.dazzleduck.sql.client.HttpProducer;
+import io.dazzleduck.sql.client.FlightProducer;
 import io.dazzleduck.sql.common.types.JavaRow;
 import org.apache.arrow.vector.types.pojo.*;
 import org.slf4j.Marker;
@@ -43,7 +43,7 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
     private static final DateTimeFormatter TS_FORMAT = DateTimeFormatter.ISO_INSTANT;
 
     private final String name;
-    private final FlightSender flightSender;
+    private final FlightProducer flightProducer;
     private final String application_id;
     private final String application_name;
     private final String application_host;
@@ -52,18 +52,18 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
         this(name, createSenderFromConfig());
     }
 
-    public ArrowSimpleLogger(String name, FlightSender sender) {
+    public ArrowSimpleLogger(String name, FlightProducer sender) {
         this.name = name;
-        this.flightSender = sender;
+        this.flightProducer = sender;
         this.application_id = CONFIG_APPLICATION_ID;
         this.application_name = CONFIG_APPLICATION_NAME;
         this.application_host = CONFIG_APPLICATION_HOST;
     }
 
-    private static FlightSender createSenderFromConfig() {
+    private static FlightProducer createSenderFromConfig() {
         Config http = config.getConfig("http");
         String targetPath = http.getString("target_path");
-        return new HttpSender(
+        return new HttpProducer(
                 schema,
                 http.getString("base_url"),
                 http.getString("username"),
@@ -123,7 +123,7 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
             });
 
             // FlightSender handles batching, serialization, and sending
-            flightSender.addRow(row);
+            flightProducer.addRow(row);
 
         } catch (Exception e) {
             System.err.println("[ArrowSimpleLogger] Failed to log:");
@@ -132,7 +132,7 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
     }
 
     public void close() {
-        if (flightSender instanceof FlightSender.AbstractFlightSender afs) {
+        if (flightProducer instanceof FlightProducer.AbstractFlightProducer afs) {
             afs.close();
         }
     }

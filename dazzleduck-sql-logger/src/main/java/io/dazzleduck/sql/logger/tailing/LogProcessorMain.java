@@ -2,7 +2,7 @@ package io.dazzleduck.sql.logger.tailing;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
-import io.dazzleduck.sql.client.HttpSender;
+import io.dazzleduck.sql.client.HttpProducer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,7 +45,7 @@ public final class LogProcessorMain {
         );
 
         // Create HttpSender with configuration
-        HttpSender httpSender = new HttpSender(
+        HttpProducer httpSender = new HttpProducer(
                 converter.getSchema(),
                 CONFIG_HTTP_BASE_URL,
                 CONFIG_HTTP_USERNAME,

@@ -22,9 +22,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
-public final class HttpSender extends FlightSender.AbstractFlightSender  {
+public final class HttpProducer extends FlightProducer.AbstractFlightProducer {
 
-    private static final Logger logger = LoggerFactory.getLogger(HttpSender.class);
+    private static final Logger logger = LoggerFactory.getLogger(HttpProducer.class);
     private static final ObjectMapper mapper = new ObjectMapper();
     private static final Duration REFRESH_SKEW = Duration.ofSeconds(60);
     private static final Duration DEFAULT_TOKEN_LIFETIME = Duration.ofHours(5);
@@ -43,7 +43,7 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
     private volatile String jwt = null;
     private volatile Instant jwtExpiry = Instant.EPOCH;
 
-    public HttpSender(
+    public HttpProducer(
             Schema schema,
             String baseUrl,
             String username,
@@ -61,7 +61,7 @@ public final class HttpSender extends FlightSender.AbstractFlightSender  {
     ) {
         this(schema, baseUrl, username, password, targetPath, httpClientTimeout, minBatchSize, maxSendInterval, retryCount, retryIntervalMillis, transformations, partitionBy, maxInMemorySize, maxOnDiskSize, Clock.systemUTC());
     }
-    public HttpSender(
+    public HttpProducer(
             Schema schema,
             String baseUrl,
             String username,

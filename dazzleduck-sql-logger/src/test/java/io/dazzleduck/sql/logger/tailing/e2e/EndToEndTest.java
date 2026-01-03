@@ -1,6 +1,6 @@
 package io.dazzleduck.sql.logger.tailing.e2e;
 
-import io.dazzleduck.sql.client.HttpSender;
+import io.dazzleduck.sql.client.HttpProducer;
 import io.dazzleduck.sql.logger.tailing.JsonToArrowConverter;
 import io.dazzleduck.sql.logger.tailing.LogTailToArrowProcessor;
 import org.slf4j.Logger;
@@ -99,7 +99,7 @@ public class EndToEndTest {
             );
             // because target path must exist
             Files.createDirectories(Path.of(warehouseDir.toString(), TARGET_PATH));
-            HttpSender httpSender = new HttpSender(
+            HttpProducer httpSender = new HttpProducer(
                     converter.getSchema(),
                     "http://localhost:" + SERVER_PORT,
                     USERNAME,
