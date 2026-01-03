@@ -9,12 +9,10 @@ import org.apache.arrow.flight.Location;
 import org.apache.arrow.flight.sql.FlightSqlClient;
 import org.apache.arrow.flight.sql.impl.FlightSql;
 import org.apache.arrow.memory.BufferAllocator;
-import org.apache.arrow.vector.ipc.ArrowStreamReader;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.InputStream;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Map;
@@ -129,36 +127,32 @@ public final class GrpcFlightProducer extends FlightProducer.AbstractFlightProdu
     }
 
     @Override
-    protected void doSend(java.util.List<FlightProducer.SendElement> elements) throws InterruptedException {
+    protected void doSend(ProducerElement element) throws InterruptedException {
         // Check if thread was interrupted before attempting send
         if (Thread.currentThread().isInterrupted()) {
             throw new InterruptedException("Thread interrupted before send");
         }
 
-        logger.debug("Sending {} combined elements via gRPC", elements.size());
+        logger.debug("Sending element via gRPC");
 
-        // Combine all elements into a single ArrowStreamReader for efficient sending
+        // Read the element and send it via gRPC
         // Use child allocator for better memory management
         try (org.apache.arrow.memory.BufferAllocator childAllocator =
-                allocator.newChildAllocator("grpc-send", 0, Long.MAX_VALUE);
-             org.apache.arrow.vector.ipc.ArrowStreamReader reader =
-                FlightProducer.AbstractFlightProducer.createCombinedReader(elements, getSchema(), childAllocator)) {
+                allocator.newChildAllocator("grpc-send", 0, Long.MAX_VALUE)) {
 
-            client.executeIngest(reader, ingestOptions);
-            logger.info("Successfully sent {} combined elements via gRPC", elements.size());
-        } catch (java.io.IOException e) {
-            // If interrupted during operation, throw InterruptedException instead
-            if (Thread.currentThread().isInterrupted()) {
-                throw new InterruptedException("Thread interrupted during gRPC send");
+            try (java.io.InputStream in = element.read();
+                 org.apache.arrow.vector.ipc.ArrowStreamReader reader =
+                    new org.apache.arrow.vector.ipc.ArrowStreamReader(in, childAllocator)) {
+
+                client.executeIngest(reader, ingestOptions);
+                logger.info("Successfully sent element via gRPC");
             }
-            logger.error("gRPC ingestion failed for {} elements", elements.size(), e);
-            throw new RuntimeException("gRPC ingestion failed", e);
         } catch (Exception e) {
             // If interrupted during operation, throw InterruptedException instead
             if (Thread.currentThread().isInterrupted()) {
                 throw new InterruptedException("Thread interrupted during gRPC send");
             }
-            logger.error("gRPC ingestion failed for {} elements", elements.size(), e);
+            logger.error("gRPC ingestion failed for element", e);
             throw new RuntimeException("gRPC ingestion failed", e);
         }
     }
@@ -189,13 +183,7 @@ public final class GrpcFlightProducer extends FlightProducer.AbstractFlightProdu
 
         // Rethrow the first exception if any occurred
         if (superCloseException != null) {
-            if (superCloseException instanceof RuntimeException) {
-                throw (RuntimeException) superCloseException;
-            } else {
-                throw new RuntimeException("Failed to close GrpcFlightSender", superCloseException);
-            }
+            throw (RuntimeException) superCloseException;
         }
     }
-
-
 }

@@ -95,8 +95,8 @@ class ArrowSimpleLoggerTest {
 
         TestFlightProducer() {
             super(
-                    1024 * 1024,
                     2048,
+                    1024 * 1024,
                     Duration.ofSeconds(1),
 
                     new Schema(java.util.List.of(
@@ -124,16 +124,15 @@ class ArrowSimpleLoggerTest {
         }
 
         @Override
-        protected void doSend(java.util.List<FlightProducer.SendElement> elements) {
-            rowsReceived.addAndGet(elements.size());
-            for (int i = 0; i < elements.size(); i++) {
-                latch.countDown();
-            }
-            // Consume the reader to simulate actual usage
+        protected void doSend(ProducerElement element) {
+            rowsReceived.incrementAndGet();
+            latch.countDown();
+            // Consume the element to simulate actual usage
             try (org.apache.arrow.memory.BufferAllocator childAllocator =
                     bufferAllocator.newChildAllocator("test-send", 0, Long.MAX_VALUE);
+                 java.io.InputStream in = element.read();
                  org.apache.arrow.vector.ipc.ArrowStreamReader reader =
-                    FlightProducer.AbstractFlightProducer.createCombinedReader(elements, getSchema(), childAllocator)) {
+                        new org.apache.arrow.vector.ipc.ArrowStreamReader(in, childAllocator)) {
                 while (reader.loadNextBatch()) {
                     // Just iterate through batches
                 }

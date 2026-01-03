@@ -57,7 +57,7 @@ class FlightProducerTest {
         // Use same schema as OnDemandProducer
         Schema schema = new Schema(List.of(new Field("ts", FieldType.nullable(new ArrowType.Utf8()), null)));
         try (BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE)) {
-            FlightProducer.SendElement element = createSendElement(schema, allocator, new int[]{}, new String[]{"a", "b", "c"});
+            FlightProducer.ProducerElement element = createSendElement(schema, allocator, new int[]{}, new String[]{"a", "b", "c"});
             assertDoesNotThrow(() -> sender.enqueue(((FlightProducer.MemoryElement)element).data));
         }
     }
@@ -68,7 +68,7 @@ class FlightProducerTest {
         // Use same schema as OnDemandProducer
         Schema schema = new Schema(List.of(new Field("ts", FieldType.nullable(new ArrowType.Utf8()), null)));
         try (BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE)) {
-            FlightProducer.SendElement element = createSendElement(schema, allocator, new int[]{}, new String[]{"a", "b", "c"});
+            FlightProducer.ProducerElement element = createSendElement(schema, allocator, new int[]{}, new String[]{"a", "b", "c"});
             sender.enqueue(((FlightProducer.MemoryElement)element).data);
             assertEquals(1, sender.filesCreated.get());
         }
@@ -85,7 +85,7 @@ class FlightProducerTest {
             for (int i = 0; i < largeData.length; i++) {
                 largeData[i] = "data_" + i;
             }
-            FlightProducer.SendElement element1 = createSendElement(schema, allocator, new int[]{}, largeData);
+            FlightProducer.ProducerElement element1 = createSendElement(schema, allocator, new int[]{}, largeData);
             sender.enqueue(((FlightProducer.MemoryElement)element1).data); // goes to disk
             sender.release(); // let it process
 
@@ -94,7 +94,7 @@ class FlightProducerTest {
             for (int i = 0; i < veryLargeData.length; i++) {
                 veryLargeData[i] = "data_" + i;
             }
-            FlightProducer.SendElement element2 = createSendElement(schema, allocator, new int[]{}, veryLargeData);
+            FlightProducer.ProducerElement element2 = createSendElement(schema, allocator, new int[]{}, veryLargeData);
             IllegalStateException ex = assertThrows(
                     IllegalStateException.class,
                     () -> sender.enqueue(((FlightProducer.MemoryElement)element2).data)
@@ -112,7 +112,7 @@ class FlightProducerTest {
         // Use same schema as OnDemandProducer
         Schema schema = new Schema(List.of(new Field("ts", FieldType.nullable(new ArrowType.Utf8()), null)));
         try (BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE)) {
-            FlightProducer.SendElement element = createSendElement(schema, allocator, new int[]{}, new String[]{"a", "b", "c"});
+            FlightProducer.ProducerElement element = createSendElement(schema, allocator, new int[]{}, new String[]{"a", "b", "c"});
             sender.enqueue(((FlightProducer.MemoryElement)element).data);
             assertEquals(1, sender.filesCreated.get());
 
@@ -132,7 +132,7 @@ class FlightProducerTest {
         try (BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE)) {
             // Create first element that fits within limits
             String[] data1Strings = new String[]{"a", "b"};
-            FlightProducer.SendElement element1 = createSendElement(schema, allocator, new int[]{}, data1Strings);
+            FlightProducer.ProducerElement element1 = createSendElement(schema, allocator, new int[]{}, data1Strings);
             byte[] data1 = ((FlightProducer.MemoryElement)element1).data;
             sender.enqueue(data1); // fits in ON_DISK
             assertEquals(1, sender.filesCreated.get());
@@ -142,7 +142,7 @@ class FlightProducerTest {
             for (int i = 0; i < data2Strings.length; i++) {
                 data2Strings[i] = "large_string_value_" + i;
             }
-            FlightProducer.SendElement element2 = createSendElement(schema, allocator, new int[]{}, data2Strings);
+            FlightProducer.ProducerElement element2 = createSendElement(schema, allocator, new int[]{}, data2Strings);
             byte[] data2 = ((FlightProducer.MemoryElement)element2).data;
             assertThrows(IllegalStateException.class, () -> sender.enqueue(data2));
             assertEquals(2, sender.filesCreated.get());
@@ -158,7 +158,7 @@ class FlightProducerTest {
         // Use same schema as OnDemandProducer
         Schema schema = new Schema(List.of(new Field("ts", FieldType.nullable(new ArrowType.Utf8()), null)));
         try (BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE)) {
-            FlightProducer.SendElement element = createSendElement(schema, allocator, new int[]{}, new String[]{"a", "b", "c"});
+            FlightProducer.ProducerElement element = createSendElement(schema, allocator, new int[]{}, new String[]{"a", "b", "c"});
             sender.enqueue(((FlightProducer.MemoryElement)element).data);
 
             sender.close();
@@ -176,7 +176,7 @@ class FlightProducerTest {
 
         try (BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE)) {
             // Create three SendElements with different data
-            List<FlightProducer.SendElement> elements = new ArrayList<>();
+            List<FlightProducer.ProducerElement> elements = new ArrayList<>();
 
             // Element 1: rows 1-3
             elements.add(createSendElement(schema, allocator, new int[]{1, 2, 3}, new String[]{"Alice", "Bob", "Charlie"}));
@@ -188,7 +188,9 @@ class FlightProducerTest {
             elements.add(createSendElement(schema, allocator, new int[]{6, 7}, new String[]{"Frank", "Grace"}));
 
             // Combine all elements
-            try (ArrowStreamReader combinedReader = FlightProducer.AbstractFlightProducer.createCombinedReader(elements, schema, allocator)) {
+            FlightProducer.ProducerElement combinedElement = FlightProducer.createCombinedReader(elements, schema, allocator);
+            try (java.io.InputStream in = combinedElement.read();
+                 ArrowStreamReader combinedReader = new ArrowStreamReader(in, allocator)) {
 
                 List<Integer> allIds = new ArrayList<>();
                 List<String> allNames = new ArrayList<>();
@@ -210,8 +212,9 @@ class FlightProducerTest {
                 assertEquals(List.of(1, 2, 3, 4, 5, 6, 7), allIds);
                 assertEquals(List.of("Alice", "Bob", "Charlie", "David", "Eve", "Frank", "Grace"), allNames);
             } finally {
+                combinedElement.close();
                 // Clean up SendElements
-                for (FlightProducer.SendElement element : elements) {
+                for (FlightProducer.ProducerElement element : elements) {
                     element.close();
                 }
             }
@@ -225,10 +228,18 @@ class FlightProducerTest {
         ));
 
         try (BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE)) {
-            List<FlightProducer.SendElement> elements = new ArrayList<>();
-            elements.add(createSendElement(schema, allocator, new int[]{10, 20, 30}, new String[]{}));
+            List<FlightProducer.ProducerElement> elements = new ArrayList<>();
+            FlightProducer.ProducerElement originalElement = createSendElement(schema, allocator, new int[]{10, 20, 30}, new String[]{});
+            elements.add(originalElement);
 
-            try (ArrowStreamReader combinedReader = FlightProducer.AbstractFlightProducer.createCombinedReader(elements, schema, allocator)) {
+            FlightProducer.ProducerElement combinedElement = FlightProducer.createCombinedReader(elements, schema, allocator);
+
+            // Verify it returns the same element instance
+            assertSame(originalElement, combinedElement, "Should return the same element for single-element list");
+
+            // Verify the data is correct
+            try (java.io.InputStream in = combinedElement.read();
+                 ArrowStreamReader combinedReader = new ArrowStreamReader(in, allocator)) {
 
                 assertTrue(combinedReader.loadNextBatch());
                 VectorSchemaRoot root = combinedReader.getVectorSchemaRoot();
@@ -241,9 +252,7 @@ class FlightProducerTest {
 
                 assertFalse(combinedReader.loadNextBatch(), "Should only have one batch");
             } finally {
-                for (FlightProducer.SendElement element : elements) {
-                    element.close();
-                }
+                combinedElement.close();
             }
         }
     }
@@ -255,11 +264,13 @@ class FlightProducerTest {
         ));
 
         try (BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE)) {
-            List<FlightProducer.SendElement> elements = new ArrayList<>();
+            List<FlightProducer.ProducerElement> elements = new ArrayList<>();
 
-            try (ArrowStreamReader combinedReader = FlightProducer.AbstractFlightProducer.createCombinedReader(elements, schema, allocator)) {
-                assertFalse(combinedReader.loadNextBatch(), "Should have no batches for empty list");
-            }
+            IllegalArgumentException exception = assertThrows(
+                    IllegalArgumentException.class,
+                    () -> FlightProducer.createCombinedReader(elements, schema, allocator)
+            );
+            assertEquals("Cannot create combined reader from empty list", exception.getMessage());
         }
     }
 
@@ -270,7 +281,7 @@ class FlightProducerTest {
         ));
 
         try (BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE)) {
-            List<FlightProducer.SendElement> elements = new ArrayList<>();
+            List<FlightProducer.ProducerElement> elements = new ArrayList<>();
 
             // Create elements in specific order
             for (int batch = 0; batch < 5; batch++) {
@@ -278,7 +289,9 @@ class FlightProducerTest {
                 elements.add(createSendElement(schema, allocator, values, new String[]{}));
             }
 
-            try (ArrowStreamReader combinedReader = FlightProducer.AbstractFlightProducer.createCombinedReader(elements, schema, allocator)) {
+            FlightProducer.ProducerElement combinedElement = FlightProducer.createCombinedReader(elements, schema, allocator);
+            try (java.io.InputStream in = combinedElement.read();
+                 ArrowStreamReader combinedReader = new ArrowStreamReader(in, allocator)) {
 
                 List<Integer> allValues = new ArrayList<>();
                 while (combinedReader.loadNextBatch()) {
@@ -294,7 +307,8 @@ class FlightProducerTest {
                 List<Integer> expected = List.of(0, 1, 10, 11, 20, 21, 30, 31, 40, 41);
                 assertEquals(expected, allValues, "Order should be preserved across batches");
             } finally {
-                for (FlightProducer.SendElement element : elements) {
+                combinedElement.close();
+                for (FlightProducer.ProducerElement element : elements) {
                     element.close();
                 }
             }
@@ -304,8 +318,8 @@ class FlightProducerTest {
     /**
      * Helper method to create a SendElement with Arrow data
      */
-    private FlightProducer.SendElement createSendElement(Schema schema, BufferAllocator allocator,
-                                                         int[] intValues, String[] stringValues) throws IOException {
+    private FlightProducer.ProducerElement createSendElement(Schema schema, BufferAllocator allocator,
+                                                             int[] intValues, String[] stringValues) throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
 
         try (VectorSchemaRoot root = VectorSchemaRoot.create(schema, allocator);
@@ -423,19 +437,18 @@ class FlightProducerTest {
         }
 
         @Override
-        protected void doSend(java.util.List<FlightProducer.SendElement> elements) throws InterruptedException {
+        protected void doSend(ProducerElement element) throws InterruptedException {
             latch.await();
-            filesDeleted.addAndGet(elements.size());
+            filesDeleted.incrementAndGet();
             if (sendDone != null) {
-                for (int i = 0; i < elements.size(); i++) {
-                    sendDone.countDown();
-                }
+                sendDone.countDown();
             }
-            // Consume the reader to simulate actual usage
+            // Consume the element to simulate actual usage
             try (org.apache.arrow.memory.BufferAllocator childAllocator =
                     bufferAllocator.newChildAllocator("test-send", 0, Long.MAX_VALUE);
+                 java.io.InputStream in = element.read();
                  org.apache.arrow.vector.ipc.ArrowStreamReader reader =
-                    FlightProducer.AbstractFlightProducer.createCombinedReader(elements, getSchema(), childAllocator)) {
+                        new org.apache.arrow.vector.ipc.ArrowStreamReader(in, childAllocator)) {
                 while (reader.loadNextBatch()) {
                     // Just iterate through batches
                 }
