@@ -1,6 +1,6 @@
 package io.dazzleduck.sql.logger;
 
-import io.dazzleduck.sql.common.ingestion.FlightSender;
+import io.dazzleduck.sql.client.FlightSender;
 import org.apache.arrow.vector.types.pojo.*;
 import org.junit.jupiter.api.*;
 

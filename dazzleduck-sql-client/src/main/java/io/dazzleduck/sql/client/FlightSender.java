@@ -1,4 +1,4 @@
-package io.dazzleduck.sql.common.ingestion;
+package io.dazzleduck.sql.client;
 
 import io.dazzleduck.sql.common.types.JavaRow;
 import io.dazzleduck.sql.common.types.VectorSchemaRootWriter;

@@ -1,6 +1,6 @@
 package io.dazzleduck.sql.micrometer.service;
 
-import io.dazzleduck.sql.common.ingestion.FlightSender;
+import io.dazzleduck.sql.client.FlightSender;
 import io.dazzleduck.sql.common.types.JavaRow;
 import io.micrometer.core.instrument.*;
 import io.micrometer.core.instrument.distribution.DistributionStatisticConfig;

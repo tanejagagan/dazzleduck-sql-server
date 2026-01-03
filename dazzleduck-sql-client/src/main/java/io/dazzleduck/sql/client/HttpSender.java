@@ -2,7 +2,6 @@ package io.dazzleduck.sql.client;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.dazzleduck.sql.common.ingestion.FlightSender;
 import io.dazzleduck.sql.login.LoginRequest;
 import io.dazzleduck.sql.login.LoginResponse;
 import org.apache.arrow.vector.types.pojo.Schema;

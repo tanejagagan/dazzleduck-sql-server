@@ -3,7 +3,7 @@ package io.dazzleduck.sql.logger;
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.client.HttpSender;
-import io.dazzleduck.sql.common.ingestion.FlightSender;
+import io.dazzleduck.sql.client.FlightSender;
 import io.dazzleduck.sql.common.types.JavaRow;
 import org.apache.arrow.vector.types.pojo.*;
 import org.slf4j.Marker;

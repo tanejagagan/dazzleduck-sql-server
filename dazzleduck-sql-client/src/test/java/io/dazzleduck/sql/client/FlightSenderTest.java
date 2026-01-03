@@ -1,4 +1,4 @@
-package io.dazzleduck.sql.common.ingestion;
+package io.dazzleduck.sql.client;
 
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;

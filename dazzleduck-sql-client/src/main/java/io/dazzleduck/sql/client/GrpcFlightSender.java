@@ -3,7 +3,6 @@ package io.dazzleduck.sql.client;
 
 
 import io.dazzleduck.sql.common.Headers;
-import io.dazzleduck.sql.common.ingestion.FlightSender;
 import io.dazzleduck.sql.client.auth.AuthUtils;
 import org.apache.arrow.flight.FlightClient;
 import org.apache.arrow.flight.Location;
@@ -20,7 +19,6 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.TimeUnit;
 
 public final class GrpcFlightSender extends FlightSender.AbstractFlightSender implements AutoCloseable {
 
