@@ -36,15 +36,12 @@ class LogToArrowConverterTest {
         Schema schema = converter.getSchema();
 
         assertNotNull(schema);
-        assertEquals(8, schema.getFields().size());
+        assertEquals(5, schema.getFields().size());
         assertNotNull(schema.findField("timestamp"));
         assertNotNull(schema.findField("level"));
         assertNotNull(schema.findField("logger"));
         assertNotNull(schema.findField("thread"));
         assertNotNull(schema.findField("message"));
-        assertNotNull(schema.findField("application_id"));
-        assertNotNull(schema.findField("application_name"));
-        assertNotNull(schema.findField("application_host"));
     }
 
     @Test
@@ -93,9 +90,6 @@ class LogToArrowConverterTest {
             assertEquals("com.example.Test", getString(root, "logger", 0));
             assertEquals("main", getString(root, "thread", 0));
             assertEquals("Test message", getString(root, "message", 0));
-            assertEquals("app-123", getString(root, "application_id", 0));
-            assertEquals("TestApp", getString(root, "application_name", 0));
-            assertEquals("host1", getString(root, "application_host", 0));
         }
     }
 
@@ -163,11 +157,9 @@ class LogToArrowConverterTest {
 
             VarCharVector timestampVec = (VarCharVector) root.getVector("timestamp");
             VarCharVector loggerVec = (VarCharVector) root.getVector("logger");
-            VarCharVector hostVec = (VarCharVector) root.getVector("application_host");
 
             assertTrue(timestampVec.isNull(0));
             assertTrue(loggerVec.isNull(0));
-            assertTrue(hostVec.isNull(0));
 
             assertEquals("WARN", getString(root, "level", 0));
             assertEquals("Test message", getString(root, "message", 0));

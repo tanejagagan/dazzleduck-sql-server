@@ -1,6 +1,7 @@
 package io.dazzleduck.sql.logback;
 
-import io.dazzleduck.sql.client.HttpSender;
+import io.dazzleduck.sql.client.HttpProducer;
+import io.dazzleduck.sql.common.types.JavaRow;
 import lombok.Getter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,7 +29,7 @@ public final class LogForwarder implements Closeable {
     @Getter
     private final LogBuffer buffer;
     private final LogToArrowConverter converter;
-    private final HttpSender httpSender;
+    private final HttpProducer httpProducer;
     private final ScheduledExecutorService scheduler;
     private final LogForwarderConfig config;
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -65,8 +66,14 @@ public final class LogForwarder implements Closeable {
                 config.isEnabled()
         );
 
-        // Create HttpSender
-        this.httpSender = new HttpSender(
+        // Create transformations for application metadata
+        java.util.List<String> transformations = new java.util.ArrayList<>(config.getTransformations());
+        transformations.add(String.format("'%s' AS application_id", config.getApplicationId()));
+        transformations.add(String.format("'%s' AS application_name", config.getApplicationName()));
+        transformations.add(String.format("'%s' AS application_host", config.getApplicationHost()));
+
+        // Create HttpProducer
+        this.httpProducer = new HttpProducer(
                 converter.getSchema(),
                 config.getBaseUrl(),
                 config.getUsername(),
@@ -74,7 +81,12 @@ public final class LogForwarder implements Closeable {
                 config.getTargetPath(),
                 config.getHttpClientTimeout(),
                 config.getMinBatchSize(),
+                config.getMaxBatchSize(),
                 config.getMaxSendInterval(),
+                config.getRetryCount(),
+                config.getRetryIntervalMillis(),
+                transformations,
+                config.getPartitionBy(),
                 config.getMaxInMemorySize(),
                 config.getMaxOnDiskSize()
         );
@@ -133,28 +145,41 @@ public final class LogForwarder implements Closeable {
 
             logger.debug("Forwarding {} log entries", entries.size());
 
-            byte[] arrowBytes = converter.convertToArrowBytes(entries);
-            if (arrowBytes == null || arrowBytes.length == 0) {
-                logger.warn("Failed to convert log entries to Arrow format");
-                buffer.returnForRetry(entries);
-                return;
-            }
-
             try {
-                httpSender.enqueue(arrowBytes);
-                logger.debug("Successfully enqueued {} log entries ({} bytes)", entries.size(), arrowBytes.length);
+                // Add each log entry as a row
+                for (LogEntry entry : entries) {
+                    JavaRow row = convertToJavaRow(entry);
+                    httpProducer.addRow(row);
+                }
+                logger.debug("Successfully added {} log entries", entries.size());
             } catch (IllegalStateException e) {
                 // Queue is full, return entries for retry
-                logger.warn("HttpSender queue is full, returning entries for retry: {}", e.getMessage());
+                logger.warn("HttpProducer queue is full, returning entries for retry: {}", e.getMessage());
                 buffer.returnForRetry(entries);
             } catch (Exception e) {
-                logger.error("Failed to enqueue log entries", e);
+                logger.error("Failed to add log entries", e);
                 buffer.returnForRetry(entries);
             }
 
         } catch (Exception e) {
             logger.error("Error during log forwarding", e);
         }
+    }
+
+    /**
+     * Convert a LogEntry to a JavaRow for the HttpProducer.
+     * The field order must match the schema from LogToArrowConverter:
+     * timestamp, level, logger, thread, message
+     * Note: application_id, application_name, application_host are added via transformations
+     */
+    private JavaRow convertToJavaRow(LogEntry entry) {
+        Object[] fields = new Object[5];
+        fields[0] = entry.timestamp() != null ? entry.timestamp().toString() : null;
+        fields[1] = entry.level();
+        fields[2] = entry.logger();
+        fields[3] = entry.thread();
+        fields[4] = entry.message();
+        return new JavaRow(fields);
     }
 
     /**
@@ -201,9 +226,9 @@ public final class LogForwarder implements Closeable {
             }
 
             try {
-                httpSender.close();
+                httpProducer.close();
             } catch (Exception e) {
-                logger.error("Error closing HttpSender", e);
+                logger.error("Error closing HttpProducer", e);
             }
 
             converter.close();

@@ -161,6 +161,8 @@ public interface FlightProducer extends Closeable {
 
         private final ScheduledExecutorService executorService;
 
+        private long currentBatchId = 0;
+
 
         public AbstractFlightProducer(long minBatchSize, long maxBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock, int retryCount, long retryIntervalMillis, java.util.List<String> transformations, java.util.List<String> partitionBy){
             this(minBatchSize, maxBatchSize, maxDataSendInterval, schema, clock, retryCount, retryIntervalMillis, transformations, partitionBy, Executors.newSingleThreadScheduledExecutor());
@@ -364,8 +366,8 @@ public interface FlightProducer extends Closeable {
             var storeStatus = getStoreStatus(input.length);
             switch (storeStatus) {
                 case FULL -> throw new IllegalStateException("queue is full");
-                case IN_MEMORY -> queue.add(new MemoryElement(input));
-                case ON_DISK -> queue.add(new FileMappedMemoryElement(input));
+                case IN_MEMORY -> queue.add(new MemoryElement(input, currentBatchId++ ));
+                case ON_DISK -> queue.add(new FileMappedMemoryElement(input, currentBatchId++));
             }
         }
 
@@ -563,8 +565,8 @@ public interface FlightProducer extends Closeable {
         private final long minBatchId;
         private final long maxBatchId;
 
-        public MemoryElement(byte[] data) {
-            this(data, 0, 0);
+        public MemoryElement(byte[] data, long batchId) {
+            this(data, batchId, batchId);
         }
 
         public MemoryElement(byte[] data, long minBatchId, long maxBatchId) {
@@ -606,8 +608,8 @@ public interface FlightProducer extends Closeable {
         private final long minBatchId;
         private final long maxBatchId;
 
-        public FileMappedMemoryElement(byte[] data) {
-            this(data, 0, 0);
+        public FileMappedMemoryElement(byte[] data, long batchId) {
+            this(data, batchId, batchId);
         }
 
         public FileMappedMemoryElement(byte[] data, long minBatchId, long maxBatchId) {

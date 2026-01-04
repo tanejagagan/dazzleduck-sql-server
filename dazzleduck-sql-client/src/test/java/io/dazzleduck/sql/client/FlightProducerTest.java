@@ -394,7 +394,7 @@ class FlightProducerTest {
             writer.end();
         }
 
-        return new FlightProducer.MemoryElement(out.toByteArray());
+        return new FlightProducer.MemoryElement(out.toByteArray(), 0);
     }
 
 
