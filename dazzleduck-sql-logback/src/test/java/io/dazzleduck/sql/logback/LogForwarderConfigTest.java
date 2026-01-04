@@ -14,7 +14,9 @@ class LogForwarderConfigTest {
 
         assertEquals("default-app", config.getApplicationId());
         assertEquals("DefaultApplication", config.getApplicationName());
-        assertEquals("localhost", config.getApplicationHost());
+        // Verify hostname is auto-detected (not null or empty)
+        assertNotNull(config.getApplicationHost());
+        assertFalse(config.getApplicationHost().isEmpty());
         assertEquals("http://localhost:8081", config.getBaseUrl());
         assertEquals("admin", config.getUsername());
         assertEquals("admin", config.getPassword());

@@ -93,10 +93,7 @@ public final class LogToArrowConverter implements Closeable {
                 new Field("level", FieldType.nullable(new ArrowType.Utf8()), null),
                 new Field("logger", FieldType.nullable(new ArrowType.Utf8()), null),
                 new Field("thread", FieldType.nullable(new ArrowType.Utf8()), null),
-                new Field("message", FieldType.nullable(new ArrowType.Utf8()), null),
-                new Field("application_id", FieldType.nullable(new ArrowType.Utf8()), null),
-                new Field("application_name", FieldType.nullable(new ArrowType.Utf8()), null),
-                new Field("application_host", FieldType.nullable(new ArrowType.Utf8()), null)
+                new Field("message", FieldType.nullable(new ArrowType.Utf8()), null)
         ));
     }
 
@@ -106,9 +103,6 @@ public final class LogToArrowConverter implements Closeable {
         VarCharVector loggerVec = (VarCharVector) root.getVector("logger");
         VarCharVector threadVec = (VarCharVector) root.getVector("thread");
         VarCharVector messageVec = (VarCharVector) root.getVector("message");
-        VarCharVector applicationIdVec = (VarCharVector) root.getVector("application_id");
-        VarCharVector applicationNameVec = (VarCharVector) root.getVector("application_name");
-        VarCharVector applicationHostVec = (VarCharVector) root.getVector("application_host");
 
         for (int i = 0; i < entries.size(); i++) {
             LogEntry entry = entries.get(i);
@@ -118,9 +112,6 @@ public final class LogToArrowConverter implements Closeable {
             setVectorValue(loggerVec, i, entry.logger());
             setVectorValue(threadVec, i, entry.thread());
             setVectorValue(messageVec, i, entry.message());
-            setVectorValue(applicationIdVec, i, entry.applicationId());
-            setVectorValue(applicationNameVec, i, entry.applicationName());
-            setVectorValue(applicationHostVec, i, entry.applicationHost());
         }
     }
 
