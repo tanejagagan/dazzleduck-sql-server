@@ -1,0 +1,51 @@
+<configuration>
+
+    <!-- File path provided at runtime -->
+    <property name="LOG_FILE" value="${LOG_FILE:-app.log}" />
+
+    <!-- ================= CONSOLE APPENDER ================= -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %-5level %logger - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- ================= FILE (JSON) APPENDER ================= -->
+    <appender name="FILE" class="ch.qos.logback.core.FileAppender">
+        <file>${LOG_FILE}</file>
+
+        <encoder class="net.logstash.logback.encoder.LoggingEventCompositeJsonEncoder">
+            <providers>
+
+                <timestamp>
+                    <fieldName>timestamp</fieldName>
+                    <timeZone>UTC</timeZone>
+                </timestamp>
+
+                <logLevel>
+                    <fieldName>level</fieldName>
+                </logLevel>
+
+                <threadName>
+                    <fieldName>thread</fieldName>
+                </threadName>
+
+                <loggerName>
+                    <fieldName>logger</fieldName>
+                </loggerName>
+
+                <message>
+                    <fieldName>message</fieldName>
+                </message>
+
+            </providers>
+        </encoder>
+    </appender>
+
+    <!-- ================= ROOT ================= -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
+    </root>
+
+</configuration>
