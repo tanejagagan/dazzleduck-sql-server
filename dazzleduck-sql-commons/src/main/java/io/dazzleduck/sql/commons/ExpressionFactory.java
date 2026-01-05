@@ -94,13 +94,13 @@ public class ExpressionFactory {
     }
 
     /**
-     * Creates a less-than-or-equal comparison expression (<=).
+     * Creates a less-than-or-equal comparison expression ({@literal <=}).
      *
      * <p>Example: {@code age <= 65}
      *
      * @param left the left operand
      * @param right the right operand
-     * @return JsonNode representing the <= comparison
+     * @return JsonNode representing the {@literal <=} comparison
      * @throws IllegalArgumentException if left or right is null
      */
     public static JsonNode lessThanOrEqualExpr(JsonNode left, JsonNode right) {
@@ -114,13 +114,13 @@ public class ExpressionFactory {
     }
 
     /**
-     * Creates a greater-than-or-equal comparison expression (>=).
+     * Creates a greater-than-or-equal comparison expression ({@literal >=}).
      *
      * <p>Example: {@code age >= 18}
      *
      * @param left the left operand
      * @param right the right operand
-     * @return JsonNode representing the >= comparison
+     * @return JsonNode representing the {@literal >=} comparison
      * @throws IllegalArgumentException if left or right is null
      */
     public static JsonNode greaterThanOrEqualExpr(JsonNode left, JsonNode right) {

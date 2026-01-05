@@ -132,7 +132,7 @@ public class OutputStreamServerStreamListener implements FlightProducer.ServerSt
      * Wait for the stream to end with a timeout.
      * @param timeoutMs Maximum time to wait in milliseconds
      * @throws InterruptedException if the thread is interrupted while waiting
-     * @throws java.util.concurrent.TimeoutException if the timeout expires
+     * @throws RuntimeException if the timeout expires
      */
     public synchronized void waitForEnd(long timeoutMs) throws InterruptedException {
         long deadline = clock.millis() + timeoutMs;
