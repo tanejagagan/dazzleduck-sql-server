@@ -58,7 +58,7 @@ const AdvancedSettings = ({
                             </p>
                         )}
                         <p className="text-xs text-gray-500 mt-1">
-                            0 = /query; &gt;0 = plan/split
+                            0 = /v1/query; &gt;0 = /v1/plan with splits
                         </p>
                     </div>
                 </div>
