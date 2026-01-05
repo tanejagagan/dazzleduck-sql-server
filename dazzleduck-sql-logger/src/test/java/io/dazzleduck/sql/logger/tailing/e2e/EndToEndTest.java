@@ -1,5 +1,6 @@
 package io.dazzleduck.sql.logger.tailing.e2e;
 
+import ch.qos.logback.classic.LoggerContext;
 import io.dazzleduck.sql.client.HttpProducer;
 import io.dazzleduck.sql.logger.tailing.JsonToArrowConverter;
 import io.dazzleduck.sql.logger.tailing.LogTailToArrowProcessor;
@@ -83,7 +84,7 @@ public class EndToEndTest {
                 }
             }, "log-generator");
 
-            logGeneratorThread.setDaemon(true);
+            // Don't make it daemon - we want to control when it stops
             logGeneratorThread.start();
             logger.info("✓ Log generator started ({}ms interval, {} entries per batch)",
                     LOG_GENERATION_INTERVAL_MS, LOG_ENTRIES_PER_BATCH);
@@ -134,8 +135,6 @@ public class EndToEndTest {
 
             // Step 5: Monitor progress
             long startTime = System.currentTimeMillis();
-            int lastIngestCount = 0;
-            int lastRecordCount = 0;
 
             while (System.currentTimeMillis() - startTime < TEST_DURATION_MS) {
                 Thread.sleep(10000); // Report every 10 seconds
@@ -160,19 +159,28 @@ public class EndToEndTest {
             logger.error("Test failed with exception", e);
             throw e;
         } finally {
-            processor.close();
-            System.exit(0);
-            // Cleanup
+            // Cleanup - IMPORTANT: Stop log generator FIRST before closing processor
             logger.info("Cleaning up...");
 
-            if (logGeneratorThread != null) {
+            if (logGeneratorThread != null && logGeneratorThread.isAlive()) {
+                logger.info("Stopping log generator thread...");
                 logGeneratorThread.interrupt();
+                try {
+                    logGeneratorThread.join(5000); // Wait up to 5 seconds for thread to stop
+                    logger.info("✓ Log generator stopped");
+                } catch (InterruptedException e) {
+                    logger.warn("Interrupted while waiting for log generator to stop");
+                    Thread.currentThread().interrupt();
+                }
             }
 
             if (processor != null) {
                 processor.close();
                 logger.info("✓ Processor closed");
             }
+            // 🔴 stop logback before cleanup
+            shutdownLogback();
+            logger.info("✓ Logback shut down");
 
             if (testLogDir != null && Files.exists(testLogDir)) {
                 Files.walk(testLogDir)
@@ -190,6 +198,12 @@ public class EndToEndTest {
             logger.info("═══════════════════════════════════════════════════════");
             logger.info("   End-to-End Test Finished");
             logger.info("═══════════════════════════════════════════════════════");
+            System.exit(0);
         }
+    }
+
+    private static void shutdownLogback() {
+        LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
+        context.stop(); // closes ALL appenders and releases file locks
     }
 }

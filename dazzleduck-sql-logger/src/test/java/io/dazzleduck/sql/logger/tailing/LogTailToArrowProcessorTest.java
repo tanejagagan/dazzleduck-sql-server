@@ -37,7 +37,8 @@ class LogTailToArrowProcessorTest {
                 "--conf", "dazzleduck_server.ingestion.max_delay_ms=500"
         });
 
-        JsonToArrowConverter converter = new JsonToArrowConverter(APPLICATION_ID, APPLICATION_NAME, APPLICATION_HOST);        schema = converter.getSchema();
+        JsonToArrowConverter converter = new JsonToArrowConverter(APPLICATION_ID, APPLICATION_NAME, APPLICATION_HOST);
+        schema = converter.getSchema();
         converter.close();
     }
 
@@ -58,13 +59,8 @@ class LogTailToArrowProcessorTest {
         String targetDir = "withSingleFileDir";
         // because target directory must exist
         Files.createDirectories(Path.of(warehouse.toString(), targetDir));
-
-        // Create temp log file
-        Path logFile = tempDir.resolve("app.log");
-        Files.writeString(logFile, """
-                {"timestamp":"2024-01-01T10:00:00Z","level":"INFO","thread":"main","logger":"App","message":"Hello"}
-                {"timestamp":"2024-01-01T10:00:01Z","level":"WARN","thread":"main","logger":"App","message":"World"}
-                """);
+        // Generating 1 file with 2 logs
+        runLogGenerator(tempDir, "1", "2");
         // Create REAL HttpSender
         try (HttpProducer sender = new HttpProducer(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(5), 1, 2048, Duration.ofSeconds(1), 3, 1000, java.util.List.of(), java.util.List.of(), 10_000_000, 10_000_000)) {
             JsonToArrowConverter converter = new JsonToArrowConverter(APPLICATION_ID, APPLICATION_NAME, APPLICATION_HOST);
@@ -83,25 +79,9 @@ class LogTailToArrowProcessorTest {
     void withMultipleFiles_endToEndTest() throws Exception {
         String targetDir = "withMultipleFileDir";
         Files.createDirectories(Path.of(warehouse.toString(), targetDir));
-        // Creating and writing logs in 3 files inside same directory.
-        Path logFile1 = tempDir.resolve("first.log");
-        Path logFile2 = tempDir.resolve("second.log");
-        Path logFile3 = tempDir.resolve("third.log");
-        // add application_name , application_id, application_host, application_name -->> in log columns.
-        Files.writeString(logFile1, """
-                {"timestamp":"2024-01-01T10:00:00Z","level":"INFO","thread":"main","logger":"App","message":"Hello file1"}
-                {"timestamp":"2024-01-01T10:00:01Z","level":"WARN","thread":"main","logger":"App","message":"World"}
-                """);
-        Files.writeString(logFile2, """
-                {"timestamp":"2024-01-01T10:00:00Z","level":"INFO","thread":"main","logger":"App","message":"Namaste file2"}
-                """);
-        Files.writeString(logFile3, """
-                {"timestamp":"2024-01-01T10:00:00Z","level":"INFO","thread":"main","logger":"App","message":"Hello"}
-                {"timestamp":"2024-01-01T10:00:01Z","level":"WARN","thread":"main","logger":"App","message":"Hii"}
-                {"timestamp":"2024-01-01T10:00:01Z","level":"WARN","thread":"main","logger":"App","message":"file3"}
-                """);
-
-        try (HttpProducer sender = new HttpProducer(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(5), 1, 2048, Duration.ofSeconds(1), 3, 1000, java.util.List.of(), java.util.List.of(), 10_000_000, 10_000_000)) {
+        // Generating 3 file with 2 logs per file: total = 6 logs
+        runLogGenerator(tempDir, "3", "2");
+        try (HttpProducer sender = new HttpProducer(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(5), 1,  2048, Duration.ofSeconds(1), 3, 1000, java.util.List.of(), java.util.List.of(), 10_000_000, 10_000_000)) {
             // Start processor
             JsonToArrowConverter converter = new JsonToArrowConverter(APPLICATION_ID, APPLICATION_NAME, APPLICATION_HOST);
             LogTailToArrowProcessor processor = new LogTailToArrowProcessor(tempDir.toString(), "*.log", converter, sender, 100);
@@ -120,13 +100,12 @@ class LogTailToArrowProcessorTest {
         String targetDir = "invalidJsonLinesDir";
         Files.createDirectories(Path.of(warehouse.toString(), targetDir));
         Path logFile = tempDir.resolve("bad.log");
-        Files.writeString(logFile, """
-                {"timestamp":"2024-01-01","level":"INFO","message":"OK"}
-                {this is not json}
-                {"timestamp":"2024-01-01","level":"WARN","message":"OK"}
-                """);
-
-        try (HttpProducer sender = new HttpProducer(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(5), 1, 2048, Duration.ofSeconds(1), 3, 1000, java.util.List.of(), java.util.List.of(), 10_000_000, 10_000_000)) {
+        // one invalid JSON in log file
+        Files.writeString(logFile, "{this is not json}\n");
+        // two correct logs in logFile
+        runLogGeneratorWithFile(logFile);
+        runLogGeneratorWithFile(logFile);
+        try (HttpProducer sender = new HttpProducer(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(5), 1,  2048, Duration.ofSeconds(1), 3, 1000, java.util.List.of(), java.util.List.of(), 10_000_000, 10_000_000)) {
             JsonToArrowConverter converter = new JsonToArrowConverter(APPLICATION_ID, APPLICATION_NAME, APPLICATION_HOST);
             LogTailToArrowProcessor processor = new LogTailToArrowProcessor(tempDir.toString(), "*.log", converter, sender, 100);
             processor.start();
@@ -172,5 +151,20 @@ class LogTailToArrowProcessorTest {
             await().during(1, TimeUnit.SECONDS).untilAsserted(() -> assertTrue(processor.isRunning()));
             processor.close();
         }
+    }
+
+    // ------------------------------
+    // HELPER METHODS
+    //-------------------------------
+    // can generate multiple files and no. of logs per files
+    static void runLogGenerator(Path tempDir, String numFiles, String logsPerFile) throws Exception {
+        Process process = new ProcessBuilder(System.getProperty("java.home") + "/bin/java", "-cp", System.getProperty("java.class.path"), "io.dazzleduck.sql.logger.tailing.SimpleLogGenerator", tempDir.toString(), numFiles, logsPerFile).redirectErrorStream(true).inheritIO().start();
+        assertEquals(0, process.waitFor());
+    }
+
+    // this will add 1 log every time we send a file in this
+    static void runLogGeneratorWithFile(Path logFile) throws Exception {
+        Process process = new ProcessBuilder(System.getProperty("java.home") + "/bin/java", "-cp", System.getProperty("java.class.path"), "io.dazzleduck.sql.logger.tailing.SimpleLogGenerator", logFile.toString()).redirectErrorStream(true).inheritIO().start();
+        assertEquals(0, process.waitFor());
     }
 }
