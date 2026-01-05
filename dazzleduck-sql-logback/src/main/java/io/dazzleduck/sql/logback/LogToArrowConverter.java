@@ -1,6 +1,5 @@
 package io.dazzleduck.sql.logback;
 
-import lombok.Getter;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.BigIntVector;
@@ -28,16 +27,20 @@ public final class LogToArrowConverter implements Closeable {
     private static final Logger logger = LoggerFactory.getLogger(LogToArrowConverter.class);
 
     private final BufferAllocator allocator;
-    /**
-     * -- GETTER --
-     *  Get the Arrow schema for log entries.
-     */
-    @Getter
     private final Schema schema;
 
     public LogToArrowConverter() {
         this.allocator = new RootAllocator(Long.MAX_VALUE);
         this.schema = createArrowSchema();
+    }
+
+    /**
+     * Get the Arrow schema for log entries.
+     *
+     * @return the Arrow schema
+     */
+    public Schema getSchema() {
+        return schema;
     }
 
     /**
