@@ -72,11 +72,14 @@ docker run -p 5174:5174 dazzleduck-frontend
 
 ## 🔄 Integration Flow
 
-1. **Frontend** sends SQL queries to:
+1. **Frontend** sends SQL queries to versioned API endpoints:
    ```
-   POST http://localhost:8080
+   POST http://localhost:8080/v1/login      (Authentication)
+   POST http://localhost:8080/v1/query      (Query execution)
+   POST http://localhost:8080/v1/plan       (Query planning with splits)
+   POST http://localhost:8080/v1/cancel     (Cancel running query)
    ```
-2. **DazzleDuck HTTP Server** executes the query and sends back the **Response**.
+2. **DazzleDuck HTTP Server** executes the query and sends back the **Response** in Arrow format.
 
 3. **Frontend** renders results using Arrow JS components.
 

@@ -32,6 +32,8 @@ public class HttpSenderTest {
     static ObjectMapper mapper = new ObjectMapper();
     static Schema schema;
 
+    private static final String BASE_URL = "http://localhost:" + PORT + "/";
+
     @TempDir
     Path tempDir;
     @BeforeAll
@@ -64,18 +66,24 @@ public class HttpSenderTest {
         org.awaitility.Awaitility.reset();
     }
 
-    private HttpSender newSender(String file, Duration timeout) {
-        return new HttpSender(
+    private HttpProducer newSender(String file, Duration timeout) {
+        return new HttpProducer(
                 schema,
-                "http://localhost:" + PORT,
+                BASE_URL,
                 "admin",
                 "admin",
                 file,
                 timeout,
                 100_000,
+                200_000,
                 Duration.ofSeconds(1),
+                3,
+                1000,
+                java.util.List.of(),
+                java.util.List.of(),
                 100,
-                100_000, Clock.systemDefaultZone()
+                100_000,
+                Clock.systemDefaultZone()
         );
     }
     private byte[] arrowBytes(String query) throws Exception {
@@ -110,7 +118,7 @@ public class HttpSenderTest {
     void testAsyncIngestionSingleBatch() throws Exception {
         String file = "async-single-" + System.nanoTime();
         Files.createDirectories(Path.of(warehouse, file));
-        try (HttpSender sender = newSender(file, Duration.ofSeconds(10))) {
+        try (HttpProducer sender = newSender(file, Duration.ofSeconds(10))) {
             sender.enqueue(arrowBytes("select * from generate_series(4)"));
         }
 
@@ -123,15 +131,20 @@ public class HttpSenderTest {
         String file = "overwrite-" + System.nanoTime();
         Files.createDirectories(Path.of(warehouse, file));
 
-        try (HttpSender overwriteSender = new HttpSender(
+        try (HttpProducer overwriteSender = new HttpProducer(
                 schema,
-                "http://localhost:" + PORT,
+                BASE_URL,
                 "admin",
                 "admin",
                 file,
                 Duration.ofSeconds(3),
                 100_000,
+                200_000,
                 Duration.ofSeconds(2),
+                3,
+                1000,
+                java.util.List.of(),
+                java.util.List.of(),
                 100_000,
                 500_000)) {
 
@@ -150,7 +163,7 @@ public class HttpSenderTest {
         CountDownLatch latch = new CountDownLatch(5);
         AtomicInteger errors = new AtomicInteger(0);
 
-        try (HttpSender concurrentEnqueues = newSender(file, Duration.ofSeconds(5))) {
+        try (HttpProducer concurrentEnqueues = newSender(file, Duration.ofSeconds(5))) {
             for (int i = 0; i < 5; i++) {
                 final int index = i;
                 new Thread(() -> {
@@ -179,7 +192,7 @@ public class HttpSenderTest {
         Files.createDirectories(Path.of(warehouse, file));
 
         // Multiple requests should reuse the same token
-        try (HttpSender ReuseSender = newSender(file, Duration.ofSeconds(5))) {
+        try (HttpProducer ReuseSender = newSender(file, Duration.ofSeconds(5))) {
             for (int i = 0; i < 5; i++) {
                 ReuseSender.enqueue(arrowBytes("select " + i + " as val"));
             }
@@ -197,7 +210,7 @@ public class HttpSenderTest {
         Files.createDirectories(Path.of(warehouse, file));
 
         // Rapid fire 20 small batches
-        try (HttpSender HighThroughput = newSender(file, Duration.ofSeconds(5))) {
+        try (HttpProducer HighThroughput = newSender(file, Duration.ofSeconds(5))) {
             for (int i = 0; i < 5; i++) {
                 HighThroughput.enqueue(arrowBytes("select " + i + " as val"));
             }
@@ -210,8 +223,8 @@ public class HttpSenderTest {
 
     @Test
     void testQueueFullBehavior() throws Exception {
-        var limitedSender = new HttpSender(  schema,"http://localhost:" + PORT, "admin", "admin", "full.parquet", Duration.ofSeconds(3), 100_000,
-                Duration.ofSeconds(2),100, 200);
+        var limitedSender = new HttpProducer(  schema,BASE_URL, "admin", "admin", "full.parquet", Duration.ofSeconds(3), 100_000, 200_000,
+                Duration.ofSeconds(2), 3, 1000, java.util.List.of(), java.util.List.of(), 100, 200);
 
         byte[] largeData = arrowBytes("select * from generate_series(200)");
 
@@ -241,8 +254,8 @@ public class HttpSenderTest {
     void testMemoryDiskSwitching() throws Exception {
         var path = "spill";
         Files.createDirectories(Path.of(warehouse, path));
-        var spillSender = new HttpSender(  schema,"http://localhost:" + PORT, "admin", "admin", path, Duration.ofSeconds(10), 100_000,
-                Duration.ofSeconds(2),50, 100_000);
+        var spillSender = new HttpProducer(  schema,BASE_URL, "admin", "admin", path, Duration.ofSeconds(10), 100_000, 200_000,
+                Duration.ofSeconds(2), 3, 1000, java.util.List.of(), java.util.List.of(), 50, 100_000);
 
 
         spillSender.enqueue(arrowBytes("select * from generate_series(30)"));
@@ -253,6 +266,101 @@ public class HttpSenderTest {
         });
 
         spillSender.close();
+    }
+
+    @Test
+    void testTransformationsHeader() throws Exception {
+        String path = "transformations-test";
+        Files.createDirectories(Path.of(warehouse, path));
+
+        try (HttpProducer sender = new HttpProducer(
+                schema,
+                BASE_URL,
+                "admin",
+                "admin",
+                path,
+                Duration.ofSeconds(3),
+                100_000,
+                200_000,
+                Duration.ofSeconds(1),
+                3,
+                1000,
+                java.util.List.of("'c1' as c1", "'c2' as c2"),
+                java.util.List.of(),
+                100_000,
+                500_000)) {
+
+            sender.enqueue(arrowBytes("select * from generate_series(5)"));
+        }
+
+        long count = ConnectionPool.collectFirst("select count(*) from read_parquet('%s/%s/*.parquet') where c1 = 'c1' and c2 = 'c2'".formatted(warehouse, path), Long.class);
+        assertEquals(6, count);
+
+    }
+
+
+    @Test
+    void testTransformationsAndPartitionByHeaders() throws Exception {
+        String path = "both-headers-test";
+        Files.createDirectories(Path.of(warehouse, path));
+
+        try (HttpProducer sender = new HttpProducer(
+                schema,
+                BASE_URL,
+                "admin",
+                "admin",
+                path,
+                Duration.ofSeconds(3),
+                100_000,
+                200_000,
+                Duration.ofSeconds(1),
+                3,
+                1000,
+                java.util.List.of("'c1' as c1", "'c2' as  c2"),
+                java.util.List.of("c1", "c2"),
+                100_000,
+                500_000)) {
+
+            sender.enqueue(arrowBytes("select * from generate_series(5)"));
+        }
+
+        await().atMost(5, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {
+            long count = ConnectionPool.collectFirst("select count(*) from read_parquet('%s/%s/*/*/*.parquet')".formatted(warehouse, path), Long.class);
+            assertEquals(6, count);
+        });
+    }
+
+
+    @Test
+    void testEmptyListsDoNotSendHeaders() throws Exception {
+        String path = "empty-lists-test";
+        Files.createDirectories(Path.of(warehouse, path));
+
+        // Empty lists should work fine and not send headers
+        try (HttpProducer sender = new HttpProducer(
+                schema,
+                BASE_URL,
+                "admin",
+                "admin",
+                path,
+                Duration.ofSeconds(3),
+                100_000,
+                200_000,
+                Duration.ofSeconds(1),
+                3,
+                1000,
+                java.util.List.of(),
+                java.util.List.of(),
+                100_000,
+                500_000)) {
+
+            sender.enqueue(arrowBytes("select * from generate_series(5)"));
+        }
+
+        await().atMost(5, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {
+            long count = ConnectionPool.collectFirst("select count(*) from read_parquet('%s/%s/*.parquet')".formatted(warehouse, path), Long.class);
+            assertEquals(6, count);
+        });
     }
 
 }

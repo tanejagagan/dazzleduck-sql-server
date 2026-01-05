@@ -13,6 +13,8 @@ import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.arrow.vector.ipc.ArrowStreamReader;
 import org.junit.jupiter.api.*;
 
+import java.io.IOException;
+
 import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -20,6 +22,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -35,6 +38,7 @@ public class HttpServerAuthorizationTest {
     static String warehousePath;
 
     static final int PORT = 8092;
+    private static final String BASE_URL = "http://localhost:%s".formatted(PORT);
 
     @BeforeAll
     static void setup() throws Exception {
@@ -57,10 +61,32 @@ public class HttpServerAuthorizationTest {
     @AfterAll
     static void cleanup() throws Exception {
         ConnectionPool.execute("DROP TABLE IF EXISTS auth_test");
-        new java.io.File(warehousePath).delete();
+        if (warehousePath != null) {
+            deleteDirectory(new java.io.File(warehousePath));
+        }
+    }
+
+    private static void deleteDirectory(java.io.File directory) throws IOException {
+        if (directory == null || !directory.exists()) {
+            return;
+        }
+
+        if (directory.isDirectory()) {
+            java.io.File[] files = directory.listFiles();
+            if (files != null) {
+                for (java.io.File file : files) {
+                    deleteDirectory(file);
+                }
+            }
+        }
+
+        if (!directory.delete()) {
+            throw new IOException("Failed to delete: " + directory.getAbsolutePath());
+        }
     }
 
     @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
     public void testQueryWithClaimsFilter() throws Exception {
         var claims = Map.of(
                 "filter", "id = 1",
@@ -79,6 +105,7 @@ public class HttpServerAuthorizationTest {
     }
 
     @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
     public void testUnauthorizedMissingTableClaim() throws Exception {
         var claims = Map.of(
                 "filter", "id = 1",
@@ -91,8 +118,9 @@ public class HttpServerAuthorizationTest {
         assertEquals(500, inputStreamResponse.statusCode());
     }
 
-    @Disabled
     @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    @Disabled("Column-level authorization not yet implemented")
     public void testColumnLevelAuthorization() throws Exception {
         var claims = Map.of(
                 // "columns", List.of("id", "name"),
@@ -113,9 +141,9 @@ public class HttpServerAuthorizationTest {
     /**
      * ======== HELPER METHODS ========
      */
-    // LOGIN (/login) with claims
+    // LOGIN (/v1/login) with claims
     private HttpResponse<String> login(Map<String, String> claims) throws Exception {
-        var loginRequest = HttpRequest.newBuilder(URI.create("http://localhost:%s/login".formatted(PORT)))
+        var loginRequest = HttpRequest.newBuilder(URI.create(BASE_URL + "/v1/login"))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(
                         mapper.writeValueAsBytes(new LoginRequest("admin", "admin", claims))
                 ))
@@ -124,10 +152,10 @@ public class HttpServerAuthorizationTest {
         return client.send(loginRequest, HttpResponse.BodyHandlers.ofString());
     }
 
-    // QUERY (/query) with sql & jwt
+    // QUERY (/v1/query) with sql & jwt
     private HttpResponse<InputStream> query(String sql, LoginResponse jwt) throws Exception {
         var body = mapper.writeValueAsBytes(new QueryRequest(sql));
-        var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/query".formatted(PORT)))
+        var request = HttpRequest.newBuilder(URI.create(BASE_URL + "/v1/query"))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values())
                 .header(HeaderNames.AUTHORIZATION.defaultCase(), jwt.tokenType() + " " + jwt.accessToken())

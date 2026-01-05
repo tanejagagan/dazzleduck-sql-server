@@ -20,7 +20,9 @@ import org.apache.arrow.vector.ipc.ArrowStreamReader;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URLDecoder;
 import java.nio.channels.Channels;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
@@ -60,13 +62,25 @@ public class IngestionService implements HttpService, ParameterUtils, Controller
     protected IngestionParameters parseIngestionParameters(ServerRequest serverRequest) {
         UriQuery query = serverRequest.query();
         var path = query.get("path");
+
+        // Validate path to prevent path traversal attacks
+        if (path == null || path.isEmpty()) {
+            throw new IllegalArgumentException("Path parameter is required");
+        }
+        if (path.contains("..") || path.startsWith("/")) {
+            throw new IllegalArgumentException("Invalid path: path traversal not allowed");
+        }
+
         final String completePath = warehousePath + "/" + path;
         String format = ParameterUtils.getParameterValue(HEADER_DATA_FORMAT, serverRequest, "parquet", String.class);
-        var partitionString = ParameterUtils.getParameterValue(HEADER_DATA_PARTITION, serverRequest, null, String.class);
-        var tranformationString = ParameterUtils.getParameterValue(HEADER_DATA_TRANSFORMATION, serverRequest, null, String.class);
+        var partitionString = urlDecode(
+                ParameterUtils.getParameterValue(HEADER_DATA_PARTITION, serverRequest, null, String.class));
+        var tranformationString = urlDecode(
+                ParameterUtils.getParameterValue(HEADER_DATA_TRANSFORMATION, serverRequest, null, String.class));
         var producerId = ParameterUtils.getParameterValue(HEADER_PRODUCER_ID, serverRequest, null, String.class);
         var producerBatchId = ParameterUtils.getParameterValue(HEADER_PRODUCER_BATCH_ID, serverRequest, -1L, Long.class);
-        var sortOrderString = ParameterUtils.getParameterValue(HEADER_SORT_ORDER, serverRequest, null, String.class);
+        var sortOrderString = urlDecode(
+                ParameterUtils.getParameterValue(HEADER_SORT_ORDER, serverRequest, null, String.class));
         return new IngestionParameters(completePath, format, getArray(partitionString),
                 getArray(tranformationString), getArray(sortOrderString), producerId, producerBatchId, Map.of());
     }
@@ -75,42 +89,90 @@ public class IngestionService implements HttpService, ParameterUtils, Controller
         return stringValue == null? new String[0]: stringValue.split(",");
     }
 
-    private void handlePost(ServerRequest serverRequest, ServerResponse serverResponse) throws ExecutionException, InterruptedException, IOException {
+    private String urlDecode(String string){
+        if (string == null) {
+            return null;
+        }
+        else {
+            return URLDecoder.decode(string, StandardCharsets.UTF_8);
+        }
+    }
+
+    private void handlePost(ServerRequest serverRequest, ServerResponse serverResponse) {
         if (handleMismatchContentType(serverRequest, serverResponse)) {
             return;
         }
-        var context = ControllerService.createContext(serverRequest);
-        var ingestionParameters = parseIngestionParameters(serverRequest);
 
-        var runnable = bulkIngestConsumer.acceptPutStatementBulkIngest(context, ingestionParameters,
-                createStream(serverRequest.content().inputStream()), new FlightClient.PutListener() {
+        ArrowStreamReader reader = null;
+        try {
+            var context = ControllerService.createContext(serverRequest);
+            var ingestionParameters = parseIngestionParameters(serverRequest);
 
-                    @Override
-                    public void getResult() {
+            // Create reader with proper resource management
+            reader = createStream(serverRequest.content().inputStream());
+            final ArrowStreamReader finalReader = reader;
 
-                    }
+            // Track if response has been sent to prevent double-send
+            final boolean[] responseSent = {false};
 
-                    @Override
-                    public void onNext(PutResult val) {
+            var runnable = bulkIngestConsumer.acceptPutStatementBulkIngest(context, ingestionParameters,
+                    finalReader, new FlightClient.PutListener() {
 
-                    }
+                        @Override
+                        public void getResult() {
 
-                    @Override
-                    synchronized public void onError(Throwable t) {
-                        serverResponse.status(Status.BAD_REQUEST_400);
-                        serverResponse.send(t.getMessage().getBytes());
-                    }
+                        }
 
-                    @Override
-                    synchronized public void onCompleted() {
-                        serverResponse.status(Status.OK_200);
-                        serverResponse.send();
-                    }
-                });
-        runnable.run();
+                        @Override
+                        public void onNext(PutResult val) {
+
+                        }
+
+                        @Override
+                        synchronized public void onError(Throwable t) {
+                            if (!responseSent[0]) {
+                                responseSent[0] = true;
+                                String errorMsg = t.getMessage() != null ? t.getMessage() : t.getClass().getName();
+                                serverResponse.status(Status.BAD_REQUEST_400);
+                                serverResponse.send(errorMsg.getBytes());
+                            }
+                        }
+
+                        @Override
+                        synchronized public void onCompleted() {
+                            if (!responseSent[0]) {
+                                responseSent[0] = true;
+                                serverResponse.status(Status.OK_200);
+                                serverResponse.send();
+                            }
+                        }
+                    });
+            runnable.run();
+
+        } catch (IllegalArgumentException e) {
+            // Path validation or parameter errors
+            String errorMsg = e.getMessage() != null ? e.getMessage() : "Invalid request parameters";
+            serverResponse.status(Status.BAD_REQUEST_400);
+            serverResponse.send(errorMsg);
+        } catch (Exception e) {
+            // Catch all other exceptions to prevent throwing from HTTP handler
+            String errorMsg = e.getMessage() != null ? e.getMessage() : "Internal server error";
+            serverResponse.status(Status.INTERNAL_SERVER_ERROR_500);
+            serverResponse.send(errorMsg);
+        } finally {
+            // Ensure ArrowStreamReader is closed
+            if (reader != null) {
+                try {
+                    reader.close();
+                } catch (IOException e) {
+                    // Log but don't propagate close errors
+                    System.err.println("Error closing ArrowStreamReader: " + e.getMessage());
+                }
+            }
+        }
     }
 
-    private ArrowReader createStream(InputStream inputStream){
+    private ArrowStreamReader createStream(InputStream inputStream){
         var readableByteChannel = Channels.newChannel(inputStream);
         return new ArrowStreamReader(readableByteChannel, bufferAllocator);
     }
