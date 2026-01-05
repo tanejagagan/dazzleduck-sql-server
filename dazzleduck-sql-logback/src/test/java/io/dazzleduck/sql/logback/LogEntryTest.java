@@ -25,8 +25,9 @@ class LogEntryTest {
         event.setThreadName("test-thread");
         event.setTimeStamp(1705312200000L); // 2024-01-15T10:30:00Z
 
-        LogEntry entry = LogEntry.from(event, "app-id-1", "TestApp", "host-1");
+        LogEntry entry = LogEntry.from(42, event, "app-id-1", "TestApp", "host-1");
 
+        assertEquals(42, entry.sNo());
         assertEquals(Instant.ofEpochMilli(1705312200000L), entry.timestamp());
         assertEquals("ERROR", entry.level());
         assertEquals("com.example.TestLogger", entry.logger());
@@ -41,9 +42,9 @@ class LogEntryTest {
     void record_shouldSupportEquality() {
         Instant now = Instant.now();
 
-        LogEntry entry1 = new LogEntry(now, "INFO", "Logger1", "main", "msg", "app1", "App1", "host1");
-        LogEntry entry2 = new LogEntry(now, "INFO", "Logger1", "main", "msg", "app1", "App1", "host1");
-        LogEntry entry3 = new LogEntry(now, "ERROR", "Logger1", "main", "msg", "app1", "App1", "host1");
+        LogEntry entry1 = new LogEntry(1, now, "INFO", "Logger1", "main", "msg", "app1", "App1", "host1");
+        LogEntry entry2 = new LogEntry(1, now, "INFO", "Logger1", "main", "msg", "app1", "App1", "host1");
+        LogEntry entry3 = new LogEntry(1, now, "ERROR", "Logger1", "main", "msg", "app1", "App1", "host1");
 
         assertEquals(entry1, entry2);
         assertNotEquals(entry1, entry3);
@@ -53,8 +54,8 @@ class LogEntryTest {
     void record_shouldGenerateHashCode() {
         Instant now = Instant.now();
 
-        LogEntry entry1 = new LogEntry(now, "INFO", "Logger1", "main", "msg", "app1", "App1", "host1");
-        LogEntry entry2 = new LogEntry(now, "INFO", "Logger1", "main", "msg", "app1", "App1", "host1");
+        LogEntry entry1 = new LogEntry(1, now, "INFO", "Logger1", "main", "msg", "app1", "App1", "host1");
+        LogEntry entry2 = new LogEntry(1, now, "INFO", "Logger1", "main", "msg", "app1", "App1", "host1");
 
         assertEquals(entry1.hashCode(), entry2.hashCode());
     }
@@ -62,6 +63,7 @@ class LogEntryTest {
     @Test
     void record_shouldGenerateToString() {
         LogEntry entry = new LogEntry(
+                1,
                 Instant.parse("2024-01-15T10:30:00Z"),
                 "INFO",
                 "TestLogger",
@@ -81,7 +83,7 @@ class LogEntryTest {
 
     @Test
     void record_shouldAllowNullValues() {
-        LogEntry entry = new LogEntry(null, null, null, null, null, null, null, null);
+        LogEntry entry = new LogEntry(1, null, null, null, null, null, null, null, null);
 
         assertNull(entry.timestamp());
         assertNull(entry.level());

@@ -6,6 +6,8 @@ import ch.qos.logback.core.AppenderBase;
 import lombok.Getter;
 import lombok.Setter;
 
+import java.util.concurrent.atomic.AtomicLong;
+
 /**
  * Custom Logback appender that captures log events and buffers them
  * for forwarding to a remote server.
@@ -30,6 +32,9 @@ public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
             "io.dazzleduck.sql.client",
             "org.apache.arrow"
     };
+
+    // Sequence number counter for generating unique s_no values
+    private static final AtomicLong sequenceCounter = new AtomicLong(0);
 
     // Static buffer shared across all instances
     private static volatile LogBuffer buffer;
@@ -77,6 +82,7 @@ public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
         }
 
         LogEntry entry = LogEntry.from(
+                sequenceCounter.incrementAndGet(),
                 event,
                 applicationId,
                 applicationName,
@@ -146,6 +152,7 @@ public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
             applicationName = null;
             applicationHost = null;
             enabled = true;
+            sequenceCounter.set(0);
         }
     }
 

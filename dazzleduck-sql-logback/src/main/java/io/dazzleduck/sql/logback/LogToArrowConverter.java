@@ -3,6 +3,7 @@ package io.dazzleduck.sql.logback;
 import lombok.Getter;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
+import org.apache.arrow.vector.BigIntVector;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.ipc.ArrowStreamWriter;
@@ -89,6 +90,7 @@ public final class LogToArrowConverter implements Closeable {
 
     private Schema createArrowSchema() {
         return new Schema(List.of(
+                new Field("s_no", FieldType.nullable(new ArrowType.Int(64, true)), null),
                 new Field("timestamp", FieldType.nullable(new ArrowType.Utf8()), null),
                 new Field("level", FieldType.nullable(new ArrowType.Utf8()), null),
                 new Field("logger", FieldType.nullable(new ArrowType.Utf8()), null),
@@ -98,6 +100,7 @@ public final class LogToArrowConverter implements Closeable {
     }
 
     private void populateVectors(VectorSchemaRoot root, List<LogEntry> entries) {
+        BigIntVector sNoVector = (BigIntVector) root.getVector("s_no");
         VarCharVector timestampVec = (VarCharVector) root.getVector("timestamp");
         VarCharVector levelVec = (VarCharVector) root.getVector("level");
         VarCharVector loggerVec = (VarCharVector) root.getVector("logger");
@@ -107,6 +110,7 @@ public final class LogToArrowConverter implements Closeable {
         for (int i = 0; i < entries.size(); i++) {
             LogEntry entry = entries.get(i);
 
+            sNoVector.setSafe(i, entry.sNo());
             setVectorValue(timestampVec, i, entry.timestamp() != null ? entry.timestamp().toString() : null);
             setVectorValue(levelVec, i, entry.level());
             setVectorValue(loggerVec, i, entry.logger());

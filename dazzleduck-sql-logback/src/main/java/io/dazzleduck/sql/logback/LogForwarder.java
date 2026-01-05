@@ -169,16 +169,17 @@ public final class LogForwarder implements Closeable {
     /**
      * Convert a LogEntry to a JavaRow for the HttpProducer.
      * The field order must match the schema from LogToArrowConverter:
-     * timestamp, level, logger, thread, message
+     * s_no, timestamp, level, logger, thread, message
      * Note: application_id, application_name, application_host are added via transformations
      */
     private JavaRow convertToJavaRow(LogEntry entry) {
-        Object[] fields = new Object[5];
-        fields[0] = entry.timestamp() != null ? entry.timestamp().toString() : null;
-        fields[1] = entry.level();
-        fields[2] = entry.logger();
-        fields[3] = entry.thread();
-        fields[4] = entry.message();
+        Object[] fields = new Object[6];
+        fields[0] = entry.sNo();
+        fields[1] = entry.timestamp() != null ? entry.timestamp().toString() : null;
+        fields[2] = entry.level();
+        fields[3] = entry.logger();
+        fields[4] = entry.thread();
+        fields[5] = entry.message();
         return new JavaRow(fields);
     }
 
