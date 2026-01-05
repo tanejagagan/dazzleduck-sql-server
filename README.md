@@ -46,14 +46,34 @@ export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java
 3. Bulk write to parquet file using bulk upload functionality. Idea is to bulk upload and then add those files to metadata.
 4. Username and Passwords can be specified in application.conf file.
 
+## HTTP API Endpoints
+
+All HTTP API endpoints use a `/v1` version prefix for backward compatibility and future API evolution.
+
+### Available Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/v1/login` | POST | Authenticate and obtain JWT token |
+| `/v1/query` | GET/POST | Execute SQL queries and return results in Arrow format |
+| `/v1/plan` | POST | Generate query execution plan with splits |
+| `/v1/ingest` | POST | Ingest Arrow data to Parquet files |
+| `/v1/cancel` | POST | Cancel a running query |
+| `/v1/ui` | GET | Access web UI dashboard |
+| `/health` | GET | Health check endpoint (unversioned) |
+
+### API Versioning
+All HTTP API endpoints are versioned with a `/v1` prefix to ensure backward compatibility and allow for future API evolution. The health check endpoint remains unversioned as it's a standard operational endpoint.
+
 ## Connecting to HTTP server.
 
 The server is running on HTTP mode on port 8081 which can used to query DuckDB with POST and GET methods. This will return data in arrow format.<p>
 The return data can itself be queried with duckdb
+
 - Using HTTP GET to query the server and read the data in duckdb
-- 
+-
   ```bash
-  URL="http://localhost:8081/query?q=select%201"
+  URL="http://localhost:8081/v1/query?q=select%201"
   SQL="INSTALL arrow FROM community; LOAD arrow; FROM read_arrow('/dev/stdin') SELECT count(*);"
   curl -s "$URL" | duckdb -c "$SQL"
   ```
@@ -61,7 +81,7 @@ The return data can itself be queried with duckdb
 - Using http POST for split planning
   ```bash
   SCHEMA_QUERY="FROM (VALUES(NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR)) t( dt, p, key, value) WHERE false UNION ALL BY NAME FROM read_parquet('/data/hive_table/*/*/*.parquet', hive_partitioning = true, hive_types = {'dt': DATE, 'p': VARCHAR})"
-  URL="http://localhost:8081/plan"
+  URL="http://localhost:8081/v1/plan"
   QUERY="SELECT count(*) FROM ($SCHEMA_QUERY) GROUP BY key"
   curl -s -X POST \
   -H "Content-Type: application/json" \
@@ -80,13 +100,13 @@ The return data can itself be queried with duckdb
 
 - Writing to Server using post <br>
 ```bash
-curl -i -X POST 'http://localhost:8081/ingest?path=file1.parquet' \
+curl -i -X POST 'http://localhost:8081/v1/ingest?path=file1.parquet' \
   -H "Content-Type: application/vnd.apache.arrow.stream" \
   --data-binary "@dazzleduck-sql-http/example/arrow_ipc/file1.arrow"
 ```
 - Reading the file written above <br>
 ```bash
-URL="http://localhost:8081/query?q=select%20%2A%20from%20read_parquet%28%27%2Fdata%2Fwarehouse%2Ffile.parquet%27%29%0A"
+URL="http://localhost:8081/v1/query?q=select%20%2A%20from%20read_parquet%28%27%2Fdata%2Fwarehouse%2Ffile.parquet%27%29%0A"
 curl -s "$URL" | duckdb -c "$SQL"
 ```
 
@@ -94,7 +114,7 @@ curl -s "$URL" | duckdb -c "$SQL"
 ```
 D INSTALL arrow FROM community;
 D LOAD arrow;
-D SELECT * FROM read_arrow(concat('http://localhost:8081/query?q=', url_encode('select 1, 2, 3')));
+D SELECT * FROM read_arrow(concat('http://localhost:8081/v1/query?q=', url_encode('select 1, 2, 3')));
 ```
 
 
@@ -165,13 +185,13 @@ See: https://github.com/prmoore77/sqlalchemy-sqlflite-adbc-dialect
 
 ## Enabling Authentication in HTTP Mode.
 Authentication is supported with jwt. Client need to invoke login api with username/password this api would return jwt  token. This jwt token can be used for all subsequent invocation
-- Run the server with authentication enabled 
+- Run the server with authentication enabled
   `docker run -ti -v "$PWD/example/data":/local-data -p 59307:59307 -p 8081:8081 flight-sql-duckdb --conf useEncryption=false --conf warehouse=/data/warehouse --conf http.authentication=jwt`
 - Get the jwt token with login <br>
- ```curl -X POST 'http://localhost:8081/login' -H "Content-Type: application/json" -d '{"username": "admin", "password" : "admin"}'```
+ ```curl -X POST 'http://localhost:8081/v1/login' -H "Content-Type: application/json" -d '{"username": "admin", "password" : "admin"}'```
 - Invoke api with jwt token
 ```
-URL="http://localhost:8081/query?q=select%201"
+URL="http://localhost:8081/v1/query?q=select%201"
 curl -H "Authorization': 'Bearer <jwt-token>" -s "$URL"
 ```
 - Run the query with jwt token by setting <br>
@@ -183,7 +203,7 @@ CREATE SECRET http_auth (
                  'Authorization': 'Bearer <jwt-token>'
                  }
               );
-SELECT * FROM read_arrow(concat('http://localhost:8081/query?q=', url_encode('select 1, 2, 3')));
+SELECT * FROM read_arrow(concat('http://localhost:8081/v1/query?q=', url_encode('select 1, 2, 3')));
 ```
 
 ### Publishing the project 
