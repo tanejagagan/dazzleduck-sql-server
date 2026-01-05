@@ -18,6 +18,13 @@ import java.time.Duration;
 import java.util.Calendar;
 
 public class LoginService implements HttpService {
+    // API versioning
+    public static final String API_VERSION = "v1";
+    public static final String API_VERSION_PREFIX = "/" + API_VERSION;
+
+    // Endpoints
+    public static final String ENDPOINT_LOGIN = "/";
+
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private static final Logger logger = LoggerFactory.getLogger(LoginService.class);
@@ -38,13 +45,14 @@ public class LoginService implements HttpService {
     }
     @Override
     public void routing(HttpRules rules) {
-        rules.post("/", this::handleLogin);
+        rules.post(ENDPOINT_LOGIN, this::handleLogin);
     }
 
     private void handleLogin(ServerRequest serverRequest, ServerResponse serverResponse) throws IOException {
         var inputStream = serverRequest.content().inputStream();
         var loginRequest = MAPPER.readValue(inputStream, LoginRequest.class);
         try {
+            logger.debug("Login attempt for user: {}", loginRequest.username());
             validator.validate(loginRequest.username(), loginRequest.password());
             Calendar expiration = Calendar.getInstance();
             expiration.add(Calendar.MINUTE,
@@ -56,7 +64,9 @@ public class LoginService implements HttpService {
                     .signWith(secretKey).compact();
             var response = new LoginResponse(jwt, loginRequest.username());
             MAPPER.writeValue(serverResponse.outputStream(), response);
+            logger.info("Login successful for user: {}", loginRequest.username());
         } catch (Exception e ){
+            logger.warn("Login failed for user: {}", loginRequest.username(), e);
             serverResponse.status(Status.UNAUTHORIZED_401);
             serverResponse.send();
         }
