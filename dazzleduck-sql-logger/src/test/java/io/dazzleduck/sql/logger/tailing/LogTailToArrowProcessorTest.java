@@ -81,7 +81,7 @@ class LogTailToArrowProcessorTest {
         Files.createDirectories(Path.of(warehouse.toString(), targetDir));
         // Generating 3 file with 2 logs per file: total = 6 logs
         runLogGenerator(tempDir, "3", "2");
-        try (HttpSender sender = new HttpSender(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(5), 1, Duration.ofSeconds(1), 10_000_000, 10_000_000)) {
+        try (HttpProducer sender = new HttpProducer(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(5), 1,  2048, Duration.ofSeconds(1), 3, 1000, java.util.List.of(), java.util.List.of(), 10_000_000, 10_000_000)) {
             // Start processor
             JsonToArrowConverter converter = new JsonToArrowConverter(APPLICATION_ID, APPLICATION_NAME, APPLICATION_HOST);
             LogTailToArrowProcessor processor = new LogTailToArrowProcessor(tempDir.toString(), "*.log", converter, sender, 100);
@@ -105,7 +105,7 @@ class LogTailToArrowProcessorTest {
         // two correct logs in logFile
         runLogGeneratorWithFile(logFile);
         runLogGeneratorWithFile(logFile);
-        try (HttpSender sender = new HttpSender(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(5), 1, Duration.ofSeconds(1), 10_000_000, 10_000_000)) {
+        try (HttpProducer sender = new HttpProducer(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(5), 1,  2048, Duration.ofSeconds(1), 3, 1000, java.util.List.of(), java.util.List.of(), 10_000_000, 10_000_000)) {
             JsonToArrowConverter converter = new JsonToArrowConverter(APPLICATION_ID, APPLICATION_NAME, APPLICATION_HOST);
             LogTailToArrowProcessor processor = new LogTailToArrowProcessor(tempDir.toString(), "*.log", converter, sender, 100);
             processor.start();
