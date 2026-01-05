@@ -1,7 +1,5 @@
 package io.dazzleduck.sql.logback;
 
-import lombok.Getter;
-
 import java.time.Duration;
 import java.util.Objects;
 
@@ -9,7 +7,6 @@ import java.util.Objects;
  * Configuration for LogForwarder.
  * Use the builder pattern for flexible configuration.
  */
-@Getter
 public final class LogForwarderConfig {
 
     // Application metadata
@@ -63,6 +60,86 @@ public final class LogForwarderConfig {
         this.transformations = java.util.List.copyOf(builder.transformations);
         this.partitionBy = java.util.List.copyOf(builder.partitionBy);
         this.enabled = builder.enabled;
+    }
+
+    public String getApplicationId() {
+        return applicationId;
+    }
+
+    public String getApplicationName() {
+        return applicationName;
+    }
+
+    public String getApplicationHost() {
+        return applicationHost;
+    }
+
+    public String getBaseUrl() {
+        return baseUrl;
+    }
+
+    public String getUsername() {
+        return username;
+    }
+
+    public String getPassword() {
+        return password;
+    }
+
+    public String getTargetPath() {
+        return targetPath;
+    }
+
+    public Duration getHttpClientTimeout() {
+        return httpClientTimeout;
+    }
+
+    public int getMaxBufferSize() {
+        return maxBufferSize;
+    }
+
+    public Duration getPollInterval() {
+        return pollInterval;
+    }
+
+    public long getMinBatchSize() {
+        return minBatchSize;
+    }
+
+    public long getMaxBatchSize() {
+        return maxBatchSize;
+    }
+
+    public Duration getMaxSendInterval() {
+        return maxSendInterval;
+    }
+
+    public long getMaxInMemorySize() {
+        return maxInMemorySize;
+    }
+
+    public long getMaxOnDiskSize() {
+        return maxOnDiskSize;
+    }
+
+    public int getRetryCount() {
+        return retryCount;
+    }
+
+    public long getRetryIntervalMillis() {
+        return retryIntervalMillis;
+    }
+
+    public java.util.List<String> getTransformations() {
+        return transformations;
+    }
+
+    public java.util.List<String> getPartitionBy() {
+        return partitionBy;
+    }
+
+    public boolean isEnabled() {
+        return enabled;
     }
 
     public static Builder builder() {

@@ -2,7 +2,6 @@ package io.dazzleduck.sql.logback;
 
 import io.dazzleduck.sql.client.HttpProducer;
 import io.dazzleduck.sql.common.types.JavaRow;
-import lombok.Getter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -22,11 +21,6 @@ public final class LogForwarder implements Closeable {
 
     private static final Logger logger = LoggerFactory.getLogger(LogForwarder.class);
 
-    /**
-     * -- GETTER --
-     *  Get the log buffer.
-     */
-    @Getter
     private final LogBuffer buffer;
     private final LogToArrowConverter converter;
     private final HttpProducer httpProducer;
@@ -71,6 +65,7 @@ public final class LogForwarder implements Closeable {
         transformations.add(String.format("'%s' AS application_id", config.getApplicationId()));
         transformations.add(String.format("'%s' AS application_name", config.getApplicationName()));
         transformations.add(String.format("'%s' AS application_host", config.getApplicationHost()));
+        transformations.addAll(config.getTransformations());
 
         // Create HttpProducer
         this.httpProducer = new HttpProducer(
@@ -99,6 +94,15 @@ public final class LogForwarder implements Closeable {
 
         logger.info("LogForwarder initialized with baseUrl={}, targetPath={}, pollInterval={}",
                 config.getBaseUrl(), config.getTargetPath(), config.getPollInterval());
+    }
+
+    /**
+     * Get the log buffer.
+     *
+     * @return the log buffer
+     */
+    public LogBuffer getBuffer() {
+        return buffer;
     }
 
     /**
