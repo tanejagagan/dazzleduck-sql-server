@@ -8,8 +8,17 @@
 [<img src="https://img.shields.io/badge/PyPI-Arrow%20ADBC%20Flight%20SQL%20driver-blue?logo=PyPI">](https://pypi.org/project/adbc-driver-flightsql/)
 [<img src="https://img.shields.io/badge/PyPI-SQLFlite%20Ibis%20Backend-blue?logo=PyPI">](https://pypi.org/project/ibis-sqlflite/)
 [<img src="https://img.shields.io/badge/PyPI-SQLFlite%20SQLAlchemy%20Dialect-blue?logo=PyPI">](https://pypi.org/project/sqlalchemy-sqlflite-adbc-dialect/)
-<br> Flight Sql Server/ Http Sql Server with DuckDB backend lets you run DuckDB remotely and let multiple user connect to it remotely with flight jdbc driver or over Http using arrow extension.
-<br> It support all the clients including JDBC, ADBC Python flight sql driver as well as sqlflite_client CLI tool
+[<img src="https://img.shields.io/badge/API-v1-blue.svg?logo=">](https://github.com)
+
+**DazzleDuck SQL Server** is a high-performance remote DuckDB server that supports both Arrow Flight SQL and RESTful HTTP protocols. It enables multiple users to connect remotely and execute queries through various client libraries.
+
+### Key Features
+- **Dual Protocol Support**: Arrow Flight SQL (gRPC) and RESTful HTTP API (versioned with `/v1`)
+- **Multiple Client Support**: JDBC, ADBC Python drivers, and CLI tools
+- **Arrow-Native**: All data transfers use Apache Arrow format for maximum performance
+- **Versioned REST API**: Future-proof HTTP endpoints with `/v1` versioning
+- **JWT Authentication**: Secure access control for HTTP endpoints
+- **Remote Query Execution**: Run DuckDB queries remotely with distributed execution support
 
 ## Dev Setup
 Requirement
@@ -25,14 +34,22 @@ JDK  21
   ```bash
   docker run -ti -p 59307:59307 -p 8081:8081 dazzleduck/dazzleduck:latest --conf warehouse=/data
   ```
-  This will print following on the console
-- ``` 
-  Warehouse Path :/data
-  Http Server is up: Listening on URL: http://localhost:8081
+  This will print the following on the console:
+  ```
+  ============================================================
+  DazzleDuck SQL Server v0.0.13-SNAPSHOT
+  ============================================================
+  Warehouse Path: /data
+  HTTP Server started successfully
+  Listening on: http://0.0.0.0:8081
+  Health check: http://0.0.0.0:8081/health
+  UI dashboard: http://0.0.0.0:8081/v1/ui
   Flight Server is up: Listening on URI: grpc+tcp://0.0.0.0:59307
   ```
-  
-- The server is running in arrow flight sql and http mode
+
+- The server is running in both Arrow Flight SQL (gRPC) and HTTP REST API modes
+- HTTP API endpoints are available at `/v1/*` (e.g., `/v1/query`, `/v1/login`, `/v1/ingest`)
+- Health check endpoint is available at `/health` (unversioned)
 
 ## Getting started in the dev setup 
  ```bash
