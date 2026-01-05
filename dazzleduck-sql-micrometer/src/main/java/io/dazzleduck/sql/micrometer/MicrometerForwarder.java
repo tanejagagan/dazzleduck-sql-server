@@ -45,18 +45,17 @@ public final class MicrometerForwarder implements Closeable {
 
     private static final Logger logger = LoggerFactory.getLogger(MicrometerForwarder.class);
 
-    /**
-     * -- GETTER --
-     *  Get the configuration.
-     */
     @Getter
     private final MicrometerForwarderConfig config;
-    private final HttpProducer httpProducer;
-    private final ArrowMicroMeterRegistry arrowRegistry;
+    private final Clock clock;
     @Getter
     private final CompositeMeterRegistry registry;
     private final AtomicBoolean started = new AtomicBoolean(false);
     private final AtomicBoolean closed = new AtomicBoolean(false);
+
+    // Created lazily in start()
+    private HttpProducer httpProducer;
+    private ArrowMicroMeterRegistry arrowRegistry;
 
     /**
      * Create a MicrometerForwarder with the given configuration.
@@ -76,45 +75,10 @@ public final class MicrometerForwarder implements Closeable {
      */
     public MicrometerForwarder(MicrometerForwarderConfig config, Clock clock) {
         this.config = config;
+        this.clock = clock;
 
-        // Create transformations for application metadata
-        List<String> transformations = new ArrayList<>(config.getTransformations());
-        transformations.add(String.format("'%s' AS application_id", config.getApplicationId()));
-        transformations.add(String.format("'%s' AS application_name", config.getApplicationName()));
-        transformations.add(String.format("'%s' AS application_host", config.getApplicationHost()));
-
-        // Create HttpProducer
-        this.httpProducer = new HttpProducer(
-                ArrowMetricSchema.SCHEMA,
-                config.getBaseUrl(),
-                config.getUsername(),
-                config.getPassword(),
-                config.getTargetPath(),
-                config.getHttpClientTimeout(),
-                config.getMinBatchSize(),
-                config.getMaxBatchSize(),
-                config.getMaxSendInterval(),
-                config.getRetryCount(),
-                config.getRetryIntervalMillis(),
-                transformations,
-                config.getPartitionBy(),
-                config.getMaxInMemorySize(),
-                config.getMaxOnDiskSize()
-        );
-
-        // Create ArrowMicroMeterRegistry
-        this.arrowRegistry = new ArrowMicroMeterRegistry(
-                httpProducer,
-                clock,
-                config.getStepInterval(),
-                config.getApplicationId(),
-                config.getApplicationName(),
-                config.getApplicationHost()
-        );
-
-        // Create composite registry
+        // Create composite registry (ArrowMicroMeterRegistry will be added in start())
         this.registry = new CompositeMeterRegistry();
-        this.registry.add(arrowRegistry);
 
         logger.info("MicrometerForwarder initialized with baseUrl={}, targetPath={}, stepInterval={}",
                 config.getBaseUrl(), config.getTargetPath(), config.getStepInterval());
@@ -135,6 +99,50 @@ public final class MicrometerForwarder implements Closeable {
         }
 
         if (started.compareAndSet(false, true)) {
+            // Create transformations for application metadata
+            List<String> transformations = new ArrayList<>(config.getTransformations());
+            transformations.add(String.format("'%s' AS application_id", config.getApplicationId()));
+            transformations.add(String.format("'%s' AS application_name", config.getApplicationName()));
+            transformations.add(String.format("'%s' AS application_host", config.getApplicationHost()));
+
+            // Create HttpProducer
+            this.httpProducer = new HttpProducer(
+                    ArrowMetricSchema.SCHEMA,
+                    config.getBaseUrl(),
+                    config.getUsername(),
+                    config.getPassword(),
+                    config.getTargetPath(),
+                    config.getHttpClientTimeout(),
+                    config.getMinBatchSize(),
+                    config.getMaxBatchSize(),
+                    config.getMaxSendInterval(),
+                    config.getRetryCount(),
+                    config.getRetryIntervalMillis(),
+                    transformations,
+                    config.getPartitionBy(),
+                    config.getMaxInMemorySize(),
+                    config.getMaxOnDiskSize()
+            );
+
+            // Create ArrowMicroMeterRegistry
+            this.arrowRegistry = new ArrowMicroMeterRegistry(
+                    httpProducer,
+                    clock,
+                    config.getStepInterval(),
+                    config.getApplicationId(),
+                    config.getApplicationName(),
+                    config.getApplicationHost()
+            );
+
+            // Add to composite registry
+            this.registry.add(arrowRegistry);
+
+            arrowRegistry.start(runnable -> {
+                Thread thread = new Thread(runnable, "micrometer-forwarder");
+                thread.setDaemon(true);
+                return thread;
+            });
+
             logger.info("MicrometerForwarder started");
         }
     }
@@ -158,10 +166,20 @@ public final class MicrometerForwarder implements Closeable {
         if (closed.compareAndSet(false, true)) {
             logger.info("Closing MicrometerForwarder...");
 
-            try {
-                arrowRegistry.close();
-            } catch (Exception e) {
-                logger.error("Error closing ArrowMicroMeterRegistry", e);
+            if (arrowRegistry != null) {
+                try {
+                    arrowRegistry.close();
+                } catch (Exception e) {
+                    logger.error("Error closing ArrowMicroMeterRegistry", e);
+                }
+            }
+
+            if (httpProducer != null) {
+                try {
+                    httpProducer.close();
+                } catch (Exception e) {
+                    logger.error("Error closing HttpProducer", e);
+                }
             }
 
             logger.info("MicrometerForwarder closed");
@@ -180,5 +198,4 @@ public final class MicrometerForwarder implements Closeable {
         forwarder.start();
         return forwarder;
     }
-
 }
