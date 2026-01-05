@@ -1,0 +1,184 @@
+package io.dazzleduck.sql.micrometer;
+
+import io.dazzleduck.sql.client.HttpProducer;
+import io.dazzleduck.sql.micrometer.config.MicrometerForwarderConfig;
+import io.dazzleduck.sql.micrometer.service.ArrowMicroMeterRegistry;
+import io.dazzleduck.sql.micrometer.util.ArrowMetricSchema;
+import io.micrometer.core.instrument.Clock;
+import io.micrometer.core.instrument.composite.CompositeMeterRegistry;
+import lombok.Getter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.Closeable;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+/**
+ * Forwards Micrometer metrics to a remote server via HTTP using Arrow format.
+ * This is the main entry point for using the micrometer forwarder library.
+ *
+ * <p>Usage example:</p>
+ * <pre>{@code
+ * MicrometerForwarderConfig config = MicrometerForwarderConfig.builder()
+ *     .baseUrl("http://localhost:8081")
+ *     .username("admin")
+ *     .password("admin")
+ *     .targetPath("metrics")
+ *     .applicationId("my-app")
+ *     .applicationName("My Application")
+ *     .build();
+ *
+ * MicrometerForwarder forwarder = MicrometerForwarder.createAndStart(config);
+ *
+ * // Use the registry to record metrics
+ * MeterRegistry registry = forwarder.getRegistry();
+ * Counter counter = registry.counter("my.counter");
+ * counter.increment();
+ *
+ * // When done, close the forwarder
+ * forwarder.close();
+ * }</pre>
+ */
+public final class MicrometerForwarder implements Closeable {
+
+    private static final Logger logger = LoggerFactory.getLogger(MicrometerForwarder.class);
+
+    /**
+     * -- GETTER --
+     *  Get the configuration.
+     */
+    @Getter
+    private final MicrometerForwarderConfig config;
+    private final HttpProducer httpProducer;
+    private final ArrowMicroMeterRegistry arrowRegistry;
+    @Getter
+    private final CompositeMeterRegistry registry;
+    private final AtomicBoolean started = new AtomicBoolean(false);
+    private final AtomicBoolean closed = new AtomicBoolean(false);
+
+    /**
+     * Create a MicrometerForwarder with the given configuration.
+     *
+     * @param config Configuration for the forwarder
+     */
+    public MicrometerForwarder(MicrometerForwarderConfig config) {
+        this(config, Clock.SYSTEM);
+    }
+
+    /**
+     * Create a MicrometerForwarder with the given configuration and clock.
+     * Useful for testing with a mock clock.
+     *
+     * @param config Configuration for the forwarder
+     * @param clock Clock to use for timing
+     */
+    public MicrometerForwarder(MicrometerForwarderConfig config, Clock clock) {
+        this.config = config;
+
+        // Create transformations for application metadata
+        List<String> transformations = new ArrayList<>(config.getTransformations());
+        transformations.add(String.format("'%s' AS application_id", config.getApplicationId()));
+        transformations.add(String.format("'%s' AS application_name", config.getApplicationName()));
+        transformations.add(String.format("'%s' AS application_host", config.getApplicationHost()));
+
+        // Create HttpProducer
+        this.httpProducer = new HttpProducer(
+                ArrowMetricSchema.SCHEMA,
+                config.getBaseUrl(),
+                config.getUsername(),
+                config.getPassword(),
+                config.getTargetPath(),
+                config.getHttpClientTimeout(),
+                config.getMinBatchSize(),
+                config.getMaxBatchSize(),
+                config.getMaxSendInterval(),
+                config.getRetryCount(),
+                config.getRetryIntervalMillis(),
+                transformations,
+                config.getPartitionBy(),
+                config.getMaxInMemorySize(),
+                config.getMaxOnDiskSize()
+        );
+
+        // Create ArrowMicroMeterRegistry
+        this.arrowRegistry = new ArrowMicroMeterRegistry(
+                httpProducer,
+                clock,
+                config.getStepInterval(),
+                config.getApplicationId(),
+                config.getApplicationName(),
+                config.getApplicationHost()
+        );
+
+        // Create composite registry
+        this.registry = new CompositeMeterRegistry();
+        this.registry.add(arrowRegistry);
+
+        logger.info("MicrometerForwarder initialized with baseUrl={}, targetPath={}, stepInterval={}",
+                config.getBaseUrl(), config.getTargetPath(), config.getStepInterval());
+    }
+
+    /**
+     * Start the metric forwarding process.
+     * Metrics will be published at the configured step interval.
+     */
+    public void start() {
+        if (!config.isEnabled()) {
+            logger.info("MicrometerForwarder is disabled, not starting");
+            return;
+        }
+
+        if (closed.get()) {
+            throw new IllegalStateException("MicrometerForwarder has been closed");
+        }
+
+        if (started.compareAndSet(false, true)) {
+            logger.info("MicrometerForwarder started");
+        }
+    }
+
+    /**
+     * Check if the forwarder is currently running.
+     */
+    public boolean isRunning() {
+        return started.get() && !closed.get();
+    }
+
+    /**
+     * Check if the forwarder is enabled.
+     */
+    public boolean isEnabled() {
+        return config.isEnabled();
+    }
+
+    @Override
+    public void close() {
+        if (closed.compareAndSet(false, true)) {
+            logger.info("Closing MicrometerForwarder...");
+
+            try {
+                arrowRegistry.close();
+            } catch (Exception e) {
+                logger.error("Error closing ArrowMicroMeterRegistry", e);
+            }
+
+            logger.info("MicrometerForwarder closed");
+        }
+    }
+
+    /**
+     * Create and start a MicrometerForwarder with the given configuration.
+     * Convenience method for simple usage.
+     *
+     * @param config Configuration for the forwarder
+     * @return A started MicrometerForwarder instance
+     */
+    public static MicrometerForwarder createAndStart(MicrometerForwarderConfig config) {
+        MicrometerForwarder forwarder = new MicrometerForwarder(config);
+        forwarder.start();
+        return forwarder;
+    }
+
+}

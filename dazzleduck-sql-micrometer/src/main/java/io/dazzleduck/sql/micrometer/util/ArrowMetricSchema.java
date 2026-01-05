@@ -11,6 +11,7 @@ public final class ArrowMetricSchema {
     private ArrowMetricSchema() {}
 
     public static final Schema SCHEMA = new Schema(List.of(
+            new Field("s_no", FieldType.notNullable(new ArrowType.Int(64, true)), null),
             new Field("name", FieldType.notNullable(new ArrowType.Utf8()), null),
             new Field("type", FieldType.notNullable(new ArrowType.Utf8()), null),
 
