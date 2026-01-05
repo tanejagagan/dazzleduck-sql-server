@@ -58,7 +58,7 @@ export const LoggingProvider = ({ children }) => {
     // --- Login ---
     const login = async (serverUrl, username, password, splitSize, claims) => {
         try {
-            const response = await axios.post(`${serverUrl.trim()}/login`, {
+            const response = await axios.post(`${serverUrl.trim()}/v1/login`, {
                 username,
                 password,
                 claims: claims,
@@ -194,9 +194,9 @@ export const LoggingProvider = ({ children }) => {
 
         try {
             if (numericSplitSize <= 0) {
-                let url = cleanUrl.endsWith("/query")
+                let url = cleanUrl.endsWith("/v1/query")
                     ? cleanUrl
-                    : cleanUrl.replace(/\/+$/, "") + "/query";
+                    : cleanUrl.replace(/\/+$/, "") + "/v1/query";
 
                 const result = await forwardToDazzleDuck(url, query, jwt, queryId);
                 finalResults = result.type === "json"
@@ -207,23 +207,23 @@ export const LoggingProvider = ({ children }) => {
                         payloadBase64: result.base64,
                     });
             } else {
-                let planUrl = serverUrl.endsWith("/plan")
+                let planUrl = serverUrl.endsWith("/v1/plan")
                     ? serverUrl
-                    : serverUrl.replace(/\/+$/, "") + "/plan";
+                    : serverUrl.replace(/\/+$/, "") + "/v1/plan";
                 planUrl += `?split_size=${numericSplitSize}`;
 
                 const planResult = await forwardToDazzleDuck(planUrl, { query }, jwt, queryId);
                 const splits = Array.isArray(planResult.data) ? planResult.data : [];
 
-                if (splits.length === 0) throw new Error("No splits returned from /plan endpoint.");
+                if (splits.length === 0) throw new Error("No splits returned from /v1/plan endpoint.");
 
                 for (const split of splits) {
                     const sql = split.query || split.sql;
                     if (!sql) continue;
 
-                    const splitUrl = serverUrl.endsWith("/query")
+                    const splitUrl = serverUrl.endsWith("/v1/query")
                         ? serverUrl
-                        : serverUrl.replace(/\/+$/, "") + "/query";
+                        : serverUrl.replace(/\/+$/, "") + "/v1/query";
 
                     const splitResult = await forwardToDazzleDuck(splitUrl, sql, jwt, queryId);
                     const normalized = splitResult.type === "json"
@@ -272,9 +272,9 @@ export const LoggingProvider = ({ children }) => {
         };
 
         try {
-            let cancelUrl = serverUrl.endsWith("/cancel")
+            let cancelUrl = serverUrl.endsWith("/v1/cancel")
                 ? serverUrl
-                : serverUrl.replace(/\/+$/, "") + "/cancel";
+                : serverUrl.replace(/\/+$/, "") + "/v1/cancel";
 
             const response = await axios.post(
                 cancelUrl,
