@@ -14,11 +14,11 @@ import org.apache.arrow.memory.BufferAllocator;
 import java.io.IOException;
 import java.util.ArrayList;
 
-public class PlaningService extends AbstractQueryBasedService implements ParameterUtils {
+public class PlanningService extends AbstractQueryBasedService implements ParameterUtils {
     private final BufferAllocator allocator;
     private final FlightProducer flightProducer;
 
-    public PlaningService(FlightProducer flightProducer, String location, BufferAllocator allocator, AccessMode accessMode) {
+    public PlanningService(FlightProducer flightProducer, String location, BufferAllocator allocator, AccessMode accessMode) {
         super(accessMode);
         this.allocator = allocator;
         this.flightProducer = flightProducer;
