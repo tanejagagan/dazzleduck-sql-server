@@ -32,14 +32,18 @@ import static io.dazzleduck.sql.common.util.ConfigUtils.CONFIG_PATH;
 public class Main {
     private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(Main.class);
 
+    // API versioning
+    private static final String API_VERSION = "v1";
+    private static final String API_VERSION_PREFIX = "/" + API_VERSION;
+
     // Endpoint paths
     private static final String ENDPOINT_HEALTH = "/health";
-    private static final String ENDPOINT_QUERY = "/query";
-    private static final String ENDPOINT_LOGIN = "/login";
-    private static final String ENDPOINT_PLAN = "/plan";
-    private static final String ENDPOINT_CANCEL = "/cancel";
-    private static final String ENDPOINT_INGEST = "/ingest";
-    private static final String ENDPOINT_UI = "/ui";
+    private static final String ENDPOINT_QUERY = API_VERSION_PREFIX + "/query";
+    private static final String ENDPOINT_LOGIN = API_VERSION_PREFIX + "/login";
+    private static final String ENDPOINT_PLAN = API_VERSION_PREFIX + "/plan";
+    private static final String ENDPOINT_CANCEL = API_VERSION_PREFIX + "/cancel";
+    private static final String ENDPOINT_INGEST = API_VERSION_PREFIX + "/ingest";
+    private static final String ENDPOINT_UI = API_VERSION_PREFIX + "/ui";
 
     // Configuration keys
     private static final String CONFIG_HTTP = "http";

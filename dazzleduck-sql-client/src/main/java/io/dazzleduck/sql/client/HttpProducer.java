@@ -148,7 +148,7 @@ public final class HttpProducer extends FlightProducer.AbstractFlightProducer {
         }
 
         HttpRequest req = HttpRequest.newBuilder()
-                .uri(URI.create(baseUrl + "/login"))
+                .uri(URI.create(baseUrl + "/v1/login"))
                 .timeout(httpClientTimeout)
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                 .header("Content-Type", "application/json")
@@ -285,7 +285,7 @@ public final class HttpProducer extends FlightProducer.AbstractFlightProducer {
 
     private HttpResponse<String> post(byte[] payload) throws IOException, InterruptedException {
         HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
-                .uri(URI.create(baseUrl + "/ingest?path=" + targetPath))
+                .uri(URI.create(baseUrl + "/v1/ingest?path=" + targetPath))
                 .timeout(httpClientTimeout)
                 .POST(HttpRequest.BodyPublishers.ofByteArray(payload))
                 .header("Authorization", getJwt())

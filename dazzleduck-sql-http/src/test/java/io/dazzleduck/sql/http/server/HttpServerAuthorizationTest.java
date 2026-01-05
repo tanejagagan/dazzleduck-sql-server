@@ -38,6 +38,7 @@ public class HttpServerAuthorizationTest {
     static String warehousePath;
 
     static final int PORT = 8092;
+    private static final String BASE_URL = "http://localhost:%s".formatted(PORT);
 
     @BeforeAll
     static void setup() throws Exception {
@@ -140,9 +141,9 @@ public class HttpServerAuthorizationTest {
     /**
      * ======== HELPER METHODS ========
      */
-    // LOGIN (/login) with claims
+    // LOGIN (/v1/login) with claims
     private HttpResponse<String> login(Map<String, String> claims) throws Exception {
-        var loginRequest = HttpRequest.newBuilder(URI.create("http://localhost:%s/login".formatted(PORT)))
+        var loginRequest = HttpRequest.newBuilder(URI.create(BASE_URL + "/v1/login"))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(
                         mapper.writeValueAsBytes(new LoginRequest("admin", "admin", claims))
                 ))
@@ -151,10 +152,10 @@ public class HttpServerAuthorizationTest {
         return client.send(loginRequest, HttpResponse.BodyHandlers.ofString());
     }
 
-    // QUERY (/query) with sql & jwt
+    // QUERY (/v1/query) with sql & jwt
     private HttpResponse<InputStream> query(String sql, LoginResponse jwt) throws Exception {
         var body = mapper.writeValueAsBytes(new QueryRequest(sql));
-        var request = HttpRequest.newBuilder(URI.create("http://localhost:%s/query".formatted(PORT)))
+        var request = HttpRequest.newBuilder(URI.create(BASE_URL + "/v1/query"))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values())
                 .header(HeaderNames.AUTHORIZATION.defaultCase(), jwt.tokenType() + " " + jwt.accessToken())
