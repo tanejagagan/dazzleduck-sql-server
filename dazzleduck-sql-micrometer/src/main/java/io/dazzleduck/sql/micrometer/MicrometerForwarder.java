@@ -6,7 +6,6 @@ import io.dazzleduck.sql.micrometer.service.ArrowMicroMeterRegistry;
 import io.dazzleduck.sql.micrometer.util.ArrowMetricSchema;
 import io.micrometer.core.instrument.Clock;
 import io.micrometer.core.instrument.composite.CompositeMeterRegistry;
-import lombok.Getter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,10 +44,8 @@ public final class MicrometerForwarder implements Closeable {
 
     private static final Logger logger = LoggerFactory.getLogger(MicrometerForwarder.class);
 
-    @Getter
     private final MicrometerForwarderConfig config;
     private final Clock clock;
-    @Getter
     private final CompositeMeterRegistry registry;
     private final AtomicBoolean started = new AtomicBoolean(false);
     private final AtomicBoolean closed = new AtomicBoolean(false);
@@ -81,7 +78,7 @@ public final class MicrometerForwarder implements Closeable {
         this.registry = new CompositeMeterRegistry();
 
         logger.info("MicrometerForwarder initialized with baseUrl={}, targetPath={}, stepInterval={}",
-                config.getBaseUrl(), config.getTargetPath(), config.getStepInterval());
+                config.baseUrl(), config.targetPath(), config.stepInterval());
     }
 
     /**
@@ -89,7 +86,7 @@ public final class MicrometerForwarder implements Closeable {
      * Metrics will be published at the configured step interval.
      */
     public void start() {
-        if (!config.isEnabled()) {
+        if (!config.enabled()) {
             logger.info("MicrometerForwarder is disabled, not starting");
             return;
         }
@@ -100,38 +97,38 @@ public final class MicrometerForwarder implements Closeable {
 
         if (started.compareAndSet(false, true)) {
             // Create transformations for application metadata
-            List<String> transformations = new ArrayList<>(config.getTransformations());
-            transformations.add(String.format("'%s' AS application_id", config.getApplicationId()));
-            transformations.add(String.format("'%s' AS application_name", config.getApplicationName()));
-            transformations.add(String.format("'%s' AS application_host", config.getApplicationHost()));
+            List<String> transformations = new ArrayList<>(config.transformations());
+            transformations.add(String.format("'%s' AS application_id", config.applicationId()));
+            transformations.add(String.format("'%s' AS application_name", config.applicationName()));
+            transformations.add(String.format("'%s' AS application_host", config.applicationHost()));
 
             // Create HttpProducer
             this.httpProducer = new HttpProducer(
                     ArrowMetricSchema.SCHEMA,
-                    config.getBaseUrl(),
-                    config.getUsername(),
-                    config.getPassword(),
-                    config.getTargetPath(),
-                    config.getHttpClientTimeout(),
-                    config.getMinBatchSize(),
-                    config.getMaxBatchSize(),
-                    config.getMaxSendInterval(),
-                    config.getRetryCount(),
-                    config.getRetryIntervalMillis(),
+                    config.baseUrl(),
+                    config.username(),
+                    config.password(),
+                    config.targetPath(),
+                    config.httpClientTimeout(),
+                    config.minBatchSize(),
+                    config.maxBatchSize(),
+                    config.maxSendInterval(),
+                    config.retryCount(),
+                    config.retryIntervalMillis(),
                     transformations,
-                    config.getPartitionBy(),
-                    config.getMaxInMemorySize(),
-                    config.getMaxOnDiskSize()
+                    config.partitionBy(),
+                    config.maxInMemorySize(),
+                    config.maxOnDiskSize()
             );
 
             // Create ArrowMicroMeterRegistry
             this.arrowRegistry = new ArrowMicroMeterRegistry(
                     httpProducer,
                     clock,
-                    config.getStepInterval(),
-                    config.getApplicationId(),
-                    config.getApplicationName(),
-                    config.getApplicationHost()
+                    config.stepInterval(),
+                    config.applicationId(),
+                    config.applicationName(),
+                    config.applicationHost()
             );
 
             // Add to composite registry
@@ -158,7 +155,21 @@ public final class MicrometerForwarder implements Closeable {
      * Check if the forwarder is enabled.
      */
     public boolean isEnabled() {
-        return config.isEnabled();
+        return config.enabled();
+    }
+
+    /**
+     * Get the configuration.
+     */
+    public MicrometerForwarderConfig getConfig() {
+        return config;
+    }
+
+    /**
+     * Get the meter registry.
+     */
+    public CompositeMeterRegistry getRegistry() {
+        return registry;
     }
 
     @Override
