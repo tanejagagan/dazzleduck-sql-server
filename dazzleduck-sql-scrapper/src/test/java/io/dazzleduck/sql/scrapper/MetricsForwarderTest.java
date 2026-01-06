@@ -25,11 +25,11 @@ class MetricsForwarderTest {
         properties.setPath("test_metrics");
         properties.setUsername("test");
         properties.setPassword("test");
-        properties.setConnectionTimeoutMs(5000);
-        properties.setReadTimeoutMs(5000);
-        properties.setMaxRetries(1);
-        properties.setRetryDelayMs(100);
-        properties.setFlushIntervalMs(5000);
+        properties.setConnectionTimeoutMs(100);
+        properties.setReadTimeoutMs(100);
+        properties.setMaxRetries(0);
+        properties.setRetryDelayMs(10);
+        properties.setFlushIntervalMs(100);
         properties.setMinBatchSize(1024);
         properties.setMaxBatchSize(16 * 1024 * 1024);
         properties.setMaxInMemorySize(10 * 1024 * 1024);

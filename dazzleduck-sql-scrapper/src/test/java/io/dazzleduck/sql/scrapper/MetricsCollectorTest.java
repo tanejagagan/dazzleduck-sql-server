@@ -31,11 +31,11 @@ class MetricsCollectorTest {
         properties.setPath("metrics");
         properties.setUsername("test");
         properties.setPassword("test");
-        properties.setScrapeIntervalMs(100);
+        properties.setScrapeIntervalMs(20);
         properties.setFlushThreshold(5);
-        properties.setFlushIntervalMs(500);
-        properties.setConnectionTimeoutMs(5000);
-        properties.setReadTimeoutMs(5000);
+        properties.setFlushIntervalMs(100);
+        properties.setConnectionTimeoutMs(500);
+        properties.setReadTimeoutMs(500);
         properties.setMaxRetries(0);
         properties.setMinBatchSize(1024);
         properties.setMaxBatchSize(16 * 1024 * 1024);
@@ -99,13 +99,13 @@ class MetricsCollectorTest {
 
         // Don't flush immediately
         properties.setFlushThreshold(100);
-        properties.setFlushIntervalMs(10000);
+        properties.setFlushIntervalMs(5000);
 
         MetricsCollector collector = new MetricsCollector(properties);
         collector.start();
 
         // Wait for at least one scrape
-        Thread.sleep(200);
+        Thread.sleep(80);
 
         assertTrue(collector.getBufferSize() > 0, "Buffer should contain scraped metrics");
 
@@ -126,15 +126,15 @@ class MetricsCollectorTest {
             targetServer.enqueue(new MockResponse().setBody(prometheusData).setResponseCode(200));
         }
 
-        properties.setScrapeIntervalMs(50);
+        properties.setScrapeIntervalMs(20);
         properties.setFlushThreshold(5);
-        properties.setFlushIntervalMs(10000); // Long interval so threshold triggers first
+        properties.setFlushIntervalMs(5000); // Long interval so threshold triggers first
 
         MetricsCollector collector = new MetricsCollector(properties);
         collector.start();
 
         // Wait for scrapes and flush
-        Thread.sleep(500);
+        Thread.sleep(150);
 
         // Metrics should have been sent (queued to HttpProducer)
         assertTrue(collector.getMetricsSentCount() > 0, "Should have sent metrics");
@@ -149,15 +149,15 @@ class MetricsCollectorTest {
         targetServer.enqueue(new MockResponse().setBody(prometheusData).setResponseCode(200));
         targetServer.enqueue(new MockResponse().setBody(prometheusData).setResponseCode(200));
 
-        properties.setScrapeIntervalMs(100);
+        properties.setScrapeIntervalMs(20);
         properties.setFlushThreshold(1000); // High threshold so interval triggers first
-        properties.setFlushIntervalMs(200);
+        properties.setFlushIntervalMs(50);
 
         MetricsCollector collector = new MetricsCollector(properties);
         collector.start();
 
         // Wait for interval to elapse
-        Thread.sleep(400);
+        Thread.sleep(100);
 
         collector.stop();
 
@@ -172,13 +172,13 @@ class MetricsCollectorTest {
         targetServer.enqueue(new MockResponse().setBody(prometheusData).setResponseCode(200));
 
         properties.setFlushThreshold(1000);
-        properties.setFlushIntervalMs(10000);
+        properties.setFlushIntervalMs(5000);
 
         MetricsCollector collector = new MetricsCollector(properties);
         collector.start();
 
         // Wait for scrape
-        Thread.sleep(200);
+        Thread.sleep(80);
 
         int bufferBefore = collector.getBufferSize();
         assertTrue(bufferBefore > 0, "Buffer should have metrics before stop");
@@ -201,7 +201,7 @@ class MetricsCollectorTest {
         }
 
         properties.setFlushThreshold(2);
-        properties.setFlushIntervalMs(100);
+        properties.setFlushIntervalMs(50);
 
         MetricsCollector collector = new MetricsCollector(properties);
         assertEquals(0, collector.getMetricsSentCount());
@@ -209,7 +209,7 @@ class MetricsCollectorTest {
         collector.start();
 
         // Wait for scrapes and flushes
-        Thread.sleep(400);
+        Thread.sleep(100);
 
         collector.stop();
 
@@ -229,7 +229,7 @@ class MetricsCollectorTest {
         MetricsCollector collector = new MetricsCollector(properties);
         collector.start();
 
-        Thread.sleep(300);
+        Thread.sleep(80);
 
         collector.stop();
 
@@ -244,13 +244,13 @@ class MetricsCollectorTest {
         targetServer.enqueue(new MockResponse().setBody("recovered_metric 1\n").setResponseCode(200));
 
         properties.setFlushThreshold(100);
-        properties.setFlushIntervalMs(10000);
+        properties.setFlushIntervalMs(5000);
 
         MetricsCollector collector = new MetricsCollector(properties);
         collector.start();
 
         // Wait for both scrape attempts
-        Thread.sleep(300);
+        Thread.sleep(100);
 
         // Should still be running despite the failure
         assertTrue(collector.isRunning(), "Should continue running after scrape failure");
