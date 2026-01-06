@@ -1,215 +1,200 @@
 package io.dazzleduck.sql.scrapper;
 
-import okhttp3.mockwebserver.MockResponse;
-import okhttp3.mockwebserver.MockWebServer;
-import okhttp3.mockwebserver.RecordedRequest;
-import org.apache.arrow.memory.BufferAllocator;
-import org.apache.arrow.memory.RootAllocator;
-import org.apache.arrow.vector.Float8Vector;
-import org.apache.arrow.vector.VarCharVector;
-import org.apache.arrow.vector.VectorSchemaRoot;
-import org.apache.arrow.vector.ipc.ArrowStreamReader;
+import org.apache.arrow.vector.types.pojo.Schema;
 import org.junit.jupiter.api.*;
 
-import java.io.ByteArrayInputStream;
-import java.nio.channels.Channels;
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Tests for MetricsForwarder - Arrow serialization and HTTP forwarding.
+ * Tests for MetricsForwarder - queuing metrics to HttpProducer.
+ *
+ * Note: HttpProducer handles actual HTTP sending asynchronously with authentication,
+ * so these tests focus on the queuing behavior and schema validation.
  */
 class MetricsForwarderTest {
 
-    private MockWebServer server;
     private CollectorProperties properties;
-    private MetricsForwarder forwarder;
 
     @BeforeEach
-    void setUp() throws Exception {
-        server = new MockWebServer();
-        server.start();
-
+    void setUp() {
         properties = new CollectorProperties();
-        properties.setServerUrl(server.url("/ingest").toString());
-        properties.setPath("scraped_metrics");
+        properties.setServerUrl("http://localhost:8081");
+        properties.setPath("test_metrics");
+        properties.setUsername("test");
+        properties.setPassword("test");
         properties.setConnectionTimeoutMs(5000);
         properties.setReadTimeoutMs(5000);
         properties.setMaxRetries(1);
         properties.setRetryDelayMs(100);
+        properties.setFlushIntervalMs(5000);
+        properties.setMinBatchSize(1024);
+        properties.setMaxBatchSize(16 * 1024 * 1024);
+        properties.setMaxInMemorySize(10 * 1024 * 1024);
+        properties.setMaxOnDiskSize(1024 * 1024 * 1024);
 
-        forwarder = new MetricsForwarder(properties);
-    }
-
-    @AfterEach
-    void tearDown() throws Exception {
-        server.shutdown();
-    }
-
-    @Test
-    @DisplayName("Should forward metrics successfully")
-    void sendMetrics_Success() throws Exception {
-        server.enqueue(new MockResponse().setResponseCode(200).setBody("OK"));
-
-        List<CollectedMetric> metrics = List.of(createMetric("test_metric", 100.0));
-
-        boolean result = forwarder.sendMetrics(metrics);
-
-        assertTrue(result);
-        assertEquals(1, server.getRequestCount());
-
-        RecordedRequest request = server.takeRequest();
-        assertEquals("POST", request.getMethod());
-        assertEquals("application/vnd.apache.arrow.stream", request.getHeader("Content-Type"));
-        assertTrue(request.getPath().contains("path=scraped_metrics"));
+        // Reset sequence counter for consistent test results
+        CollectedMetric.resetSequence();
     }
 
     @Test
     @DisplayName("Should return true for empty metrics list")
     void sendMetrics_EmptyList() {
-        boolean result = forwarder.sendMetrics(List.of());
-
-        assertTrue(result);
-        assertEquals(0, server.getRequestCount());
+        MetricsForwarder forwarder = new MetricsForwarder(properties);
+        try {
+            boolean result = forwarder.sendMetrics(List.of());
+            assertTrue(result);
+            assertEquals(0, forwarder.getMetricsSentCount());
+        } finally {
+            forwarder.close();
+        }
     }
 
     @Test
-    @DisplayName("Should retry on failure")
-    void sendMetrics_Retry() throws Exception {
-        server.enqueue(new MockResponse().setResponseCode(500).setBody("Error"));
-        server.enqueue(new MockResponse().setResponseCode(200).setBody("OK"));
+    @DisplayName("Should queue metrics successfully")
+    void sendMetrics_QueueSuccess() {
+        MetricsForwarder forwarder = new MetricsForwarder(properties);
+        try {
+            List<CollectedMetric> metrics = List.of(createMetric("test_metric", 100.0));
 
-        List<CollectedMetric> metrics = List.of(createMetric("test_metric", 100.0));
+            boolean result = forwarder.sendMetrics(metrics);
 
-        boolean result = forwarder.sendMetrics(metrics);
-
-        assertTrue(result);
-        assertEquals(2, server.getRequestCount());
+            assertTrue(result, "Should return true when metrics are queued");
+            assertEquals(1, forwarder.getMetricsSentCount());
+        } finally {
+            forwarder.close();
+        }
     }
 
     @Test
-    @DisplayName("Should fail after max retries")
-    void sendMetrics_FailAfterRetries() {
-        server.enqueue(new MockResponse().setResponseCode(500).setBody("Error"));
-        server.enqueue(new MockResponse().setResponseCode(500).setBody("Error"));
-        server.enqueue(new MockResponse().setResponseCode(500).setBody("Error"));
+    @DisplayName("Should queue multiple metrics")
+    void sendMetrics_MultipleMetrics() {
+        MetricsForwarder forwarder = new MetricsForwarder(properties);
+        try {
+            List<CollectedMetric> metrics = List.of(
+                createMetric("metric_1", 1.0),
+                createMetric("metric_2", 2.0),
+                createMetric("metric_3", 3.0)
+            );
 
-        List<CollectedMetric> metrics = List.of(createMetric("test_metric", 100.0));
+            boolean result = forwarder.sendMetrics(metrics);
 
-        boolean result = forwarder.sendMetrics(metrics);
-
-        assertFalse(result);
+            assertTrue(result);
+            assertEquals(3, forwarder.getMetricsSentCount());
+        } finally {
+            forwarder.close();
+        }
     }
 
     @Test
-    @DisplayName("Should send valid Arrow format")
-    void sendMetrics_ValidArrowFormat() throws Exception {
-        server.enqueue(new MockResponse().setResponseCode(200).setBody("OK"));
+    @DisplayName("Should track cumulative sent count")
+    void sendMetrics_CumulativeCount() {
+        MetricsForwarder forwarder = new MetricsForwarder(properties);
+        try {
+            assertEquals(0, forwarder.getMetricsSentCount());
 
-        List<CollectedMetric> metrics = List.of(
-            new CollectedMetric(
-                "test_counter",
+            forwarder.sendMetrics(List.of(createMetric("m1", 1.0)));
+            assertEquals(1, forwarder.getMetricsSentCount());
+
+            forwarder.sendMetrics(List.of(createMetric("m2", 2.0), createMetric("m3", 3.0)));
+            assertEquals(3, forwarder.getMetricsSentCount());
+        } finally {
+            forwarder.close();
+        }
+    }
+
+    @Test
+    @DisplayName("Should have correct Arrow schema with s_no column")
+    void getArrowSchema_HasCorrectFields() {
+        MetricsForwarder forwarder = new MetricsForwarder(properties);
+        try {
+            Schema schema = forwarder.getArrowSchema();
+
+            assertNotNull(schema);
+            assertEquals(10, schema.getFields().size());
+
+            // Verify s_no is first column
+            assertEquals("s_no", schema.getFields().get(0).getName());
+            assertEquals("timestamp", schema.getFields().get(1).getName());
+            assertEquals("name", schema.getFields().get(2).getName());
+            assertEquals("type", schema.getFields().get(3).getName());
+            assertEquals("source_url", schema.getFields().get(4).getName());
+            assertEquals("collector_id", schema.getFields().get(5).getName());
+            assertEquals("collector_name", schema.getFields().get(6).getName());
+            assertEquals("collector_host", schema.getFields().get(7).getName());
+            assertEquals("labels", schema.getFields().get(8).getName());
+            assertEquals("value", schema.getFields().get(9).getName());
+        } finally {
+            forwarder.close();
+        }
+    }
+
+    @Test
+    @DisplayName("Should handle metrics with special double values")
+    void sendMetrics_SpecialValues() {
+        MetricsForwarder forwarder = new MetricsForwarder(properties);
+        try {
+            List<CollectedMetric> metrics = List.of(
+                createMetric("nan_metric", Double.NaN),
+                createMetric("inf_metric", Double.POSITIVE_INFINITY),
+                createMetric("neg_inf_metric", Double.NEGATIVE_INFINITY)
+            );
+
+            boolean result = forwarder.sendMetrics(metrics);
+
+            assertTrue(result, "Should handle NaN and Infinity values");
+            assertEquals(3, forwarder.getMetricsSentCount());
+        } finally {
+            forwarder.close();
+        }
+    }
+
+    @Test
+    @DisplayName("Should handle metrics with labels")
+    void sendMetrics_WithLabels() {
+        MetricsForwarder forwarder = new MetricsForwarder(properties);
+        try {
+            CollectedMetric metric = new CollectedMetric(
+                "labeled_metric",
                 "counter",
                 "http://app:8080/metrics",
                 "collector-1",
                 "my-collector",
                 "host1",
-                Map.of("env", "prod", "region", "us-east"),
+                Map.of("env", "prod", "region", "us-east", "service", "api"),
                 999.0
-            )
-        );
+            );
 
-        boolean result = forwarder.sendMetrics(metrics);
+            boolean result = forwarder.sendMetrics(List.of(metric));
 
-        assertTrue(result);
-
-        RecordedRequest request = server.takeRequest();
-        byte[] arrowBytes = request.getBody().readByteArray();
-
-        try (BufferAllocator allocator = new RootAllocator();
-             ArrowStreamReader reader = new ArrowStreamReader(
-                 Channels.newChannel(new ByteArrayInputStream(arrowBytes)), allocator)) {
-
-            VectorSchemaRoot root = reader.getVectorSchemaRoot();
-            assertTrue(reader.loadNextBatch());
-            assertEquals(1, root.getRowCount());
-
-            // Verify fields exist
-            assertNotNull(root.getVector("name"));
-            assertNotNull(root.getVector("type"));
-            assertNotNull(root.getVector("source_url"));
-            assertNotNull(root.getVector("collector_id"));
-            assertNotNull(root.getVector("labels"));
-            assertNotNull(root.getVector("value"));
-
-            // Verify data
-            VarCharVector nameVector = (VarCharVector) root.getVector("name");
-            assertEquals("test_counter", new String(nameVector.get(0)));
-
-            Float8Vector valueVector = (Float8Vector) root.getVector("value");
-            assertEquals(999.0, valueVector.get(0), 0.001);
+            assertTrue(result);
+            assertEquals(1, forwarder.getMetricsSentCount());
+        } finally {
+            forwarder.close();
         }
     }
 
     @Test
-    @DisplayName("Should handle multiple metrics in batch")
-    void sendMetrics_MultipleBatch() throws Exception {
-        server.enqueue(new MockResponse().setResponseCode(200).setBody("OK"));
+    @DisplayName("Should assign sequential s_no to metrics")
+    void sendMetrics_SequentialSNo() {
+        CollectedMetric.resetSequence();
+        MetricsForwarder forwarder = new MetricsForwarder(properties);
+        try {
+            CollectedMetric m1 = createMetric("m1", 1.0);
+            CollectedMetric m2 = createMetric("m2", 2.0);
+            CollectedMetric m3 = createMetric("m3", 3.0);
 
-        List<CollectedMetric> metrics = List.of(
-            createMetric("metric_1", 1.0),
-            createMetric("metric_2", 2.0),
-            createMetric("metric_3", 3.0)
-        );
+            assertEquals(1, m1.sNo());
+            assertEquals(2, m2.sNo());
+            assertEquals(3, m3.sNo());
 
-        boolean result = forwarder.sendMetrics(metrics);
-
-        assertTrue(result);
-
-        RecordedRequest request = server.takeRequest();
-        byte[] arrowBytes = request.getBody().readByteArray();
-
-        try (BufferAllocator allocator = new RootAllocator();
-             ArrowStreamReader reader = new ArrowStreamReader(
-                 Channels.newChannel(new ByteArrayInputStream(arrowBytes)), allocator)) {
-
-            VectorSchemaRoot root = reader.getVectorSchemaRoot();
-            assertTrue(reader.loadNextBatch());
-            assertEquals(3, root.getRowCount());
+            boolean result = forwarder.sendMetrics(List.of(m1, m2, m3));
+            assertTrue(result);
+        } finally {
+            forwarder.close();
         }
-    }
-
-    @Test
-    @DisplayName("Should track sent count")
-    void sendMetrics_TracksCount() throws Exception {
-        server.enqueue(new MockResponse().setResponseCode(200).setBody("OK"));
-
-        List<CollectedMetric> metrics = List.of(
-            createMetric("metric_1", 1.0),
-            createMetric("metric_2", 2.0)
-        );
-
-        assertEquals(0, forwarder.getMetricsSentCount());
-
-        forwarder.sendMetrics(metrics);
-
-        assertEquals(2, forwarder.getMetricsSentCount());
-        assertEquals(1, forwarder.getSendSuccessCount());
-    }
-
-    @Test
-    @DisplayName("Should track failure count")
-    void sendMetrics_TracksFailures() {
-        server.enqueue(new MockResponse().setResponseCode(500).setBody("Error"));
-        server.enqueue(new MockResponse().setResponseCode(500).setBody("Error"));
-
-        List<CollectedMetric> metrics = List.of(createMetric("metric_1", 1.0));
-
-        forwarder.sendMetrics(metrics);
-
-        assertEquals(1, forwarder.getSendFailureCount());
     }
 
     private CollectedMetric createMetric(String name, double value) {

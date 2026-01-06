@@ -1,14 +1,7 @@
 package io.dazzleduck.sql.scrapper;
 
-import org.apache.arrow.memory.BufferAllocator;
-import org.apache.arrow.memory.RootAllocator;
-import org.apache.arrow.vector.BigIntVector;
-import org.apache.arrow.vector.Float8Vector;
-import org.apache.arrow.vector.VarCharVector;
-import org.apache.arrow.vector.VectorSchemaRoot;
-import org.apache.arrow.vector.complex.MapVector;
-import org.apache.arrow.vector.complex.impl.UnionMapWriter;
-import org.apache.arrow.vector.ipc.ArrowStreamWriter;
+import io.dazzleduck.sql.client.HttpProducer;
+import io.dazzleduck.sql.common.types.JavaRow;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.FieldType;
@@ -16,44 +9,46 @@ import org.apache.arrow.vector.types.pojo.Schema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Forwards collected metrics to a remote server in Apache Arrow IPC format.
- * Includes retry logic with exponential backoff.
+ * Forwards collected metrics to a remote server using HttpProducer from dazzleduck-sql-client.
+ * Metrics are sent as Apache Arrow streams with automatic batching and retry logic.
  */
 public class MetricsForwarder {
 
     private static final Logger log = LoggerFactory.getLogger(MetricsForwarder.class);
 
     private final CollectorProperties properties;
-    private final HttpClient httpClient;
+    private final HttpProducer producer;
     private final Schema arrowSchema;
+
+    // Column indices in the schema
+    private static final int COL_S_NO = 0;
+    private static final int COL_TIMESTAMP = 1;
+    private static final int COL_NAME = 2;
+    private static final int COL_TYPE = 3;
+    private static final int COL_SOURCE_URL = 4;
+    private static final int COL_COLLECTOR_ID = 5;
+    private static final int COL_COLLECTOR_NAME = 6;
+    private static final int COL_COLLECTOR_HOST = 7;
+    private static final int COL_LABELS = 8;
+    private static final int COL_VALUE = 9;
 
     // Simple counters for monitoring
     private final AtomicLong metricsSentCount = new AtomicLong(0);
     private final AtomicLong metricsDroppedCount = new AtomicLong(0);
-    private final AtomicLong sendSuccessCount = new AtomicLong(0);
-    private final AtomicLong sendFailureCount = new AtomicLong(0);
 
     public MetricsForwarder(CollectorProperties properties) {
         this.properties = properties;
 
-        this.httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofMillis(properties.getConnectionTimeoutMs()))
-            .build();
-
-        // Arrow schema for collected metrics
+        // Arrow schema for collected metrics with s_no as first column
         this.arrowSchema = new Schema(List.of(
+            new Field("s_no", FieldType.notNullable(new ArrowType.Int(64, true)), null),
             new Field("timestamp", FieldType.nullable(new ArrowType.Int(64, true)), null),
             new Field("name", FieldType.notNullable(new ArrowType.Utf8()), null),
             new Field("type", FieldType.notNullable(new ArrowType.Utf8()), null),
@@ -70,150 +65,95 @@ public class MetricsForwarder {
             new Field("value", FieldType.nullable(new ArrowType.FloatingPoint(
                 org.apache.arrow.vector.types.FloatingPointPrecision.DOUBLE)), null)
         ));
+
+        // Create HttpProducer with configuration from properties
+        this.producer = new HttpProducer(
+            arrowSchema,
+            properties.getServerUrl(),
+            properties.getUsername(),
+            properties.getPassword(),
+            properties.getPath(),
+            Duration.ofMillis(properties.getReadTimeoutMs()),
+            properties.getMinBatchSize(),
+            properties.getMaxBatchSize(),
+            Duration.ofMillis(properties.getFlushIntervalMs()),
+            properties.getMaxRetries(),
+            properties.getRetryDelayMs(),
+            List.of(),  // transformations
+            List.of(),  // partitionBy
+            properties.getMaxInMemorySize(),
+            properties.getMaxOnDiskSize()
+        );
+
+        log.info("MetricsForwarder initialized with HttpProducer: serverUrl={}, path={}",
+            properties.getServerUrl(), properties.getPath());
     }
 
     /**
-     * Send collected metrics to the remote server as Arrow bytes.
-     * Returns true if successful, false otherwise.
+     * Send collected metrics to the remote server.
+     * Returns true if metrics were queued successfully.
      */
     public boolean sendMetrics(List<CollectedMetric> metrics) {
         if (metrics.isEmpty()) {
             return true;
         }
 
-        byte[] arrowBytes = convertToArrowBytes(metrics);
-        if (arrowBytes == null || arrowBytes.length == 0) {
-            log.error("Failed to serialize metrics to Arrow format");
+        try {
+            for (CollectedMetric metric : metrics) {
+                JavaRow row = toJavaRow(metric);
+                producer.addRow(row);
+            }
+            metricsSentCount.addAndGet(metrics.size());
+            log.debug("Queued {} metrics for sending", metrics.size());
+            return true;
+        } catch (Exception e) {
+            log.error("Failed to queue metrics: {}", e.getMessage());
             metricsDroppedCount.addAndGet(metrics.size());
             return false;
         }
-
-        String url = properties.getServerUrl() + "?path=" + properties.getPath();
-
-        int retries = 0;
-        int maxRetries = properties.getMaxRetries();
-        int retryDelay = properties.getRetryDelayMs();
-
-        while (retries <= maxRetries) {
-            try {
-                HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
-                    .header("Content-Type", "application/vnd.apache.arrow.stream")
-                    .timeout(Duration.ofMillis(properties.getReadTimeoutMs()))
-                    .POST(HttpRequest.BodyPublishers.ofByteArray(arrowBytes))
-                    .build();
-
-                HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
-                if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                    metricsSentCount.addAndGet(metrics.size());
-                    sendSuccessCount.incrementAndGet();
-                    log.debug("Successfully forwarded {} metrics ({} bytes)",
-                        metrics.size(), arrowBytes.length);
-                    return true;
-                } else {
-                    log.warn("Forwarding failed with status {}: {}",
-                        response.statusCode(), response.body());
-                }
-
-            } catch (IOException e) {
-                log.warn("Forwarding IO error (attempt {}): {}", retries + 1, e.getMessage());
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                log.warn("Forwarding interrupted");
-                return false;
-            }
-
-            retries++;
-            if (retries <= maxRetries) {
-                try {
-                    Thread.sleep(retryDelay * (long) Math.pow(2, retries - 1));
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    return false;
-                }
-            }
-        }
-
-        sendFailureCount.incrementAndGet();
-        log.error("Failed to forward {} metrics after {} retries", metrics.size(), maxRetries);
-        return false;
     }
 
     /**
-     * Convert collected metrics to Arrow IPC format.
+     * Convert CollectedMetric to JavaRow for Arrow serialization.
      */
-    private byte[] convertToArrowBytes(List<CollectedMetric> metrics) {
-        try (BufferAllocator allocator = new RootAllocator();
-             VectorSchemaRoot root = VectorSchemaRoot.create(arrowSchema, allocator);
-             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+    private JavaRow toJavaRow(CollectedMetric metric) {
+        Object[] values = new Object[10];
+        values[COL_S_NO] = metric.sNo();
+        values[COL_TIMESTAMP] = metric.timestamp().toEpochMilli();
+        values[COL_NAME] = metric.name();
+        values[COL_TYPE] = metric.type();
+        values[COL_SOURCE_URL] = metric.sourceUrl();
+        values[COL_COLLECTOR_ID] = metric.collectorId();
+        values[COL_COLLECTOR_NAME] = metric.collectorName();
+        values[COL_COLLECTOR_HOST] = metric.collectorHost();
+        values[COL_LABELS] = convertLabels(metric.labels());
 
-            BigIntVector timestampVector = (BigIntVector) root.getVector("timestamp");
-            VarCharVector nameVector = (VarCharVector) root.getVector("name");
-            VarCharVector typeVector = (VarCharVector) root.getVector("type");
-            VarCharVector sourceUrlVector = (VarCharVector) root.getVector("source_url");
-            VarCharVector collectorIdVector = (VarCharVector) root.getVector("collector_id");
-            VarCharVector collectorNameVector = (VarCharVector) root.getVector("collector_name");
-            VarCharVector collectorHostVector = (VarCharVector) root.getVector("collector_host");
-            MapVector labelsVector = (MapVector) root.getVector("labels");
-            Float8Vector valueVector = (Float8Vector) root.getVector("value");
-
-            root.allocateNew();
-            UnionMapWriter labelsWriter = labelsVector.getWriter();
-
-            for (int i = 0; i < metrics.size(); i++) {
-                CollectedMetric metric = metrics.get(i);
-
-                timestampVector.setSafe(i, metric.timestamp().toEpochMilli());
-                setSafeString(nameVector, i, metric.name());
-                setSafeString(typeVector, i, metric.type());
-                setSafeString(sourceUrlVector, i, metric.sourceUrl());
-                setSafeString(collectorIdVector, i, metric.collectorId());
-                setSafeString(collectorNameVector, i, metric.collectorName());
-                setSafeString(collectorHostVector, i, metric.collectorHost());
-
-                // Write labels map
-                labelsWriter.setPosition(i);
-                labelsWriter.startMap();
-                for (var entry : metric.labels().entrySet()) {
-                    labelsWriter.startEntry();
-                    labelsWriter.key().varChar().writeVarChar(entry.getKey());
-                    if (entry.getValue() != null) {
-                        labelsWriter.value().varChar().writeVarChar(entry.getValue());
-                    }
-                    labelsWriter.endEntry();
-                }
-                labelsWriter.endMap();
-
-                double value = metric.value();
-                if (Double.isNaN(value) || Double.isInfinite(value)) {
-                    valueVector.setNull(i);
-                } else {
-                    valueVector.setSafe(i, value);
-                }
-            }
-
-            root.setRowCount(metrics.size());
-
-            try (ArrowStreamWriter writer = new ArrowStreamWriter(root, null, out)) {
-                writer.start();
-                writer.writeBatch();
-                writer.end();
-            }
-
-            return out.toByteArray();
-
-        } catch (Exception e) {
-            log.error("Failed to convert metrics to Arrow format: {}", e.getMessage());
-            return null;
+        double value = metric.value();
+        if (Double.isNaN(value) || Double.isInfinite(value)) {
+            values[COL_VALUE] = null;
+        } else {
+            values[COL_VALUE] = value;
         }
+
+        return new JavaRow(values);
     }
 
-    private void setSafeString(VarCharVector vector, int index, String value) {
-        if (value != null) {
-            vector.setSafe(index, value.getBytes(StandardCharsets.UTF_8));
-        } else {
-            vector.setNull(index);
+    /**
+     * Convert labels map to format expected by Arrow Map type.
+     */
+    private Map<String, String> convertLabels(Map<String, String> labels) {
+        return labels;
+    }
+
+    /**
+     * Close the forwarder and flush any pending metrics.
+     */
+    public void close() {
+        try {
+            producer.close();
+            log.info("MetricsForwarder closed");
+        } catch (Exception e) {
+            log.error("Error closing MetricsForwarder: {}", e.getMessage());
         }
     }
 
@@ -226,11 +166,10 @@ public class MetricsForwarder {
         return metricsDroppedCount.get();
     }
 
-    public long getSendSuccessCount() {
-        return sendSuccessCount.get();
-    }
-
-    public long getSendFailureCount() {
-        return sendFailureCount.get();
+    /**
+     * Get the Arrow schema used for metrics.
+     */
+    public Schema getArrowSchema() {
+        return arrowSchema;
     }
 }

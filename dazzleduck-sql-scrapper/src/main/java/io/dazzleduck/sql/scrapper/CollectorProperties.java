@@ -11,19 +11,24 @@ import java.util.List;
  * - Buffers metrics with tailing mode
  * - Forwards to a remote server in Apache Arrow format
  *
- * Configuration example (application.yml):
- *
- * collector:
- *   enabled: true
- *   targets:
- *     - <a href="http://localhost:8080/actuator/prometheus">...</a>
- *     - <a href="http://localhost:8081/actuator/prometheus">...</a>
- *   target-prefix: http://localhost  # Optional: prefix for all targets
- *   server-url: <a href="http://remote-server:8080/ingest">...</a>
- *   path: scraped_metrics
- *   scrape-interval-ms: 15000
- *   flush-threshold: 100
- *   flush-interval-ms: 5000
+ * Configuration example (application.conf - HOCON format):
+ * <pre>
+ * collector {
+ *     enabled = true
+ *     targets = [
+ *         "http://localhost:8080/actuator/prometheus"
+ *         "http://localhost:8081/actuator/prometheus"
+ *     ]
+ *     target-prefix = "http://localhost"
+ *     server-url = "http://remote-server:8080/ingest"
+ *     path = "scraped_metrics"
+ *     scrape-interval-ms = 15000
+ *     tailing {
+ *         flush-threshold = 100
+ *         flush-interval-ms = 5000
+ *     }
+ * }
+ * </pre>
  */
 public class CollectorProperties {
 
@@ -106,6 +111,36 @@ public class CollectorProperties {
      * Host identifier (defaults to hostname if empty).
      */
     private String collectorHost = "";
+
+    /**
+     * Server authentication username.
+     */
+    private String username = "admin";
+
+    /**
+     * Server authentication password.
+     */
+    private String password = "admin";
+
+    /**
+     * Minimum batch size in bytes before sending.
+     */
+    private long minBatchSize = 1024;
+
+    /**
+     * Maximum batch size in bytes.
+     */
+    private long maxBatchSize = 16 * 1024 * 1024;
+
+    /**
+     * Maximum in-memory buffer size in bytes.
+     */
+    private long maxInMemorySize = 10 * 1024 * 1024;
+
+    /**
+     * Maximum on-disk buffer size in bytes.
+     */
+    private long maxOnDiskSize = 1024 * 1024 * 1024;
 
     // Getters and Setters
 
@@ -235,6 +270,54 @@ public class CollectorProperties {
 
     public void setCollectorHost(String collectorHost) {
         this.collectorHost = collectorHost;
+    }
+
+    public String getUsername() {
+        return username;
+    }
+
+    public void setUsername(String username) {
+        this.username = username;
+    }
+
+    public String getPassword() {
+        return password;
+    }
+
+    public void setPassword(String password) {
+        this.password = password;
+    }
+
+    public long getMinBatchSize() {
+        return minBatchSize;
+    }
+
+    public void setMinBatchSize(long minBatchSize) {
+        this.minBatchSize = minBatchSize;
+    }
+
+    public long getMaxBatchSize() {
+        return maxBatchSize;
+    }
+
+    public void setMaxBatchSize(long maxBatchSize) {
+        this.maxBatchSize = maxBatchSize;
+    }
+
+    public long getMaxInMemorySize() {
+        return maxInMemorySize;
+    }
+
+    public void setMaxInMemorySize(long maxInMemorySize) {
+        this.maxInMemorySize = maxInMemorySize;
+    }
+
+    public long getMaxOnDiskSize() {
+        return maxOnDiskSize;
+    }
+
+    public void setMaxOnDiskSize(long maxOnDiskSize) {
+        this.maxOnDiskSize = maxOnDiskSize;
     }
 
     /**

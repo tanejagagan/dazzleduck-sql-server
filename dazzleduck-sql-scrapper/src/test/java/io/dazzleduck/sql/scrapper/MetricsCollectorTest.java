@@ -10,11 +10,13 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Tests for MetricsCollector - main collector with tailing support.
+ *
+ * Note: HttpProducer handles actual HTTP sending asynchronously with authentication,
+ * so these tests focus on the collector's scraping and buffering behavior.
  */
 class MetricsCollectorTest {
 
     private MockWebServer targetServer;
-    private MockWebServer forwardServer;
     private CollectorProperties properties;
 
     @BeforeEach
@@ -22,26 +24,31 @@ class MetricsCollectorTest {
         targetServer = new MockWebServer();
         targetServer.start();
 
-        forwardServer = new MockWebServer();
-        forwardServer.start();
-
         properties = new CollectorProperties();
         properties.setEnabled(true);
         properties.setTargets(List.of(targetServer.url("/actuator/prometheus").toString()));
-        properties.setServerUrl(forwardServer.url("/ingest").toString());
+        properties.setServerUrl("http://localhost:8081");  // HttpProducer will handle auth
         properties.setPath("metrics");
+        properties.setUsername("test");
+        properties.setPassword("test");
         properties.setScrapeIntervalMs(100);
         properties.setFlushThreshold(5);
         properties.setFlushIntervalMs(500);
         properties.setConnectionTimeoutMs(5000);
         properties.setReadTimeoutMs(5000);
         properties.setMaxRetries(0);
+        properties.setMinBatchSize(1024);
+        properties.setMaxBatchSize(16 * 1024 * 1024);
+        properties.setMaxInMemorySize(10 * 1024 * 1024);
+        properties.setMaxOnDiskSize(1024 * 1024 * 1024);
+
+        // Reset sequence for consistent tests
+        CollectedMetric.resetSequence();
     }
 
     @AfterEach
     void tearDown() throws Exception {
         targetServer.shutdown();
-        forwardServer.shutdown();
     }
 
     @Test
@@ -100,7 +107,7 @@ class MetricsCollectorTest {
         // Wait for at least one scrape
         Thread.sleep(200);
 
-        assertTrue(collector.getBufferSize() > 0);
+        assertTrue(collector.getBufferSize() > 0, "Buffer should contain scraped metrics");
 
         collector.stop();
     }
@@ -118,8 +125,6 @@ class MetricsCollectorTest {
         for (int i = 0; i < 10; i++) {
             targetServer.enqueue(new MockResponse().setBody(prometheusData).setResponseCode(200));
         }
-        forwardServer.enqueue(new MockResponse().setResponseCode(200).setBody("OK"));
-        forwardServer.enqueue(new MockResponse().setResponseCode(200).setBody("OK"));
 
         properties.setScrapeIntervalMs(50);
         properties.setFlushThreshold(5);
@@ -131,10 +136,10 @@ class MetricsCollectorTest {
         // Wait for scrapes and flush
         Thread.sleep(500);
 
-        collector.stop();
+        // Metrics should have been sent (queued to HttpProducer)
+        assertTrue(collector.getMetricsSentCount() > 0, "Should have sent metrics");
 
-        // Should have forwarded at least once due to threshold
-        assertTrue(forwardServer.getRequestCount() > 0);
+        collector.stop();
     }
 
     @Test
@@ -143,7 +148,6 @@ class MetricsCollectorTest {
         String prometheusData = "single_metric 1\n";
         targetServer.enqueue(new MockResponse().setBody(prometheusData).setResponseCode(200));
         targetServer.enqueue(new MockResponse().setBody(prometheusData).setResponseCode(200));
-        forwardServer.enqueue(new MockResponse().setResponseCode(200).setBody("OK"));
 
         properties.setScrapeIntervalMs(100);
         properties.setFlushThreshold(1000); // High threshold so interval triggers first
@@ -157,8 +161,8 @@ class MetricsCollectorTest {
 
         collector.stop();
 
-        // Should have forwarded at least once due to interval
-        assertTrue(forwardServer.getRequestCount() > 0);
+        // Should have sent metrics due to interval
+        assertTrue(collector.getMetricsSentCount() > 0, "Should have sent metrics on interval");
     }
 
     @Test
@@ -166,7 +170,6 @@ class MetricsCollectorTest {
     void flushOnStop() throws Exception {
         String prometheusData = "test_metric 42\n";
         targetServer.enqueue(new MockResponse().setBody(prometheusData).setResponseCode(200));
-        forwardServer.enqueue(new MockResponse().setResponseCode(200).setBody("OK"));
 
         properties.setFlushThreshold(1000);
         properties.setFlushIntervalMs(10000);
@@ -177,42 +180,40 @@ class MetricsCollectorTest {
         // Wait for scrape
         Thread.sleep(200);
 
-        assertTrue(collector.getBufferSize() > 0);
+        int bufferBefore = collector.getBufferSize();
+        assertTrue(bufferBefore > 0, "Buffer should have metrics before stop");
 
         collector.stop();
 
-        // Should have flushed on stop
-        assertTrue(forwardServer.getRequestCount() > 0 || collector.getBufferSize() == 0);
+        // Buffer should be flushed on stop
+        assertEquals(0, collector.getBufferSize(), "Buffer should be empty after stop");
     }
 
     @Test
-    @DisplayName("Should return metrics to buffer on failure")
-    void returnToBufferOnFailure() throws Exception {
-        String prometheusData = "test_metric 42\n";
-        // Queue multiple responses for scrapes
+    @DisplayName("Should track metrics sent count")
+    void trackMetricsSentCount() throws Exception {
+        String prometheusData = """
+            metric_1 1
+            metric_2 2
+            """;
         for (int i = 0; i < 5; i++) {
             targetServer.enqueue(new MockResponse().setBody(prometheusData).setResponseCode(200));
         }
-        // All forward attempts fail
-        for (int i = 0; i < 10; i++) {
-            forwardServer.enqueue(new MockResponse().setResponseCode(500).setBody("Error"));
-        }
 
-        properties.setFlushThreshold(1);
+        properties.setFlushThreshold(2);
         properties.setFlushIntervalMs(100);
-        properties.setMaxRetries(0);
 
         MetricsCollector collector = new MetricsCollector(properties);
+        assertEquals(0, collector.getMetricsSentCount());
+
         collector.start();
 
-        // Wait for scrape and failed flush attempts
+        // Wait for scrapes and flushes
         Thread.sleep(400);
 
         collector.stop();
 
-        // At least one forward attempt should have failed
-        assertTrue(forwardServer.getRequestCount() > 0, "Should have attempted to forward");
-        assertTrue(collector.getForwarder().getSendFailureCount() > 0, "Should have recorded failures");
+        assertTrue(collector.getMetricsSentCount() > 0, "Should have sent metrics");
     }
 
     @Test
@@ -220,7 +221,6 @@ class MetricsCollectorTest {
     void useTargetPrefix() throws Exception {
         String prometheusData = "prefixed_metric 123\n";
         targetServer.enqueue(new MockResponse().setBody(prometheusData).setResponseCode(200));
-        forwardServer.enqueue(new MockResponse().setResponseCode(200).setBody("OK"));
 
         properties.setTargetPrefix(targetServer.url("/").toString().replaceAll("/$", ""));
         properties.setTargets(List.of("/metrics"));
@@ -233,6 +233,28 @@ class MetricsCollectorTest {
 
         collector.stop();
 
-        assertTrue(targetServer.getRequestCount() > 0);
+        assertTrue(targetServer.getRequestCount() > 0, "Should have scraped from prefixed target");
+    }
+
+    @Test
+    @DisplayName("Should handle scrape failures gracefully")
+    void handleScrapeFailure() throws Exception {
+        // First request fails, second succeeds
+        targetServer.enqueue(new MockResponse().setResponseCode(500).setBody("Error"));
+        targetServer.enqueue(new MockResponse().setBody("recovered_metric 1\n").setResponseCode(200));
+
+        properties.setFlushThreshold(100);
+        properties.setFlushIntervalMs(10000);
+
+        MetricsCollector collector = new MetricsCollector(properties);
+        collector.start();
+
+        // Wait for both scrape attempts
+        Thread.sleep(300);
+
+        // Should still be running despite the failure
+        assertTrue(collector.isRunning(), "Should continue running after scrape failure");
+
+        collector.stop();
     }
 }

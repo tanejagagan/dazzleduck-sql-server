@@ -23,7 +23,7 @@
         <logback.version>1.5.15</logback.version>
         <mockwebserver.version>4.12.0</mockwebserver.version>
         <surefire.version>3.5.2</surefire.version>
-        <exec.mainClass>io.dazzleduck.sql.scrapper.MetricsCollectorServer</exec.mainClass>
+        <exec.mainClass>io.dazzleduck.sql.scrapper.Main</exec.mainClass>
     </properties>
 
     <dependencies>
@@ -74,12 +74,17 @@
             <version>${mockwebserver.version}</version>
             <scope>test</scope>
         </dependency>
-        <!-- Logging implementation (runtime) -->
+        <!-- Logging implementation (compile scope for programmatic configuration) -->
         <dependency>
             <groupId>ch.qos.logback</groupId>
             <artifactId>logback-classic</artifactId>
             <version>${logback.version}</version>
-            <scope>runtime</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>io.dazzleduck.sql</groupId>
+            <artifactId>dazzleduck-sql-client</artifactId>
+            <version>0.0.13-SNAPSHOT</version>
         </dependency>
     </dependencies>
 

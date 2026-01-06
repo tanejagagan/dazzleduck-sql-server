@@ -233,6 +233,48 @@ public class CollectorConfig {
     }
 
     /**
+     * Get server authentication username.
+     */
+    public String getUsername() {
+        return getString("auth.username", "admin");
+    }
+
+    /**
+     * Get server authentication password.
+     */
+    public String getPassword() {
+        return getString("auth.password", "admin");
+    }
+
+    /**
+     * Get minimum batch size in bytes.
+     */
+    public long getMinBatchSize() {
+        return getLong("producer.min-batch-size", 1024);
+    }
+
+    /**
+     * Get maximum batch size in bytes.
+     */
+    public long getMaxBatchSize() {
+        return getLong("producer.max-batch-size", 16 * 1024 * 1024);
+    }
+
+    /**
+     * Get maximum in-memory buffer size in bytes.
+     */
+    public long getMaxInMemorySize() {
+        return getLong("producer.max-in-memory-size", 10 * 1024 * 1024);
+    }
+
+    /**
+     * Get maximum on-disk buffer size in bytes.
+     */
+    public long getMaxOnDiskSize() {
+        return getLong("producer.max-on-disk-size", 1024 * 1024 * 1024);
+    }
+
+    /**
      * Convert this configuration to CollectorProperties.
      * This provides backward compatibility with existing code.
      */
@@ -254,6 +296,12 @@ public class CollectorConfig {
         props.setCollectorId(getCollectorId());
         props.setCollectorName(getCollectorName());
         props.setCollectorHost(getCollectorHost());
+        props.setUsername(getUsername());
+        props.setPassword(getPassword());
+        props.setMinBatchSize(getMinBatchSize());
+        props.setMaxBatchSize(getMaxBatchSize());
+        props.setMaxInMemorySize(getMaxInMemorySize());
+        props.setMaxOnDiskSize(getMaxOnDiskSize());
         return props;
     }
 
@@ -288,6 +336,18 @@ public class CollectorConfig {
         try {
             if (config.hasPath(fullPath)) {
                 return config.getBoolean(fullPath);
+            }
+        } catch (Exception e) {
+            log.debug("Error reading config path {}: {}", fullPath, e.getMessage());
+        }
+        return defaultValue;
+    }
+
+    private long getLong(String path, long defaultValue) {
+        String fullPath = CONFIG_PREFIX + "." + path;
+        try {
+            if (config.hasPath(fullPath)) {
+                return config.getLong(fullPath);
             }
         } catch (Exception e) {
             log.debug("Error reading config path {}: {}", fullPath, e.getMessage());

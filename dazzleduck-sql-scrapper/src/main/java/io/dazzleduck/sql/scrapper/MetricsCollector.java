@@ -118,6 +118,9 @@ public class MetricsCollector {
             shutdownScheduler(scraperScheduler, "scraper");
             shutdownScheduler(forwarderScheduler, "forwarder");
 
+            // Close the forwarder to flush any pending data
+            forwarder.close();
+
             log.info("Metrics collector stopped");
         }
     }

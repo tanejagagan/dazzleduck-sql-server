@@ -145,15 +145,15 @@ public class MetricsScraper {
 
                 double value;
                 try {
-                    if ("NaN".equals(valueStr)) {
-                        value = Double.NaN;
-                    } else if ("+Inf".equals(valueStr)) {
-                        value = Double.POSITIVE_INFINITY;
-                    } else if ("-Inf".equals(valueStr)) {
-                        value = Double.NEGATIVE_INFINITY;
-                    } else {
-                        value = Double.parseDouble(valueStr);
-                    }
+                    value = switch (valueStr) {
+                        case "NaN" -> Double.NaN;
+                        case "+Inf" -> Double.POSITIVE_INFINITY;
+                        case "-Inf" -> Double.NEGATIVE_INFINITY;
+                        case null, default -> {
+                            assert valueStr != null;
+                            yield Double.parseDouble(valueStr);
+                        }
+                    };
                 } catch (NumberFormatException e) {
                     continue;
                 }

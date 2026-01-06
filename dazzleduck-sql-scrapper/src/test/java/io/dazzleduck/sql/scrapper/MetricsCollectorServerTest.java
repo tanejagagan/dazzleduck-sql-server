@@ -17,11 +17,13 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Tests for MetricsCollectorServer - standalone server with HOCON config.
+ *
+ * Note: HttpProducer handles actual HTTP sending asynchronously with authentication,
+ * so these tests focus on server lifecycle and scraping behavior.
  */
 class MetricsCollectorServerTest {
 
     private MockWebServer targetServer;
-    private MockWebServer forwardServer;
     private File tempConfigFile;
     private ExecutorService executor;
 
@@ -30,12 +32,10 @@ class MetricsCollectorServerTest {
         targetServer = new MockWebServer();
         targetServer.start();
 
-        forwardServer = new MockWebServer();
-        forwardServer.start();
-
         executor = Executors.newSingleThreadExecutor();
 
         ConfigFactory.invalidateCaches();
+        CollectedMetric.resetSequence();
     }
 
     @AfterEach
@@ -45,7 +45,6 @@ class MetricsCollectorServerTest {
             executor.awaitTermination(5, TimeUnit.SECONDS);
         }
         targetServer.shutdown();
-        forwardServer.shutdown();
         if (tempConfigFile != null && tempConfigFile.exists()) {
             tempConfigFile.delete();
         }
@@ -66,16 +65,25 @@ class MetricsCollectorServerTest {
             collector {
                 enabled = true
                 targets = ["%s"]
-                server-url = "%s"
+                server-url = "http://localhost:8081"
                 scrape-interval-ms = 100
                 tailing {
                     flush-threshold = 1
                     flush-interval-ms = 100
                 }
+                auth {
+                    username = "test"
+                    password = "test"
+                }
+                producer {
+                    min-batch-size = 1024
+                    max-batch-size = 16777216
+                    max-in-memory-size = 10485760
+                    max-on-disk-size = 1073741824
+                }
             }
             """,
-            targetServer.url("/prometheus").toString(),
-            forwardServer.url("/ingest").toString()
+            targetServer.url("/prometheus").toString()
         );
 
         tempConfigFile = createTempConfigFile(hoconContent);
@@ -92,11 +100,20 @@ class MetricsCollectorServerTest {
             collector {
                 enabled = true
                 targets = ["%s"]
-                server-url = "%s"
+                server-url = "http://localhost:8081"
+                auth {
+                    username = "test"
+                    password = "test"
+                }
+                producer {
+                    min-batch-size = 1024
+                    max-batch-size = 16777216
+                    max-in-memory-size = 10485760
+                    max-on-disk-size = 1073741824
+                }
             }
             """,
-            targetServer.url("/prometheus").toString(),
-            forwardServer.url("/ingest").toString()
+            targetServer.url("/prometheus").toString()
         );
 
         Config config = ConfigFactory.parseString(hoconString);
@@ -113,6 +130,16 @@ class MetricsCollectorServerTest {
         String hoconContent = """
             collector {
                 enabled = false
+                auth {
+                    username = "test"
+                    password = "test"
+                }
+                producer {
+                    min-batch-size = 1024
+                    max-batch-size = 16777216
+                    max-in-memory-size = 10485760
+                    max-on-disk-size = 1073741824
+                }
             }
             """;
 
@@ -136,6 +163,16 @@ class MetricsCollectorServerTest {
             collector {
                 enabled = true
                 targets = []
+                auth {
+                    username = "test"
+                    password = "test"
+                }
+                producer {
+                    min-batch-size = 1024
+                    max-batch-size = 16777216
+                    max-in-memory-size = 10485760
+                    max-on-disk-size = 1073741824
+                }
             }
             """;
 
@@ -155,13 +192,10 @@ class MetricsCollectorServerTest {
     @Test
     @DisplayName("Should start and run with valid config")
     void shouldStartWithValidConfig() throws Exception {
-        // Queue responses for scraping and forwarding
+        // Queue responses for scraping
         String prometheusData = "test_metric 123\n";
-        for (int i = 0; i < 20; i++) {
+        for (int i = 0; i < 50; i++) {
             targetServer.enqueue(new MockResponse().setBody(prometheusData).setResponseCode(200));
-        }
-        for (int i = 0; i < 20; i++) {
-            forwardServer.enqueue(new MockResponse().setResponseCode(200).setBody("OK"));
         }
 
         String hoconContent = String.format("""
@@ -169,7 +203,7 @@ class MetricsCollectorServerTest {
                 enabled = true
                 targets = ["%s"]
                 target-prefix = ""
-                server-url = "%s"
+                server-url = "http://localhost:8081"
                 scrape-interval-ms = 100
                 tailing {
                     flush-threshold = 1
@@ -182,10 +216,19 @@ class MetricsCollectorServerTest {
                     max-retries = 0
                     retry-delay-ms = 100
                 }
+                auth {
+                    username = "test"
+                    password = "test"
+                }
+                producer {
+                    min-batch-size = 1024
+                    max-batch-size = 16777216
+                    max-in-memory-size = 10485760
+                    max-on-disk-size = 1073741824
+                }
             }
             """,
-            targetServer.url("/prometheus").toString(),
-            forwardServer.url("/ingest").toString()
+            targetServer.url("/prometheus").toString()
         );
 
         tempConfigFile = createTempConfigFile(hoconContent);
@@ -194,8 +237,8 @@ class MetricsCollectorServerTest {
         // Start in background thread
         executor.submit(server::start);
 
-        // Wait for startup (give it more time)
-        Thread.sleep(500);
+        // Wait for startup - give more time for HttpProducer initialization
+        Thread.sleep(1000);
 
         assertTrue(server.isRunning(), "Server should be running");
         assertNotNull(server.getCollector(), "Collector should not be null");
@@ -204,14 +247,14 @@ class MetricsCollectorServerTest {
         server.shutdown();
 
         // Wait for shutdown
-        Thread.sleep(300);
+        Thread.sleep(500);
 
         assertFalse(server.isRunning());
     }
 
     @Test
-    @DisplayName("Should scrape and forward metrics")
-    void shouldScrapeAndForwardMetrics() throws Exception {
+    @DisplayName("Should scrape metrics from target")
+    void shouldScrapeMetrics() throws Exception {
         String prometheusData = """
             test_gauge 1.5
             test_counter 100
@@ -221,15 +264,12 @@ class MetricsCollectorServerTest {
         for (int i = 0; i < 20; i++) {
             targetServer.enqueue(new MockResponse().setBody(prometheusData).setResponseCode(200));
         }
-        for (int i = 0; i < 20; i++) {
-            forwardServer.enqueue(new MockResponse().setResponseCode(200).setBody("OK"));
-        }
 
         String hoconContent = String.format("""
             collector {
                 enabled = true
                 targets = ["%s"]
-                server-url = "%s"
+                server-url = "http://localhost:8081"
                 scrape-interval-ms = 50
                 tailing {
                     flush-threshold = 2
@@ -238,10 +278,19 @@ class MetricsCollectorServerTest {
                 http {
                     max-retries = 0
                 }
+                auth {
+                    username = "test"
+                    password = "test"
+                }
+                producer {
+                    min-batch-size = 1024
+                    max-batch-size = 16777216
+                    max-in-memory-size = 10485760
+                    max-on-disk-size = 1073741824
+                }
             }
             """,
-            targetServer.url("/prometheus").toString(),
-            forwardServer.url("/ingest").toString()
+            targetServer.url("/prometheus").toString()
         );
 
         tempConfigFile = createTempConfigFile(hoconContent);
@@ -250,7 +299,7 @@ class MetricsCollectorServerTest {
         // Start in background
         executor.submit(server::start);
 
-        // Wait for some scrapes and forwards
+        // Wait for some scrapes
         Thread.sleep(500);
 
         assertTrue(server.isRunning());
@@ -258,8 +307,8 @@ class MetricsCollectorServerTest {
         // Should have scraped from target
         assertTrue(targetServer.getRequestCount() > 0, "Should have scraped at least once");
 
-        // Should have forwarded to server
-        assertTrue(forwardServer.getRequestCount() > 0, "Should have forwarded at least once");
+        // Should have sent metrics (queued to HttpProducer)
+        assertTrue(server.getCollector().getMetricsSentCount() > 0, "Should have sent metrics");
 
         server.shutdown();
     }
@@ -271,14 +320,12 @@ class MetricsCollectorServerTest {
         for (int i = 0; i < 10; i++) {
             targetServer.enqueue(new MockResponse().setBody(prometheusData).setResponseCode(200));
         }
-        forwardServer.enqueue(new MockResponse().setResponseCode(200).setBody("OK"));
-        forwardServer.enqueue(new MockResponse().setResponseCode(200).setBody("OK"));
 
         String hoconContent = String.format("""
             collector {
                 enabled = true
                 targets = ["%s"]
-                server-url = "%s"
+                server-url = "http://localhost:8081"
                 scrape-interval-ms = 50
                 tailing {
                     flush-threshold = 100
@@ -287,10 +334,19 @@ class MetricsCollectorServerTest {
                 http {
                     max-retries = 0
                 }
+                auth {
+                    username = "test"
+                    password = "test"
+                }
+                producer {
+                    min-batch-size = 1024
+                    max-batch-size = 16777216
+                    max-in-memory-size = 10485760
+                    max-on-disk-size = 1073741824
+                }
             }
             """,
-            targetServer.url("/prometheus").toString(),
-            forwardServer.url("/ingest").toString()
+            targetServer.url("/prometheus").toString()
         );
 
         tempConfigFile = createTempConfigFile(hoconContent);
@@ -320,15 +376,12 @@ class MetricsCollectorServerTest {
         for (int i = 0; i < 20; i++) {
             targetServer.enqueue(new MockResponse().setBody(prometheusData).setResponseCode(200));
         }
-        for (int i = 0; i < 20; i++) {
-            forwardServer.enqueue(new MockResponse().setResponseCode(200).setBody("OK"));
-        }
 
         String hoconContent = String.format("""
             collector {
                 enabled = true
                 targets = ["%s"]
-                server-url = "%s"
+                server-url = "http://localhost:8081"
                 scrape-interval-ms = 50
                 tailing {
                     flush-threshold = 1
@@ -337,10 +390,19 @@ class MetricsCollectorServerTest {
                 http {
                     max-retries = 0
                 }
+                auth {
+                    username = "test"
+                    password = "test"
+                }
+                producer {
+                    min-batch-size = 1024
+                    max-batch-size = 16777216
+                    max-in-memory-size = 10485760
+                    max-on-disk-size = 1073741824
+                }
             }
             """,
-            targetServer.url("/prometheus").toString(),
-            forwardServer.url("/ingest").toString()
+            targetServer.url("/prometheus").toString()
         );
 
         tempConfigFile = createTempConfigFile(hoconContent);
