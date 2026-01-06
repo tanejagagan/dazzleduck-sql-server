@@ -149,6 +149,7 @@ class LogForwarderTest {
 
     private LogEntry createEntry(String message) {
         return new LogEntry(
+                1,
                 Instant.now(),
                 "INFO",
                 "TestLogger",

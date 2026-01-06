@@ -3,8 +3,8 @@ package io.dazzleduck.sql.logback;
 
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.AppenderBase;
-import lombok.Getter;
-import lombok.Setter;
+
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Custom Logback appender that captures log events and buffers them
@@ -21,7 +21,6 @@ import lombok.Setter;
  * </root>
  * }</pre>
  */
-@Setter
 public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
 
     // Packages to exclude from forwarding to prevent infinite loops
@@ -31,6 +30,9 @@ public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
             "org.apache.arrow"
     };
 
+    // Sequence number counter for generating unique s_no values
+    private static final AtomicLong sequenceCounter = new AtomicLong(0);
+
     // Static buffer shared across all instances
     private static volatile LogBuffer buffer;
     private static volatile String applicationId;
@@ -39,18 +41,38 @@ public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
 
     /**
      * Enable or disable log forwarding.
-     * -- GETTER --
-     *  Check if forwarding is enabled.
-     *
-     * @return true if enabled
-
      */
-    @Getter
-    @Setter
     private static volatile boolean enabled = true;
 
     // Logback XML configurable properties
     private int maxBufferSize = 10000;
+
+    /**
+     * Set the maximum buffer size.
+     *
+     * @param maxBufferSize the maximum buffer size
+     */
+    public void setMaxBufferSize(int maxBufferSize) {
+        this.maxBufferSize = maxBufferSize;
+    }
+
+    /**
+     * Check if forwarding is enabled.
+     *
+     * @return true if enabled
+     */
+    public static boolean isEnabled() {
+        return enabled;
+    }
+
+    /**
+     * Set whether forwarding is enabled.
+     *
+     * @param enabled true to enable forwarding
+     */
+    public static void setEnabled(boolean enabled) {
+        LogForwardingAppender.enabled = enabled;
+    }
 
     @Override
     public void start() {
@@ -77,6 +99,7 @@ public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
         }
 
         LogEntry entry = LogEntry.from(
+                sequenceCounter.incrementAndGet(),
                 event,
                 applicationId,
                 applicationName,
@@ -146,15 +169,7 @@ public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
             applicationName = null;
             applicationHost = null;
             enabled = true;
+            sequenceCounter.set(0);
         }
-    }
-
-    /**
-     * Set whether forwarding is enabled.
-     *
-     * @param enabled true to enable, false to disable
-     */
-    public static void setEnabled(boolean enabled) {
-        LogForwardingAppender.enabled = enabled;
     }
 }
