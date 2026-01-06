@@ -36,7 +36,8 @@ class LogToArrowConverterTest {
         Schema schema = converter.getSchema();
 
         assertNotNull(schema);
-        assertEquals(5, schema.getFields().size());
+        assertEquals(6, schema.getFields().size());
+        assertNotNull(schema.findField("s_no"));
         assertNotNull(schema.findField("timestamp"));
         assertNotNull(schema.findField("level"));
         assertNotNull(schema.findField("logger"));
@@ -60,6 +61,7 @@ class LogToArrowConverterTest {
     void convertToArrowBytes_shouldConvertSingleEntry() throws IOException {
         Instant now = Instant.parse("2024-01-15T10:30:00Z");
         LogEntry entry = new LogEntry(
+                1,
                 now,
                 "INFO",
                 "com.example.Test",
@@ -98,6 +100,7 @@ class LogToArrowConverterTest {
         List<LogEntry> entries = new ArrayList<>();
         for (int i = 0; i < 5; i++) {
             entries.add(new LogEntry(
+                    i,
                     Instant.now(),
                     i % 2 == 0 ? "INFO" : "ERROR",
                     "Logger" + i,
@@ -132,6 +135,7 @@ class LogToArrowConverterTest {
     @Test
     void convertToArrowBytes_shouldHandleNullValues() throws IOException {
         LogEntry entry = new LogEntry(
+                1,
                 null,  // null timestamp
                 "WARN",
                 null,  // null logger
@@ -169,6 +173,7 @@ class LogToArrowConverterTest {
     @Test
     void convertToVectorSchemaRoot_shouldReturnValidRoot() {
         LogEntry entry = new LogEntry(
+                1,
                 Instant.now(),
                 "DEBUG",
                 "TestLogger",
@@ -201,6 +206,7 @@ class LogToArrowConverterTest {
         }
 
         LogEntry entry = new LogEntry(
+                1,
                 Instant.now(),
                 "INFO",
                 "TestLogger",
