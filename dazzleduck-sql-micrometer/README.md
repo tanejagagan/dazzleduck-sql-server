@@ -1,4 +1,4 @@
-# DazzleDuck SQL Micrometer
+# Arrow-Micrometer
 
 A Micrometer metrics library that forwards application metrics to any HTTP server using Apache Arrow format.
 
@@ -29,47 +29,7 @@ Add the dependency to your `pom.xml`:
 
 ## Quick Start
 
-### Option 1: Programmatic Configuration (Recommended)
-
-```java
-import io.dazzleduck.sql.micrometer.MicrometerForwarder;
-import io.dazzleduck.sql.micrometer.config.MicrometerForwarderConfig;
-import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.MeterRegistry;
-
-import java.time.Duration;
-
-public class MetricsExample {
-    public static void main(String[] args) {
-        // Build configuration
-        MicrometerForwarderConfig config = MicrometerForwarderConfig.builder()
-                .baseUrl("http://localhost:8081")
-                .username("admin")
-                .password("admin")
-                .targetPath("metrics")
-                .applicationId("my-app")
-                .applicationName("My Application")
-                .stepInterval(Duration.ofSeconds(10))
-                .build();
-
-        // Create and start the forwarder
-        MicrometerForwarder forwarder = MicrometerForwarder.createAndStart(config);
-
-        // Get the registry and record metrics
-        MeterRegistry registry = forwarder.getRegistry();
-
-        Counter requestCounter = registry.counter("http.requests", "method", "GET", "path", "/api/users");
-        requestCounter.increment();
-
-        // ... your application code ...
-
-        // Cleanup on shutdown
-        Runtime.getRuntime().addShutdownHook(new Thread(forwarder::close));
-    }
-}
-```
-
-### Option 2: Configuration File
+### Option 1: Configuration File (Recommended)
 
 Create an `application.conf` file in your resources:
 
@@ -105,20 +65,58 @@ dazzleduck_micrometer = {
 Then use the factory:
 
 ```java
-import io.dazzleduck.sql.micrometer.MicrometerForwarder;
 import io.dazzleduck.sql.micrometer.metrics.MetricsRegistryFactory;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 
 public class MetricsExample {
     public static void main(String[] args) {
-        // Create forwarder from application.conf
-        MicrometerForwarder forwarder = MetricsRegistryFactory.createForwarder();
+        // Create registry from application.conf
+        MeterRegistry registry = MetricsRegistryFactory.create();
+
+        // Record metrics
+        Counter requestCounter = registry.counter("http.requests", "method", "GET", "path", "/api/users");
+        requestCounter.increment();
+
+        // ... your application code ...
+    }
+}
+```
+
+### Option 2: Programmatic Configuration
+
+```java
+import io.dazzleduck.sql.micrometer.MicrometerForwarder;
+import io.dazzleduck.sql.micrometer.config.MicrometerForwarderConfig;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+
+import java.time.Duration;
+
+public class MetricsExample {
+    public static void main(String[] args) {
+        // Build configuration
+        MicrometerForwarderConfig config = MicrometerForwarderConfig.builder()
+                .baseUrl("http://localhost:8081")
+                .username("admin")
+                .password("admin")
+                .targetPath("metrics")
+                .applicationId("my-app")
+                .applicationName("My Application")
+                .stepInterval(Duration.ofSeconds(10))
+                .build();
+
+        // Create and start the forwarder
+        MicrometerForwarder forwarder = MicrometerForwarder.createAndStart(config);
+
+        // Get the registry and record metrics
         MeterRegistry registry = forwarder.getRegistry();
 
-        // Or just get the registry directly
-        // MeterRegistry registry = MetricsRegistryFactory.create();
+        Counter requestCounter = registry.counter("http.requests", "method", "GET", "path", "/api/users");
+        requestCounter.increment();
 
-        // Use the registry...
+        // Cleanup on shutdown
+        Runtime.getRuntime().addShutdownHook(new Thread(forwarder::close));
     }
 }
 ```
@@ -139,7 +137,6 @@ counter.increment(5);
 AtomicInteger activeConnections = new AtomicInteger(0);
 registry.gauge("db.connections.active", activeConnections);
 
-// Update the value
 activeConnections.set(10);
 ```
 
@@ -153,7 +150,6 @@ timer.record(Duration.ofMillis(250));
 
 // Or wrap a callable
 String result = timer.record(() -> {
-    // Your code here
     return processRequest();
 });
 
@@ -264,94 +260,6 @@ public class MetricsConfig {
 }
 ```
 
-## Complete Example: Web Application Metrics
-
-```java
-import io.dazzleduck.sql.micrometer.MicrometerForwarder;
-import io.dazzleduck.sql.micrometer.config.MicrometerForwarderConfig;
-import io.micrometer.core.instrument.*;
-
-import java.time.Duration;
-import java.util.concurrent.atomic.AtomicInteger;
-
-public class WebAppMetricsExample {
-
-    private final MeterRegistry registry;
-    private final Counter requestCounter;
-    private final Timer requestTimer;
-    private final AtomicInteger activeRequests = new AtomicInteger(0);
-
-    public WebAppMetricsExample() {
-        // Configure and start the forwarder
-        MicrometerForwarderConfig config = MicrometerForwarderConfig.builder()
-                .baseUrl("http://localhost:8081")
-                .username("admin")
-                .password("admin")
-                .targetPath("metrics")
-                .applicationId("webapp-001")
-                .applicationName("Web Application")
-                .stepInterval(Duration.ofSeconds(10))
-                .retryCount(5)
-                .build();
-
-        MicrometerForwarder forwarder = MicrometerForwarder.createAndStart(config);
-        this.registry = forwarder.getRegistry();
-
-        // Register common tags
-        registry.config().commonTags(
-                "service", "web-api",
-                "version", "1.0.0"
-        );
-
-        // Initialize metrics
-        this.requestCounter = registry.counter("http.requests.total");
-        this.requestTimer = registry.timer("http.request.duration");
-
-        // Gauge for active requests
-        registry.gauge("http.requests.active", activeRequests);
-
-        // Register shutdown hook
-        Runtime.getRuntime().addShutdownHook(new Thread(forwarder::close));
-    }
-
-    public String handleRequest(String path) {
-        activeRequests.incrementAndGet();
-        Timer.Sample sample = Timer.start(registry);
-
-        try {
-            // Simulate request processing
-            Thread.sleep(100);
-
-            // Count request by path
-            registry.counter("http.requests", "path", path, "status", "200").increment();
-
-            return "OK";
-        } catch (Exception e) {
-            registry.counter("http.requests", "path", path, "status", "500").increment();
-            throw new RuntimeException(e);
-        } finally {
-            activeRequests.decrementAndGet();
-            sample.stop(requestTimer);
-            requestCounter.increment();
-        }
-    }
-
-    public static void main(String[] args) throws InterruptedException {
-        WebAppMetricsExample app = new WebAppMetricsExample();
-
-        // Simulate some requests
-        for (int i = 0; i < 100; i++) {
-            app.handleRequest("/api/users");
-            app.handleRequest("/api/orders");
-            Thread.sleep(50);
-        }
-
-        // Wait for metrics to be published
-        Thread.sleep(15000);
-    }
-}
-```
-
 ## Lifecycle Management
 
 ```java
@@ -367,21 +275,19 @@ forwarder.close();
 
 ## Disabling Metrics
 
-You can disable metric forwarding without changing code:
+Via code:
 
 ```java
 MicrometerForwarderConfig config = MicrometerForwarderConfig.builder()
-        // ... other config ...
         .enabled(false)
         .build();
 ```
 
-Or via configuration file:
+Or via `application.conf`:
 
 ```hocon
 dazzleduck_micrometer {
   enabled = false
-  // ... rest of config ...
 }
 ```
 
@@ -391,8 +297,8 @@ dazzleduck_micrometer {
 
 1. Check that the server URL is correct and accessible
 2. Verify authentication credentials
-3. Check the application logs for connection errors
-4. Ensure `enabled = true` in configuration
+3. Ensure `enabled = true` in `application.conf`
+4. Verify the forwarder is started before recording metrics
 
 ### High memory usage
 
@@ -408,8 +314,8 @@ Reduce buffer sizes:
 Adjust timing parameters:
 
 ```java
-.stepInterval(Duration.ofSeconds(30))      // Less frequent publishing
-.maxSendInterval(Duration.ofSeconds(5))    // Longer batching window
+.stepInterval(Duration.ofSeconds(30))
+.maxSendInterval(Duration.ofSeconds(5))
 ```
 
 ## License
