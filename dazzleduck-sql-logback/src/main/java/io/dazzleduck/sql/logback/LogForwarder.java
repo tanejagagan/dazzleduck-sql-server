@@ -36,7 +36,7 @@ public final class LogForwarder implements Closeable {
      * @param config Configuration for the forwarder
      */
     public LogForwarder(LogForwarderConfig config) {
-        this(config, new LogBuffer(config.getMaxBufferSize()));
+        this(config, new LogBuffer(config.maxBufferSize()));
     }
 
     /**
@@ -53,37 +53,37 @@ public final class LogForwarder implements Closeable {
 
         // Configure the LogForwardingAppender to use our buffer
         LogForwardingAppender.configure(
-                config.getApplicationId(),
-                config.getApplicationName(),
-                config.getApplicationHost(),
-                config.getMaxBufferSize(),
-                config.isEnabled()
+                config.applicationId(),
+                config.applicationName(),
+                config.applicationHost(),
+                config.maxBufferSize(),
+                config.enabled()
         );
 
         // Create transformations for application metadata
-        java.util.List<String> transformations = new java.util.ArrayList<>(config.getTransformations());
-        transformations.add(String.format("'%s' AS application_id", config.getApplicationId()));
-        transformations.add(String.format("'%s' AS application_name", config.getApplicationName()));
-        transformations.add(String.format("'%s' AS application_host", config.getApplicationHost()));
-        transformations.addAll(config.getTransformations());
+        java.util.List<String> transformations = new java.util.ArrayList<>(config.transformations());
+        transformations.add(String.format("'%s' AS application_id", config.applicationId()));
+        transformations.add(String.format("'%s' AS application_name", config.applicationName()));
+        transformations.add(String.format("'%s' AS application_host", config.applicationHost()));
+        transformations.addAll(config.transformations());
 
         // Create HttpProducer
         this.httpProducer = new HttpProducer(
                 converter.getSchema(),
-                config.getBaseUrl(),
-                config.getUsername(),
-                config.getPassword(),
-                config.getTargetPath(),
-                config.getHttpClientTimeout(),
-                config.getMinBatchSize(),
-                config.getMaxBatchSize(),
-                config.getMaxSendInterval(),
-                config.getRetryCount(),
-                config.getRetryIntervalMillis(),
+                config.baseUrl(),
+                config.username(),
+                config.password(),
+                config.targetPath(),
+                config.httpClientTimeout(),
+                config.minBatchSize(),
+                config.maxBatchSize(),
+                config.maxSendInterval(),
+                config.retryCount(),
+                config.retryIntervalMillis(),
                 transformations,
-                config.getPartitionBy(),
-                config.getMaxInMemorySize(),
-                config.getMaxOnDiskSize()
+                config.partitionBy(),
+                config.maxInMemorySize(),
+                config.maxOnDiskSize()
         );
 
         this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -93,7 +93,7 @@ public final class LogForwarder implements Closeable {
         });
 
         logger.info("LogForwarder initialized with baseUrl={}, targetPath={}, pollInterval={}",
-                config.getBaseUrl(), config.getTargetPath(), config.getPollInterval());
+                config.baseUrl(), config.targetPath(), config.pollInterval());
     }
 
     /**
@@ -110,7 +110,7 @@ public final class LogForwarder implements Closeable {
      * Logs will be polled from the buffer at the configured interval.
      */
     public void start() {
-        if (!config.isEnabled()) {
+        if (!config.enabled()) {
             logger.info("LogForwarder is disabled, not starting");
             return;
         }
@@ -120,7 +120,7 @@ public final class LogForwarder implements Closeable {
         }
 
         if (running.compareAndSet(false, true)) {
-            long pollIntervalMs = config.getPollInterval().toMillis();
+            long pollIntervalMs = config.pollInterval().toMillis();
             scheduler.scheduleAtFixedRate(
                     this::forwardLogs,
                     pollIntervalMs,
