@@ -69,7 +69,7 @@ public class MetricsForwarder {
         // Create HttpProducer with configuration from properties
         this.producer = new HttpProducer(
             arrowSchema,
-            properties.getServerUrl(),
+            properties.getBaseUrl(),
             properties.getUsername(),
             properties.getPassword(),
             properties.getPath(),
