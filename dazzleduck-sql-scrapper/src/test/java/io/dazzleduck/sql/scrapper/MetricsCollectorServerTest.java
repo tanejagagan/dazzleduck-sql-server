@@ -1,0 +1,433 @@
+package io.dazzleduck.sql.scrapper;
+
+import com.typesafe.config.Config;
+import com.typesafe.config.ConfigFactory;
+import io.dazzleduck.sql.scrapper.config.CollectorConfig;
+import okhttp3.mockwebserver.MockResponse;
+import okhttp3.mockwebserver.MockWebServer;
+import org.junit.jupiter.api.*;
+
+import java.io.File;
+import java.io.FileWriter;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+/**
+ * Tests for MetricsCollectorServer - standalone server with HOCON config.
+ *
+ * Note: HttpProducer handles actual HTTP sending asynchronously with authentication,
+ * so these tests focus on server lifecycle and scraping behavior.
+ */
+class MetricsCollectorServerTest {
+
+    private MockWebServer targetServer;
+    private File tempConfigFile;
+    private ExecutorService executor;
+
+    @BeforeEach
+    void setUp() throws Exception {
+        targetServer = new MockWebServer();
+        targetServer.start();
+
+        executor = Executors.newSingleThreadExecutor();
+
+        ConfigFactory.invalidateCaches();
+        CollectedMetric.resetSequence();
+    }
+
+    @AfterEach
+    void tearDown() throws Exception {
+        if (executor != null) {
+            executor.shutdownNow();
+            executor.awaitTermination(5, TimeUnit.SECONDS);
+        }
+        targetServer.shutdown();
+        if (tempConfigFile != null && tempConfigFile.exists()) {
+            tempConfigFile.delete();
+        }
+        ConfigFactory.invalidateCaches();
+    }
+
+    @Test
+    @DisplayName("Should create server with default config")
+    void createWithDefaultConfig() {
+        MetricsCollectorServer server = new MetricsCollectorServer();
+        assertNotNull(server.getConfig());
+    }
+
+    @Test
+    @DisplayName("Should create server with external config")
+    void createWithExternalConfig() throws Exception {
+        String hoconContent = String.format("""
+            collector {
+                enabled = true
+                targets = ["%s"]
+                server-url = "http://localhost:8081"
+                scrape-interval-ms = 100
+                tailing {
+                    flush-threshold = 1
+                    flush-interval-ms = 100
+                }
+                auth {
+                    username = "test"
+                    password = "test"
+                }
+                producer {
+                    min-batch-size = 1024
+                    max-batch-size = 16777216
+                    max-in-memory-size = 10485760
+                    max-on-disk-size = 1073741824
+                }
+            }
+            """,
+            targetServer.url("/prometheus").toString()
+        );
+
+        tempConfigFile = createTempConfigFile(hoconContent);
+        MetricsCollectorServer server = new MetricsCollectorServer(tempConfigFile.getAbsolutePath());
+
+        assertNotNull(server.getConfig());
+        assertTrue(server.getConfig().isEnabled());
+    }
+
+    @Test
+    @DisplayName("Should create server with CollectorConfig")
+    void createWithCollectorConfig() {
+        String hoconString = String.format("""
+            collector {
+                enabled = true
+                targets = ["%s"]
+                server-url = "http://localhost:8081"
+                auth {
+                    username = "test"
+                    password = "test"
+                }
+                producer {
+                    min-batch-size = 1024
+                    max-batch-size = 16777216
+                    max-in-memory-size = 10485760
+                    max-on-disk-size = 1073741824
+                }
+            }
+            """,
+            targetServer.url("/prometheus").toString()
+        );
+
+        Config config = ConfigFactory.parseString(hoconString);
+        CollectorConfig collectorConfig = new CollectorConfig(config);
+        MetricsCollectorServer server = new MetricsCollectorServer(collectorConfig);
+
+        assertNotNull(server.getConfig());
+        assertTrue(server.getConfig().isEnabled());
+    }
+
+    @Test
+    @DisplayName("Should not start when disabled")
+    void shouldNotStartWhenDisabled() throws Exception {
+        String hoconContent = """
+            collector {
+                enabled = false
+                auth {
+                    username = "test"
+                    password = "test"
+                }
+                producer {
+                    min-batch-size = 1024
+                    max-batch-size = 16777216
+                    max-in-memory-size = 10485760
+                    max-on-disk-size = 1073741824
+                }
+            }
+            """;
+
+        tempConfigFile = createTempConfigFile(hoconContent);
+        MetricsCollectorServer server = new MetricsCollectorServer(tempConfigFile.getAbsolutePath());
+
+        // Start in background thread
+        executor.submit(server::start);
+
+        // Give it a moment
+        Thread.sleep(200);
+
+        assertFalse(server.isRunning());
+        server.shutdown();
+    }
+
+    @Test
+    @DisplayName("Should not start with no targets")
+    void shouldNotStartWithNoTargets() throws Exception {
+        String hoconContent = """
+            collector {
+                enabled = true
+                targets = []
+                auth {
+                    username = "test"
+                    password = "test"
+                }
+                producer {
+                    min-batch-size = 1024
+                    max-batch-size = 16777216
+                    max-in-memory-size = 10485760
+                    max-on-disk-size = 1073741824
+                }
+            }
+            """;
+
+        tempConfigFile = createTempConfigFile(hoconContent);
+        MetricsCollectorServer server = new MetricsCollectorServer(tempConfigFile.getAbsolutePath());
+
+        // Start in background thread
+        executor.submit(server::start);
+
+        // Give it a moment
+        Thread.sleep(200);
+
+        assertFalse(server.isRunning());
+        server.shutdown();
+    }
+
+    @Test
+    @DisplayName("Should start and run with valid config")
+    void shouldStartWithValidConfig() throws Exception {
+        // Queue responses for scraping
+        String prometheusData = "test_metric 123\n";
+        for (int i = 0; i < 50; i++) {
+            targetServer.enqueue(new MockResponse().setBody(prometheusData).setResponseCode(200));
+        }
+
+        String hoconContent = String.format("""
+            collector {
+                enabled = true
+                targets = ["%s"]
+                target-prefix = ""
+                server-url = "http://localhost:8081"
+                scrape-interval-ms = 100
+                tailing {
+                    flush-threshold = 1
+                    flush-interval-ms = 100
+                    max-buffer-size = 10000
+                }
+                http {
+                    connection-timeout-ms = 5000
+                    read-timeout-ms = 5000
+                    max-retries = 0
+                    retry-delay-ms = 100
+                }
+                auth {
+                    username = "test"
+                    password = "test"
+                }
+                producer {
+                    min-batch-size = 1024
+                    max-batch-size = 16777216
+                    max-in-memory-size = 10485760
+                    max-on-disk-size = 1073741824
+                }
+            }
+            """,
+            targetServer.url("/prometheus").toString()
+        );
+
+        tempConfigFile = createTempConfigFile(hoconContent);
+        MetricsCollectorServer server = new MetricsCollectorServer(tempConfigFile.getAbsolutePath());
+
+        // Start in background thread
+        executor.submit(server::start);
+
+        // Wait for startup - give more time for HttpProducer initialization
+        Thread.sleep(1000);
+
+        assertTrue(server.isRunning(), "Server should be running");
+        assertNotNull(server.getCollector(), "Collector should not be null");
+
+        // Shutdown
+        server.shutdown();
+
+        // Wait for shutdown
+        Thread.sleep(500);
+
+        assertFalse(server.isRunning());
+    }
+
+    @Test
+    @DisplayName("Should scrape metrics from target")
+    void shouldScrapeMetrics() throws Exception {
+        String prometheusData = """
+            test_gauge 1.5
+            test_counter 100
+            """;
+
+        // Queue enough responses
+        for (int i = 0; i < 20; i++) {
+            targetServer.enqueue(new MockResponse().setBody(prometheusData).setResponseCode(200));
+        }
+
+        String hoconContent = String.format("""
+            collector {
+                enabled = true
+                targets = ["%s"]
+                server-url = "http://localhost:8081"
+                scrape-interval-ms = 50
+                tailing {
+                    flush-threshold = 2
+                    flush-interval-ms = 100
+                }
+                http {
+                    max-retries = 0
+                }
+                auth {
+                    username = "test"
+                    password = "test"
+                }
+                producer {
+                    min-batch-size = 1024
+                    max-batch-size = 16777216
+                    max-in-memory-size = 10485760
+                    max-on-disk-size = 1073741824
+                }
+            }
+            """,
+            targetServer.url("/prometheus").toString()
+        );
+
+        tempConfigFile = createTempConfigFile(hoconContent);
+        MetricsCollectorServer server = new MetricsCollectorServer(tempConfigFile.getAbsolutePath());
+
+        // Start in background
+        executor.submit(server::start);
+
+        // Wait for some scrapes
+        Thread.sleep(500);
+
+        assertTrue(server.isRunning());
+
+        // Should have scraped from target
+        assertTrue(targetServer.getRequestCount() > 0, "Should have scraped at least once");
+
+        // Should have sent metrics (queued to HttpProducer)
+        assertTrue(server.getCollector().getMetricsSentCount() > 0, "Should have sent metrics");
+
+        server.shutdown();
+    }
+
+    @Test
+    @DisplayName("Should handle shutdown gracefully")
+    void shouldHandleShutdownGracefully() throws Exception {
+        String prometheusData = "shutdown_metric 42\n";
+        for (int i = 0; i < 10; i++) {
+            targetServer.enqueue(new MockResponse().setBody(prometheusData).setResponseCode(200));
+        }
+
+        String hoconContent = String.format("""
+            collector {
+                enabled = true
+                targets = ["%s"]
+                server-url = "http://localhost:8081"
+                scrape-interval-ms = 50
+                tailing {
+                    flush-threshold = 100
+                    flush-interval-ms = 10000
+                }
+                http {
+                    max-retries = 0
+                }
+                auth {
+                    username = "test"
+                    password = "test"
+                }
+                producer {
+                    min-batch-size = 1024
+                    max-batch-size = 16777216
+                    max-in-memory-size = 10485760
+                    max-on-disk-size = 1073741824
+                }
+            }
+            """,
+            targetServer.url("/prometheus").toString()
+        );
+
+        tempConfigFile = createTempConfigFile(hoconContent);
+        MetricsCollectorServer server = new MetricsCollectorServer(tempConfigFile.getAbsolutePath());
+
+        executor.submit(server::start);
+        Thread.sleep(200);
+
+        assertTrue(server.isRunning());
+
+        // Get collector before shutdown
+        MetricsCollector collector = server.getCollector();
+        assertNotNull(collector);
+
+        // Trigger shutdown
+        server.shutdown();
+        Thread.sleep(100);
+
+        assertFalse(server.isRunning());
+        assertFalse(collector.isRunning());
+    }
+
+    @Test
+    @DisplayName("Should expose collector for monitoring")
+    void shouldExposeCollectorForMonitoring() throws Exception {
+        String prometheusData = "monitor_metric 1\n";
+        for (int i = 0; i < 20; i++) {
+            targetServer.enqueue(new MockResponse().setBody(prometheusData).setResponseCode(200));
+        }
+
+        String hoconContent = String.format("""
+            collector {
+                enabled = true
+                targets = ["%s"]
+                server-url = "http://localhost:8081"
+                scrape-interval-ms = 50
+                tailing {
+                    flush-threshold = 1
+                    flush-interval-ms = 50
+                }
+                http {
+                    max-retries = 0
+                }
+                auth {
+                    username = "test"
+                    password = "test"
+                }
+                producer {
+                    min-batch-size = 1024
+                    max-batch-size = 16777216
+                    max-in-memory-size = 10485760
+                    max-on-disk-size = 1073741824
+                }
+            }
+            """,
+            targetServer.url("/prometheus").toString()
+        );
+
+        tempConfigFile = createTempConfigFile(hoconContent);
+        MetricsCollectorServer server = new MetricsCollectorServer(tempConfigFile.getAbsolutePath());
+
+        executor.submit(server::start);
+        Thread.sleep(400);
+
+        MetricsCollector collector = server.getCollector();
+        assertNotNull(collector);
+
+        // Should be able to access monitoring metrics
+        assertTrue(collector.getMetricsSentCount() >= 0);
+        assertTrue(collector.getMetricsDroppedCount() >= 0);
+        assertTrue(collector.getBufferSize() >= 0);
+
+        server.shutdown();
+    }
+
+    private File createTempConfigFile(String content) throws Exception {
+        File file = File.createTempFile("test-server-config-", ".conf");
+        file.deleteOnExit();
+        try (FileWriter writer = new FileWriter(file)) {
+            writer.write(content);
+        }
+        return file;
+    }
+}

@@ -39,6 +39,7 @@
         <module>dazzleduck-sql-logger</module>
         <module>dazzleduck-sql-login</module>
         <module>dazzleduck-sql-client</module>
+        <module>dazzleduck-sql-scrapper</module>
         <module>dazzleduck-sql-logback</module>
     </modules>
     <properties>
