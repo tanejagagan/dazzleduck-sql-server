@@ -4,13 +4,14 @@ import io.dazzleduck.sql.flight.ingestion.IngestionParameters;
 import org.apache.arrow.flight.CancelStatus;
 import org.apache.arrow.flight.FlightProducer;
 import org.apache.arrow.flight.PutResult;
-import org.apache.arrow.vector.ipc.ArrowReader;
 
-public interface SimpleBulkIngestConsumer extends FlightProducer {
+import java.io.InputStream;
+
+public interface HttpFlightAdaptor extends FlightProducer {
     Runnable acceptPutStatementBulkIngest(
             FlightProducer.CallContext context,
             IngestionParameters ingestionParameters,
-            ArrowReader inputReader,
+            InputStream inputStream,
             FlightProducer.StreamListener<PutResult> ackStream);
 
     String getProducerId();

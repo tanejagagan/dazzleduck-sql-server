@@ -4,7 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.google.protobuf.Any;
 import com.google.protobuf.ByteString;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
-import io.dazzleduck.sql.flight.server.SimpleBulkIngestConsumer;
+import io.dazzleduck.sql.flight.server.HttpFlightAdaptor;
 import io.dazzleduck.sql.flight.server.StatementHandle;
 import io.helidon.http.Status;
 import io.helidon.webserver.http.ServerRequest;
@@ -20,14 +20,13 @@ public class QueryService extends AbstractQueryBasedService {
     private final String producerId;
     private final HttpConfig httpConfig;
 
-    public QueryService(SimpleBulkIngestConsumer flightProducer, AccessMode accessMode) {
-        this(flightProducer, accessMode, HttpConfig.defaultConfig());
+    public QueryService(HttpFlightAdaptor httpFlightAdaptor) {
+        this(httpFlightAdaptor, HttpConfig.defaultConfig());
     }
 
-    public QueryService(SimpleBulkIngestConsumer flightProducer, AccessMode accessMode, HttpConfig httpConfig) {
-        super(accessMode);
-        this.flightProducer = flightProducer;
-        this.producerId = flightProducer.getProducerId();
+    public QueryService(HttpFlightAdaptor httpFlightAdaptor, HttpConfig httpConfig) {
+        this.flightProducer = httpFlightAdaptor;
+        this.producerId = httpFlightAdaptor.getProducerId();
         this.httpConfig = httpConfig;
     }
 

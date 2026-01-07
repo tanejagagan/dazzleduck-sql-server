@@ -31,6 +31,7 @@ import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.ipc.ArrowReader;
+import org.apache.arrow.vector.ipc.ArrowStreamReader;
 import org.apache.arrow.vector.ipc.WriteChannel;
 import org.apache.arrow.vector.ipc.message.MessageSerializer;
 import org.apache.arrow.vector.types.pojo.Schema;
@@ -42,6 +43,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.nio.file.Files;
@@ -66,7 +68,7 @@ import static org.duckdb.DuckDBConnection.DEFAULT_SCHEMA;
  * and available in the header. More options will be supported in the future version.
  * Future implementation note for statement we check if its SET or RESET statement and based on that use cookies to set unset the values
  */
-public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable, SimpleBulkIngestConsumer, SqlProducerMBean {
+public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable, HttpFlightAdaptor, SqlProducerMBean {
 
     public static final String TEMP_WRITE_FORMAT = "arrow";
     public static final IngestionConfig DEFAULT_INGESTION_CONFIG = new IngestionConfig(1024 * 1024,
@@ -747,18 +749,38 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             StreamListener<PutResult> ackStream) {
         IngestionParameters ingestionParameters = IngestionParameters.getIngestionParameters(command);
         FlightStreamReader reader = FlightStreamReader.of(flightStream, allocator);
-        return acceptPutStatementBulkIngest(context, ingestionParameters, reader, ackStream);
+        return () -> {
+            Path tempFile;
+            try (reader) {
+                tempFile = BulkIngestQueue.writeAndValidateTempArrowFile(tempDir, reader);
+                var batch = ingestionParameters.constructBatch(Files.size(tempFile), tempFile.toAbsolutePath().toString());
+                var ingestionQueue = ingestionQueueMap.computeIfAbsent(ingestionParameters.completePath(warehousePath), p -> {
+                    return new ParquetIngestionQueue(producerId, TEMP_WRITE_FORMAT, p, p,
+                            bulkIngestionConfig.minBucketSize(),
+                            bulkIngestionConfig.maxDelay(),
+                            postIngestionTaskFactory,
+                            Executors.newSingleThreadScheduledExecutor(),
+                            Clock.systemDefaultZone());
+                });
+                var result = ingestionQueue.add(batch);
+                result.get();
+                ackStream.onNext(PutResult.empty());
+                ackStream.onCompleted();
+            } catch (Throwable throwable) {
+                ErrorHandling.handleThrowable(ackStream, throwable);
+            }
+        };
     }
 
     @Override
     public Runnable acceptPutStatementBulkIngest(
             CallContext context,
             IngestionParameters ingestionParameters,
-            ArrowReader inputReader,
+            InputStream inputStream,
             StreamListener<PutResult> ackStream) {
         return () -> {
             Path tempFile;
-            try (inputReader) {
+            try (ArrowReader inputReader = new ArrowStreamReader(inputStream, allocator)) {
                 tempFile = BulkIngestQueue.writeAndValidateTempArrowFile(tempDir, inputReader);
                 var batch = ingestionParameters.constructBatch(Files.size(tempFile), tempFile.toAbsolutePath().toString());
                 var ingestionQueue = ingestionQueueMap.computeIfAbsent(ingestionParameters.completePath(warehousePath), p -> {

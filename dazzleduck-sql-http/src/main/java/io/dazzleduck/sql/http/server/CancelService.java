@@ -1,7 +1,7 @@
 package io.dazzleduck.sql.http.server;
 
 import io.dazzleduck.sql.commons.authorization.AccessMode;
-import io.dazzleduck.sql.flight.server.SimpleBulkIngestConsumer;
+import io.dazzleduck.sql.flight.server.HttpFlightAdaptor;
 import io.helidon.webserver.http.ServerRequest;
 import io.helidon.webserver.http.ServerResponse;
 import org.apache.arrow.flight.CancelStatus;
@@ -13,11 +13,10 @@ import java.util.Map;
 
 public class CancelService extends AbstractQueryBasedService {
     private static final Logger log = LoggerFactory.getLogger(CancelService.class);
-    private final SimpleBulkIngestConsumer flightProducer;
+    private final HttpFlightAdaptor httpFlightAdaptor;
 
-    public CancelService(SimpleBulkIngestConsumer flightProducer, AccessMode accessMode) {
-        super(accessMode);
-        this.flightProducer = flightProducer;
+    public CancelService(HttpFlightAdaptor httpFlightAdaptor) {
+        this.httpFlightAdaptor = httpFlightAdaptor;
     }
 
     @Override
@@ -31,7 +30,7 @@ public class CancelService extends AbstractQueryBasedService {
 
         Long queryId = requestObject.id();
         try {
-            flightProducer.cancel(queryId, new FlightProducer.StreamListener<CancelStatus>() {
+            httpFlightAdaptor.cancel(queryId, new FlightProducer.StreamListener<CancelStatus>() {
                 @Override
                 public void onNext(CancelStatus val) {
                     log.info("cancel update for id {}: {}", queryId, val);

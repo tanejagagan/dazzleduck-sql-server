@@ -1,0 +1,208 @@
+package io.dazzleduck.sql.runtime;
+
+import com.typesafe.config.Config;
+import io.dazzleduck.sql.common.ConfigBasedProvider;
+import io.dazzleduck.sql.common.ConfigBasedStartupScriptProvider;
+import io.dazzleduck.sql.common.StartupScriptProvider;
+import io.dazzleduck.sql.common.util.ConfigUtils;
+import io.dazzleduck.sql.commons.ConnectionPool;
+import io.dazzleduck.sql.flight.server.DuckDBFlightSqlProducer;
+import io.dazzleduck.sql.flight.server.FlightSqlProducerFactory;
+import org.apache.arrow.memory.BufferAllocator;
+import org.apache.arrow.memory.RootAllocator;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.Closeable;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.List;
+
+public class Runtime implements Closeable {
+    private static final Logger logger = LoggerFactory.getLogger(Runtime.class);
+
+    private final Config config;
+    private final BufferAllocator allocator;
+    private final DuckDBFlightSqlProducer producer;
+    private final boolean httpStarted;
+    private final boolean flightSqlStarted;
+
+    private Runtime(Config config, BufferAllocator allocator, DuckDBFlightSqlProducer producer,
+                    boolean httpStarted, boolean flightSqlStarted) {
+        this.config = config;
+        this.allocator = allocator;
+        this.producer = producer;
+        this.httpStarted = httpStarted;
+        this.flightSqlStarted = flightSqlStarted;
+    }
+
+    public static Runtime start(Config config) throws Exception {
+        String warehousePath = ConfigUtils.getWarehousePath(config);
+        validateWarehousePath(warehousePath);
+
+        List<String> networkingModes = config.getStringList("networking_modes");
+        validateNetworkingModes(networkingModes);
+
+        logger.info("Starting DazzleDuck Runtime with configuration:");
+        logger.info("  Warehouse path: {}", warehousePath);
+        logger.info("  Networking modes: {}", networkingModes);
+
+        executeStartupScript(config);
+
+        BufferAllocator allocator = null;
+        DuckDBFlightSqlProducer producer = null;
+        boolean httpStarted = false;
+        boolean flightSqlStarted = false;
+
+        try {
+            if (networkingModes.contains("http") || networkingModes.contains("flight-sql")) {
+                allocator = new RootAllocator();
+                producer = FlightSqlProducerFactory.builder(config)
+                        .withAllocator(allocator)
+                        .build();
+                logger.info("Created shared FlightSqlProducer for networking services");
+            }
+
+            if (networkingModes.contains("http")) {
+                logger.info("Starting HTTP server...");
+                io.dazzleduck.sql.http.server.Main.start(config, producer, allocator);
+                httpStarted = true;
+                logger.info("HTTP server started successfully");
+            }
+
+            if (networkingModes.contains("flight-sql")) {
+                logger.info("Starting Flight SQL server...");
+                io.dazzleduck.sql.flight.server.Main.start(config, producer, allocator);
+                flightSqlStarted = true;
+                logger.info("Flight SQL server started successfully");
+            }
+
+            logger.info("DazzleDuck Runtime startup complete");
+            logger.info("  HTTP server: {}", httpStarted ? "RUNNING" : "NOT STARTED");
+            logger.info("  Flight SQL server: {}", flightSqlStarted ? "RUNNING" : "NOT STARTED");
+
+            return new Runtime(config, allocator, producer, httpStarted, flightSqlStarted);
+
+        } catch (Exception e) {
+            closeQuietly(producer, "producer");
+            closeQuietly(allocator, "allocator");
+            throw e;
+        }
+    }
+
+    private static void executeStartupScript(Config config) throws Exception {
+        StartupScriptProvider startupScriptProvider = ConfigBasedProvider.load(config,
+                StartupScriptProvider.STARTUP_SCRIPT_CONFIG_PREFIX,
+                new ConfigBasedStartupScriptProvider());
+        if (startupScriptProvider.getStartupScript() != null) {
+            logger.info("Executing startup script");
+            ConnectionPool.execute(startupScriptProvider.getStartupScript());
+        }
+    }
+
+    @Override
+    public void close() {
+        logger.info("Shutting down DazzleDuck Runtime...");
+
+        closeQuietly(producer, "producer");
+        closeQuietly(allocator, "allocator");
+
+        logger.info("DazzleDuck Runtime shutdown complete");
+    }
+
+    private static void closeQuietly(AutoCloseable closeable, String name) {
+        if (closeable != null) {
+            try {
+                closeable.close();
+                logger.info("{} closed", name);
+            } catch (Exception e) {
+                logger.error("Error closing {}", name, e);
+            }
+        }
+    }
+
+    public boolean isHttpStarted() {
+        return httpStarted;
+    }
+
+    public boolean isFlightSqlStarted() {
+        return flightSqlStarted;
+    }
+
+    public DuckDBFlightSqlProducer getProducer() {
+        return producer;
+    }
+
+    private static void validateWarehousePath(String warehousePath) {
+        if (warehousePath == null || warehousePath.isEmpty()) {
+            throw new IllegalStateException("Warehouse path cannot be null or empty");
+        }
+
+        if (warehousePath.startsWith("s3://") || warehousePath.startsWith("s3a://")) {
+            validateS3Path(warehousePath);
+        } else {
+            validateLocalPath(warehousePath);
+        }
+    }
+
+    private static void validateS3Path(String s3Path) {
+        String path = s3Path.replaceFirst("^s3a?://", "");
+        if (path.isEmpty()) {
+            throw new IllegalStateException("S3 path must include bucket name: " + s3Path);
+        }
+
+        String[] parts = path.split("/", 2);
+        String bucketName = parts[0];
+
+        if (bucketName.isEmpty()) {
+            throw new IllegalStateException("S3 bucket name cannot be empty: " + s3Path);
+        }
+
+        if (bucketName.length() < 3 || bucketName.length() > 63) {
+            throw new IllegalStateException("S3 bucket name must be between 3 and 63 characters: " + bucketName);
+        }
+
+        if (!bucketName.matches("^[a-z0-9][a-z0-9.-]*[a-z0-9]$")) {
+            throw new IllegalStateException("Invalid S3 bucket name format: " + bucketName +
+                    " (must contain only lowercase letters, numbers, dots, and hyphens)");
+        }
+
+        logger.info("Using S3 warehouse path: {}", s3Path);
+        logger.warn("S3 path validation is basic - bucket accessibility will be verified at runtime");
+    }
+
+    private static void validateLocalPath(String warehousePath) {
+        Path path = Paths.get(warehousePath);
+        if (!Files.exists(path)) {
+            try {
+                Files.createDirectories(path);
+                logger.info("Created warehouse directory: {}", warehousePath);
+            } catch (IOException e) {
+                throw new IllegalStateException("Warehouse path does not exist and could not be created: " + warehousePath, e);
+            }
+        }
+        if (!Files.isDirectory(path)) {
+            throw new IllegalStateException("Warehouse path is not a directory: " + warehousePath);
+        }
+        if (!Files.isWritable(path)) {
+            throw new IllegalStateException("Warehouse path is not writable: " + warehousePath);
+        }
+        logger.info("Using local filesystem warehouse path: {}", warehousePath);
+    }
+
+    private static void validateNetworkingModes(List<String> networkingModes) {
+        if (networkingModes == null || networkingModes.isEmpty()) {
+            throw new IllegalStateException("At least one networking mode must be configured. Valid options: 'http', 'flight-sql'");
+        }
+
+        for (String mode : networkingModes) {
+            if (!mode.equals("http") && !mode.equals("flight-sql")) {
+                throw new IllegalStateException("Invalid networking mode: '" + mode + "'. Valid options: 'http', 'flight-sql'");
+            }
+        }
+
+        logger.info("Validated networking modes: {}", networkingModes);
+    }
+}
