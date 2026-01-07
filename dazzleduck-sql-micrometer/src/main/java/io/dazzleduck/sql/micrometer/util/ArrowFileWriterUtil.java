@@ -81,7 +81,7 @@ public final class ArrowFileWriterUtil {
             AtomicLong sequenceCounter = new AtomicLong(0);
             List<JavaRow> rows = new ArrayList<>(sortedMeters.size());
             for (Meter meter : sortedMeters) {
-                rows.add(toRow(sequenceCounter.incrementAndGet(), meter, applicationId, applicationName, host));
+                rows.add(toRow(sequenceCounter.incrementAndGet(), meter));
             }
 
             vectorWriter.writeToVector(rows.toArray(JavaRow[]::new), root);
@@ -93,7 +93,7 @@ public final class ArrowFileWriterUtil {
     /**
      * Converts a single Micrometer Meter to a JavaRow (Arrow record).
      */
-    private static JavaRow toRow(long sNo, Meter meter, String applicationId, String applicationName, String host) {
+    private static JavaRow toRow(long sNo, Meter meter) {
         Meter.Id id = meter.getId();
         Map<String, String> tagsMap = new LinkedHashMap<>();
         for (Tag t : id.getTags()) {
@@ -156,9 +156,6 @@ public final class ArrowFileWriterUtil {
                 sNo,
                 id.getName(),
                 id.getType().name().toLowerCase(),
-                applicationId,
-                applicationName,
-                host,
                 tagsMap,
                 !Double.isNaN(value) ? value : 0,
                 !Double.isNaN(min) ? min : 0,
@@ -177,9 +174,6 @@ public final class ArrowFileWriterUtil {
         fields.add(new Field("s_no", FieldType.notNullable(new ArrowType.Int(64, true)), null));
         fields.add(new Field("name", FieldType.notNullable(new ArrowType.Utf8()), null));
         fields.add(new Field("type", FieldType.notNullable(new ArrowType.Utf8()), null));
-        fields.add(new Field("application_id", FieldType.nullable(new ArrowType.Utf8()), null));
-        fields.add(new Field("application_name", FieldType.nullable(new ArrowType.Utf8()), null));
-        fields.add(new Field("application_host", FieldType.nullable(new ArrowType.Utf8()), null));
         // tags: Map<String, String>
         Field keyField = new Field("key", FieldType.notNullable(new ArrowType.Utf8()), null);
         Field valField = new Field("value", FieldType.nullable(new ArrowType.Utf8()), null);
