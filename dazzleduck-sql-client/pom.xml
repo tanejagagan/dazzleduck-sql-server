@@ -10,6 +10,7 @@
     </parent>
 
     <artifactId>dazzleduck-sql-client</artifactId>
+    <name>DazzleDuck Project Client</name>
 
     <properties>
         <maven.compiler.source>21</maven.compiler.source>
