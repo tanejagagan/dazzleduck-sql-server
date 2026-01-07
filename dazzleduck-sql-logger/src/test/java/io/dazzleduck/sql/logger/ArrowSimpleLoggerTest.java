@@ -97,7 +97,7 @@ class ArrowSimpleLoggerTest {
             super(
                     2048,
                     1024 * 1024,
-                    Duration.ofSeconds(1),
+                    Duration.ofMillis(200),
 
                     new Schema(java.util.List.of(
                             new Field(
@@ -141,7 +141,7 @@ class ArrowSimpleLoggerTest {
         }
 
         boolean awaitRows(int expected) throws InterruptedException {
-            latch.await(2, TimeUnit.SECONDS);
+            latch.await(400, TimeUnit.MILLISECONDS);
             return rowsReceived.get() >= expected;
         }
     }

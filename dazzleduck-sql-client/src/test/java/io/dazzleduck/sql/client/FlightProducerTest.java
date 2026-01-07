@@ -408,7 +408,7 @@ class FlightProducerTest {
     private final CountDownLatch sendDone;
 
         OnDemandProducer(long maxInMemorySize, long maxOnDiskSize, Clock clock, CountDownLatch blockLatch, CountDownLatch sendDone) {
-            super(1024 * 1024, 2048 * 1024, Duration.ofSeconds(1),  new Schema(java.util.List.of(new Field("ts", FieldType.nullable(new ArrowType.Utf8()), null))), clock, 3, 1000, java.util.List.of(), java.util.List.of());
+            super(1024 * 1024, 2048 * 1024, Duration.ofMillis(200),  new Schema(java.util.List.of(new Field("ts", FieldType.nullable(new ArrowType.Utf8()), null))), clock, 3, 1000, java.util.List.of(), java.util.List.of());
             this.maxInMemorySize = maxInMemorySize;
             this.maxOnDiskSize = maxOnDiskSize;
             this.latch = blockLatch;

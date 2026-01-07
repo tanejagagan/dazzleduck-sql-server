@@ -19,15 +19,6 @@ public abstract class AbstractQueryBasedService implements HttpService, Controll
 
     protected static final ObjectMapper MAPPER = new ObjectMapper();
 
-    protected final SqlAuthorizer sqlAuthorizer;
-
-    public AbstractQueryBasedService(AccessMode accessMode) {
-        if(AccessMode.RESTRICTED == accessMode) {
-            this.sqlAuthorizer = SqlAuthorizer.JWT_AUTHORIZER;
-        } else {
-            this.sqlAuthorizer = SqlAuthorizer.NOOP_AUTHORIZER;
-        }
-    }
     protected static final Logger logger = LoggerFactory.getLogger(AbstractQueryBasedService.class);
 
     protected void handle(ServerRequest request,

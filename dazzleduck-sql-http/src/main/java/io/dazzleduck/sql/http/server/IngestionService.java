@@ -1,11 +1,9 @@
 package io.dazzleduck.sql.http.server;
 
-import com.google.protobuf.ByteString;
 import io.dazzleduck.sql.flight.ingestion.IngestionParameters;
-import io.dazzleduck.sql.flight.server.SimpleBulkIngestConsumer;
+import io.dazzleduck.sql.flight.server.HttpFlightAdaptor;
 import io.helidon.common.uri.UriQuery;
 import io.helidon.http.HeaderNames;
-import io.helidon.http.HeaderValues;
 import io.helidon.http.Status;
 import io.helidon.webserver.http.HttpRules;
 import io.helidon.webserver.http.HttpService;
@@ -13,35 +11,20 @@ import io.helidon.webserver.http.ServerRequest;
 import io.helidon.webserver.http.ServerResponse;
 import org.apache.arrow.flight.FlightClient;
 import org.apache.arrow.flight.PutResult;
-import org.apache.arrow.flight.impl.Flight;
-import org.apache.arrow.memory.BufferAllocator;
-import org.apache.arrow.vector.ipc.ArrowReader;
-import org.apache.arrow.vector.ipc.ArrowStreamReader;
 
-import java.io.IOException;
 import java.io.InputStream;
 import java.net.URLDecoder;
-import java.nio.channels.Channels;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.Map;
-import java.util.concurrent.ExecutionException;
 
 import static io.dazzleduck.sql.common.Headers.*;
 
 public class IngestionService implements HttpService, ParameterUtils, ControllerService {
 
-    private final String warehousePath;
+    private final HttpFlightAdaptor httpFlightAdaptor;
 
-    private final SimpleBulkIngestConsumer bulkIngestConsumer;
-
-    private final BufferAllocator bufferAllocator;
-
-    public IngestionService(SimpleBulkIngestConsumer bulkIngestConsumer,
-                            String warehousePath, BufferAllocator allocator)  {
-        this.warehousePath = warehousePath;
-        this.bulkIngestConsumer = bulkIngestConsumer;
-        this.bufferAllocator = allocator;
+    public IngestionService(HttpFlightAdaptor httpFlightAdaptor)  {
+        this.httpFlightAdaptor = httpFlightAdaptor;
     }
 
     @Override
@@ -71,7 +54,7 @@ public class IngestionService implements HttpService, ParameterUtils, Controller
             throw new IllegalArgumentException("Invalid path: path traversal not allowed");
         }
 
-        final String completePath = warehousePath + "/" + path;
+
         String format = ParameterUtils.getParameterValue(HEADER_DATA_FORMAT, serverRequest, "parquet", String.class);
         var partitionString = urlDecode(
                 ParameterUtils.getParameterValue(HEADER_DATA_PARTITION, serverRequest, null, String.class));
@@ -81,7 +64,7 @@ public class IngestionService implements HttpService, ParameterUtils, Controller
         var producerBatchId = ParameterUtils.getParameterValue(HEADER_PRODUCER_BATCH_ID, serverRequest, -1L, Long.class);
         var sortOrderString = urlDecode(
                 ParameterUtils.getParameterValue(HEADER_SORT_ORDER, serverRequest, null, String.class));
-        return new IngestionParameters(completePath, format, getArray(partitionString),
+        return new IngestionParameters(path, format, getArray(partitionString),
                 getArray(tranformationString), getArray(sortOrderString), producerId, producerBatchId, Map.of());
     }
 
@@ -103,20 +86,16 @@ public class IngestionService implements HttpService, ParameterUtils, Controller
             return;
         }
 
-        ArrowStreamReader reader = null;
         try {
             var context = ControllerService.createContext(serverRequest);
             var ingestionParameters = parseIngestionParameters(serverRequest);
-
-            // Create reader with proper resource management
-            reader = createStream(serverRequest.content().inputStream());
-            final ArrowStreamReader finalReader = reader;
+            InputStream inputStream = serverRequest.content().inputStream();
 
             // Track if response has been sent to prevent double-send
             final boolean[] responseSent = {false};
 
-            var runnable = bulkIngestConsumer.acceptPutStatementBulkIngest(context, ingestionParameters,
-                    finalReader, new FlightClient.PutListener() {
+            var runnable = httpFlightAdaptor.acceptPutStatementBulkIngest(context, ingestionParameters,
+                    inputStream, new FlightClient.PutListener() {
 
                         @Override
                         public void getResult() {
@@ -159,21 +138,6 @@ public class IngestionService implements HttpService, ParameterUtils, Controller
             String errorMsg = e.getMessage() != null ? e.getMessage() : "Internal server error";
             serverResponse.status(Status.INTERNAL_SERVER_ERROR_500);
             serverResponse.send(errorMsg);
-        } finally {
-            // Ensure ArrowStreamReader is closed
-            if (reader != null) {
-                try {
-                    reader.close();
-                } catch (IOException e) {
-                    // Log but don't propagate close errors
-                    System.err.println("Error closing ArrowStreamReader: " + e.getMessage());
-                }
-            }
         }
-    }
-
-    private ArrowStreamReader createStream(InputStream inputStream){
-        var readableByteChannel = Channels.newChannel(inputStream);
-        return new ArrowStreamReader(readableByteChannel, bufferAllocator);
     }
 }

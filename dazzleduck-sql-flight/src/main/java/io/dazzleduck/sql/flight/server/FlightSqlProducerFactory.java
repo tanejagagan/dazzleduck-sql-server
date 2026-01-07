@@ -90,6 +90,9 @@ public final class FlightSqlProducerFactory {
 
     /**
      * Builder class for creating DuckDBFlightSqlProducer instances with custom configuration.
+     *
+     * <p>All configuration values are read eagerly from the config in the constructor.
+     * The with* methods can be used to override specific values after construction.
      */
     public static class ProducerBuilder {
         private final Config config;
@@ -109,7 +112,115 @@ public final class FlightSqlProducerFactory {
 
         private ProducerBuilder(Config config) {
             this.config = config;
+            readConfigValues();
         }
+
+        /**
+         * Reads all configuration values and sets them as defaults.
+         * Called during construction to eagerly load config.
+         */
+        private void readConfigValues() {
+            // Location
+            this.location = readLocationFromConfig();
+
+            // Core settings
+            this.warehousePath = ConfigUtils.getWarehousePath(config);
+            this.secretKey = config.getString(ConfigUtils.SECRET_KEY_KEY);
+            this.producerId = config.hasPath("producerId")
+                ? config.getString("producerId")
+                : UUID.randomUUID().toString();
+
+            // Access mode
+            this.accessMode = DuckDBFlightSqlProducer.getAccessMode(config);
+
+            // Temp write directory
+            try {
+                this.tempWriteDir = DuckDBFlightSqlProducer.getTempWriteDir(config);
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to create temp write directory", e);
+            }
+
+            // Query timeout
+            this.queryTimeout = config.hasPath("query_timeout_minutes")
+                ? Duration.ofMinutes(config.getLong("query_timeout_minutes"))
+                : Duration.ofMinutes(2);
+
+            // Ingestion config
+            this.ingestionConfig = loadIngestionConfig(config);
+
+            // Load providers (query optimizer, post-ingestion factory)
+            try {
+                this.queryOptimizer = loadQueryOptimizer(config);
+                this.postIngestionTaskFactory = loadPostIngestionTaskFactory(config);
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to load providers from config", e);
+            }
+
+            // Defaults for non-config values
+            this.allocator = null; // Will use RootAllocator if not set
+            this.scheduledExecutorService = null; // Will create new one if not set
+            this.clock = Clock.systemDefaultZone();
+        }
+
+        // ==================== Getters for inspecting loaded config ====================
+
+        /**
+         * @return the configured location
+         */
+        public Location getLocation() {
+            return location;
+        }
+
+        /**
+         * @return the configured producer ID
+         */
+        public String getProducerId() {
+            return producerId;
+        }
+
+        /**
+         * @return the configured warehouse path
+         */
+        public String getWarehousePath() {
+            return warehousePath;
+        }
+
+        /**
+         * @return the configured access mode
+         */
+        public AccessMode getAccessMode() {
+            return accessMode;
+        }
+
+        /**
+         * @return the configured query timeout
+         */
+        public Duration getQueryTimeout() {
+            return queryTimeout;
+        }
+
+        /**
+         * @return the configured ingestion config
+         */
+        public IngestionConfig getIngestionConfig() {
+            return ingestionConfig;
+        }
+
+        /**
+         * @return the configured query optimizer
+         */
+        public QueryOptimizer getQueryOptimizer() {
+            return queryOptimizer;
+        }
+
+        /**
+         * @return the configured post-ingestion task factory
+         */
+        public PostIngestionTaskFactory getPostIngestionTaskFactory() {
+            return postIngestionTaskFactory;
+        }
+
+        // ==================== Setters for overriding config ====================
 
         /**
          * Sets a custom location for the Flight server.
@@ -257,103 +368,55 @@ public final class FlightSqlProducerFactory {
         /**
          * Builds the DuckDBFlightSqlProducer instance.
          *
+         * <p>All configuration values have been read during builder construction.
+         * Any values set via with* methods will override the config defaults.
+         *
          * @return a fully configured DuckDBFlightSqlProducer
-         * @throws IOException if temporary write directory creation fails
-         * @throws IllegalArgumentException if required configuration is missing
-         * @throws Exception if provider loading fails
          */
-        public DuckDBFlightSqlProducer build() throws Exception {
-            // Use provided or read from configuration
-            Location finalLocation = location != null
-                ? location
-                : readLocationFromConfig();
-
-            String finalWarehousePath = warehousePath != null
-                ? warehousePath
-                : ConfigUtils.getWarehousePath(config);
-
-            String finalSecretKey = secretKey != null
-                ? secretKey
-                : config.getString(ConfigUtils.SECRET_KEY_KEY);
-
-            String finalProducerId = producerId != null
-                ? producerId
-                : (config.hasPath("producerId")
-                    ? config.getString("producerId")
-                    : UUID.randomUUID().toString());
-
-            AccessMode finalAccessMode = accessMode != null
-                ? accessMode
-                : DuckDBFlightSqlProducer.getAccessMode(config);
-
-            Path finalTempWriteDir = tempWriteDir != null
-                ? tempWriteDir
-                : DuckDBFlightSqlProducer.getTempWriteDir(config);
-
-            // Use provided or create default components
+        public DuckDBFlightSqlProducer build() {
+            // Use provided allocator or create default
             BufferAllocator finalAllocator = allocator != null
                 ? allocator
                 : new RootAllocator();
 
-            PostIngestionTaskFactory finalPostIngestionFactory = postIngestionTaskFactory != null
-                ? postIngestionTaskFactory
-                : loadPostIngestionTaskFactory(config);
-
-            QueryOptimizer finalQueryOptimizer = queryOptimizer != null
-                ? queryOptimizer
-                : loadQueryOptimizer(config);
-
+            // Use provided executor or create default
             ScheduledExecutorService finalExecutorService = scheduledExecutorService != null
                 ? scheduledExecutorService
                 : Executors.newSingleThreadScheduledExecutor();
 
-            Duration finalQueryTimeout = queryTimeout != null
-                ? queryTimeout
-                : config.hasPath("query_timeout_minutes")
-                    ? Duration.ofMinutes(config.getLong("query_timeout_minutes"))
-                    : Duration.ofMinutes(2);
-
-            Clock finalClock = clock != null
-                ? clock
-                : Clock.systemDefaultZone();
-
-            IngestionConfig finalIngestionConfig = ingestionConfig != null
-                ? ingestionConfig
-                : loadIngestionConfig(config);
-
             // Create appropriate producer based on access mode
-            if (finalAccessMode == AccessMode.RESTRICTED) {
+            if (accessMode == AccessMode.RESTRICTED) {
                 return new RestrictedFlightSqlProducer(
-                    finalLocation,
-                    finalProducerId,
-                    finalSecretKey,
+                    location,
+                    producerId,
+                    secretKey,
                     finalAllocator,
-                    finalWarehousePath,
-                    finalTempWriteDir,
-                    finalPostIngestionFactory,
+                    warehousePath,
+                    tempWriteDir,
+                    postIngestionTaskFactory,
                     finalExecutorService,
-                    finalQueryTimeout,
-                    finalClock,
-                    buildRecorder(finalProducerId),
-                    finalQueryOptimizer,
-                    finalIngestionConfig
+                    queryTimeout,
+                    clock,
+                    buildRecorder(producerId),
+                    queryOptimizer,
+                    ingestionConfig
                 );
             } else {
                 return new DuckDBFlightSqlProducer(
-                    finalLocation,
-                    finalProducerId,
-                    finalSecretKey,
+                    location,
+                    producerId,
+                    secretKey,
                     finalAllocator,
-                    finalWarehousePath,
-                    finalAccessMode,
-                    finalTempWriteDir,
-                    finalPostIngestionFactory,
+                    warehousePath,
+                    accessMode,
+                    tempWriteDir,
+                    postIngestionTaskFactory,
                     finalExecutorService,
-                    finalQueryTimeout,
-                    finalClock,
-                    buildRecorder(finalProducerId),
-                    finalQueryOptimizer,
-                    finalIngestionConfig
+                    queryTimeout,
+                    clock,
+                    buildRecorder(producerId),
+                    queryOptimizer,
+                    ingestionConfig
                 );
             }
         }
@@ -390,10 +453,7 @@ public final class FlightSqlProducerFactory {
         }
 
         private static IngestionConfig loadIngestionConfig(Config config) {
-            if (config.hasPath(IngestionConfig.KEY)) {
-                return IngestionConfig.fromConfig(config.getConfig(IngestionConfig.KEY));
-            }
-            return DuckDBFlightSqlProducer.DEFAULT_INGESTION_CONFIG;
+            return IngestionConfig.fromConfig(config.getConfig(IngestionConfig.KEY));
         }
 
         private static io.dazzleduck.sql.flight.FlightRecorder buildRecorder(String producerId) {

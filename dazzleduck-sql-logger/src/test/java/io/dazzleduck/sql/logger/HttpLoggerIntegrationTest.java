@@ -3,35 +3,46 @@ package io.dazzleduck.sql.logger;
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.commons.util.TestUtils;
+import io.dazzleduck.sql.runtime.SharedTestServer;
 import org.junit.jupiter.api.*;
 
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.UUID;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class HttpLoggerIntegrationTest {
 
-    private static final int PORT = 8081;
-    static String warehousePath;
     private static final Config config = ConfigFactory.load().getConfig("dazzleduck_logger");
     private static final String CONFIG_HTTP_TARGET_PATH = config.getString("http.target_path");
+    // ArrowSimpleLogger reads base_url from config (e.g., "http://localhost:8081")
+    // Extract port from base_url to ensure server matches
+    private static final int LOGGER_CONFIG_HTTP_PORT = extractPortFromBaseUrl(config.getString("http.base_url"));
+
+    private SharedTestServer server;
+    private String warehousePath;
+
+    private static int extractPortFromBaseUrl(String baseUrl) {
+        // baseUrl format: "http://localhost:8081"
+        int lastColon = baseUrl.lastIndexOf(':');
+        if (lastColon > 0) {
+            return Integer.parseInt(baseUrl.substring(lastColon + 1));
+        }
+        return 8081; // default
+    }
 
     @BeforeAll
     void startServer() throws Exception {
-        warehousePath = "/tmp/" + UUID.randomUUID();
-        new java.io.File(warehousePath).mkdirs();
-
-        io.dazzleduck.sql.runtime.Main.main(new String[]{
-                "--conf", "dazzleduck_server.networking_modes=[http]",
-                "--conf", "dazzleduck_server.http.port=" + PORT,
-                "--conf", "dazzleduck_server.http.auth=jwt",
-                "--conf", "dazzleduck_server.warehouse=" + warehousePath,
-                "--conf", "dazzleduck_server.ingestion.max_delay_ms=200"
-        });
-
+        server = new SharedTestServer();
+        server.startWithPorts(LOGGER_CONFIG_HTTP_PORT, 0);
+        warehousePath = server.getWarehousePath();
         Files.createDirectories(Path.of(warehousePath + "/" + CONFIG_HTTP_TARGET_PATH));
+    }
+
+    @AfterAll
+    void stopServer() {
+        if (server != null) {
+            server.close();
+        }
     }
 
     @Test

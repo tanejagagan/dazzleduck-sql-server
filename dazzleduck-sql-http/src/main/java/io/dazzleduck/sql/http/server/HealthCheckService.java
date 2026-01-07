@@ -5,8 +5,6 @@ import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.flight.server.SqlProducerMBean;
 import io.helidon.http.Status;
 import io.helidon.webserver.http.*;
-import io.dazzleduck.sql.flight.server.SimpleBulkIngestConsumer;
-import org.apache.arrow.flight.FlightProducer;
 import java.sql.Connection;
 import java.time.Instant;
 import java.util.Map;

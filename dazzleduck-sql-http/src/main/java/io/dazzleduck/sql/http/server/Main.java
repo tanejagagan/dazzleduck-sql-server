@@ -278,8 +278,7 @@ public class Main {
         var port = httpConfig.getInt(ConfigUtils.PORT_KEY);
         var host = httpConfig.getString(ConfigUtils.HOST_KEY);
         var auth = httpConfig.hasPath(ConfigUtils.AUTHENTICATION_KEY) ? httpConfig.getString(ConfigUtils.AUTHENTICATION_KEY) : AUTH_NONE;
-        String warehousePath = ConfigUtils.getWarehousePath(appConfig);
-        String base64SecretKey = appConfig.getString(ConfigUtils.SECRET_KEY_KEY);
+       String base64SecretKey = appConfig.getString(ConfigUtils.SECRET_KEY_KEY);
         var secretKey = Validator.fromBase64String(base64SecretKey);
         String location = PROTOCOL_HTTP + "://%s:%s".formatted(host, port);
         AccessMode accessMode = DuckDBFlightSqlProducer.getAccessMode(appConfig);
@@ -311,11 +310,11 @@ public class Main {
                     routing.register(cors);
                     var b = routing
                             .register(ENDPOINT_HEALTH, new HealthCheckService(producer))
-                            .register(ENDPOINT_QUERY, new QueryService(producer, accessMode))
+                            .register(ENDPOINT_QUERY, new QueryService(producer))
                             .register(ENDPOINT_LOGIN, loginService)
-                            .register(ENDPOINT_PLAN, new PlanningService(producer, location, allocator, accessMode))
-                            .register(ENDPOINT_CANCEL, new CancelService(producer, accessMode))
-                            .register(ENDPOINT_INGEST, new IngestionService(producer, warehousePath, allocator))
+                            .register(ENDPOINT_PLAN, new PlanningService(producer, location))
+                            .register(ENDPOINT_CANCEL, new CancelService(producer))
+                            .register(ENDPOINT_INGEST, new IngestionService(producer))
                             .register(ENDPOINT_UI, new UIService(producer));
 
                     // Add JWT filter to versioned endpoints if required
