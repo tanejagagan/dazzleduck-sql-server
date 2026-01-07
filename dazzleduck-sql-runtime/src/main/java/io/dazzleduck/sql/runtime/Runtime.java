@@ -1,6 +1,9 @@
 package io.dazzleduck.sql.runtime;
 
 import com.typesafe.config.Config;
+import com.typesafe.config.ConfigFactory;
+
+import static io.dazzleduck.sql.common.util.ConfigUtils.CONFIG_PATH;
 import io.dazzleduck.sql.common.ConfigBasedProvider;
 import io.dazzleduck.sql.common.ConfigBasedStartupScriptProvider;
 import io.dazzleduck.sql.common.StartupScriptProvider;
@@ -36,6 +39,12 @@ public class Runtime implements Closeable {
         this.producer = producer;
         this.httpStarted = httpStarted;
         this.flightSqlStarted = flightSqlStarted;
+    }
+
+    public static Runtime start(String[] args) throws Exception {
+        Config overrides = ConfigUtils.loadCommandLineConfig(args).config();
+        Config config = overrides.withFallback(ConfigFactory.load()).getConfig(CONFIG_PATH);
+        return start(config);
     }
 
     public static Runtime start(Config config) throws Exception {

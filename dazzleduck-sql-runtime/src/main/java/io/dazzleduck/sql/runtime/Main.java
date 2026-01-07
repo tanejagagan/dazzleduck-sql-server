@@ -1,12 +1,7 @@
 package io.dazzleduck.sql.runtime;
 
-import com.typesafe.config.Config;
-import com.typesafe.config.ConfigFactory;
-import io.dazzleduck.sql.common.util.ConfigUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import static io.dazzleduck.sql.common.util.ConfigUtils.CONFIG_PATH;
 
 public class Main {
     private static final Logger logger = LoggerFactory.getLogger(Main.class);
@@ -14,9 +9,12 @@ public class Main {
     public static void main(String[] args) {
         try {
             printBanner();
-            var commandLineConfig = ConfigUtils.loadCommandLineConfig(args).config();
-            var config = commandLineConfig.withFallback(ConfigFactory.load()).getConfig(CONFIG_PATH);
-            start(config);
+            Runtime runtime = Runtime.start(args);
+
+            java.lang.Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                logger.info("Shutdown signal received");
+                runtime.close();
+            }, "shutdown-hook"));
         } catch (com.typesafe.config.ConfigException.Missing e) {
             logger.error("Missing required configuration: {}", e.getMessage());
             System.err.println("ERROR: Missing required configuration: " + e.getMessage());
@@ -34,14 +32,5 @@ public class Main {
         logger.info("=".repeat(60));
         logger.info("DazzleDuck Runtime {}", version != null ? "v" + version : "(development)");
         logger.info("=".repeat(60));
-    }
-
-    public static void start(Config config) throws Exception {
-        Runtime runtime = Runtime.start(config);
-
-        java.lang.Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            logger.info("Shutdown signal received");
-            runtime.close();
-        }, "shutdown-hook"));
     }
 }

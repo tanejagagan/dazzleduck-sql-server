@@ -5,6 +5,7 @@ import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.dazzleduck.sql.micrometer.metrics.MetricsRegistryFactory;
+import io.dazzleduck.sql.runtime.Runtime;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -20,23 +21,12 @@ import java.util.concurrent.TimeUnit;
 @Disabled
 public class HttpMetricIntegrationTest {
 
-    private Thread serverThread;
+    private Runtime runtime;
 
     @BeforeAll
     void startServers() throws Exception {
         Config config = ConfigFactory.load().getConfig(ConfigUtils.CONFIG_PATH);
-
-        serverThread = new Thread(() -> {
-            try {
-                io.dazzleduck.sql.runtime.Main.start(config);
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        });
-
-        serverThread.setDaemon(true);
-        serverThread.start();
-
+        runtime = Runtime.start(config);
         waitForHttpServer();
     }
 
@@ -84,9 +74,12 @@ public class HttpMetricIntegrationTest {
     }
 
     @AfterAll
-    void cleanupWarehouse() throws Exception {
-        String warehousePath = ConfigUtils.getWarehousePath(ConfigFactory.load().getConfig(ConfigUtils.CONFIG_PATH));
+    void cleanup() throws Exception {
+        if (runtime != null) {
+            runtime.close();
+        }
 
+        String warehousePath = ConfigUtils.getWarehousePath(ConfigFactory.load().getConfig(ConfigUtils.CONFIG_PATH));
         Path path = Path.of(warehousePath);
         if (Files.exists(path)) {
             Files.walk(path).sorted(Comparator.reverseOrder())
