@@ -12,23 +12,23 @@ class LogForwarderConfigTest {
     void builder_shouldUseDefaults() {
         LogForwarderConfig config = LogForwarderConfig.builder().build();
 
-        assertEquals("default-app", config.getApplicationId());
-        assertEquals("DefaultApplication", config.getApplicationName());
+        assertEquals("default-app", config.applicationId());
+        assertEquals("DefaultApplication", config.applicationName());
         // Verify hostname is auto-detected (not null or empty)
-        assertNotNull(config.getApplicationHost());
-        assertFalse(config.getApplicationHost().isEmpty());
-        assertEquals("http://localhost:8081", config.getBaseUrl());
-        assertEquals("admin", config.getUsername());
-        assertEquals("admin", config.getPassword());
-        assertEquals("logs", config.getTargetPath());
-        assertEquals(Duration.ofSeconds(3), config.getHttpClientTimeout());
-        assertEquals(10000, config.getMaxBufferSize());
-        assertEquals(Duration.ofSeconds(5), config.getPollInterval());
-        assertEquals(1024 * 1024, config.getMinBatchSize());
-        assertEquals(Duration.ofSeconds(2), config.getMaxSendInterval());
-        assertEquals(10 * 1024 * 1024, config.getMaxInMemorySize());
-        assertEquals(1024 * 1024 * 1024L, config.getMaxOnDiskSize());
-        assertTrue(config.isEnabled());
+        assertNotNull(config.applicationHost());
+        assertFalse(config.applicationHost().isEmpty());
+        assertEquals("http://localhost:8081", config.baseUrl());
+        assertEquals("admin", config.username());
+        assertEquals("admin", config.password());
+        assertEquals("logs", config.targetPath());
+        assertEquals(Duration.ofSeconds(3), config.httpClientTimeout());
+        assertEquals(10000, config.maxBufferSize());
+        assertEquals(Duration.ofSeconds(5), config.pollInterval());
+        assertEquals(1024 * 1024, config.minBatchSize());
+        assertEquals(Duration.ofSeconds(2), config.maxSendInterval());
+        assertEquals(10 * 1024 * 1024, config.maxInMemorySize());
+        assertEquals(1024 * 1024 * 1024L, config.maxOnDiskSize());
+        assertTrue(config.enabled());
     }
 
     @Test
@@ -51,21 +51,21 @@ class LogForwarderConfigTest {
                 .enabled(false)
                 .build();
 
-        assertEquals("my-app", config.getApplicationId());
-        assertEquals("MyApp", config.getApplicationName());
-        assertEquals("my-host", config.getApplicationHost());
-        assertEquals("http://custom:9000", config.getBaseUrl());
-        assertEquals("user", config.getUsername());
-        assertEquals("pass", config.getPassword());
-        assertEquals("custom-logs", config.getTargetPath());
-        assertEquals(Duration.ofSeconds(10), config.getHttpClientTimeout());
-        assertEquals(5000, config.getMaxBufferSize());
-        assertEquals(Duration.ofSeconds(30), config.getPollInterval());
-        assertEquals(512 * 1024, config.getMinBatchSize());
-        assertEquals(Duration.ofSeconds(5), config.getMaxSendInterval());
-        assertEquals(50 * 1024 * 1024, config.getMaxInMemorySize());
-        assertEquals(5 * 1024 * 1024 * 1024L, config.getMaxOnDiskSize());
-        assertFalse(config.isEnabled());
+        assertEquals("my-app", config.applicationId());
+        assertEquals("MyApp", config.applicationName());
+        assertEquals("my-host", config.applicationHost());
+        assertEquals("http://custom:9000", config.baseUrl());
+        assertEquals("user", config.username());
+        assertEquals("pass", config.password());
+        assertEquals("custom-logs", config.targetPath());
+        assertEquals(Duration.ofSeconds(10), config.httpClientTimeout());
+        assertEquals(5000, config.maxBufferSize());
+        assertEquals(Duration.ofSeconds(30), config.pollInterval());
+        assertEquals(512 * 1024, config.minBatchSize());
+        assertEquals(Duration.ofSeconds(5), config.maxSendInterval());
+        assertEquals(50 * 1024 * 1024, config.maxInMemorySize());
+        assertEquals(5 * 1024 * 1024 * 1024L, config.maxOnDiskSize());
+        assertFalse(config.enabled());
     }
 
     @Test
@@ -138,7 +138,7 @@ class LogForwarderConfigTest {
                 .build();
 
         assertNotNull(config);
-        assertEquals("id", config.getApplicationId());
-        assertEquals("name", config.getApplicationName());
+        assertEquals("id", config.applicationId());
+        assertEquals("name", config.applicationName());
     }
 }
