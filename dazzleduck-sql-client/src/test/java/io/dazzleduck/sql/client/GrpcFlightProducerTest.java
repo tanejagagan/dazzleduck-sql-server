@@ -3,7 +3,7 @@ package io.dazzleduck.sql.client;
 import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.common.types.JavaRow;
 import io.dazzleduck.sql.commons.ConnectionPool;
-import io.dazzleduck.sql.runtime.Main;
+import io.dazzleduck.sql.runtime.SharedTestServer;
 import org.apache.arrow.flight.*;
 import org.apache.arrow.flight.sql.FlightSqlClient;
 import org.apache.arrow.memory.RootAllocator;
@@ -23,42 +23,35 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class GrpcFlightProducerTest {
 
     private static final String HOST = "localhost";
-    private static final int PORT = 55620;
-
     private static final String USER = "admin";
     private static final String PASSWORD = "admin";
     private static final String CATALOG = "test_catalog";
     private static final String SCHEMA = "test_schema";
 
+    private SharedTestServer server;
     private RootAllocator allocator;
     private FlightSqlClient client;
-    static String warehouse;
+    private int flightPort;
+    private String warehouse;
 
     @BeforeAll
     void setup() throws Exception {
-        allocator = new RootAllocator(Long.MAX_VALUE);
-        warehouse = "/tmp/" + java.util.UUID.randomUUID();
-        new java.io.File(warehouse).mkdirs();
-        Main.main(new String[]{
-                "--conf", "dazzleduck_server.flight_sql.port=" + PORT,
-                "--conf", "dazzleduck_server.flight_sql.host=localhost",
-                "--conf", "dazzleduck_server.flight_sql.use_encryption=false",
-                "--conf", "dazzleduck_server.ingestion.max_delay_ms = 500",
-                "--conf", "dazzleduck_server.warehouse=" + warehouse,
-        });
+        server = new SharedTestServer();
+        server.start("ingestion.max_delay_ms=500");
+        flightPort = server.getFlightPort();
+        warehouse = server.getWarehousePath();
 
+        allocator = new RootAllocator(Long.MAX_VALUE);
 
         ConnectionPool.executeBatch(new String[]{
-                "INSTALL arrow FROM community",
-                "LOAD arrow",
                 "ATTACH ':memory:' AS test_catalog",
-                "CREATE SCHEMA test_catalog.test_schema"
+                "CREATE SCHEMA IF NOT EXISTS test_catalog.test_schema"
         });
 
         client = new FlightSqlClient(
                 FlightClient.builder(
                         allocator,
-                        Location.forGrpcInsecure(HOST, PORT))
+                        Location.forGrpcInsecure(HOST, flightPort))
                         .intercept(io.dazzleduck.sql.flight.server.auth2.AuthUtils
                         .createClientMiddlewareFactory(
                                         USER,
@@ -72,6 +65,22 @@ class GrpcFlightProducerTest {
         );
     }
 
+    @AfterAll
+    void teardown() {
+        if (client != null) {
+            try {
+                client.close();
+            } catch (Exception ignored) {
+            }
+        }
+        if (allocator != null) {
+            allocator.close();
+        }
+        if (server != null) {
+            server.close();
+        }
+    }
+
     @Test
     void ingestAndVerifyValues() throws Exception {
         Schema schema = new Schema(List.of(new Field("name", FieldType.nullable(new ArrowType.Utf8()), null)));
@@ -82,7 +91,7 @@ class GrpcFlightProducerTest {
                 schema,
                 1024,
                 2048,
-                Duration.ofSeconds(2),
+                Duration.ofMillis(200),
                 Clock.systemUTC(),
                 3,
                 1000,
@@ -91,7 +100,7 @@ class GrpcFlightProducerTest {
                 5_000_000,
                 20_000_000,
                 allocator,
-                Location.forGrpcInsecure(HOST, PORT),
+                Location.forGrpcInsecure(HOST, flightPort),
                 USER,
                 PASSWORD,
                 CATALOG,
@@ -134,7 +143,7 @@ class GrpcFlightProducerTest {
                 schema,
                 1024,
                 2048,
-                Duration.ofSeconds(2),
+                Duration.ofMillis(200),
                 Clock.systemUTC(),
                 3,
                 1000,
@@ -143,7 +152,7 @@ class GrpcFlightProducerTest {
                 5_000_000,
                 20_000_000,
                 allocator,
-                Location.forGrpcInsecure(HOST, PORT),
+                Location.forGrpcInsecure(HOST, flightPort),
                 USER,
                 PASSWORD,
                 CATALOG,
@@ -178,7 +187,7 @@ class GrpcFlightProducerTest {
                 schema,
                 1024,
                 2048,
-                Duration.ofSeconds(2),
+                Duration.ofMillis(200),
                 Clock.systemUTC(),
                 3,
                 1000,
@@ -187,7 +196,7 @@ class GrpcFlightProducerTest {
                 5_000_000,
                 20_000_000,
                 allocator,
-                Location.forGrpcInsecure(HOST, PORT),
+                Location.forGrpcInsecure(HOST, flightPort),
                 USER,
                 PASSWORD,
                 CATALOG,
@@ -222,7 +231,7 @@ class GrpcFlightProducerTest {
                 schema,
                 1024,
                 2048,
-                Duration.ofSeconds(2),
+                Duration.ofMillis(200),
                 Clock.systemUTC(),
                 3,
                 1000,
@@ -231,7 +240,7 @@ class GrpcFlightProducerTest {
                 5_000_000,
                 20_000_000,
                 allocator,
-                Location.forGrpcInsecure(HOST, PORT),
+                Location.forGrpcInsecure(HOST, flightPort),
                 USER,
                 PASSWORD,
                 CATALOG,
@@ -267,7 +276,7 @@ class GrpcFlightProducerTest {
                 schema,
                 1024,
                 2048,
-                Duration.ofSeconds(2),
+                Duration.ofMillis(200),
                 Clock.systemUTC(),
                 3,
                 1000,
@@ -276,7 +285,7 @@ class GrpcFlightProducerTest {
                 5_000_000,
                 20_000_000,
                 allocator,
-                Location.forGrpcInsecure(HOST, PORT),
+                Location.forGrpcInsecure(HOST, flightPort),
                 USER,
                 PASSWORD,
                 CATALOG,
@@ -312,7 +321,7 @@ class GrpcFlightProducerTest {
                 schema,
                 1024,
                 2048,
-                Duration.ofSeconds(2),
+                Duration.ofMillis(200),
                 Clock.systemUTC(),
                 3,
                 1000,
@@ -321,7 +330,7 @@ class GrpcFlightProducerTest {
                 5_000_000,
                 20_000_000,
                 allocator,
-                Location.forGrpcInsecure(HOST, PORT),
+                Location.forGrpcInsecure(HOST, flightPort),
                 USER,
                 PASSWORD,
                 CATALOG,

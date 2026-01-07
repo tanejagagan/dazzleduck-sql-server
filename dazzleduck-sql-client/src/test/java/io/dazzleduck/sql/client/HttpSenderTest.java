@@ -2,6 +2,7 @@ package io.dazzleduck.sql.client;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.dazzleduck.sql.commons.ConnectionPool;
+import io.dazzleduck.sql.runtime.SharedTestServer;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.ipc.ArrowStreamWriter;
@@ -25,58 +26,56 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.*;
 
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class HttpSenderTest {
 
-    static final int PORT = 8093;
-    static String warehouse;
-    static ObjectMapper mapper = new ObjectMapper();
-    static Schema schema;
-
-    private static final String BASE_URL = "http://localhost:" + PORT + "/";
+    private SharedTestServer server;
+    private String warehouse;
+    private String baseUrl;
+    private static final ObjectMapper mapper = new ObjectMapper();
+    private Schema schema;
 
     @TempDir
     Path tempDir;
+
     @BeforeAll
-    static void setup() throws Exception {
-        warehouse = "/tmp/" + java.util.UUID.randomUUID();
-        new java.io.File(warehouse).mkdirs();
-
-        // Use runtime Main which handles both networking modes
-        io.dazzleduck.sql.runtime.Main.main(new String[]{
-                "--conf", "dazzleduck_server.http.port=" + PORT,
-                "--conf", "dazzleduck_server.http.auth=jwt",
-                "--conf", "dazzleduck_server.warehouse=" + warehouse,
-                "--conf", "dazzleduck_server.ingestion.max_delay_ms = 500"
-        });
-
-   //     ConnectionPool.executeBatch(new String[]{"INSTALL arrow FROM community", "LOAD arrow"});
-
+    void setup() throws Exception {
+        server = new SharedTestServer();
+        server.start();
+        warehouse = server.getWarehousePath();
+        baseUrl = server.getHttpBaseUrl();
         schema = new Schema(java.util.List.of(new Field("timestamp", FieldType.nullable(new ArrowType.Utf8()), null)));
+    }
+
+    @AfterAll
+    void teardown() {
+        if (server != null) {
+            server.close();
+        }
     }
 
     @BeforeEach
     void setupEach() {
         org.awaitility.Awaitility.setDefaultPollInterval(5, TimeUnit.MILLISECONDS);
-        org.awaitility.Awaitility.setDefaultTimeout(3, TimeUnit.SECONDS);
+        org.awaitility.Awaitility.setDefaultTimeout(2, TimeUnit.SECONDS);
     }
 
     @AfterEach
     void teardownEach() {
-        // Reset Awaitility to defaults
         org.awaitility.Awaitility.reset();
     }
 
     private HttpProducer newSender(String file, Duration timeout) {
         return new HttpProducer(
                 schema,
-                BASE_URL,
+                baseUrl,
                 "admin",
                 "admin",
                 file,
                 timeout,
                 100_000,
                 200_000,
-                Duration.ofSeconds(1),
+                Duration.ofMillis(200),
                 3,
                 1000,
                 java.util.List.of(),
@@ -133,14 +132,14 @@ public class HttpSenderTest {
 
         try (HttpProducer overwriteSender = new HttpProducer(
                 schema,
-                BASE_URL,
+                baseUrl,
                 "admin",
                 "admin",
                 file,
                 Duration.ofSeconds(3),
                 100_000,
                 200_000,
-                Duration.ofSeconds(2),
+                Duration.ofMillis(200),
                 3,
                 1000,
                 java.util.List.of(),
@@ -223,8 +222,8 @@ public class HttpSenderTest {
 
     @Test
     void testQueueFullBehavior() throws Exception {
-        var limitedSender = new HttpProducer(  schema,BASE_URL, "admin", "admin", "full.parquet", Duration.ofSeconds(3), 100_000, 200_000,
-                Duration.ofSeconds(2), 3, 1000, java.util.List.of(), java.util.List.of(), 100, 200);
+        var limitedSender = new HttpProducer(  schema,baseUrl, "admin", "admin", "full.parquet", Duration.ofSeconds(3), 100_000, 200_000,
+                Duration.ofMillis(200), 3, 1000, java.util.List.of(), java.util.List.of(), 100, 200);
 
         byte[] largeData = arrowBytes("select * from generate_series(200)");
 
@@ -254,8 +253,8 @@ public class HttpSenderTest {
     void testMemoryDiskSwitching() throws Exception {
         var path = "spill";
         Files.createDirectories(Path.of(warehouse, path));
-        var spillSender = new HttpProducer(  schema,BASE_URL, "admin", "admin", path, Duration.ofSeconds(10), 100_000, 200_000,
-                Duration.ofSeconds(2), 3, 1000, java.util.List.of(), java.util.List.of(), 50, 100_000);
+        var spillSender = new HttpProducer(  schema,baseUrl, "admin", "admin", path, Duration.ofSeconds(10), 100_000, 200_000,
+                Duration.ofMillis(200), 3, 1000, java.util.List.of(), java.util.List.of(), 50, 100_000);
 
 
         spillSender.enqueue(arrowBytes("select * from generate_series(30)"));
@@ -275,14 +274,14 @@ public class HttpSenderTest {
 
         try (HttpProducer sender = new HttpProducer(
                 schema,
-                BASE_URL,
+                baseUrl,
                 "admin",
                 "admin",
                 path,
                 Duration.ofSeconds(3),
                 100_000,
                 200_000,
-                Duration.ofSeconds(1),
+                Duration.ofMillis(200),
                 3,
                 1000,
                 java.util.List.of("'c1' as c1", "'c2' as c2"),
@@ -306,14 +305,14 @@ public class HttpSenderTest {
 
         try (HttpProducer sender = new HttpProducer(
                 schema,
-                BASE_URL,
+                baseUrl,
                 "admin",
                 "admin",
                 path,
                 Duration.ofSeconds(3),
                 100_000,
                 200_000,
-                Duration.ofSeconds(1),
+                Duration.ofMillis(200),
                 3,
                 1000,
                 java.util.List.of("'c1' as c1", "'c2' as  c2"),
@@ -339,14 +338,14 @@ public class HttpSenderTest {
         // Empty lists should work fine and not send headers
         try (HttpProducer sender = new HttpProducer(
                 schema,
-                BASE_URL,
+                baseUrl,
                 "admin",
                 "admin",
                 path,
                 Duration.ofSeconds(3),
                 100_000,
                 200_000,
-                Duration.ofSeconds(1),
+                Duration.ofMillis(200),
                 3,
                 1000,
                 java.util.List.of(),

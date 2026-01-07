@@ -9,21 +9,19 @@ import org.apache.arrow.flight.auth2.Auth2Constants;
 import javax.annotation.Nullable;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 public class SyntheticFlightContext implements FlightProducer.CallContext {
     private final CallHeaders callHeaders;
     private final String peerIdentity;
-    private final SubjectAndVerifiedClaims subjectAndVerifiedClaims;
     private final Map<FlightServerMiddleware.Key<?>, FlightServerMiddleware> middlewareMap;
 
-    private final AuthResultWithClaims authResultWithClaims;
-
     public SyntheticFlightContext(Map<String, List<String>> headers) {
-        this(headers, null, Map.of());
+        this(headers, null);
     }
+
     public SyntheticFlightContext(Map<String, List<String>> headers,
                                   @Nullable SubjectAndVerifiedClaims subjectAndVerifiedClaims) {
         this(headers, subjectAndVerifiedClaims, Map.of());
@@ -31,42 +29,33 @@ public class SyntheticFlightContext implements FlightProducer.CallContext {
 
     public SyntheticFlightContext(Map<String, List<String>> headers,
                                   @Nullable SubjectAndVerifiedClaims subjectAndVerifiedClaims,
-                                  Map<String, List<String>> parameters) {
+                                  Map<String, List<String>> queryParameters) {
         this.callHeaders = new FlightCallHeaders();
-        this.subjectAndVerifiedClaims = subjectAndVerifiedClaims;
         headers.forEach((k, vs) -> vs.forEach(v -> callHeaders.insert(k, v)));
-        parameters.forEach((k, vs) -> vs.forEach(v -> callHeaders.insert(k, v)));
+        queryParameters.forEach((k, vs) -> vs.forEach(v -> callHeaders.insert(k, v)));
+
+        if (subjectAndVerifiedClaims != null) {
+            this.peerIdentity = subjectAndVerifiedClaims.subject();
+        } else {
+            this.peerIdentity = extractPeerIdentityFromBasicAuth(headers);
+        }
+
+        AuthResultWithClaims authResultWithClaims = subjectAndVerifiedClaims != null
+                ? new AuthResultWithClaims(peerIdentity, "", subjectAndVerifiedClaims.verifiedClaims())
+                : new AuthResultWithClaims(peerIdentity, null, Map.of());
+
         ServerHeaderMiddleware serverHeaderMiddleware = new ServerHeaderMiddleware.Factory()
                 .onCallStarted(null, callHeaders, null);
-        middlewareMap = Map.of(FlightConstants.HEADER_KEY, serverHeaderMiddleware);
-        if (subjectAndVerifiedClaims == null) {
-            peerIdentity = getPeerIdentityFromAuthHeader(headers);
-        } else {
-            peerIdentity = subjectAndVerifiedClaims.subject();
-        }
-        if (subjectAndVerifiedClaims != null) {
-            authResultWithClaims = new AuthResultWithClaims(peerIdentity, "", this.subjectAndVerifiedClaims.verifiedClaims());
-        } else {
-            authResultWithClaims = new AuthResultWithClaims(peerIdentity, null, Map.of());
-        }
+
+        Map<FlightServerMiddleware.Key<?>, FlightServerMiddleware> mutableMap = new HashMap<>();
+        mutableMap.put(FlightConstants.HEADER_KEY, serverHeaderMiddleware);
+        mutableMap.put(AdvanceServerCallHeaderAuthMiddleware.KEY,
+                new AdvanceServerCallHeaderAuthMiddleware(authResultWithClaims));
+        this.middlewareMap = Map.copyOf(mutableMap);
     }
 
-    public static String getPeerIdentityFromAuthHeader(Map<String, List<String>> headers) {
-        var authEncodedList =
-                headers.get(Auth2Constants.AUTHORIZATION_HEADER);
-        String _peerIdentity = null;
-        if (authEncodedList != null && !authEncodedList.isEmpty() && authEncodedList.get(0).startsWith(Auth2Constants.BASIC_PREFIX)) {
-            var authEncoded = authEncodedList.get(0)
-                    .substring(Auth2Constants.BASIC_PREFIX.length() + 1);
-            // The value has the format Base64(<username>:<password>)
-            final String authDecoded =
-                    new String(Base64.getDecoder().decode(authEncoded), StandardCharsets.UTF_8);
-            final int colonPos = authDecoded.indexOf(':');
-            if (colonPos != -1) {
-                _peerIdentity = authDecoded.substring(0, colonPos);
-            }
-        }
-        return _peerIdentity;
+    public CallHeaders getCallHeaders() {
+        return callHeaders;
     }
 
     @Override
@@ -79,18 +68,39 @@ public class SyntheticFlightContext implements FlightProducer.CallContext {
         return false;
     }
 
+    @SuppressWarnings("unchecked")
     @Override
     public <T extends FlightServerMiddleware> T getMiddleware(FlightServerMiddleware.Key<T> key) {
-        //noinspection unchecked
-        if (key.equals(AdvanceServerCallHeaderAuthMiddleware.KEY)) {
-            return (T) new AdvanceServerCallHeaderAuthMiddleware(authResultWithClaims);
-        } else {
-            return (T) middlewareMap.get(key);
-        }
+        return (T) middlewareMap.get(key);
     }
 
     @Override
     public Map<FlightServerMiddleware.Key<?>, FlightServerMiddleware> getMiddleware() {
-        return Map.of();
+        return middlewareMap;
+    }
+
+    private static String extractPeerIdentityFromBasicAuth(Map<String, List<String>> headers) {
+        List<String> authHeaders = headers.get(Auth2Constants.AUTHORIZATION_HEADER);
+        if (authHeaders == null || authHeaders.isEmpty()) {
+            return null;
+        }
+
+        String authHeader = authHeaders.get(0);
+        if (!authHeader.startsWith(Auth2Constants.BASIC_PREFIX)) {
+            return null;
+        }
+
+        String encodedCredentials = authHeader.substring(Auth2Constants.BASIC_PREFIX.length() + 1);
+        String decodedCredentials = new String(
+                Base64.getDecoder().decode(encodedCredentials),
+                StandardCharsets.UTF_8
+        );
+
+        int colonIndex = decodedCredentials.indexOf(':');
+        if (colonIndex == -1) {
+            return null;
+        }
+
+        return decodedCredentials.substring(0, colonIndex);
     }
 }
