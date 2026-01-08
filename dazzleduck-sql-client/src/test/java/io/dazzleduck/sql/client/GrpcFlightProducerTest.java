@@ -25,8 +25,6 @@ class GrpcFlightProducerTest {
     private static final String HOST = "localhost";
     private static final String USER = "admin";
     private static final String PASSWORD = "admin";
-    private static final String CATALOG = "test_catalog";
-    private static final String SCHEMA = "test_schema";
 
     private SharedTestServer server;
     private RootAllocator allocator;
@@ -57,8 +55,8 @@ class GrpcFlightProducerTest {
                                         USER,
                                         PASSWORD,
                                         Map.of(
-                                                Headers.HEADER_DATABASE, CATALOG,
-                                                Headers.HEADER_SCHEMA, SCHEMA
+                                                Headers.HEADER_DATABASE, "test_catalog",
+                                                Headers.HEADER_SCHEMA, "test_schema"
                                         )
                                 )
                 ).build()
@@ -103,8 +101,6 @@ class GrpcFlightProducerTest {
                 Location.forGrpcInsecure(HOST, flightPort),
                 USER,
                 PASSWORD,
-                CATALOG,
-                SCHEMA,
                 Map.of("path", path),
                 Duration.ofSeconds(30)
         )) {
@@ -159,8 +155,6 @@ class GrpcFlightProducerTest {
                 Location.forGrpcInsecure(HOST, flightPort),
                 USER,
                 PASSWORD,
-                CATALOG,
-                SCHEMA,
                 Map.of("path", path),
                 Duration.ofSeconds(30)
         )) {
@@ -206,8 +200,6 @@ class GrpcFlightProducerTest {
                 Location.forGrpcInsecure(HOST, flightPort),
                 USER,
                 PASSWORD,
-                CATALOG,
-                SCHEMA,
                 Map.of("path", path),
                 Duration.ofSeconds(30)
         )) {

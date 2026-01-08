@@ -32,8 +32,17 @@ public record IngestionParameters(String path,
     }
 
     public static IngestionParameters getIngestionParameters(FlightSql.CommandStatementIngest command) {
+
         Map<String, String> optionMap = command.getOptionsMap();
         String path = optionMap.get(Headers.HEADER_PATH);
+        // Validate path to prevent path traversal attacks
+        if (path == null || path.isEmpty()) {
+            throw new IllegalArgumentException("Path parameter is required");
+        }
+        if (path.contains("..") || path.startsWith("/")) {
+            throw new IllegalArgumentException("Invalid path: path traversal not allowed");
+        }
+
         String format = optionMap.getOrDefault(Headers.HEADER_DATA_FORMAT, "parquet");
 
         Function<String, String[]> splitCsv = value -> {

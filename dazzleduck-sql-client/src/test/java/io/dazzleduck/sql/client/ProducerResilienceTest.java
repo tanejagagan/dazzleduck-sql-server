@@ -47,8 +47,6 @@ public class ProducerResilienceTest {
     private static final String HOST = "localhost";
     private static final String USER = "admin";
     private static final String PASSWORD = "admin";
-    private static final String CATALOG = "test_catalog";
-    private static final String SCHEMA_NAME = "test_schema";
 
     private static final int TEST_DURATION_MS = 6_000;
     private static final int EVENT_INTERVAL_MS = 10;
@@ -134,8 +132,6 @@ public class ProducerResilienceTest {
                     Location.forGrpcInsecure(HOST, fixedFlightPort),
                     USER,
                     PASSWORD,
-                    CATALOG,
-                    SCHEMA_NAME,
                     Map.of("path", testPath),
                     Duration.ofSeconds(60)
             )) {
