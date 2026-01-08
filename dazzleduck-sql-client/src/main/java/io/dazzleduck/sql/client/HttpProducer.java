@@ -157,7 +157,7 @@ public final class HttpProducer extends FlightProducer.AbstractFlightProducer {
 
         HttpResponse<String> resp;
         try {
-            resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+            resp = getClient().send(req, HttpResponse.BodyHandlers.ofString());
         } catch (HttpTimeoutException e) {
             logger.error("Login request timed out after {}", httpClientTimeout, e);
             throw new IOException("Login request timed out", e);
@@ -269,6 +269,8 @@ public final class HttpProducer extends FlightProducer.AbstractFlightProducer {
 
         } catch (HttpTimeoutException e) {
             logger.error("HTTP request timed out after {} to {}{}", httpClientTimeout, baseUrl, targetPath, e);
+            // Invalidate JWT on timeout - server may have restarted
+            invalidateJwt();
             throw new RuntimeException("HTTP request timed out to " + baseUrl + targetPath, e);
         } catch (IOException e) {
             // Check if interrupted during IO
@@ -276,11 +278,31 @@ public final class HttpProducer extends FlightProducer.AbstractFlightProducer {
                 throw new InterruptedException("Thread interrupted during HTTP send");
             }
             logger.error("Network error sending data to {}{}", baseUrl, targetPath, e);
+            // Invalidate JWT on network error - server may have restarted
+            invalidateJwt();
             throw new RuntimeException("Network error sending data to " + baseUrl + targetPath, e);
         } catch (SecurityException e) {
             logger.error("Authentication failed for {}{}", baseUrl, targetPath, e);
             throw new RuntimeException("Authentication failed for " + baseUrl + targetPath, e);
         }
+    }
+
+    /**
+     * Invalidates the cached JWT token. Called when connection errors occur
+     * since the server may have restarted with fresh state.
+     */
+    private void invalidateJwt() {
+        synchronized (this) {
+            jwt = null;
+            jwtExpiry = Instant.EPOCH;
+        }
+    }
+
+    /**
+     * Gets the HTTP client.
+     */
+    private HttpClient getClient() {
+        return client;
     }
 
     private HttpResponse<String> post(byte[] payload) throws IOException, InterruptedException {
@@ -304,7 +326,7 @@ public final class HttpProducer extends FlightProducer.AbstractFlightProducer {
         }
 
         HttpRequest req = requestBuilder.build();
-        return client.send(req, HttpResponse.BodyHandlers.ofString());
+        return getClient().send(req, HttpResponse.BodyHandlers.ofString());
     }
 
     // Issue #1: Override close() to cleanup HttpClient resources
@@ -312,7 +334,7 @@ public final class HttpProducer extends FlightProducer.AbstractFlightProducer {
     public void close() {
         Exception superCloseException = null;
 
-        // Close parent resources first
+        // Close parent resources first (includes stats logging)
         try {
             super.close();
         } catch (Exception e) {

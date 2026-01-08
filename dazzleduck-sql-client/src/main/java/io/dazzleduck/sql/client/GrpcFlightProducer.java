@@ -45,31 +45,21 @@ public final class GrpcFlightProducer extends FlightProducer.AbstractFlightProdu
             Location location,
             String username,
             String password,
-            String catalog,
-            String schemaName,
             Map<String, String> ingestParams,
             Duration grpcTimeout
     ) {
         super(minBatchSize, maxBatchSize, maxSendInterval, schema, clock, retryCount, retryIntervalMillis, transformations, partitionBy);
 
-        // Validate parameters (Issue #6)
+        // Validate parameters
         this.allocator = Objects.requireNonNull(allocator, "allocator must not be null");
         Objects.requireNonNull(location, "location must not be null");
         Objects.requireNonNull(username, "username must not be null");
         Objects.requireNonNull(password, "password must not be null");
-        Objects.requireNonNull(catalog, "catalog must not be null");
-        Objects.requireNonNull(schemaName, "schemaName must not be null");
         Objects.requireNonNull(ingestParams, "ingestParams must not be null");
         Objects.requireNonNull(grpcTimeout, "grpcTimeout must not be null");
 
         if (username.trim().isEmpty()) {
             throw new IllegalArgumentException("username must not be empty");
-        }
-        if (catalog.trim().isEmpty()) {
-            throw new IllegalArgumentException("catalog must not be empty");
-        }
-        if (schemaName.trim().isEmpty()) {
-            throw new IllegalArgumentException("schemaName must not be empty");
         }
         if (grpcTimeout.isNegative() || grpcTimeout.isZero()) {
             throw new IllegalArgumentException("grpcTimeout must be positive");
@@ -79,30 +69,27 @@ public final class GrpcFlightProducer extends FlightProducer.AbstractFlightProdu
         this.maxDisk = maxOnDiskSize;
         this.grpcTimeout = grpcTimeout;
 
-        logger.info("Initializing GrpcFlightSender with location={}, catalog={}, schema={}, timeout={}",
-                    location.getUri(), catalog, schemaName, this.grpcTimeout);
+        logger.info("Initializing GrpcFlightSender with location={}, timeout={}",
+                    location.getUri(), this.grpcTimeout);
 
         this.client = new FlightSqlClient(FlightClient.builder(allocator, location)
                         .intercept(AuthUtils.createClientMiddlewareFactory(
                                 username,
                                 password,
-                                Map.of(
-                                        Headers.HEADER_DATABASE, catalog,
-                                        Headers.HEADER_SCHEMA, schemaName
-                                )
+                                Map.of()
                         ))
                         .build()
         );
 
-        // Add transformations and partitionBy to ingestParams (URL encoded)
+        // Add transformations and partitionBy to ingestParams
         Map<String, String> enrichedParams = new java.util.HashMap<>(ingestParams);
         if (!getTransformations().isEmpty()) {
             String transformationsValue = String.join(",", getTransformations());
-            enrichedParams.put(Headers.HEADER_DATA_TRANSFORMATION, java.net.URLEncoder.encode(transformationsValue, java.nio.charset.StandardCharsets.UTF_8));
+            enrichedParams.put(Headers.HEADER_DATA_TRANSFORMATION, transformationsValue);
         }
         if (!getPartitionBy().isEmpty()) {
             String partitionByValue = String.join(",", getPartitionBy());
-            enrichedParams.put(Headers.HEADER_DATA_PARTITION, java.net.URLEncoder.encode(partitionByValue, java.nio.charset.StandardCharsets.UTF_8));
+            enrichedParams.put(Headers.HEADER_DATA_PARTITION, partitionByValue);
         }
 
         this.ingestOptions = new FlightSqlClient.ExecuteIngestOptions("", FlightSql.CommandStatementIngest
@@ -110,8 +97,8 @@ public final class GrpcFlightProducer extends FlightProducer.AbstractFlightProdu
                                 .newBuilder()
                                 .build(),
                         false,
-                        catalog,
-                        schemaName,
+                        "",
+                        "",
                         enrichedParams
                 );
     }

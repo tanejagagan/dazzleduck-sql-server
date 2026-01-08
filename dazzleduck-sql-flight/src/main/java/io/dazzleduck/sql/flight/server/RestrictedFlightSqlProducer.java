@@ -546,7 +546,7 @@ public class RestrictedFlightSqlProducer extends DuckDBFlightSqlProducer {
                 query = authorize(context, query, connection);
             }
             Statement statement = connection.createStatement();
-            var statementContext = new StatementContext<>(statement, query);
+            var statementContext = new StatementContext<>(connection, statement, query);
             var key = new CacheKey(context.peerIdentity(), statementHandle.queryId());
             statementLoadingCache.put(key, statementContext);
             ResultSetStreamUtil.streamResultSet(executorService,

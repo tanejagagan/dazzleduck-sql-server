@@ -1,7 +1,7 @@
 package io.dazzleduck.sql.client;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.dazzleduck.sql.commons.ConnectionPool;
+import io.dazzleduck.sql.commons.util.TestUtils;
 import io.dazzleduck.sql.runtime.SharedTestServer;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
@@ -12,7 +12,6 @@ import org.apache.arrow.vector.types.pojo.FieldType;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.duckdb.DuckDBConnection;
 import org.junit.jupiter.api.*;
-import org.junit.jupiter.api.io.TempDir;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.file.Files;
@@ -27,16 +26,12 @@ import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.*;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-public class HttpSenderTest {
+public class HttpProducerTest {
 
     private SharedTestServer server;
     private String warehouse;
     private String baseUrl;
-    private static final ObjectMapper mapper = new ObjectMapper();
     private Schema schema;
-
-    @TempDir
-    Path tempDir;
 
     @BeforeAll
     void setup() throws Exception {
@@ -85,6 +80,7 @@ public class HttpSenderTest {
                 Clock.systemDefaultZone()
         );
     }
+
     private byte[] arrowBytes(String query) throws Exception {
         try (BufferAllocator allocator = new RootAllocator();
              DuckDBConnection conn = ConnectionPool.getConnection();
@@ -101,16 +97,10 @@ public class HttpSenderTest {
         }
     }
 
-    private void verifyFile(String path, long expectedCount) {
-        await()
-                .pollInterval(6, TimeUnit.MILLISECONDS)
-                .atMost(3, TimeUnit.SECONDS)
-                .ignoreExceptions()
-                .untilAsserted(() -> {
-                    long count = ConnectionPool.collectFirst("select count(*) from read_parquet('%s/%s/*.parquet')".formatted(warehouse, path), Long.class);
-                    assertEquals(expectedCount, count);
-                });
-
+    private void verifyFile(String path, int maxValue) throws Exception {
+        var actualQuery = "SELECT generate_series FROM read_parquet('%s/%s/*.parquet') ORDER BY generate_series".formatted(warehouse, path);
+        var expectedQuery = "SELECT * FROM generate_series(%d) ORDER BY generate_series".formatted(maxValue);
+        TestUtils.isEqual(expectedQuery, actualQuery);
     }
 
     @Test
@@ -122,7 +112,7 @@ public class HttpSenderTest {
         }
 
         // Verify after close() has flushed all data
-        verifyFile(file, 5);
+        verifyFile(file, 4);
     }
 
     @Test
@@ -151,8 +141,16 @@ public class HttpSenderTest {
             overwriteSender.enqueue(arrowBytes("select * from generate_series(2)"));
         }
 
-        // Verify after close() has flushed all data
-        verifyFile(file, 5);
+        // Verify after close() has flushed all data - combined results from both enqueues
+        await()
+                .pollInterval(6, TimeUnit.MILLISECONDS)
+                .atMost(3, TimeUnit.SECONDS)
+                .ignoreExceptions()
+                .untilAsserted(() -> {
+                    var actualQuery = "SELECT generate_series FROM read_parquet('%s/%s/*.parquet') ORDER BY generate_series".formatted(warehouse, file);
+                    var expectedQuery = "SELECT * FROM (VALUES (0), (0), (1), (1), (2)) AS t(generate_series)";
+                    TestUtils.isEqual(expectedQuery, actualQuery);
+                });
     }
 
     @Test
@@ -178,27 +176,30 @@ public class HttpSenderTest {
 
             assertTrue(latch.await(5, TimeUnit.SECONDS));
             assertEquals(0, errors.get());
+            // Verify that all concurrent enqueues completed - total rows = 1 + 11 + 21 + 31 + 41 = 105
             await().atMost(10, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {
-                long count = ConnectionPool.collectFirst("select count(*) from read_parquet('%s/%s/*.parquet')".formatted(warehouse, file), Long.class);
-                assertTrue(count >= 0);
+                var actualQuery = "SELECT generate_series FROM read_parquet('%s/%s/*.parquet') ORDER BY generate_series".formatted(warehouse, file);
+                var expectedQuery = "SELECT * FROM (SELECT * FROM generate_series(0) UNION ALL SELECT * FROM generate_series(10) UNION ALL SELECT * FROM generate_series(20) UNION ALL SELECT * FROM generate_series(30) UNION ALL SELECT * FROM generate_series(40)) ORDER BY generate_series";
+                TestUtils.isEqual(expectedQuery, actualQuery);
             });
         }
     }
 
     @Test
     void testJWTTokenReuse() throws Exception {
-        String file = "jwt-reuse-" + System.nanoTime() ;
+        String file = "jwt-reuse-" + System.nanoTime();
         Files.createDirectories(Path.of(warehouse, file));
 
         // Multiple requests should reuse the same token
-        try (HttpProducer ReuseSender = newSender(file, Duration.ofSeconds(5))) {
+        try (HttpProducer reuseSender = newSender(file, Duration.ofSeconds(5))) {
             for (int i = 0; i < 5; i++) {
-                ReuseSender.enqueue(arrowBytes("select " + i + " as val"));
+                reuseSender.enqueue(arrowBytes("select " + i + " as val"));
             }
 
             await().atMost(5, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {
-                long count = ConnectionPool.collectFirst("select count(*) from read_parquet('%s/%s/*.parquet')".formatted(warehouse, file), Long.class);
-                assertTrue(count >= 1);
+                var actualQuery = "SELECT val FROM read_parquet('%s/%s/*.parquet') ORDER BY val".formatted(warehouse, file);
+                var expectedQuery = "SELECT * FROM (VALUES (0), (1), (2), (3), (4)) AS t(val)";
+                TestUtils.isEqual(expectedQuery, actualQuery);
             });
         }
     }
@@ -208,21 +209,22 @@ public class HttpSenderTest {
         String file = "high-throughput-" + System.nanoTime();
         Files.createDirectories(Path.of(warehouse, file));
 
-        // Rapid fire 20 small batches
-        try (HttpProducer HighThroughput = newSender(file, Duration.ofSeconds(5))) {
+        // Rapid fire 5 small batches
+        try (HttpProducer highThroughput = newSender(file, Duration.ofSeconds(5))) {
             for (int i = 0; i < 5; i++) {
-                HighThroughput.enqueue(arrowBytes("select " + i + " as val"));
+                highThroughput.enqueue(arrowBytes("select " + i + " as val"));
             }
             await().atMost(2, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {
-                long count = ConnectionPool.collectFirst("select count(*) from read_parquet('%s/%s/*.parquet')".formatted(warehouse, file), Long.class);
-                assertTrue(count >= 1);
+                var actualQuery = "SELECT val FROM read_parquet('%s/%s/*.parquet') ORDER BY val".formatted(warehouse, file);
+                var expectedQuery = "SELECT * FROM (VALUES (0), (1), (2), (3), (4)) AS t(val)";
+                TestUtils.isEqual(expectedQuery, actualQuery);
             });
         }
     }
 
     @Test
     void testQueueFullBehavior() throws Exception {
-        var limitedSender = new HttpProducer(  schema,baseUrl, "admin", "admin", "full.parquet", Duration.ofSeconds(3), 100_000, 200_000,
+        var limitedSender = new HttpProducer(schema, baseUrl, "admin", "admin", "full.parquet", Duration.ofSeconds(3), 100_000, 200_000,
                 Duration.ofMillis(200), 3, 1000, java.util.List.of(), java.util.List.of(), 100, 200);
 
         byte[] largeData = arrowBytes("select * from generate_series(200)");
@@ -242,9 +244,9 @@ public class HttpSenderTest {
         try (var timeoutSender = newSender(file, Duration.ofSeconds(5))) {
             timeoutSender.enqueue(arrowBytes("select * from generate_series(2000)"));
             await().atMost(5, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() ->
-                assertThrows(Exception.class, () ->
-                    ConnectionPool.collectFirst("select count(*) from read_parquet('%s/%s')".formatted(warehouse, file), Long.class)
-                )
+                    assertThrows(Exception.class, () ->
+                            ConnectionPool.collectFirst("select count(*) from read_parquet('%s/%s')".formatted(warehouse, file), Long.class)
+                    )
             );
         }
     }
@@ -253,15 +255,15 @@ public class HttpSenderTest {
     void testMemoryDiskSwitching() throws Exception {
         var path = "spill";
         Files.createDirectories(Path.of(warehouse, path));
-        var spillSender = new HttpProducer(  schema,baseUrl, "admin", "admin", path, Duration.ofSeconds(10), 100_000, 200_000,
+        var spillSender = new HttpProducer(schema, baseUrl, "admin", "admin", path, Duration.ofSeconds(10), 100_000, 200_000,
                 Duration.ofMillis(200), 3, 1000, java.util.List.of(), java.util.List.of(), 50, 100_000);
-
 
         spillSender.enqueue(arrowBytes("select * from generate_series(30)"));
 
         await().atMost(10, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {
-            long count = ConnectionPool.collectFirst("select count(*) from read_parquet('%s/%s/*.parquet')".formatted(warehouse,path), Long.class);
-            assertEquals(31, count);
+            var actualQuery = "SELECT generate_series FROM read_parquet('%s/%s/*.parquet') ORDER BY generate_series".formatted(warehouse, path);
+            var expectedQuery = "SELECT * FROM generate_series(30) ORDER BY generate_series";
+            TestUtils.isEqual(expectedQuery, actualQuery);
         });
 
         spillSender.close();
@@ -292,11 +294,10 @@ public class HttpSenderTest {
             sender.enqueue(arrowBytes("select * from generate_series(5)"));
         }
 
-        long count = ConnectionPool.collectFirst("select count(*) from read_parquet('%s/%s/*.parquet') where c1 = 'c1' and c2 = 'c2'".formatted(warehouse, path), Long.class);
-        assertEquals(6, count);
-
+        var actualQuery = "SELECT generate_series, c1, c2 FROM read_parquet('%s/%s/*.parquet') WHERE c1 = 'c1' AND c2 = 'c2' ORDER BY generate_series".formatted(warehouse, path);
+        var expectedQuery = "SELECT generate_series, 'c1' as c1, 'c2' as c2 FROM generate_series(5) ORDER BY generate_series";
+        TestUtils.isEqual(expectedQuery, actualQuery);
     }
-
 
     @Test
     void testTransformationsAndPartitionByHeaders() throws Exception {
@@ -324,11 +325,11 @@ public class HttpSenderTest {
         }
 
         await().atMost(5, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {
-            long count = ConnectionPool.collectFirst("select count(*) from read_parquet('%s/%s/*/*/*.parquet')".formatted(warehouse, path), Long.class);
-            assertEquals(6, count);
+            var actualQuery = "SELECT generate_series, c1, c2 FROM read_parquet('%s/%s/*/*/*.parquet') ORDER BY generate_series".formatted(warehouse, path);
+            var expectedQuery = "SELECT generate_series, 'c1' as c1, 'c2' as c2 FROM generate_series(5) ORDER BY generate_series";
+            TestUtils.isEqual(expectedQuery, actualQuery);
         });
     }
-
 
     @Test
     void testEmptyListsDoNotSendHeaders() throws Exception {
@@ -357,9 +358,9 @@ public class HttpSenderTest {
         }
 
         await().atMost(5, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {
-            long count = ConnectionPool.collectFirst("select count(*) from read_parquet('%s/%s/*.parquet')".formatted(warehouse, path), Long.class);
-            assertEquals(6, count);
+            var actualQuery = "SELECT generate_series FROM read_parquet('%s/%s/*.parquet') ORDER BY generate_series".formatted(warehouse, path);
+            var expectedQuery = "SELECT * FROM generate_series(5) ORDER BY generate_series";
+            TestUtils.isEqual(expectedQuery, actualQuery);
         });
     }
-
 }

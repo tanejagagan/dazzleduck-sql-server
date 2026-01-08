@@ -133,11 +133,17 @@ public interface FlightProducer extends Closeable {
         private final BlockingQueue<ProducerElement> queue = new ArrayBlockingQueue<>(1024 * 1024);
         protected final Clock clock;
         private volatile boolean shutdown = false;
+        private volatile boolean forceShutdown = false;
 
         protected final Thread senderThread;
 
         private long inMemorySize = 0;
         private long onDiskSize = 0;
+
+        // Counters for tracking send statistics
+        private final java.util.concurrent.atomic.AtomicLong totalRetryCount = new java.util.concurrent.atomic.AtomicLong(0);
+        private final java.util.concurrent.atomic.AtomicLong droppedElementCount = new java.util.concurrent.atomic.AtomicLong(0);
+        private final java.util.concurrent.atomic.AtomicLong sentElementCount = new java.util.concurrent.atomic.AtomicLong(0);
 
         private final long minBatchSize;
 
@@ -251,6 +257,7 @@ public interface FlightProducer extends Closeable {
                             } catch (Exception e) {
                                 error = true;
                                 shutdown = true;
+                                forceShutdown = true;
                                 logger.atError().setCause(e).log("Error sending data");
                                 logger.atError().setCause(e).log("Shutting down because of exception");
                                 throw e;
@@ -417,20 +424,24 @@ public interface FlightProducer extends Closeable {
                 while (attempt <= retryCount) {
                     try {
                         doSend(elementToSend);
+                        sentElementCount.incrementAndGet();
                         if (attempt > 0) {
                             logger.info("Successfully sent element after {} retries", attempt);
                         }
                         return; // Success, exit the retry loop
                     } catch (InterruptedException e) {
                         // Don't retry on interruption, propagate immediately
+                        droppedElementCount.incrementAndGet();
                         throw e;
                     } catch (Exception e) {
                         lastException = e;
                         attempt++;
+                        totalRetryCount.incrementAndGet();
 
-                        // Don't retry if we're shutting down
-                        if (shutdown) {
-                            logger.warn("Sender is shutting down, skipping retry for failed send: {}", e.getMessage());
+                        // Don't retry if we're force shutting down (only skip retries on forced shutdown, not graceful)
+                        if (forceShutdown) {
+                            logger.warn("Sender is force shutting down, skipping retry for failed send: {}", e.getMessage());
+                            droppedElementCount.incrementAndGet();
                             return;
                         }
 
@@ -440,10 +451,12 @@ public interface FlightProducer extends Closeable {
                                 Thread.sleep(retryIntervalMillis);
                             } catch (InterruptedException ie) {
                                 Thread.currentThread().interrupt();
+                                droppedElementCount.incrementAndGet();
                                 throw ie;
                             }
                         } else {
                             logger.error("Failed to send element after {} attempts", attempt, e);
+                            droppedElementCount.incrementAndGet();
                         }
                     }
                 }
@@ -486,6 +499,27 @@ public interface FlightProducer extends Closeable {
             return maxBatchSize;
         }
 
+        /**
+         * Returns the total number of retry attempts made during the lifetime of this producer.
+         */
+        protected long getTotalRetryCount() {
+            return totalRetryCount.get();
+        }
+
+        /**
+         * Returns the number of elements that were dropped (failed to send after all retries).
+         */
+        protected long getDroppedElementCount() {
+            return droppedElementCount.get();
+        }
+
+        /**
+         * Returns the number of elements successfully sent.
+         */
+        protected long getSentElementCount() {
+            return sentElementCount.get();
+        }
+
         @Override
         public void close()  {
             // Send final bucket before shutdown
@@ -512,17 +546,19 @@ public interface FlightProducer extends Closeable {
             // Wait for the sender thread to finish processing the queue naturally
             // The sender thread will exit when shutdown=true and queue is empty
             try {
-                // Give it 5 seconds to finish processing
-                senderThread.join(2000);
+                // Give it reasonable time to finish processing (longer for graceful shutdown with retries)
+                senderThread.join(3000);
 
-                // If it's still running, interrupt it
+                // If it's still running, force shutdown and interrupt it
                 if (senderThread.isAlive()) {
-                    logger.warn("Sender thread did not finish gracefully, interrupting");
+                    logger.warn("Sender thread did not finish gracefully, forcing shutdown");
+                    forceShutdown = true;
                     senderThread.interrupt();
-                    senderThread.join(1000);
+                    senderThread.join(5000);
                 }
             } catch (InterruptedException e) {
                 logger.atError().setCause(e).log("error closing sender");
+                forceShutdown = true;
                 senderThread.interrupt();
                 Thread.currentThread().interrupt();
             }
@@ -530,12 +566,34 @@ public interface FlightProducer extends Closeable {
             // Clean up remaining queue items
             cleanupQueue();
 
+            // Log statistics
+            logCloseStatistics();
+
             // Close allocator AFTER sender thread has stopped to avoid race condition
             bufferAllocator.close();
         }
 
+        /**
+         * Logs statistics when the producer is closed. Can be overridden by subclasses
+         * to add additional context.
+         */
+        protected void logCloseStatistics() {
+            long sent = sentElementCount.get();
+            long dropped = droppedElementCount.get();
+            long retries = totalRetryCount.get();
+
+            if (dropped > 0) {
+                logger.error("Producer closed with {} unsent/dropped elements. Stats: sent={}, retries={}",
+                        dropped, sent, retries);
+            } else {
+                logger.info("Producer closed. Stats: sent={}, dropped={}, retries={}",
+                        sent, dropped, retries);
+            }
+        }
+
         private void cleanupQueue() {
             ProducerElement element;
+            int droppedInCleanup = 0;
             while ((element = queue.poll()) != null) {
                 synchronized(this) {
                     if (element instanceof MemoryElement) {
@@ -544,8 +602,13 @@ public interface FlightProducer extends Closeable {
                         onDiskSize -= element.length();
                     }
                 }
+                droppedInCleanup++;
+                droppedElementCount.incrementAndGet();
                 // Close the element to cleanup resources
                 element.close();
+            }
+            if (droppedInCleanup > 0) {
+                logger.error("Dropped {} unsent elements during cleanup", droppedInCleanup);
             }
         }
     }

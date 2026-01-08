@@ -479,7 +479,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                         connection.prepareStatement(
                                 authorizedSql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
                 final StatementContext<PreparedStatement> preparedStatementContext =
-                        new StatementContext<>(preparedStatement, authorizedSql);
+                        new StatementContext<>(connection, preparedStatement, authorizedSql);
                 preparedStatementLoadingCache.put(
                         cacheKey, preparedStatementContext);
 
@@ -638,7 +638,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                 return;
             }
             Statement statement = connection.createStatement();
-            var statementContext = new StatementContext<>(statement, query);
+            var statementContext = new StatementContext<>(connection, statement, query);
             var key = new CacheKey(context.peerIdentity(), statementHandle.queryId());
             statementLoadingCache.put(key, statementContext);
             ResultSetStreamUtil.streamResultSet(executorService,

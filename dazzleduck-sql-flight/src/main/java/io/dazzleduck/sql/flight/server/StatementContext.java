@@ -18,7 +18,9 @@ package io.dazzleduck.sql.flight.server;
 
 import org.apache.arrow.flight.sql.FlightSqlProducer;
 import org.apache.arrow.util.AutoCloseables;
+import org.duckdb.DuckDBConnection;
 
+import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.Statement;
 import java.time.Clock;
@@ -43,10 +45,13 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
 
     private final boolean isPreparedStatementContext;
 
+    private final Connection connection;
 
-    public StatementContext(final T statement, final String query) {
+
+    public StatementContext(final Connection connection, final T statement, final String query) {
         this.statement = Objects.requireNonNull(statement, "statement cannot be null.");
         this.query = query;
+        this.connection = connection;
         this.isPreparedStatementContext = statement instanceof PreparedStatement;
     }
 
@@ -74,7 +79,12 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
     @Override
     public void close()  {
         try {
-            AutoCloseables.close(statement, statement.getConnection());
+            if ( !statement.isClosed())
+                statement.close();
+            if ( !connection.isClosed()){
+                connection.close();
+            }
+
         } catch (Exception e ){
             throw new RuntimeException(e);
         }

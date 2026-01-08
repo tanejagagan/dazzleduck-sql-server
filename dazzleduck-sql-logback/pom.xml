@@ -9,6 +9,7 @@
         <version>0.0.13-SNAPSHOT</version>
     </parent>
     <artifactId>dazzleduck-sql-logback</artifactId>
+    <name>DazzleDuck Project Logback</name>
     <properties>
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
