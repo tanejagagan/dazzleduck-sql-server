@@ -5,6 +5,9 @@ import com.beust.jcommander.Parameter;
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 
 public class ConfigUtils {
@@ -19,6 +22,10 @@ public class ConfigUtils {
     public static final String  HOST_KEY =  "host";
 
     public static final String SECRET_KEY_KEY = "secret_key";
+
+    public static final String ACCESS_MODE_KEY = "access_mode";
+
+    public static final String TEMP_WRITE_LOCATION_KEY = "temp_write_location";
 
     public record ConfigWithMainParameters(Config config, List<String> mainParameters){}
 
@@ -48,6 +55,14 @@ public class ConfigUtils {
     }
 
     public static String getWarehousePath(Config config) {
-        return config.hasPath(WAREHOUSE_CONFIG_KEY) ? config.getString(WAREHOUSE_CONFIG_KEY) : System.getProperty("user.dir") + "/warehouse";
+        return config.getString(WAREHOUSE_CONFIG_KEY);
+    }
+
+    public static Path getTempWriteDir(Config config) throws IOException {
+        var tempWriteDir = Path.of(config.getString(TEMP_WRITE_LOCATION_KEY));
+        if (!Files.exists(tempWriteDir)) {
+            Files.createDirectories(tempWriteDir);
+        }
+        return tempWriteDir;
     }
 }

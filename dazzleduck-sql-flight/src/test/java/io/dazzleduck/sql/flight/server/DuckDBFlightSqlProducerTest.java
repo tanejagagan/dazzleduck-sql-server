@@ -320,6 +320,17 @@ public class DuckDBFlightSqlProducerTest {
     }
 
     @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testStatementNoOutput() throws Exception {
+        String query = "SET enable_progress_bar = true";
+        final FlightInfo flightInfo = sqlClient.execute(query);
+        try (final FlightStream stream =
+                     sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket())) {
+            FlightTestUtils.printResult(stream);
+        }
+    }
+
+    @Test
     @Timeout(value = 60, unit = TimeUnit.SECONDS)
     public void testCancelQuery() throws SQLException {
         try (Connection connection = ConnectionPool.getConnection();
