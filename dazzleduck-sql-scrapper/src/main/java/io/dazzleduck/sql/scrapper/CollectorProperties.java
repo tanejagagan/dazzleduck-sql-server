@@ -53,6 +53,11 @@ public class CollectorProperties {
     private String serverUrl = "http://localhost:8081/ingest";
 
     /**
+     * Remote server URL to forward scraped metrics.
+     */
+    private String baseUrl = "http://localhost:8081";
+
+    /**
      * Path parameter appended to server URL.
      */
     private String path = "scraped_metrics";
@@ -172,8 +177,16 @@ public class CollectorProperties {
         return serverUrl;
     }
 
+    public String getBaseUrl() {
+        return baseUrl;
+    }
+
     public void setServerUrl(String serverUrl) {
         this.serverUrl = serverUrl;
+    }
+
+    public void setBaseUrl(String baseUrl) {
+        this.baseUrl = baseUrl;
     }
 
     public String getPath() {

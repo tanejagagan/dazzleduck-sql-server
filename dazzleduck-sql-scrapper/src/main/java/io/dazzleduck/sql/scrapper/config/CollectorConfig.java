@@ -149,6 +149,13 @@ public class CollectorConfig {
     }
 
     /**
+     * Get server URL to send metrics.
+     */
+    public String getBaseUrl() {
+        return getString("base-url", "http://localhost:8081");
+    }
+
+    /**
      * Get path parameter for server URL.
      */
     public String getPath() {
@@ -284,6 +291,7 @@ public class CollectorConfig {
         props.setTargets(getTargets());
         props.setTargetPrefix(getTargetPrefix());
         props.setServerUrl(getServerUrl());
+        props.setBaseUrl(getBaseUrl());
         props.setPath(getPath());
         props.setScrapeIntervalMs(getScrapeIntervalMs());
         props.setFlushThreshold(getFlushThreshold());
