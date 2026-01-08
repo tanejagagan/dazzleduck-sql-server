@@ -1,5 +1,6 @@
 package io.dazzleduck.sql.flight.server;
 
+import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.flight.MicroMeterFlightRecorder;
 import io.dazzleduck.sql.flight.model.FlightMetricsSnapshot;
 import io.dazzleduck.sql.flight.server.DuckDBFlightSqlProducer.CacheKey;
@@ -81,7 +82,7 @@ public class MicroMeterFlightRecorderTest {
 
     private static StatementContext<Statement> dummyContext(boolean prepared, String query) {
         Statement dummyStmt = (Statement) Proxy.newProxyInstance(MicroMeterFlightRecorderTest.class.getClassLoader(), new Class<?>[]{prepared ? PreparedStatement.class : Statement.class}, (proxy, method, args) -> 0);
-        StatementContext<Statement> ctx = new StatementContext<>(dummyStmt, query);
+        StatementContext<Statement> ctx = new StatementContext<>(ConnectionPool.getConnection(), dummyStmt, query);
         ctx.start();
         ctx.bytesOut(100);
         ctx.end();

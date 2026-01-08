@@ -98,11 +98,11 @@ public final class GrpcFlightProducer extends FlightProducer.AbstractFlightProdu
         Map<String, String> enrichedParams = new java.util.HashMap<>(ingestParams);
         if (!getTransformations().isEmpty()) {
             String transformationsValue = String.join(",", getTransformations());
-            enrichedParams.put(Headers.HEADER_DATA_TRANSFORMATION, java.net.URLEncoder.encode(transformationsValue, java.nio.charset.StandardCharsets.UTF_8));
+            enrichedParams.put(Headers.HEADER_DATA_TRANSFORMATION, transformationsValue);
         }
         if (!getPartitionBy().isEmpty()) {
             String partitionByValue = String.join(",", getPartitionBy());
-            enrichedParams.put(Headers.HEADER_DATA_PARTITION, java.net.URLEncoder.encode(partitionByValue, java.nio.charset.StandardCharsets.UTF_8));
+            enrichedParams.put(Headers.HEADER_DATA_PARTITION, partitionByValue);
         }
 
         this.ingestOptions = new FlightSqlClient.ExecuteIngestOptions("", FlightSql.CommandStatementIngest
