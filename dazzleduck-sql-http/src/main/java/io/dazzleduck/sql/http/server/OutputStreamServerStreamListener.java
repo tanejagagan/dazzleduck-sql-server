@@ -3,6 +3,8 @@ package io.dazzleduck.sql.http.server;
 import io.helidon.http.Status;
 import io.helidon.webserver.http.ServerResponse;
 import org.apache.arrow.flight.FlightProducer;
+import org.apache.arrow.flight.FlightRuntimeException;
+import org.apache.arrow.flight.FlightStatusCode;
 import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.dictionary.DictionaryProvider;
@@ -114,10 +116,20 @@ public class OutputStreamServerStreamListener implements FlightProducer.ServerSt
 
     private void sendError(Throwable ex) {
         String errorMsg = ex.getMessage() != null ? ex.getMessage() : ex.getClass().getName();
+        Status httpStatus = Status.INTERNAL_SERVER_ERROR_500;
+
+        if (ex instanceof FlightRuntimeException flightEx) {
+            FlightStatusCode statusCode = flightEx.status().code();
+            errorMsg = flightEx.status().description() != null
+                    ? flightEx.status().description()
+                    : errorMsg;
+            httpStatus = mapFlightStatusToHttp(statusCode);
+        }
+
         try {
             // Only write error if stream hasn't started
             if (!isReady) {
-                this.response.status(Status.INTERNAL_SERVER_ERROR_500);
+                this.response.status(httpStatus);
                 outputStream.write(errorMsg.getBytes());
             } else {
                 // Stream already started, just log error
@@ -126,6 +138,21 @@ public class OutputStreamServerStreamListener implements FlightProducer.ServerSt
         } catch (IOException e) {
             logger.error("Failed to send error message", e);
         }
+    }
+
+    private Status mapFlightStatusToHttp(FlightStatusCode statusCode) {
+        return switch (statusCode) {
+            case OK -> Status.OK_200;
+            case INVALID_ARGUMENT -> Status.BAD_REQUEST_400;
+            case UNAUTHENTICATED -> Status.UNAUTHORIZED_401;
+            case UNAUTHORIZED -> Status.FORBIDDEN_403;
+            case NOT_FOUND -> Status.NOT_FOUND_404;
+            case TIMED_OUT -> Status.GATEWAY_TIMEOUT_504;
+            case ALREADY_EXISTS -> Status.CONFLICT_409;
+            case UNIMPLEMENTED -> Status.NOT_IMPLEMENTED_501;
+            case UNAVAILABLE -> Status.SERVICE_UNAVAILABLE_503;
+            default -> Status.INTERNAL_SERVER_ERROR_500;
+        };
     }
 
     /**

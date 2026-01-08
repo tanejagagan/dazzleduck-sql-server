@@ -170,34 +170,34 @@ public class ErrorHandling {
     }
 
     private static void handleSqlException(FlightProducer.ServerStreamListener listener, SQLException e) {
-        var exception = CallStatus.INTERNAL
+        var exception = CallStatus.INVALID_ARGUMENT
                 .withDescription(e.getMessage())
                 .toRuntimeException();
         listener.error(exception);
     }
 
     static<T> void handleSqlException(FlightProducer.StreamListener<T> listener, SQLException e) {
-        var exception = CallStatus.INTERNAL
+        var exception = CallStatus.INVALID_ARGUMENT
                 .withDescription(e.getMessage())
                 .toRuntimeException();
         listener.onError(exception);
     }
 
     static<T> void handleSQLSyntaxErrorException(FlightProducer.StreamListener<T> listener, SQLSyntaxErrorException e) {
-        var exception = CallStatus.INTERNAL
+        var exception = CallStatus.INVALID_ARGUMENT
                 .withDescription(e.getMessage())
                 .toRuntimeException();
         listener.onError(exception);
     }
 
     private static void handleSQLSyntaxErrorException(SQLSyntaxErrorException e) {
-        throw CallStatus.INTERNAL
+        throw CallStatus.INVALID_ARGUMENT
                 .withDescription(e.getMessage())
                 .toRuntimeException();
     }
 
     private static void handleSQLSyntaxErrorException(FlightProducer.ServerStreamListener listener, SQLSyntaxErrorException e) {
-        var exception = CallStatus.INTERNAL
+        var exception = CallStatus.INVALID_ARGUMENT
                 .withDescription(e.getMessage())
                 .toRuntimeException();
         listener.error(exception);
@@ -226,7 +226,7 @@ public class ErrorHandling {
     }
 
     static FlightRuntimeException handleSqlException(SQLException e) {
-        throw  CallStatus.INTERNAL
+        throw  CallStatus.INVALID_ARGUMENT
                 .withDescription(e.getMessage())
                 .toRuntimeException();
     }

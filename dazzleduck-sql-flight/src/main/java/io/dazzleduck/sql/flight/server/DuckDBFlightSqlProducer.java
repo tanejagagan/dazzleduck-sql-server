@@ -7,6 +7,7 @@ import com.google.common.cache.RemovalListener;
 import com.google.common.cache.RemovalNotification;
 import com.google.protobuf.*;
 import io.dazzleduck.sql.common.Headers;
+import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.authorization.SqlAuthorizer;
@@ -77,15 +78,11 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     private final Instant startTime;
 
     public static AccessMode getAccessMode(com.typesafe.config.Config appConfig) {
-        return appConfig.hasPath("access_mode") ? AccessMode.valueOf(appConfig.getString("access_mode").toUpperCase()) : AccessMode.COMPLETE;
+        return AccessMode.valueOf(appConfig.getString(ConfigUtils.ACCESS_MODE_KEY).toUpperCase());
     }
 
     public static Path getTempWriteDir(com.typesafe.config.Config appConfig) throws IOException {
-        var tempWriteDir = Path.of(appConfig.getString("temp_write_location"));
-        if (!Files.exists(tempWriteDir)) {
-            Files.createDirectories(tempWriteDir);
-        }
-        return tempWriteDir;
+        return ConfigUtils.getTempWriteDir(appConfig);
     }
 
     @Override
