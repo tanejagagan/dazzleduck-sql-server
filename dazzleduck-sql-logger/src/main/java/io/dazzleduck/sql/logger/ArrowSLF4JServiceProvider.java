@@ -1,12 +1,10 @@
 package io.dazzleduck.sql.logger;
 
 import org.slf4j.ILoggerFactory;
-import org.slf4j.IMarkerFactory;
 import org.slf4j.spi.MDCAdapter;
 import org.slf4j.spi.SLF4JServiceProvider;
 
-public class ArrowSLF4JServiceProvider implements SLF4JServiceProvider {
-
+public abstract class ArrowSLF4JServiceProvider implements SLF4JServiceProvider {
     public static final String REQUESTED_API_VERSION = "2.0.99";
 
     private final ArrowSimpleLoggerFactory loggerFactory = new ArrowSimpleLoggerFactory();
@@ -15,14 +13,6 @@ public class ArrowSLF4JServiceProvider implements SLF4JServiceProvider {
     @Override
     public ILoggerFactory getLoggerFactory() {
         return loggerFactory;
-    }
-
-    /**
-     * @return
-     */
-    @Override
-    public IMarkerFactory getMarkerFactory() {
-        return null;
     }
 
     @Override
