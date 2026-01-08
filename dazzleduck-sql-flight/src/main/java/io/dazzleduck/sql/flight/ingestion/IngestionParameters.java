@@ -57,4 +57,14 @@ public record IngestionParameters(String path,
         String[] sortOrder = splitCsv.apply(optionMap.get(Headers.HEADER_SORT_ORDER));
         return new IngestionParameters(path, format, partitions, transformations, sortOrder, producerId, 0L, Map.of());
     }
+
+    public FlightSql.CommandStatementIngest createCommand() {
+        var options = Map.of(
+                Headers.HEADER_PATH, path(),
+                Headers.HEADER_DATA_PARTITION, String.join(",", partitions()),
+                Headers.HEADER_DATA_FORMAT, format(),
+                Headers.HEADER_DATA_TRANSFORMATION, String.join(",", transformations()),
+                Headers.HEADER_SORT_ORDER, String.join(",", sortOrder()));
+        return FlightSql.CommandStatementIngest.newBuilder().putAllOptions(options).build();
+    }
 }

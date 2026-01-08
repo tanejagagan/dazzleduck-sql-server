@@ -79,7 +79,7 @@ public class SyntheticFlightContext implements FlightProducer.CallContext {
         return middlewareMap;
     }
 
-    private static String extractPeerIdentityFromBasicAuth(Map<String, List<String>> headers) {
+    public static String extractPeerIdentityFromBasicAuth(Map<String, List<String>> headers) {
         List<String> authHeaders = headers.get(Auth2Constants.AUTHORIZATION_HEADER);
         if (authHeaders == null || authHeaders.isEmpty()) {
             return null;
