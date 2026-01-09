@@ -1,5 +1,7 @@
 package io.dazzleduck.sql.http.server;
 
+import com.typesafe.config.Config;
+import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.util.TestUtils;
@@ -63,10 +65,47 @@ public class HttpServerDuckLakePostIngestionTest {
         Files.createDirectories(warehousePath.resolve(INGEST_PATH));
         // Initialize DuckLake
         setupDuckLake();
-        // Start HTTP server with DuckLake configuration
-        startServer();
-        // Wait for server to start
-        Thread.sleep(2000);
+        String configStr = """
+                dazzleduck_server {
+                  http {
+                    port = %d
+                    host = "0.0.0.0"
+                    authentication = "none"
+                  }
+                  warehouse = "%s"
+                  temp_write_location = "%s"
+
+                  ingestion {
+                    max_delay_ms = 500
+                  }
+
+                  post_ingestion_task_factory_provider {
+                    class = "io.dazzleduck.sql.commons.ingestion.DuckLakePostIngestionTaskFactoryProvider"
+                    catalog_name = "%s"
+                    metadata_database = "%s"
+                
+                    path_to_table_mapping {
+                      table_name = "%s"
+                      catalog_name = "%s"
+                      schema_name = "main"
+                      base_path = "%s"
+                    }
+                  }
+                }
+                """.formatted(
+                        TEST_PORT,
+                        warehousePath.toString().replace("\\", "/"),
+                        warehousePath.resolve("_tmp").toString().replace("\\", "/"),
+                        DUCKLAKE_CATALOG,
+                        detectedMetadataDatabase,
+                        TEST_TABLE,
+                        DUCKLAKE_CATALOG,
+                        INGEST_PATH
+                );
+
+        Config config = ConfigFactory.parseString(configStr).withFallback(ConfigFactory.load()).resolve();
+        Main.start(config.getConfig(ConfigUtils.CONFIG_PATH));
+        Thread.sleep(500);
     }
 
     private static void setupDuckLake() throws SQLException {
@@ -97,40 +136,6 @@ public class HttpServerDuckLakePostIngestionTest {
             tableId = ConnectionPool.collectFirst(conn, getTableIdSql, Long.class);
             assertNotNull(tableId, "Table ID should not be null");
         }
-    }
-
-    private static void startServer() throws Exception {
-        // Start server with configuration
-        String[] args = {
-                "--conf", "dazzleduck_server.http.port=" + TEST_PORT,
-
-                "--conf", "dazzleduck_server." + ConfigUtils.WAREHOUSE_CONFIG_KEY +
-                "=\"" + warehousePath.toString().replace("\\", "/") + "\"",
-
-                "--conf", "dazzleduck_server.ingestion.max_delay_ms=500",
-
-                "--conf", "dazzleduck_server.post_ingestion_task_factory_provider.class=" +
-                "io.dazzleduck.sql.commons.ingestion.DuckLakePostIngestionTaskFactoryProvider",
-
-                "--conf", "dazzleduck_server.post_ingestion_task_factory_provider.catalog_name=\"" +
-                DUCKLAKE_CATALOG + "\"",
-
-                "--conf", "dazzleduck_server.post_ingestion_task_factory_provider.metadata_database=\"" +
-                detectedMetadataDatabase + "\"",
-
-                "--conf", "dazzleduck_server.post_ingestion_task_factory_provider.path_to_table_mapping.table_name=\"" +
-                TEST_TABLE + "\"",
-
-                "--conf", "dazzleduck_server.post_ingestion_task_factory_provider.path_to_table_mapping.catalog_name=\"" +
-                DUCKLAKE_CATALOG + "\"",
-
-                "--conf", "dazzleduck_server.post_ingestion_task_factory_provider.path_to_table_mapping.schema_name=main",
-
-                "--conf", "dazzleduck_server.post_ingestion_task_factory_provider.path_to_table_mapping.base_path=\"" +
-                INGEST_PATH + "\""
-        };
-
-        Main.main(args);
     }
 
     @AfterAll
@@ -170,7 +175,6 @@ public class HttpServerDuckLakePostIngestionTest {
             writer.end();
             arrowData = outputStream.toByteArray();
         }
-        Files.createDirectories(warehousePath.resolve(INGEST_PATH));
 
         var request = HttpRequest.newBuilder(URI.create(BASE_URL + "/v1/ingest?path=" + INGEST_PATH))
                 .POST(HttpRequest.BodyPublishers.ofInputStream(() -> new ByteArrayInputStream(arrowData)))

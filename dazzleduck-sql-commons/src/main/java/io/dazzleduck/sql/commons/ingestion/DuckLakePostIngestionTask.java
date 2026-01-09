@@ -62,7 +62,6 @@ public class DuckLakePostIngestionTask implements PostIngestionTask {
         try (Connection conn = ConnectionPool.getConnection()) {
             String[] queries = files.stream().map(file -> ADD_FILE_QUERY.formatted(catalogName, tableName, file, schemaName)).toArray(String[]::new);
             ConnectionPool.executeBatchInTxn(conn, queries);
-            logger.debug("Transaction committed successfully for {} files", files.size());
         }
     }
 }
