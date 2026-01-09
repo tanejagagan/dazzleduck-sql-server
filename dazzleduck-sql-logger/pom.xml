@@ -32,6 +32,13 @@
             <artifactId>slf4j-api</artifactId>
             <version>${slf4j.version}</version>
         </dependency>
+        <!-- Exclude slf4j-simple from parent - this module IS the SLF4J provider -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
+            <version>${slf4j.version}</version>
+            <scope>provided</scope>
+        </dependency>
         <!-- Logback for tests only -->
         <dependency>
             <groupId>ch.qos.logback</groupId>
