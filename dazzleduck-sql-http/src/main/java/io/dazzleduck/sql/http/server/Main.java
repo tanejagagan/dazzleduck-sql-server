@@ -49,7 +49,6 @@ public class Main {
     private static final String CONFIG_HTTP = "http";
     private static final String CONFIG_JWT_EXPIRATION = "jwt_token.expiration";
     private static final String CONFIG_ALLOW_ORIGIN = "allow-origin";
-    private static final String CONFIG_DAZZLEDUCK_SERVER = "dazzleduck_server";
     private static final String CONFIG_FLIGHT_SQL = "flight_sql";
 
     // CORS configuration
@@ -304,7 +303,7 @@ public class Main {
         boolean requiresJwt = AUTH_JWT.equals(auth) || accessMode == AccessMode.RESTRICTED;
 
         WebServer server = WebServer.builder()
-                .config(helidonConfig.get(CONFIG_DAZZLEDUCK_SERVER))
+                .config(helidonConfig.get(ConfigUtils.CONFIG_PATH))
                 .config(helidonConfig.get(CONFIG_FLIGHT_SQL))
                 .routing(routing -> {
                     routing.register(cors);
