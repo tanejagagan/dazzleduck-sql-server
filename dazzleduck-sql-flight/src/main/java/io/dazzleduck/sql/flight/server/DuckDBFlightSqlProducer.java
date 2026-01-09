@@ -1135,7 +1135,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             final T request, final FlightDescriptor descriptor, final Schema schema) {
         final Ticket ticket = new Ticket(pack(request).toByteArray());
         // TODO Support multiple endpoints.
-        var location = getExternaalLocation();
+        var location = getExternalLocation();
         final List<FlightEndpoint> endpoints = singletonList(new FlightEndpoint(ticket, location));
         return new FlightInfo(schema, descriptor, endpoints, -1, -1);
     }
