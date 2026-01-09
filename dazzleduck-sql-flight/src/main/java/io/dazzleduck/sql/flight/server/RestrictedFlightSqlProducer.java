@@ -521,7 +521,7 @@ public class RestrictedFlightSqlProducer extends DuckDBFlightSqlProducer {
                     throw new RuntimeException(e);
                 }
             }).toList();
-            return getFlightInfoForSchema(list, descriptor, null, getLocation());
+            return getFlightInfoForSchema(list, descriptor, null, getExternalLocation());
         } catch (Throwable throwable) {
             ErrorHandling.handleThrowable(throwable);
             return null;

@@ -77,6 +77,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     protected final FlightRecorder recorder;
     private final Instant startTime;
 
+    private final Random random = new Random();
+
     public static AccessMode getAccessMode(com.typesafe.config.Config appConfig) {
         return AccessMode.valueOf(appConfig.getString(ConfigUtils.ACCESS_MODE_KEY).toUpperCase());
     }
@@ -213,7 +215,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     private final Set<Integer> supportedSqlInfo;
     protected final ExecutorService executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
     private final static Logger logger = LoggerFactory.getLogger(DuckDBFlightSqlProducer.class);
-    private final Location location;
+    private final List<Location> locations = new ArrayList<>();
     private final String producerId;
     protected final String secretKey;
     protected final BufferAllocator allocator;
@@ -331,7 +333,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                    QueryOptimizer queryOptimizer,
                                    IngestionConfig bulkIngestionConfig) {
         this.startTime = clock.instant();
-        this.location = location;
+        this.locations.add( location);
         this.producerId = producerId;
         this.allocator = allocator;
         this.secretKey = secretKey;
@@ -1030,9 +1032,14 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     }
 
 
-    public Location getLocation(){
-        return this.location;
+    /**
+     * @return external location which will be visible to client.
+     * This can be  the location of the producer it can be overwritten based on external hostname and port
+     */
+    public synchronized Location getExternalLocation(){
+        return locations.get(random.nextInt(locations.size()));
     }
+
 
     private void cancelStatement(final FlightSql.TicketStatementQuery ticketStatementQuery,
                                  CallContext context,
@@ -1074,6 +1081,14 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             listener.onCompleted();
             invalidateCache(key, context);
         }
+    }
+
+    public synchronized boolean addLocation(Location location){
+        return locations.add(location);
+    }
+
+    public synchronized boolean removeLocation(Location location){
+        return locations.remove(location);
     }
 
     private StatementContext<?> getStatementContext(CacheKey key) {
@@ -1120,6 +1135,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             final T request, final FlightDescriptor descriptor, final Schema schema) {
         final Ticket ticket = new Ticket(pack(request).toByteArray());
         // TODO Support multiple endpoints.
+        var location = getExternaalLocation();
         final List<FlightEndpoint> endpoints = singletonList(new FlightEndpoint(ticket, location));
         return new FlightInfo(schema, descriptor, endpoints, -1, -1);
     }
