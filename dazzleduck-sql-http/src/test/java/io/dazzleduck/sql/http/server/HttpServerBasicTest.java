@@ -78,14 +78,20 @@ public class HttpServerBasicTest extends HttpServerTestBase {
     }
 
     @Test
-    public void testSetWithGet() throws IOException, InterruptedException {
-        var query = "SET enable_progress_bar = true;";
+    public void testSetWithGet() throws IOException, InterruptedException, SQLException {
+        var query = "SET enable_progress_bar = true";
         var urlEncode = URLEncoder.encode(query, StandardCharsets.UTF_8);
         var request = HttpRequest.newBuilder(URI.create(baseUrl + "/v1/query?q=%s".formatted(urlEncode)))
                 .GET()
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
         var inputStreamResponse = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
         assertEquals(200, inputStreamResponse.statusCode());
+        try (var allocator = new RootAllocator();
+             ArrowReader reader = new ArrowStreamReader(inputStreamResponse.body(), allocator)) {
+            while (reader.loadNextBatch()) {
+                System.out.println(reader.getVectorSchemaRoot().contentToTSVString());
+            }
+        }
     }
 
     @Test
@@ -248,5 +254,21 @@ public class HttpServerBasicTest extends HttpServerTestBase {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
             executor.shutdown();
         }
+    }
+
+    @Test
+    public void testError() throws IOException, InterruptedException {
+        var query = "select fr";
+        var urlEncode = URLEncoder.encode(query, StandardCharsets.UTF_8);
+        var request = HttpRequest.newBuilder(URI.create(baseUrl + "/v1/query?q=%s".formatted(urlEncode)))
+                .GET()
+                .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
+        var inputStreamResponse = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+        assertEquals(400, inputStreamResponse.statusCode());
+        byte[] bytes;
+        try (var b = inputStreamResponse.body()) {
+            bytes = b.readAllBytes();
+        }
+        assertTrue(new String(bytes).contains("Error"));
     }
 }

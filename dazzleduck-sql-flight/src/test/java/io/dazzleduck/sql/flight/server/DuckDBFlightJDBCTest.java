@@ -1,6 +1,7 @@
 package io.dazzleduck.sql.flight.server;
 
 
+import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import org.apache.arrow.driver.jdbc.ArrowFlightConnection;
@@ -12,9 +13,11 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
+import java.nio.file.Path;
 import java.security.NoSuchAlgorithmException;
 import java.sql.*;
 import java.util.Map;
@@ -35,6 +38,9 @@ public class DuckDBFlightJDBCTest {
     private static String urlWithS3Path;
     private static ServerClient serverClient;
 
+    @TempDir
+    private static Path warehouse;
+
     @BeforeAll
     public static void beforeAll() throws Exception {
         // Find available port dynamically
@@ -42,7 +48,9 @@ public class DuckDBFlightJDBCTest {
         url = String.format("jdbc:arrow-flight-sql://localhost:%s/?database=memory&useEncryption=1&disableCertificateVerification=true&user=admin&password=admin", port);
         urlWithS3Path = String.format("jdbc:arrow-flight-sql://localhost:%s/?database=memory&useEncryption=1&disableCertificateVerification=true&user=admin&password=admin&path=s3://bucket/my/folder", port);
 
-        String[] args = {"--conf", "dazzleduck_server.flight_sql.port=" + port, "--conf", "dazzleduck_server.use_encryption=false"};
+        String[] args = {"--conf", "dazzleduck_server.flight_sql.port=" + port, "--conf", "dazzleduck_server.use_encryption=false",
+                "--conf",
+                "dazzleduck_server.%s=\"%s\"".formatted(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehouse.toAbsolutePath().toString())};
         serverClient = FlightTestUtils.setUpFlightServerAndClient(args, "admin", "admin", Map.of());
     }
 

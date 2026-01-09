@@ -2,6 +2,7 @@ package io.dazzleduck.sql.flight.server;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
+import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactory;
 import io.dazzleduck.sql.flight.optimizer.QueryOptimizer;
@@ -60,9 +61,10 @@ public class FlightSqlProducerFactoryTest {
     @Test
     public void testCreateFromConfig_WithMinimalConfig() throws Exception {
         Map<String, Object> configMap = new HashMap<>();
-        configMap.put("warehouse_path", warehousePath.toString());
-        configMap.put("secret_key", "test-secret-key");
-        configMap.put("temp_write_location", tempWritePath.toString());
+        configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
+        configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
+        configMap.put(ConfigUtils.ACCESS_MODE_KEY, "COMPLETE");
         configMap.put("ingestion.min_bucket_size", 1048576L);
         configMap.put("ingestion.max_delay_ms", 2000L);
 
@@ -84,10 +86,10 @@ public class FlightSqlProducerFactoryTest {
     @Test
     public void testCreateFromConfig_RestrictedMode() throws Exception {
         Map<String, Object> configMap = new HashMap<>();
-        configMap.put("warehouse_path", warehousePath.toString());
-        configMap.put("secret_key", "test-secret-key");
-        configMap.put("temp_write_location", tempWritePath.toString());
-        configMap.put("access_mode", "RESTRICTED");
+        configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
+        configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
+        configMap.put(ConfigUtils.ACCESS_MODE_KEY, "RESTRICTED");
         configMap.put("ingestion.min_bucket_size", 1048576L);
         configMap.put("ingestion.max_delay_ms", 2000L);
 
@@ -108,9 +110,10 @@ public class FlightSqlProducerFactoryTest {
     @Test
     public void testCreateFromConfig_WithCustomHostAndPort() throws Exception {
         Map<String, Object> configMap = new HashMap<>();
-        configMap.put("warehouse_path", warehousePath.toString());
-        configMap.put("secret_key", "test-secret-key");
-        configMap.put("temp_write_location", tempWritePath.toString());
+        configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
+        configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
+        configMap.put(ConfigUtils.ACCESS_MODE_KEY, "COMPLETE");
         configMap.put("flight_sql.host", "127.0.0.1");
         configMap.put("flight_sql.port", 12345);
         configMap.put("ingestion.min_bucket_size", 1048576L);
@@ -133,9 +136,10 @@ public class FlightSqlProducerFactoryTest {
     @Test
     public void testCreateFromConfig_WithEncryption() throws Exception {
         Map<String, Object> configMap = new HashMap<>();
-        configMap.put("warehouse_path", warehousePath.toString());
-        configMap.put("secret_key", "test-secret-key");
-        configMap.put("temp_write_location", tempWritePath.toString());
+        configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
+        configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
+        configMap.put(ConfigUtils.ACCESS_MODE_KEY, "COMPLETE");
         configMap.put("flight_sql.host", "secure.example.com");
         configMap.put("flight_sql.port", 443);
         configMap.put("flight_sql.use_encryption", true);
@@ -161,9 +165,10 @@ public class FlightSqlProducerFactoryTest {
         String customProducerId = "custom-producer-123";
 
         Map<String, Object> configMap = new HashMap<>();
-        configMap.put("warehouse_path", warehousePath.toString());
-        configMap.put("secret_key", "test-secret-key");
-        configMap.put("temp_write_location", tempWritePath.toString());
+        configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
+        configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
+        configMap.put(ConfigUtils.ACCESS_MODE_KEY, "COMPLETE");
         configMap.put("producerId", customProducerId);
         configMap.put("ingestion.min_bucket_size", 1048576L);
         configMap.put("ingestion.max_delay_ms", 2000L);
@@ -185,9 +190,10 @@ public class FlightSqlProducerFactoryTest {
     @Test
     public void testCreateFromConfig_WithCustomQueryTimeout() throws Exception {
         Map<String, Object> configMap = new HashMap<>();
-        configMap.put("warehouse_path", warehousePath.toString());
-        configMap.put("secret_key", "test-secret-key");
-        configMap.put("temp_write_location", tempWritePath.toString());
+        configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
+        configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
+        configMap.put(ConfigUtils.ACCESS_MODE_KEY, "COMPLETE");
         configMap.put("query_timeout_minutes", 10L);
         configMap.put("ingestion.min_bucket_size", 1048576L);
         configMap.put("ingestion.max_delay_ms", 2000L);
@@ -210,9 +216,10 @@ public class FlightSqlProducerFactoryTest {
     @Test
     public void testCreateFromConfig_WithCustomIngestionConfig() throws Exception {
         Map<String, Object> configMap = new HashMap<>();
-        configMap.put("warehouse_path", warehousePath.toString());
-        configMap.put("secret_key", "test-secret-key");
-        configMap.put("temp_write_location", tempWritePath.toString());
+        configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
+        configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
+        configMap.put(ConfigUtils.ACCESS_MODE_KEY, "COMPLETE");
         configMap.put("ingestion.min_bucket_size", 2097152L);
         configMap.put("ingestion.max_delay_ms", 5000L);
 
@@ -232,8 +239,9 @@ public class FlightSqlProducerFactoryTest {
     @Test
     public void testCreateFromConfig_MissingSecretKey() {
         Map<String, Object> configMap = new HashMap<>();
-        configMap.put("warehouse_path", warehousePath.toString());
-        configMap.put("temp_write_location", tempWritePath.toString());
+        configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
+        configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
+        configMap.put(ConfigUtils.ACCESS_MODE_KEY, "COMPLETE");
         configMap.put("ingestion.min_bucket_size", 1048576L);
         configMap.put("ingestion.max_delay_ms", 2000L);
 
@@ -248,8 +256,9 @@ public class FlightSqlProducerFactoryTest {
     @Test
     public void testCreateFromConfig_MissingTempWriteLocation() {
         Map<String, Object> configMap = new HashMap<>();
-        configMap.put("warehouse_path", warehousePath.toString());
-        configMap.put("secret_key", "test-secret-key");
+        configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
+        configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.ACCESS_MODE_KEY, "COMPLETE");
         configMap.put("ingestion.min_bucket_size", 1048576L);
         configMap.put("ingestion.max_delay_ms", 2000L);
 
@@ -264,9 +273,10 @@ public class FlightSqlProducerFactoryTest {
     @Test
     public void testBuilder_WithCustomAllocator() throws Exception {
         Map<String, Object> configMap = new HashMap<>();
-        configMap.put("warehouse_path", warehousePath.toString());
-        configMap.put("secret_key", "test-secret-key");
-        configMap.put("temp_write_location", tempWritePath.toString());
+        configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
+        configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
+        configMap.put(ConfigUtils.ACCESS_MODE_KEY, "COMPLETE");
         configMap.put("ingestion.min_bucket_size", 1048576L);
         configMap.put("ingestion.max_delay_ms", 2000L);
 
@@ -291,9 +301,10 @@ public class FlightSqlProducerFactoryTest {
     @Test
     public void testBuilder_WithCustomQueryOptimizer() throws Exception {
         Map<String, Object> configMap = new HashMap<>();
-        configMap.put("warehouse_path", warehousePath.toString());
-        configMap.put("secret_key", "test-secret-key");
-        configMap.put("temp_write_location", tempWritePath.toString());
+        configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
+        configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
+        configMap.put(ConfigUtils.ACCESS_MODE_KEY, "COMPLETE");
         configMap.put("ingestion.min_bucket_size", 1048576L);
         configMap.put("ingestion.max_delay_ms", 2000L);
 
@@ -317,9 +328,10 @@ public class FlightSqlProducerFactoryTest {
     @Test
     public void testBuilder_WithCustomClock() throws Exception {
         Map<String, Object> configMap = new HashMap<>();
-        configMap.put("warehouse_path", warehousePath.toString());
-        configMap.put("secret_key", "test-secret-key");
-        configMap.put("temp_write_location", tempWritePath.toString());
+        configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
+        configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
+        configMap.put(ConfigUtils.ACCESS_MODE_KEY, "COMPLETE");
         configMap.put("ingestion.min_bucket_size", 1048576L);
         configMap.put("ingestion.max_delay_ms", 2000L);
 
@@ -343,9 +355,10 @@ public class FlightSqlProducerFactoryTest {
     @Test
     public void testBuilder_WithCustomQueryTimeout() throws Exception {
         Map<String, Object> configMap = new HashMap<>();
-        configMap.put("warehouse_path", warehousePath.toString());
-        configMap.put("secret_key", "test-secret-key");
-        configMap.put("temp_write_location", tempWritePath.toString());
+        configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
+        configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
+        configMap.put(ConfigUtils.ACCESS_MODE_KEY, "COMPLETE");
         configMap.put("ingestion.min_bucket_size", 1048576L);
         configMap.put("ingestion.max_delay_ms", 2000L);
 
@@ -369,9 +382,10 @@ public class FlightSqlProducerFactoryTest {
     @Test
     public void testBuilder_WithCustomIngestionConfig() throws Exception {
         Map<String, Object> configMap = new HashMap<>();
-        configMap.put("warehouse_path", warehousePath.toString());
-        configMap.put("secret_key", "test-secret-key");
-        configMap.put("temp_write_location", tempWritePath.toString());
+        configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
+        configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
+        configMap.put(ConfigUtils.ACCESS_MODE_KEY, "COMPLETE");
         configMap.put("ingestion.min_bucket_size", 1048576L);
         configMap.put("ingestion.max_delay_ms", 2000L);
 
@@ -395,9 +409,10 @@ public class FlightSqlProducerFactoryTest {
     @Test
     public void testBuilder_WithMultipleCustomComponents() throws Exception {
         Map<String, Object> configMap = new HashMap<>();
-        configMap.put("warehouse_path", warehousePath.toString());
-        configMap.put("secret_key", "test-secret-key");
-        configMap.put("temp_write_location", tempWritePath.toString());
+        configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
+        configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
+        configMap.put(ConfigUtils.ACCESS_MODE_KEY, "COMPLETE");
         configMap.put("ingestion.min_bucket_size", 1048576L);
         configMap.put("ingestion.max_delay_ms", 2000L);
 
@@ -427,12 +442,13 @@ public class FlightSqlProducerFactoryTest {
     @Test
     public void testCreateFromConfig_UsesDefaultValues() throws Exception {
         Map<String, Object> configMap = new HashMap<>();
-        configMap.put("warehouse_path", warehousePath.toString());
-        configMap.put("secret_key", "test-secret-key");
-        configMap.put("temp_write_location", tempWritePath.toString());
+        configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
+        configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
+        configMap.put(ConfigUtils.ACCESS_MODE_KEY, "COMPLETE");
         configMap.put("ingestion.min_bucket_size", 1048576L);
         configMap.put("ingestion.max_delay_ms", 2000L);
-        // Not setting: flight_sql.host, flight_sql.port, use_encryption, producerId, access_mode, query_timeout_minutes
+        // Not setting: flight_sql.host, flight_sql.port, use_encryption, producerId, query_timeout_minutes
 
         Config config = ConfigFactory.parseMap(configMap);
 

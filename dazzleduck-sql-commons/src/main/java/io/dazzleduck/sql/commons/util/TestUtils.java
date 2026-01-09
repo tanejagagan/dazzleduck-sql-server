@@ -46,6 +46,18 @@ public class TestUtils {
         }
     }
 
+    public static void printResult(BufferAllocator allocator, ArrowReader reader) throws SQLException, IOException {
+        String tempTable = "_temp_" + System.currentTimeMillis();
+        String matTable = String.format("%s_mat", tempTable);
+        try( DuckDBConnection connection = ConnectionPool.getConnection();
+             final ArrowArrayStream arrow_array_stream = ArrowArrayStream.allocateNew(allocator)) {
+            Data.exportArrayStream(allocator, reader, arrow_array_stream);
+            connection.registerArrowStream(tempTable, arrow_array_stream);
+            ConnectionPool.execute(connection, String.format("CREATE TABLE %s AS SELECT * FROM %s", matTable, tempTable));
+            ConnectionPool.printResult(connection, allocator, "select * from %s".formatted(tempTable));
+        }
+    }
+
     public static void isEqual(DuckDBConnection connection, BufferAllocator allocator,
                                String expected, String result) throws SQLException, IOException {
         String sql = String.format(IS_EQUAL, expected, result);
