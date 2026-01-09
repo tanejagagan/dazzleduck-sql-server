@@ -78,9 +78,10 @@ public class HttpLoggerIntegrationTest {
         ArrowSimpleLogger logger = new ArrowSimpleLogger("multi-level-test");
 
         try {
-            logger.trace("Trace message");
-            logger.debug("Debug message");
+            // Log at levels that pass the configured log level (INFO by default)
             logger.info("Info message");
+            logger.warn("Warn message");
+            logger.error("Error message");
         } finally {
             logger.close();
         }
