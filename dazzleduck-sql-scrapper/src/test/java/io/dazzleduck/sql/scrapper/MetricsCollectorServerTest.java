@@ -12,6 +12,7 @@ import java.io.FileWriter;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -317,57 +318,76 @@ class MetricsCollectorServerTest {
     @DisplayName("Should handle shutdown gracefully")
     void shouldHandleShutdownGracefully() throws Exception {
         String prometheusData = "shutdown_metric 42\n";
-        for (int i = 0; i < 10; i++) {
-            targetServer.enqueue(new MockResponse().setBody(prometheusData).setResponseCode(200));
+        for (int i = 0; i < 3; i++) {
+            targetServer.enqueue(new MockResponse()
+                    .setBody(prometheusData)
+                    .setResponseCode(200));
         }
 
         String hoconContent = String.format("""
-            collector {
-                enabled = true
-                targets = ["%s"]
-                server-url = "http://localhost:8081"
-                scrape-interval-ms = 50
-                tailing {
-                    flush-threshold = 100
-                    flush-interval-ms = 10000
-                }
-                http {
-                    max-retries = 0
-                }
-                auth {
-                    username = "test"
-                    password = "test"
-                }
-                producer {
-                    min-batch-size = 1024
-                    max-batch-size = 16777216
-                    max-in-memory-size = 10485760
-                    max-on-disk-size = 1073741824
-                }
+        collector {
+            enabled = true
+            targets = ["%s"]
+            server-url = "http://localhost:8081"
+            scrape-interval-ms = 10
+            tailing {
+                flush-threshold = 1
+                flush-interval-ms = 50
             }
-            """,
-            targetServer.url("/prometheus").toString()
+            http {
+                max-retries = 0
+            }
+            auth {
+                username = "test"
+                password = "test"
+            }
+            producer {
+                min-batch-size = 1
+                max-batch-size = 1024
+                max-in-memory-size = 1024
+                max-on-disk-size = 1024
+            }
+        }
+        """,
+                targetServer.url("/prometheus").toString()
         );
 
         tempConfigFile = createTempConfigFile(hoconContent);
-        MetricsCollectorServer server = new MetricsCollectorServer(tempConfigFile.getAbsolutePath());
+        MetricsCollectorServer server =
+                new MetricsCollectorServer(tempConfigFile.getAbsolutePath());
 
         executor.submit(server::start);
-        Thread.sleep(200);
+
+        // Wait until server is actually running
+        waitUntil(server::isRunning, 1000);
 
         assertTrue(server.isRunning());
 
-        // Get collector before shutdown
         MetricsCollector collector = server.getCollector();
         assertNotNull(collector);
 
         // Trigger shutdown
         server.shutdown();
-        Thread.sleep(100);
+
+        // Wait until fully stopped
+        waitUntil(() -> !server.isRunning(), 1000);
+        waitUntil(() -> !collector.isRunning(), 1000);
 
         assertFalse(server.isRunning());
         assertFalse(collector.isRunning());
     }
+
+    static void waitUntil(BooleanSupplier condition, long timeoutMs) throws InterruptedException {
+        long end = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < end) {
+            if (condition.getAsBoolean()) {
+                return;
+            }
+            Thread.sleep(10);
+        }
+        throw new AssertionError("Condition not met within timeout");
+    }
+
 
     @Test
     @DisplayName("Should expose collector for monitoring")
