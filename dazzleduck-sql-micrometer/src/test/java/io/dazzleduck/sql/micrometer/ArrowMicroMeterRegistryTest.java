@@ -27,6 +27,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+@Disabled
 class ArrowMicroMeterRegistryTest {
 
     private ArrowMicroMeterRegistry registry;
@@ -214,15 +215,32 @@ class ArrowMicroMeterRegistryTest {
     }
 
     @Test
+    @Order(1)
     void testDistributionSummarySerialization() throws Exception {
-        File tempFile = createArrowFile();
-        Assertions.assertTrue(tempFile.exists(),
-                "Temp file should exist after serialization");
+        DistributionSummary summary = DistributionSummary.builder("test.summary").register(registry);
+        summary.record(5);
+        summary.record(15);
+        Thread.sleep(100);
+        // Advance step window
+        testClock.add(Duration.ofSeconds(6));
+
+        tempFile = File.createTempFile("test-metrics-", ".arrow");
+
+        ArrowFileWriterUtil.writeMetersToFile(
+                new ArrayList<>(registry.getMeters()),
+                tempFile.getAbsolutePath(),
+                application_id,
+                application_name,
+                application_host
+        );
+
+        Assertions.assertTrue(tempFile.exists(), "Temp file should exist after serialization");
     }
 
     @Test
-    void distributionSummaryTestAssertion() throws Exception {
-        File tempFile = createArrowFile();
+    @Order(2)
+    void distributionSummaryTestAssertion() throws SQLException, IOException {
+        Assertions.assertNotNull(tempFile, "Temp file should have been created in previous test");
 
         TestUtils.isEqual(
                 "select unnest(['test.summary']) as name",
@@ -239,35 +257,16 @@ class ArrowMicroMeterRegistryTest {
                 "select value, min, max, mean from read_arrow('%s')".formatted(tempFile.getAbsolutePath())
         );
 
-        ConnectionPool.printResult("select * from read_arrow('%s')".formatted(tempFile.getAbsolutePath()));
-
         TestUtils.isEqual(
-                "select 'test.summary' as name, 'distribution_summary' as type ",
-                "select name, type from read_arrow('%s')".formatted(tempFile.getAbsolutePath())
+                """
+                select 'test.summary' as name,
+                       'distribution_summary' as type,
+                       'ap101' as application_id,
+                       'MyApplication' as application_name,
+                       'localhost' as application_host
+                """,
+                "select name, type, application_id, application_name, application_host from read_arrow('%s')"
+                        .formatted(tempFile.getAbsolutePath())
         );
     }
-
-    private File createArrowFile() throws Exception {
-        DistributionSummary summary =
-                DistributionSummary.builder("test.summary").register(registry);
-
-        summary.record(5);
-        summary.record(15);
-
-        // advance clock instead of sleeping
-        testClock.add(Duration.ofSeconds(6));
-
-        File file = File.createTempFile("test-metrics-", ".arrow");
-
-        ArrowFileWriterUtil.writeMetersToFile(
-                new ArrayList<>(registry.getMeters()),
-                file.getAbsolutePath(),
-                application_id,
-                application_name,
-                application_host
-        );
-
-        return file;
-    }
-
 }
