@@ -123,10 +123,10 @@ public class Main {
         }
 
         // Validate port from producer location
-        int port = producer.getLocation().getUri().getPort();
+        int port = producer.getExternalLocation().getUri().getPort();
         validatePort(port);
 
-        String host = producer.getLocation().getUri().getHost();
+        String host = producer.getExternalLocation().getUri().getHost();
 
         logger.info("Starting Flight server with configuration:");
         logger.info("  Host: {}", host);
@@ -139,7 +139,7 @@ public class Main {
         try (var certStream = getInputStreamForResource(serverCertLocation);
              var keyStream = getInputStreamForResource(keystoreLocation)) {
 
-            var builder = FlightServer.builder(allocator, producer.getLocation(), producer)
+            var builder = FlightServer.builder(allocator, producer.getExternalLocation(), producer)
                     .middleware(AdvanceServerCallHeaderAuthMiddleware.KEY,
                             new AdvanceServerCallHeaderAuthMiddleware.Factory(authenticator));
             if (useEncryption) {

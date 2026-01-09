@@ -3,8 +3,6 @@ package io.dazzleduck.sql.flight.server;
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.common.util.ConfigUtils;
-import io.dazzleduck.sql.commons.authorization.AccessMode;
-import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactory;
 import io.dazzleduck.sql.flight.optimizer.QueryOptimizer;
 import org.apache.arrow.flight.Location;
 import org.apache.arrow.memory.BufferAllocator;
@@ -20,8 +18,6 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.ScheduledExecutorService;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -124,7 +120,7 @@ public class FlightSqlProducerFactoryTest {
         DuckDBFlightSqlProducer producer = FlightSqlProducerFactory.createFromConfig(config);
 
         assertNotNull(producer);
-        assertEquals(Location.forGrpcInsecure("127.0.0.1", 12345), producer.getLocation());
+        assertEquals(Location.forGrpcInsecure("127.0.0.1", 12345), producer.getExternalLocation());
 
         // Clean up
         producer.close();
@@ -151,7 +147,7 @@ public class FlightSqlProducerFactoryTest {
         DuckDBFlightSqlProducer producer = FlightSqlProducerFactory.createFromConfig(config);
 
         assertNotNull(producer);
-        assertEquals(Location.forGrpcTls("secure.example.com", 443), producer.getLocation());
+        assertEquals(Location.forGrpcTls("secure.example.com", 443), producer.getExternalLocation());
 
         // Clean up
         producer.close();
@@ -457,7 +453,7 @@ public class FlightSqlProducerFactoryTest {
         assertNotNull(producer);
 
         // Verify defaults
-        assertEquals(Location.forGrpcInsecure("0.0.0.0", 32010), producer.getLocation());
+        assertEquals(Location.forGrpcInsecure("0.0.0.0", 32010), producer.getExternalLocation());
         assertNotNull(producer.getProducerId()); // Should be a generated UUID
         assertFalse(producer instanceof RestrictedFlightSqlProducer); // Default is COMPLETE mode
 
