@@ -1,6 +1,7 @@
 package io.dazzleduck.sql.http.server;
 
 import com.typesafe.config.Config;
+import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.commons.authorization.SubjectAndVerifiedClaims;
 import io.helidon.http.HeaderNames;
 import io.helidon.http.Status;
@@ -32,8 +33,8 @@ public class JwtAuthenticationFilter implements Filter {
                 .verifyWith(secretKey)      //     or a constant key used to verify all signed JWTs
                 .build();
         this.paths = paths;
-        this.claimHeader = config.getStringList("jwt_token.claims.generate.headers");
-        this.validateHeaders = new HashSet<>(config.getStringList("jwt_token.claims.validate.headers"));
+        this.claimHeader = config.getStringList(ConfigUtils.JWT_TOKEN_CLAIMS_GENERATE_HEADERS_KEY);
+        this.validateHeaders = new HashSet<>(config.getStringList(ConfigUtils.JWT_TOKEN_CLAIMS_VALIDATE_HEADERS_KEY));
     }
 
     public SubjectAndVerifiedClaims authenticate(String token) {

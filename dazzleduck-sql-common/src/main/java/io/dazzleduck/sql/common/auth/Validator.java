@@ -63,8 +63,8 @@ public interface Validator {
         List<? extends ConfigObject> users = config.getObjectList("users");
         final Map<String, byte[]> passwords = new HashMap<>();
         users.forEach( o -> {
-            String name = o.toConfig().getString("username");
-            String password = o.toConfig().getString("password");
+            String name = o.toConfig().getString(ConfigUtils.USERNAME_KEY);
+            String password = o.toConfig().getString(ConfigUtils.PASSWORD_KEY);
             passwords.put(name, hash(password));
         });
         return (username, password) -> {

@@ -3,6 +3,7 @@ package io.dazzleduck.sql.scrapper;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.Tag;
 
 import java.util.List;
 
@@ -14,6 +15,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * Note: HttpProducer handles actual HTTP sending asynchronously with authentication,
  * so these tests focus on the collector's scraping and buffering behavior.
  */
+@Tag("slow")
 class MetricsCollectorTest {
 
     private MockWebServer targetServer;

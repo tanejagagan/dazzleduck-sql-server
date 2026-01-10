@@ -101,7 +101,7 @@ public final class SharedTestServer implements Closeable {
                 .withValue("flight_sql.use_encryption", ConfigValueFactory.fromAnyRef(false))
                 .withValue("warehouse", ConfigValueFactory.fromAnyRef(warehousePath))
                 .withValue("http.auth", ConfigValueFactory.fromAnyRef("jwt"))
-                .withValue("ingestion.max_delay_ms", ConfigValueFactory.fromAnyRef(200));
+                .withValue("ingestion.max_delay_ms", ConfigValueFactory.fromAnyRef(50));
 
         for (String override : configOverrides) {
             String[] parts = override.split("=", 2);

@@ -2,6 +2,7 @@ package io.dazzleduck.sql.logback;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
+import io.dazzleduck.sql.common.util.ConfigUtils;
 
 import java.time.Duration;
 
@@ -61,29 +62,29 @@ public final class LogForwarderConfigFactory {
      * @return A configured LogForwarderConfig
      */
     public static LogForwarderConfig createConfig() {
-        Config http = config.getConfig("http");
+        Config http = config.getConfig(ConfigUtils.HTTP_PREFIX);
 
         return LogForwarderConfig.builder()
-                .applicationId(config.getString("application_id"))
-                .applicationName(config.getString("application_name"))
-                .applicationHost(config.getString("application_host"))
-                .baseUrl(http.getString("base_url"))
-                .username(http.getString("username"))
-                .password(http.getString("password"))
-                .targetPath(http.getString("target_path"))
-                .httpClientTimeout(Duration.ofMillis(http.getLong("http_client_timeout_ms")))
-                .maxBufferSize(config.getInt("max_buffer_size"))
-                .pollInterval(Duration.ofMillis(config.getLong("poll_interval_ms")))
-                .minBatchSize(config.getLong("min_batch_size"))
-                .maxBatchSize(config.getLong("max_batch_size"))
-                .maxSendInterval(Duration.ofMillis(config.getLong("max_send_interval_ms")))
-                .maxInMemorySize(config.getLong("max_in_memory_bytes"))
-                .maxOnDiskSize(config.getLong("max_on_disk_bytes"))
-                .retryCount(config.getInt("retry_count"))
-                .retryIntervalMillis(config.getLong("retry_interval_ms"))
-                .transformations(config.getStringList("transformations"))
-                .partitionBy(config.getStringList("partition_by"))
-                .enabled(config.getBoolean("enabled"))
+                .applicationId(config.getString(ConfigUtils.APPLICATION_ID_KEY))
+                .applicationName(config.getString(ConfigUtils.APPLICATION_NAME_KEY))
+                .applicationHost(config.getString(ConfigUtils.APPLICATION_HOST_KEY))
+                .baseUrl(http.getString(ConfigUtils.BASE_URL_KEY))
+                .username(http.getString(ConfigUtils.USERNAME_KEY))
+                .password(http.getString(ConfigUtils.PASSWORD_KEY))
+                .targetPath(http.getString(ConfigUtils.TARGET_PATH_KEY))
+                .httpClientTimeout(Duration.ofMillis(http.getLong(ConfigUtils.HTTP_CLIENT_TIMEOUT_MS_KEY)))
+                .maxBufferSize(config.getInt(ConfigUtils.MAX_BUFFER_SIZE_KEY))
+                .pollInterval(Duration.ofMillis(config.getLong(ConfigUtils.POLL_INTERVAL_MS_KEY)))
+                .minBatchSize(config.getLong(ConfigUtils.MIN_BATCH_SIZE_KEY))
+                .maxBatchSize(config.getLong(ConfigUtils.MAX_BATCH_SIZE_KEY))
+                .maxSendInterval(Duration.ofMillis(config.getLong(ConfigUtils.MAX_SEND_INTERVAL_MS_KEY)))
+                .maxInMemorySize(config.getLong(ConfigUtils.MAX_IN_MEMORY_BYTES_KEY))
+                .maxOnDiskSize(config.getLong(ConfigUtils.MAX_ON_DISK_BYTES_KEY))
+                .retryCount(config.getInt(ConfigUtils.RETRY_COUNT_KEY))
+                .retryIntervalMillis(config.getLong(ConfigUtils.RETRY_INTERVAL_MS_KEY))
+                .transformations(config.getStringList(ConfigUtils.TRANSFORMATIONS_KEY))
+                .partitionBy(config.getStringList(ConfigUtils.PARTITION_BY_KEY))
+                .enabled(config.getBoolean(ConfigUtils.ENABLED_KEY))
                 .build();
     }
 }

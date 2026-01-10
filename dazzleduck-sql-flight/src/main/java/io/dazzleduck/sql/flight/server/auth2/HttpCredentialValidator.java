@@ -2,6 +2,7 @@ package io.dazzleduck.sql.flight.server.auth2;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.typesafe.config.Config;
+import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.login.LoginResponse;
 import org.apache.arrow.flight.CallHeaders;
 import org.apache.arrow.flight.auth2.Auth2Constants;
@@ -24,8 +25,8 @@ public class HttpCredentialValidator implements AdvanceBasicCallHeaderAuthentica
     private final String loginUrl;
 
     public HttpCredentialValidator(Config config) {
-        this.jwtClaims = config.getStringList("jwt_token.claims.generate.headers");
-        this.loginUrl = config.getString("login_url");
+        this.jwtClaims = config.getStringList(ConfigUtils.JWT_TOKEN_CLAIMS_GENERATE_HEADERS_KEY);
+        this.loginUrl = config.getString(ConfigUtils.LOGIN_URL_KEY);
     }
 
     @Override

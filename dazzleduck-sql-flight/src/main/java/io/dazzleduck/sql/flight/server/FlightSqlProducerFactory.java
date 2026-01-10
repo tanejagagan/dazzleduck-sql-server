@@ -16,7 +16,6 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
-import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 
@@ -33,7 +32,7 @@ import java.util.concurrent.ScheduledExecutorService;
  *   <li><b>flight_sql.use_encryption</b> - Whether to use TLS (default: false)</li>
  *   <li><b>warehouse_path</b> - Warehouse directory path (required)</li>
  *   <li><b>secret_key</b> - Secret key for signing (required)</li>
- *   <li><b>producerId</b> - Producer identifier (default: random UUID)</li>
+ *   <li><b>producer_id</b> - Producer identifier (required)</li>
  *   <li><b>access_mode</b> - Access mode: COMPLETE or RESTRICTED (default: COMPLETE)</li>
  *   <li><b>temp_write_location</b> - Temporary write directory (required)</li>
  *   <li><b>query_timeout_minutes</b> - Query timeout in minutes (default: 2)</li>
@@ -126,9 +125,7 @@ public final class FlightSqlProducerFactory {
             // Core settings
             this.warehousePath = ConfigUtils.getWarehousePath(config);
             this.secretKey = config.getString(ConfigUtils.SECRET_KEY_KEY);
-            this.producerId = config.hasPath("producerId")
-                ? config.getString("producerId")
-                : UUID.randomUUID().toString();
+            this.producerId = config.getString(ConfigUtils.PRODUCER_ID_KEY);
 
             // Access mode
             this.accessMode = DuckDBFlightSqlProducer.getAccessMode(config);
@@ -141,8 +138,8 @@ public final class FlightSqlProducerFactory {
             }
 
             // Query timeout
-            this.queryTimeout = config.hasPath("query_timeout_minutes")
-                ? Duration.ofMinutes(config.getLong("query_timeout_minutes"))
+            this.queryTimeout = config.hasPath(ConfigUtils.QUERY_TIMEOUT_MINUTES_KEY)
+                ? Duration.ofMinutes(config.getLong(ConfigUtils.QUERY_TIMEOUT_MINUTES_KEY))
                 : Duration.ofMinutes(2);
 
             // Ingestion config
@@ -421,12 +418,12 @@ public final class FlightSqlProducerFactory {
         }
 
         private Location readLocationFromConfig() {
-            String host = config.hasPath("flight_sql.host")
-                ? config.getString("flight_sql.host") : "0.0.0.0";
-            int port = config.hasPath("flight_sql.port")
-                ? config.getInt("flight_sql.port") : 32010;
-            boolean useEncryption = config.hasPath("flight_sql.use_encryption")
-                && config.getBoolean("flight_sql.use_encryption");
+            String host = config.hasPath(ConfigUtils.FLIGHT_SQL_HOST_KEY)
+                ? config.getString(ConfigUtils.FLIGHT_SQL_HOST_KEY) : "0.0.0.0";
+            int port = config.hasPath(ConfigUtils.FLIGHT_SQL_PORT_KEY)
+                ? config.getInt(ConfigUtils.FLIGHT_SQL_PORT_KEY) : 32010;
+            boolean useEncryption = config.hasPath(ConfigUtils.FLIGHT_SQL_USE_ENCRYPTION_KEY)
+                && config.getBoolean(ConfigUtils.FLIGHT_SQL_USE_ENCRYPTION_KEY);
 
             return useEncryption
                 ? Location.forGrpcTls(host, port)
@@ -452,7 +449,7 @@ public final class FlightSqlProducerFactory {
         }
 
         private static IngestionConfig loadIngestionConfig(Config config) {
-            return IngestionConfig.fromConfig(config.getConfig(IngestionConfig.KEY));
+            return IngestionConfig.fromConfig(config.getConfig(ConfigUtils.INGESTION_KEY));
         }
 
         private static io.dazzleduck.sql.flight.FlightRecorder buildRecorder(String producerId) {
