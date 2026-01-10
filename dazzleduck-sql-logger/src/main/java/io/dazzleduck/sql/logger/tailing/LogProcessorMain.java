@@ -3,6 +3,7 @@ package io.dazzleduck.sql.logger.tailing;
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.client.HttpProducer;
+import io.dazzleduck.sql.common.util.ConfigUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -15,27 +16,32 @@ public final class LogProcessorMain {
 
     private static final Logger logger = LoggerFactory.getLogger(LogProcessorMain.class);
 
+    // Logger-specific config keys
+    private static final String LOG_DIRECTORY_KEY = "log_directory";
+    private static final String LOG_FILE_PATTERN_KEY = "log_file_pattern";
+
     private static final Config config = ConfigFactory.load().getConfig("dazzleduck_logger");
     // Application config
-    private static final String CONFIG_APPLICATION_ID = config.getString("application_id");
-    private static final String CONFIG_APPLICATION_NAME = config.getString("application_name");
-    private static final String CONFIG_APPLICATION_HOST = config.getString("application_host");
+    private static final String CONFIG_APPLICATION_ID = config.getString(ConfigUtils.APPLICATION_ID_KEY);
+    private static final String CONFIG_APPLICATION_NAME = config.getString(ConfigUtils.APPLICATION_NAME_KEY);
+    private static final String CONFIG_APPLICATION_HOST = config.getString(ConfigUtils.APPLICATION_HOST_KEY);
     // Log monitoring config
-    private static final String CONFIG_LOG_DIRECTORY = config.getString("log_directory");
-    private static final String CONFIG_LOG_FILE_PATTERN = config.getString("log_file_pattern");
-    private static final long CONFIG_POLL_INTERVAL_MS = config.getLong("poll_interval_ms");
+    private static final String CONFIG_LOG_DIRECTORY = config.getString(LOG_DIRECTORY_KEY);
+    private static final String CONFIG_LOG_FILE_PATTERN = config.getString(LOG_FILE_PATTERN_KEY);
+    private static final long CONFIG_POLL_INTERVAL_MS = config.getLong(ConfigUtils.POLL_INTERVAL_MS_KEY);
     // HTTP config
-    private static final String CONFIG_HTTP_BASE_URL = config.getString("http.base_url");
-    private static final String CONFIG_HTTP_USERNAME = config.getString("http.username");
-    private static final String CONFIG_HTTP_PASSWORD = config.getString("http.password");
-    private static final String CONFIG_HTTP_TARGET_PATH = config.getString("http.target_path");
-    private static final long CONFIG_HTTP_TIMEOUT_MS = config.getLong("http.http_client_timeout_ms");
+    private static final Config httpConfig = config.getConfig(ConfigUtils.HTTP_PREFIX);
+    private static final String CONFIG_HTTP_BASE_URL = httpConfig.getString(ConfigUtils.BASE_URL_KEY);
+    private static final String CONFIG_HTTP_USERNAME = httpConfig.getString(ConfigUtils.USERNAME_KEY);
+    private static final String CONFIG_HTTP_PASSWORD = httpConfig.getString(ConfigUtils.PASSWORD_KEY);
+    private static final String CONFIG_HTTP_TARGET_PATH = httpConfig.getString(ConfigUtils.TARGET_PATH_KEY);
+    private static final long CONFIG_HTTP_TIMEOUT_MS = httpConfig.getLong(ConfigUtils.HTTP_CLIENT_TIMEOUT_MS_KEY);
     // Batch and memory config
-    private static final long CONFIG_MIN_BATCH_SIZE = config.getLong("min_batch_size");
-    private static final long CONFIG_MAX_BATCH_SIZE = config.getLong("max_batch_size");
-    private static final long CONFIG_MAX_SEND_INTERVAL_MS = config.getLong("max_send_interval_ms");
-    private static final long CONFIG_MAX_IN_MEMORY_BYTES = config.getLong("max_in_memory_bytes");
-    private static final long CONFIG_MAX_ON_DISK_BYTES = config.getLong("max_on_disk_bytes");
+    private static final long CONFIG_MIN_BATCH_SIZE = config.getLong(ConfigUtils.MIN_BATCH_SIZE_KEY);
+    private static final long CONFIG_MAX_BATCH_SIZE = config.getLong(ConfigUtils.MAX_BATCH_SIZE_KEY);
+    private static final long CONFIG_MAX_SEND_INTERVAL_MS = config.getLong(ConfigUtils.MAX_SEND_INTERVAL_MS_KEY);
+    private static final long CONFIG_MAX_IN_MEMORY_BYTES = config.getLong(ConfigUtils.MAX_IN_MEMORY_BYTES_KEY);
+    private static final long CONFIG_MAX_ON_DISK_BYTES = config.getLong(ConfigUtils.MAX_ON_DISK_BYTES_KEY);
 
     public static void main(String[] args) throws InterruptedException {
         // Create converter to get schema
@@ -56,10 +62,10 @@ public final class LogProcessorMain {
                 CONFIG_MIN_BATCH_SIZE,
                 CONFIG_MAX_BATCH_SIZE,
                 Duration.ofMillis(CONFIG_MAX_SEND_INTERVAL_MS),
-                config.getInt("retry_count"),
-                config.getLong("retry_interval_ms"),
-                config.getStringList("transformations"),
-                config.getStringList("partition_by"),
+                config.getInt(ConfigUtils.RETRY_COUNT_KEY),
+                config.getLong(ConfigUtils.RETRY_INTERVAL_MS_KEY),
+                config.getStringList(ConfigUtils.TRANSFORMATIONS_KEY),
+                config.getStringList(ConfigUtils.PARTITION_BY_KEY),
                 CONFIG_MAX_IN_MEMORY_BYTES,
                 CONFIG_MAX_ON_DISK_BYTES
         );

@@ -9,7 +9,10 @@ import org.junit.jupiter.api.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
+
+@Execution(ExecutionMode.CONCURRENT)
 public class HttpLoggerIntegrationTest {
 
     private static final Config config = ConfigFactory.load().getConfig("dazzleduck_logger");
@@ -18,8 +21,8 @@ public class HttpLoggerIntegrationTest {
     // Extract port from base_url to ensure server matches
     private static final int LOGGER_CONFIG_HTTP_PORT = extractPortFromBaseUrl(config.getString("http.base_url"));
 
-    private SharedTestServer server;
-    private String warehousePath;
+    private static SharedTestServer server;
+    private static String warehousePath;
 
     private static int extractPortFromBaseUrl(String baseUrl) {
         // baseUrl format: "http://localhost:8081"
@@ -31,7 +34,7 @@ public class HttpLoggerIntegrationTest {
     }
 
     @BeforeAll
-    void startServer() throws Exception {
+    static void startServer() throws Exception {
         server = new SharedTestServer();
         server.startWithPorts(LOGGER_CONFIG_HTTP_PORT, 0);
         warehousePath = server.getWarehousePath();
@@ -39,7 +42,7 @@ public class HttpLoggerIntegrationTest {
     }
 
     @AfterAll
-    void stopServer() {
+    static void stopServer() {
         if (server != null) {
             server.close();
         }
@@ -63,12 +66,11 @@ public class HttpLoggerIntegrationTest {
                     """
                     select 'INFO'              as level,
                            'integration-test'  as logger,
-                           'main'              as thread,
                            'Test 0'            as message,
                            'ap101'             as application_id,
                            'MyApplication'     as application_name,
                            'localhost'         as application_host
-                    """, "select level, logger, thread, message, application_id, application_name, application_host\n" +
+                    """, "select level, logger, message, application_id, application_name, application_host\n" +
                             "from read_parquet('%s') where message = 'Test 0'".formatted(logFile.toAbsolutePath())
             );
     }

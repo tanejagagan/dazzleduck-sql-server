@@ -109,9 +109,9 @@ public class Main {
      */
     public static FlightServer createServer(Config config, DuckDBFlightSqlProducer producer, BufferAllocator allocator) throws Exception {
         // Validate and load configuration
-        boolean useEncryption = config.getBoolean("flight_sql.use_encryption");
-        String keystoreLocation = config.getString("keystore");
-        String serverCertLocation = config.getString("server_cert");
+        boolean useEncryption = config.getBoolean(ConfigUtils.FLIGHT_SQL_USE_ENCRYPTION_KEY);
+        String keystoreLocation = config.getString(ConfigUtils.KEYSTORE_KEY);
+        String serverCertLocation = config.getString(ConfigUtils.SERVER_CERT_KEY);
         String warehousePath = ConfigUtils.getWarehousePath(config);
 
         // Validate warehouse path

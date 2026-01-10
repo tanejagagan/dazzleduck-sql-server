@@ -3,6 +3,7 @@ package io.dazzleduck.sql.flight.server.auth2;
 import com.google.common.base.Strings;
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
+import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.grpc.Metadata;
 import io.jsonwebtoken.JwtParser;
 import io.jsonwebtoken.Jwts;
@@ -43,10 +44,10 @@ public class AdvanceJWTTokenAuthenticator implements CallHeaderAuthenticator {
                 .verifyWith(key)//     or a constant key used to verify all signed JWTs
                 .build();
         this.initialAuthenticator = initialAuthenticator;
-        this.timeMinutes = config.getDuration("jwt_token.expiration");
-        this.claimHeader = config.getStringList("jwt_token.claims.generate.headers");
-        this.validateHeaders = new HashSet<>(config.getStringList("jwt_token.claims.validate.headers"));
-        this.generateToken = config.getBoolean("jwt_token.generation");
+        this.timeMinutes = config.getDuration(ConfigUtils.JWT_TOKEN_EXPIRATION_KEY);
+        this.claimHeader = config.getStringList(ConfigUtils.JWT_TOKEN_CLAIMS_GENERATE_HEADERS_KEY);
+        this.validateHeaders = new HashSet<>(config.getStringList(ConfigUtils.JWT_TOKEN_CLAIMS_VALIDATE_HEADERS_KEY));
+        this.generateToken = config.getBoolean(ConfigUtils.JWT_TOKEN_GENERATION_KEY);
     }
 
     private static Config defaulConfig() {

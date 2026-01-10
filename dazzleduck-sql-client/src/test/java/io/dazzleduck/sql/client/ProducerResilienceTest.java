@@ -12,6 +12,7 @@ import org.apache.arrow.vector.types.pojo.FieldType;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.parallel.Execution;
@@ -39,6 +40,7 @@ import java.util.Map;
  * 4. Server runs for 2 seconds, stops for 0.5 seconds, repeats until test ends
  * 5. After producer closes, validate all distinct events are received
  */
+@Tag("slow")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @Execution(ExecutionMode.CONCURRENT)
 public class ProducerResilienceTest {

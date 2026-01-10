@@ -24,11 +24,15 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
 
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Tests for MockIngestionServer to verify it correctly mimics the ingestion service.
  */
+@Execution(ExecutionMode.CONCURRENT)
 class MockIngestionServerTest {
 
     private static final ObjectMapper mapper = new ObjectMapper();

@@ -4,6 +4,7 @@ import io.dazzleduck.sql.client.HttpProducer;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
@@ -14,6 +15,7 @@ import java.util.concurrent.TimeUnit;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.*;
 
+@Tag("slow")
 class LogTailToArrowProcessorTest {
 
     static final int PORT = 8094;
