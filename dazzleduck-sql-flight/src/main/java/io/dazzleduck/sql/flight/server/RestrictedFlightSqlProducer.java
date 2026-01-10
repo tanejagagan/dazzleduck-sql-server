@@ -25,8 +25,11 @@ import java.util.concurrent.ScheduledExecutorService;
 import static com.google.protobuf.ByteString.copyFrom;
 
 public class RestrictedFlightSqlProducer extends DuckDBFlightSqlProducer {
+
+    private final QueryOptimizer queryOptimizer;
     public RestrictedFlightSqlProducer(Location location, String producerId, String secretKey, BufferAllocator allocator, String warehousePath, Path tempDir, PostIngestionTaskFactory postIngestionTaskFactory, ScheduledExecutorService scheduledExecutorService, Duration queryTimeout, Clock clock, FlightRecorder recorder, QueryOptimizer queryOptimizer, IngestionConfig ingestionConfig) {
-        super(location, producerId, secretKey, allocator, warehousePath, AccessMode.RESTRICTED, tempDir, postIngestionTaskFactory, scheduledExecutorService, queryTimeout, clock, recorder, queryOptimizer, ingestionConfig);
+        super(location, producerId, secretKey, allocator, warehousePath, AccessMode.RESTRICTED, tempDir, postIngestionTaskFactory, scheduledExecutorService, queryTimeout, clock, recorder, ingestionConfig);
+        this.queryOptimizer = queryOptimizer;
     }
 
     public static <T> T throwNotSupported(String operation) {

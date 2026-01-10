@@ -279,7 +279,6 @@ public class IngestionResilienceTest {
                 Duration.ofMinutes(2),
                 Clock.systemDefaultZone(),
                 new MicroMeterFlightRecorder(new SimpleMeterRegistry(), producerId),
-                QueryOptimizer.NOOP_QUERY_OPTIMIZER,
                 DuckDBFlightSqlProducer.DEFAULT_INGESTION_CONFIG
         );
 
