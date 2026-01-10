@@ -15,6 +15,7 @@ public class ConfigBasedStartupScriptProvider implements StartupScriptProvider {
     public static final String SCRIPT_LOCATION_KEY = "script_location";
     private Config config;
 
+
     public String getStartupScript() throws IOException {
         StringBuilder sb = new StringBuilder();
         if (config.hasPath(CONTENT_KEY)) {

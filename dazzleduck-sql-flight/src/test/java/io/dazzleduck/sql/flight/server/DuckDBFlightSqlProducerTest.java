@@ -8,6 +8,7 @@ import io.dazzleduck.sql.common.StartupScriptProvider;
 import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.ConnectionPool;
+import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactory;
 import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactoryProvider;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.dazzleduck.sql.flight.optimizer.QueryOptimizer;
@@ -42,6 +43,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import static io.dazzleduck.sql.common.LocalStartupConfigProvider.SCRIPT_LOCATION_KEY;
@@ -187,6 +189,7 @@ public class DuckDBFlightSqlProducerTest {
         final Location serverLocation = FlightTestUtils.findNextLocation();
         String producerId = UUID.randomUUID().toString();
         FlightRecorder recorder = new MicroMeterFlightRecorder(new SimpleMeterRegistry(), producerId);
+
         producer = new DuckDBFlightSqlProducer(
                 serverLocation,
                 producerId,
@@ -198,8 +201,7 @@ public class DuckDBFlightSqlProducerTest {
                 PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(),
                 Executors.newSingleThreadScheduledExecutor(),
                 Duration.ofMinutes(2),
-                Clock.systemDefaultZone(),
-                recorder, QueryOptimizer.NOOP_QUERY_OPTIMIZER, DuckDBFlightSqlProducer.DEFAULT_INGESTION_CONFIG);
+                Clock.systemDefaultZone(), recorder, DuckDBFlightSqlProducer.DEFAULT_INGESTION_CONFIG);
 
         flightServer = FlightServer.builder(
                         serverAllocator,

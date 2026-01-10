@@ -12,7 +12,7 @@ public interface StartupScriptProvider extends ConfigBasedProvider {
     String getStartupScript()  throws IOException;
 
     static StartupScriptProvider load(Config config) throws Exception {
-        return (StartupScriptProvider) ConfigBasedProvider.load(config, STARTUP_SCRIPT_CONFIG_PREFIX,
+        return ConfigBasedProvider.load(config, STARTUP_SCRIPT_CONFIG_PREFIX,
                 new ConfigBasedStartupScriptProvider());
     }
 }

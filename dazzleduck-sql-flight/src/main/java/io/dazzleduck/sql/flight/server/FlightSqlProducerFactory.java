@@ -415,8 +415,7 @@ public final class FlightSqlProducerFactory {
                     queryTimeout,
                     clock,
                     buildRecorder(producerId),
-                    queryOptimizer,
-                    ingestionConfig
+                        ingestionConfig
                 );
             }
         }
