@@ -1,5 +1,6 @@
 package io.dazzleduck.sql.flight.server;
 
+import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
 import org.apache.arrow.flight.*;
 import org.apache.arrow.flight.sql.FlightSqlClient;
@@ -9,7 +10,9 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 
 import java.nio.file.Files;
@@ -30,7 +33,10 @@ public class HttpLoginTest {
     private static int flightPort;
     private static FlightSqlClient sqlClient;
     private static Location serverLocation;
-    private static String warehousePath;
+
+    @TempDir
+    private static Path  warehouse;
+
 
     private static ServerClient serverClient;
 
@@ -38,9 +44,6 @@ public class HttpLoginTest {
     public static void setup() throws Exception {
         // Create allocator with reasonable limit
         clientAllocator = new RootAllocator(ALLOCATOR_LIMIT);
-
-        // Create warehouse directory
-        warehousePath = Files.createTempDirectory("duckdb_warehouse_" + HttpLoginTest.class.getSimpleName()).toString();
 
         // Use dynamic port allocation
         httpPort = FlightTestUtils.findFreePortInRange(8000, 9000);
@@ -53,6 +56,7 @@ public class HttpLoginTest {
         Thread.sleep(100);
 
         var confOverload = new String[]{"--conf", "dazzleduck_server.flight_sql.port=" + flightPort,
+                "--conf", "dazzleduck_server.%s=\"%s\"".formatted(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehouse.toAbsolutePath().toString()),
                 "--conf", "dazzleduck_server.login_url=\"http://localhost:%s/v1/login\"".formatted(httpPort),
                 "--conf", "dazzleduck_server.flight_sql.use_encryption=false",
                 "--conf", "dazzleduck_server.jwt_token.generation=false",
@@ -109,15 +113,6 @@ public class HttpLoginTest {
                 clientAllocator.close();
             } catch (Exception e) {
                 System.err.println("Error closing clientAllocator: " + e.getMessage());
-            }
-        }
-
-        // Clean up warehouse directory
-        if (warehousePath != null) {
-            try {
-                deleteDirectory(new java.io.File(warehousePath));
-            } catch (Exception e) {
-                System.err.println("Error deleting warehousePath: " + e.getMessage());
             }
         }
     }

@@ -20,7 +20,6 @@ public class Main {
     public static final String CONFIG_PATH = "dazzleduck_login_service";
     private static final String CONFIG_HTTP = "http";
     private static final String CONFIG_JWT_EXPIRATION = "jwt_token.expiration";
-    private static final String CONFIG_DAZZLEDUCK_SERVER = "dazzleduck_server";
     private static final String CONFIG_FLIGHT_SQL = "flight_sql";
 
     // HTTP protocols
@@ -41,7 +40,7 @@ public class Main {
         var secretKey = Validator.fromBase64String(appConfig.getString(ConfigUtils.SECRET_KEY_KEY));
         var jwtExpiration = appConfig.getDuration(CONFIG_JWT_EXPIRATION);
         WebServer server = WebServer.builder()
-                .config(helidonConfig.get(CONFIG_DAZZLEDUCK_SERVER))
+                .config(helidonConfig.get(ConfigUtils.CONFIG_PATH))
                 .config(helidonConfig.get(CONFIG_FLIGHT_SQL))
                 .routing(routing -> {
                     var b = routing

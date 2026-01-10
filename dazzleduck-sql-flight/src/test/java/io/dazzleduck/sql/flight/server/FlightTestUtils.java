@@ -132,7 +132,8 @@ public interface FlightTestUtils {
                 .intercept(AuthUtils.createClientMiddlewareFactory(user, password, clientHeaders))
                 .build());
         var commandLineConfig = ConfigUtils.loadCommandLineConfig(confOverload).config();
-        return new ServerClient(flightServer, sqlClient, clientAllocator, ConfigUtils.getWarehousePath(commandLineConfig));
+        var serverconfig = commandLineConfig.getConfig(ConfigUtils.CONFIG_PATH);
+        return new ServerClient(flightServer, sqlClient, clientAllocator, ConfigUtils.getWarehousePath(serverconfig));
     }
 
     static void testQuery(String testQuery, FlightSqlClient sqlClient, BufferAllocator clientAllocator) throws Exception {
@@ -149,6 +150,15 @@ public interface FlightTestUtils {
     static void testStream(String expectedQuery, Supplier<FlightStream> streamSupplier, BufferAllocator clientAllocator) throws Exception {
         try (final FlightStream stream = streamSupplier.get()) {
             TestUtils.isEqual(expectedQuery, clientAllocator, FlightStreamReader.of(stream, clientAllocator));
+        }
+    }
+
+    static void printResult(FlightStream flightStream) throws IOException {
+        try (var allocator = new RootAllocator();
+            var reader = FlightStreamReader.of(flightStream, allocator)){
+            while (reader.loadNextBatch()){
+                System.out.println(reader.getVectorSchemaRoot().contentToTSVString());
+            }
         }
     }
 
