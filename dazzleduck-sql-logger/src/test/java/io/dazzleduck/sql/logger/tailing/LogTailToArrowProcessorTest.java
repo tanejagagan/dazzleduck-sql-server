@@ -12,10 +12,13 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
+
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.*;
 
-@Tag("slow")
+@Execution(ExecutionMode.CONCURRENT)
 class LogTailToArrowProcessorTest {
 
     static final int PORT = 8094;

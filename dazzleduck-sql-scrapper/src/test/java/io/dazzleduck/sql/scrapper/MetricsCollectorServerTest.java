@@ -23,7 +23,6 @@ import static org.junit.jupiter.api.Assertions.*;
  * Note: HttpProducer handles actual HTTP sending asynchronously with authentication,
  * so these tests focus on server lifecycle and scraping behavior.
  */
-@Tag("slow")
 class MetricsCollectorServerTest {
 
     private MockWebServer targetServer;
