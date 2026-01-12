@@ -15,7 +15,7 @@
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <testcontainer.version>2.0.2</testcontainer.version>
-        <hadoop.version>3.4.2</hadoop.version>
+        <hadoop.version>3.3.4</hadoop.version>
         <delta-kernel.version>3.3.2</delta-kernel.version>
     </properties>
 
