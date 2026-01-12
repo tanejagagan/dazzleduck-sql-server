@@ -284,6 +284,7 @@ public class DuckDBFlightSqlProducerTest {
 
     @Test
     @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    @Disabled("Requires Hadoop 3.4.3+ for Java 23+ compatibility (HADOOP-19212)")
     public void testStatementSplittableDelta() throws Exception {
         // Use dynamic port allocation
         var serverLocation = FlightTestUtils.findNextLocation();
