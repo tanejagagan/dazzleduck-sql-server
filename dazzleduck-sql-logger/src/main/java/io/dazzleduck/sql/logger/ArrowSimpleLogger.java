@@ -6,6 +6,7 @@ import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.client.HttpProducer;
 import io.dazzleduck.sql.client.FlightProducer;
+import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.common.types.JavaRow;
 import org.apache.arrow.vector.types.pojo.*;
 import org.slf4j.MDC;
@@ -106,7 +107,7 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
     private final String application_name;
     private final String application_host;
 
-    public ArrowSimpleLogger(String name) {
+    public ArrowSimpleLogger(String name) throws IllegalAccessException {
         this(name, createSenderFromConfig());
     }
 
@@ -118,72 +119,41 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
         this.application_host = CONFIG_APPLICATION_HOST;
     }
 
-    private static FlightProducer createSenderFromConfig() {
+    private static FlightProducer createSenderFromConfig() throws IllegalAccessException {
         // If not fully initialized, config is unavailable, or we're already creating a producer,
         // return a no-op producer. This handles:
         // 1. Circular initialization when Arrow's Field class triggers SLF4J logging
         // 2. Recursive calls when HttpProducer's static initializer uses SLF4J logging
         if (!fullyInitialized || config == null || creatingProducer.get()) {
-            return new NoOpFlightProducer();
+            throw new IllegalAccessException("Config is required");
         }
 
         // Set flag to prevent recursion
         creatingProducer.set(Boolean.TRUE);
         try {
-            Config http = config.getConfig("http");
-            String targetPath = http.getString("target_path");
+            Config http = config.getConfig(ConfigUtils.HTTP_PREFIX);
+            String targetPath = http.getString(ConfigUtils.TARGET_PATH_KEY);
             return new HttpProducer(
                     schema,
-                    http.getString("base_url"),
-                    http.getString("username"),
-                    http.getString("password"),
+                    http.getString(ConfigUtils.BASE_URL_KEY),
+                    http.getString(ConfigUtils.USERNAME_KEY),
+                    http.getString(ConfigUtils.PASSWORD_KEY),
                     targetPath,
-                    Duration.ofMillis(http.getLong("http_client_timeout_ms")),
-                    config.getLong("min_batch_size"),
-                    config.getLong("max_batch_size"),
-                    Duration.ofMillis(config.getLong("max_send_interval_ms")),
-                    config.getInt("retry_count"),
-                    config.getLong("retry_interval_ms"),
-                    config.getStringList("transformations"),
-                    config.getStringList("partition_by"),
-                    config.getLong("max_in_memory_bytes"),
-                    config.getLong("max_on_disk_bytes")
+                    Duration.ofMillis(http.getLong(ConfigUtils.HTTP_CLIENT_TIMEOUT_MS_KEY)),
+                    config.getLong(ConfigUtils.MIN_BATCH_SIZE_KEY),
+                    config.getLong(ConfigUtils.MAX_BATCH_SIZE_KEY),
+                    Duration.ofMillis(config.getLong(ConfigUtils.MAX_SEND_INTERVAL_MS_KEY)),
+                    config.getInt(ConfigUtils.RETRY_COUNT_KEY),
+                    config.getLong(ConfigUtils.RETRY_INTERVAL_MS_KEY),
+                    config.getStringList(ConfigUtils.TRANSFORMATIONS_KEY),
+                    config.getStringList(ConfigUtils.PARTITION_BY_KEY),
+                    config.getLong(ConfigUtils.MAX_IN_MEMORY_BYTES_KEY),
+                    config.getLong(ConfigUtils.MAX_ON_DISK_BYTES_KEY)
             );
-        } catch (Exception e) {
-            System.err.println("[ArrowSimpleLogger] Failed to create HttpProducer: " + e.getMessage());
-            return new NoOpFlightProducer();
+        } catch (Exception ex) {
+            throw new RuntimeException(ex);
         } finally {
             creatingProducer.set(Boolean.FALSE);
-        }
-    }
-
-    /**
-     * No-op FlightProducer for use during initialization or when config is unavailable.
-     */
-    private static class NoOpFlightProducer implements FlightProducer {
-        @Override
-        public void addRow(JavaRow row) {
-            // No-op: discard logs during initialization
-        }
-
-        @Override
-        public void enqueue(byte[] input) {
-            // No-op
-        }
-
-        @Override
-        public long getMaxInMemorySize() {
-            return 0;
-        }
-
-        @Override
-        public long getMaxOnDiskSize() {
-            return 0;
-        }
-
-        @Override
-        public void close() {
-            // No-op
         }
     }
 
@@ -268,13 +238,8 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
 
     @Override
     public void close() {
-        try {
-            if (flightProducer != null) {
-                ((AutoCloseable) flightProducer).close();
-            }
-        } catch (Exception e) {
-            System.err.println("[ArrowSimpleLogger] Failed to close producer:");
-            e.printStackTrace(System.err);
+        if (flightProducer instanceof FlightProducer.AbstractFlightProducer afs) {
+            afs.close();
         }
     }
 
