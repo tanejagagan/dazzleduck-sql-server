@@ -2,7 +2,6 @@ package io.dazzleduck.sql.commons.planner;
 
 import io.dazzleduck.sql.commons.Transformations;
 import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -20,7 +19,6 @@ public class SplitPlannerTest {
     }
 
     @Test
-    @Disabled("Requires Hadoop 3.4.3+ for Java 23+ compatibility (HADOOP-19212)")
     public void testSplitDelta() throws SQLException, IOException {
         var splits = SplitPlanner.getSplitTreeAndSize(Transformations.parseToTree(SUPPORTED_DELTA_PATH_QUERY),
                 1024 * 1024 * 1024);
