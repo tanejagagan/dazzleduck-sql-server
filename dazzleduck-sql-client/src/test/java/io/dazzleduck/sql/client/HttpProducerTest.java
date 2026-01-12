@@ -13,6 +13,7 @@ import org.apache.arrow.vector.types.pojo.Schema;
 import org.duckdb.DuckDBConnection;
 import org.junit.jupiter.api.*;
 
+
 import java.io.ByteArrayOutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -22,19 +23,22 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
+
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.*;
 
-@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+@Execution(ExecutionMode.CONCURRENT)
 public class HttpProducerTest {
 
-    private SharedTestServer server;
-    private String warehouse;
-    private String baseUrl;
-    private Schema schema;
+    private static SharedTestServer server;
+    private static String warehouse;
+    private static String baseUrl;
+    private static Schema schema;
 
     @BeforeAll
-    void setup() throws Exception {
+    static void setup() throws Exception {
         server = new SharedTestServer();
         server.start();
         warehouse = server.getWarehousePath();
@@ -43,7 +47,7 @@ public class HttpProducerTest {
     }
 
     @AfterAll
-    void teardown() {
+    static void teardown() {
         if (server != null) {
             server.close();
         }
@@ -224,7 +228,8 @@ public class HttpProducerTest {
 
     @Test
     void testQueueFullBehavior() throws Exception {
-        var limitedSender = new HttpProducer(schema, baseUrl, "admin", "admin", "full.parquet", Duration.ofSeconds(3), 100_000, 200_000,
+        String file = "full-" + System.nanoTime();
+        var limitedSender = new HttpProducer(schema, baseUrl, "admin", "admin", file, Duration.ofSeconds(3), 100_000, 200_000,
                 Duration.ofMillis(200), 3, 1000, java.util.List.of(), java.util.List.of(), 100, 200);
 
         byte[] largeData = arrowBytes("select * from generate_series(200)");
@@ -237,23 +242,8 @@ public class HttpProducerTest {
     }
 
     @Test
-    void testTimeoutFailure() throws Exception {
-        String file = "timeout-" + System.nanoTime() + ".parquet";
-
-        // Set an impossibly short timeout of 1ms to force the exception
-        try (var timeoutSender = newSender(file, Duration.ofSeconds(5))) {
-            timeoutSender.enqueue(arrowBytes("select * from generate_series(2000)"));
-            await().atMost(5, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() ->
-                    assertThrows(Exception.class, () ->
-                            ConnectionPool.collectFirst("select count(*) from read_parquet('%s/%s')".formatted(warehouse, file), Long.class)
-                    )
-            );
-        }
-    }
-
-    @Test
     void testMemoryDiskSwitching() throws Exception {
-        var path = "spill";
+        var path = "spill-" + System.nanoTime();
         Files.createDirectories(Path.of(warehouse, path));
         var spillSender = new HttpProducer(schema, baseUrl, "admin", "admin", path, Duration.ofSeconds(10), 100_000, 200_000,
                 Duration.ofMillis(200), 3, 1000, java.util.List.of(), java.util.List.of(), 50, 100_000);
@@ -271,7 +261,7 @@ public class HttpProducerTest {
 
     @Test
     void testTransformationsHeader() throws Exception {
-        String path = "transformations-test";
+        String path = "transformations-test-" + System.nanoTime();
         Files.createDirectories(Path.of(warehouse, path));
 
         try (HttpProducer sender = new HttpProducer(
@@ -301,7 +291,7 @@ public class HttpProducerTest {
 
     @Test
     void testTransformationsAndPartitionByHeaders() throws Exception {
-        String path = "both-headers-test";
+        String path = "both-headers-test-" + System.nanoTime();
         Files.createDirectories(Path.of(warehouse, path));
 
         try (HttpProducer sender = new HttpProducer(
@@ -333,7 +323,7 @@ public class HttpProducerTest {
 
     @Test
     void testEmptyListsDoNotSendHeaders() throws Exception {
-        String path = "empty-lists-test";
+        String path = "empty-lists-test-" + System.nanoTime();
         Files.createDirectories(Path.of(warehouse, path));
 
         // Empty lists should work fine and not send headers

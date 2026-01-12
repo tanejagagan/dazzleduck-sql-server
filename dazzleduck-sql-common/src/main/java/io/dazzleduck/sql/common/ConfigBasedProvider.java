@@ -26,7 +26,6 @@ public interface ConfigBasedProvider {
             object.setConfig(innerConfig);
             return object;
         }
-
     }
 
     void setConfig(Config config);

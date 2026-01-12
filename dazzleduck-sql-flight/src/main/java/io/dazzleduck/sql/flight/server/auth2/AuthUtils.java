@@ -20,7 +20,6 @@ import java.util.Map;
 public class AuthUtils {
     private static final ObjectMapper objectMapper = new ObjectMapper();
     private static final HttpClient httpClient = HttpClient.newHttpClient();
-    public static final String PROXY_LOGIN_URL_KEY = "login_url";
 
     private static String generateBasicAuthHeader(String username, String password) {
         byte[] up = Base64.getEncoder().encode((username + ":" + password).getBytes(StandardCharsets.UTF_8));
@@ -84,7 +83,7 @@ public class AuthUtils {
     }
 
     public static AdvanceBasicCallHeaderAuthenticator.AdvanceCredentialValidator createCredentialValidator(Config config) {
-        return config.hasPath(PROXY_LOGIN_URL_KEY) ?
+        return config.hasPath(ConfigUtils.LOGIN_URL_KEY) ?
                 new HttpCredentialValidator(config)
                 : new ConfBasedCredentialValidator(config);
     }

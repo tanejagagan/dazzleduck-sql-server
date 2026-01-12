@@ -46,10 +46,10 @@ public class Main {
     private static final String ENDPOINT_UI = API_VERSION_PREFIX + "/ui";
 
     // Configuration keys
-    private static final String CONFIG_HTTP = "http";
-    private static final String CONFIG_JWT_EXPIRATION = "jwt_token.expiration";
-    private static final String CONFIG_ALLOW_ORIGIN = "allow-origin";
-    private static final String CONFIG_FLIGHT_SQL = "flight_sql";
+    private static final String CONFIG_HTTP = ConfigUtils.HTTP_PREFIX;
+    private static final String CONFIG_JWT_EXPIRATION = ConfigUtils.JWT_TOKEN_EXPIRATION_KEY;
+    private static final String CONFIG_ALLOW_ORIGIN = ConfigUtils.ALLOW_ORIGIN_KEY;
+    private static final String CONFIG_FLIGHT_SQL = ConfigUtils.FLIGHT_SQL_PREFIX;
 
     // CORS configuration
     private static final String CORS_DEFAULT_ALLOW_ORIGIN = "*";
@@ -59,8 +59,8 @@ public class Main {
     private static final String HEADER_AUTHORIZATION = "Authorization";
 
     // Authentication types
-    private static final String AUTH_NONE = "none";
-    private static final String AUTH_JWT = "jwt";
+    private static final String AUTH_NONE = ConfigUtils.AUTH_NONE;
+    private static final String AUTH_JWT = ConfigUtils.AUTH_JWT;
 
     // HTTP protocols
     private static final String PROTOCOL_HTTP = "http";
@@ -290,8 +290,8 @@ public class Main {
                         .build())
                 .build();
         HttpService loginService;
-        if (appConfig.hasPath(AuthUtils.PROXY_LOGIN_URL_KEY)) {
-            var proxyUrl = appConfig.getString(AuthUtils.PROXY_LOGIN_URL_KEY);
+        if (appConfig.hasPath(ConfigUtils.LOGIN_URL_KEY)) {
+            var proxyUrl = appConfig.getString(ConfigUtils.LOGIN_URL_KEY);
             loginService = new ProxyLoginService(proxyUrl);
         } else {
             loginService = new LoginService(appConfig, secretKey, jwtExpiration);

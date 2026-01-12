@@ -174,7 +174,7 @@ public class DuckDBSqlProducerTimeoutTest {
                 Duration.ofSeconds(5),
                 mutableClock,
                 new NOOPFlightRecorder(),
-                QueryOptimizer.NOOP_QUERY_OPTIMIZER,  DuckDBFlightSqlProducer.DEFAULT_INGESTION_CONFIG
+                DuckDBFlightSqlProducer.DEFAULT_INGESTION_CONFIG
         );
 
         flightServer = FlightServer.builder(serverAllocator, serverLocation, producer)

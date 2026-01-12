@@ -16,7 +16,6 @@ import io.dazzleduck.sql.flight.FlightRecorder;
 import io.dazzleduck.sql.flight.MicroMeterFlightRecorder;
 import io.dazzleduck.sql.flight.ingestion.IngestionParameters;
 import io.dazzleduck.sql.flight.model.RunningStatementInfo;
-import io.dazzleduck.sql.flight.optimizer.QueryOptimizer;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceServerCallHeaderAuthMiddleware;
 import io.dazzleduck.sql.flight.stream.FlightStreamReader;
 import io.micrometer.core.instrument.logging.LoggingMeterRegistry;
@@ -74,10 +73,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     public static final String TEMP_WRITE_FORMAT = "arrow";
     public static final IngestionConfig DEFAULT_INGESTION_CONFIG = new IngestionConfig(1024 * 1024,
             Duration.ofSeconds(2));
-    protected final FlightRecorder recorder;
-    private final Instant startTime;
-
-    private final Random random = new Random();
 
     public static AccessMode getAccessMode(com.typesafe.config.Config appConfig) {
         return AccessMode.valueOf(appConfig.getString(ConfigUtils.ACCESS_MODE_KEY).toUpperCase());
@@ -211,6 +206,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
     protected static final Calendar DEFAULT_CALENDAR = JdbcToArrowUtils.getUtcCalendar();
     public static final String  DEFAULT_DATABASE = "memory";
+    protected final FlightRecorder recorder;
+    private final Instant startTime;
+    private final Random random = new Random();
     private final AccessMode accessMode;
     private final Set<Integer> supportedSqlInfo;
     protected final ExecutorService executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
@@ -240,7 +238,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
     private final Clock clock;
 
-    protected final QueryOptimizer queryOptimizer;
     private final long CANCEL_TASK_INTERVAL_SECOND = 10;
 
     private final StreamListener<CancelStatus> streamListener = new StreamListener<>() {
@@ -260,25 +257,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         }
     };
 
-    public static DuckDBFlightSqlProducer createProducer(Location location,
-                                                          String producerId,
-                                                          String secretKey,
-                                                          BufferAllocator allocator,
-                                                          String warehousePath,
-                                                          AccessMode accessMode,
-                                                         PostIngestionTaskFactory postIngestionTaskFactory,
-                                                         QueryOptimizer queryOptimizer,
-                                                         IngestionConfig ingestionConfig) {
-        if(accessMode == AccessMode.RESTRICTED) {
-            return new RestrictedFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, newTempDir(),
-                    postIngestionTaskFactory, Executors.newSingleThreadScheduledExecutor(),
-                    Duration.ofMinutes(2), Clock.systemDefaultZone(), buildRecorder(producerId), queryOptimizer,
-                    ingestionConfig);
-        }
-        return new DuckDBFlightSqlProducer(location, producerId, secretKey, allocator, warehousePath, accessMode, newTempDir(),
-                postIngestionTaskFactory, Executors.newSingleThreadScheduledExecutor(),
-                Duration.ofMinutes(2), queryOptimizer, ingestionConfig);
-    }
 
     public static Path newTempDir() {
         var dir = Path.of(System.getProperty("java.io.tmpdir"), UUID.randomUUID().toString());
@@ -298,7 +276,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
     public DuckDBFlightSqlProducer(Location location, String producerId) {
         this(location, producerId, "change me", new RootAllocator(),  System.getProperty("user.dir") + "/warehouse", AccessMode.COMPLETE, newTempDir()
-        , PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(), Executors.newSingleThreadScheduledExecutor(), Duration.ofMinutes(2), QueryOptimizer.NOOP_QUERY_OPTIMIZER, DEFAULT_INGESTION_CONFIG);
+        , PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(), Executors.newSingleThreadScheduledExecutor(), Duration.ofMinutes(2), DEFAULT_INGESTION_CONFIG);
     }
 
     public DuckDBFlightSqlProducer(Location location,
@@ -311,11 +289,10 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                    PostIngestionTaskFactory postIngestionTaskFactory,
                                    ScheduledExecutorService scheduledExecutorService,
                                    Duration queryTimeout,
-                                   QueryOptimizer queryOptimizer,
                                    IngestionConfig ingestionConfig) {
         this(location, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionTaskFactory,
                 scheduledExecutorService, queryTimeout, Clock.systemDefaultZone(),
-                buildRecorder(producerId), queryOptimizer, ingestionConfig);
+                buildRecorder(producerId),  ingestionConfig);
 
     }
     public DuckDBFlightSqlProducer(Location location,
@@ -330,7 +307,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                    Duration queryTimeout,
                                    Clock clock,
                                    FlightRecorder recorder,
-                                   QueryOptimizer queryOptimizer,
                                    IngestionConfig bulkIngestionConfig) {
         this.startTime = clock.instant();
         this.locations.add( location);
@@ -365,7 +341,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         this.warehousePath = warehousePath;
         this.clock = clock;
         sqlInfoBuilder = new SqlInfoBuilder();
-        this.queryOptimizer = queryOptimizer;
         try (final Connection connection = ConnectionPool.getConnection()) {
             final DatabaseMetaData metaData = connection.getMetaData();
 
@@ -643,7 +618,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             ResultSetStreamUtil.streamResultSet(executorService,
                     statementContext,
                     key,
-                    OptionalResultSetSupplier.of(statement, query, queryOptimizer),
+                    OptionalResultSetSupplier.of(statement, query),
                     allocator,
                     getBatchSize(context),
                     listener,

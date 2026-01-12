@@ -59,6 +59,7 @@ public class FlightSqlProducerFactoryTest {
         Map<String, Object> configMap = new HashMap<>();
         configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
         configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.PRODUCER_ID_KEY, "test-producer");
         configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
         configMap.put(ConfigUtils.ACCESS_MODE_KEY, "COMPLETE");
         configMap.put("ingestion.min_bucket_size", 1048576L);
@@ -84,6 +85,7 @@ public class FlightSqlProducerFactoryTest {
         Map<String, Object> configMap = new HashMap<>();
         configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
         configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.PRODUCER_ID_KEY, "test-producer");
         configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
         configMap.put(ConfigUtils.ACCESS_MODE_KEY, "RESTRICTED");
         configMap.put("ingestion.min_bucket_size", 1048576L);
@@ -108,6 +110,7 @@ public class FlightSqlProducerFactoryTest {
         Map<String, Object> configMap = new HashMap<>();
         configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
         configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.PRODUCER_ID_KEY, "test-producer");
         configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
         configMap.put(ConfigUtils.ACCESS_MODE_KEY, "COMPLETE");
         configMap.put("flight_sql.host", "127.0.0.1");
@@ -134,6 +137,7 @@ public class FlightSqlProducerFactoryTest {
         Map<String, Object> configMap = new HashMap<>();
         configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
         configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.PRODUCER_ID_KEY, "test-producer");
         configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
         configMap.put(ConfigUtils.ACCESS_MODE_KEY, "COMPLETE");
         configMap.put("flight_sql.host", "secure.example.com");
@@ -163,9 +167,9 @@ public class FlightSqlProducerFactoryTest {
         Map<String, Object> configMap = new HashMap<>();
         configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
         configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.PRODUCER_ID_KEY, customProducerId);
         configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
         configMap.put(ConfigUtils.ACCESS_MODE_KEY, "COMPLETE");
-        configMap.put("producerId", customProducerId);
         configMap.put("ingestion.min_bucket_size", 1048576L);
         configMap.put("ingestion.max_delay_ms", 2000L);
 
@@ -188,6 +192,7 @@ public class FlightSqlProducerFactoryTest {
         Map<String, Object> configMap = new HashMap<>();
         configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
         configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.PRODUCER_ID_KEY, "test-producer");
         configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
         configMap.put(ConfigUtils.ACCESS_MODE_KEY, "COMPLETE");
         configMap.put("query_timeout_minutes", 10L);
@@ -214,6 +219,7 @@ public class FlightSqlProducerFactoryTest {
         Map<String, Object> configMap = new HashMap<>();
         configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
         configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.PRODUCER_ID_KEY, "test-producer");
         configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
         configMap.put(ConfigUtils.ACCESS_MODE_KEY, "COMPLETE");
         configMap.put("ingestion.min_bucket_size", 2097152L);
@@ -271,6 +277,7 @@ public class FlightSqlProducerFactoryTest {
         Map<String, Object> configMap = new HashMap<>();
         configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
         configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.PRODUCER_ID_KEY, "test-producer");
         configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
         configMap.put(ConfigUtils.ACCESS_MODE_KEY, "COMPLETE");
         configMap.put("ingestion.min_bucket_size", 1048576L);
@@ -299,6 +306,7 @@ public class FlightSqlProducerFactoryTest {
         Map<String, Object> configMap = new HashMap<>();
         configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
         configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.PRODUCER_ID_KEY, "test-producer");
         configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
         configMap.put(ConfigUtils.ACCESS_MODE_KEY, "COMPLETE");
         configMap.put("ingestion.min_bucket_size", 1048576L);
@@ -326,6 +334,7 @@ public class FlightSqlProducerFactoryTest {
         Map<String, Object> configMap = new HashMap<>();
         configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
         configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.PRODUCER_ID_KEY, "test-producer");
         configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
         configMap.put(ConfigUtils.ACCESS_MODE_KEY, "COMPLETE");
         configMap.put("ingestion.min_bucket_size", 1048576L);
@@ -353,6 +362,7 @@ public class FlightSqlProducerFactoryTest {
         Map<String, Object> configMap = new HashMap<>();
         configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
         configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.PRODUCER_ID_KEY, "test-producer");
         configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
         configMap.put(ConfigUtils.ACCESS_MODE_KEY, "COMPLETE");
         configMap.put("ingestion.min_bucket_size", 1048576L);
@@ -380,6 +390,7 @@ public class FlightSqlProducerFactoryTest {
         Map<String, Object> configMap = new HashMap<>();
         configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
         configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.PRODUCER_ID_KEY, "test-producer");
         configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
         configMap.put(ConfigUtils.ACCESS_MODE_KEY, "COMPLETE");
         configMap.put("ingestion.min_bucket_size", 1048576L);
@@ -407,6 +418,7 @@ public class FlightSqlProducerFactoryTest {
         Map<String, Object> configMap = new HashMap<>();
         configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
         configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.PRODUCER_ID_KEY, "test-producer");
         configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
         configMap.put(ConfigUtils.ACCESS_MODE_KEY, "COMPLETE");
         configMap.put("ingestion.min_bucket_size", 1048576L);
@@ -440,11 +452,12 @@ public class FlightSqlProducerFactoryTest {
         Map<String, Object> configMap = new HashMap<>();
         configMap.put(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath.toString());
         configMap.put(ConfigUtils.SECRET_KEY_KEY, "test-secret-key");
+        configMap.put(ConfigUtils.PRODUCER_ID_KEY, "test-producer");
         configMap.put(ConfigUtils.TEMP_WRITE_LOCATION_KEY, tempWritePath.toString());
         configMap.put(ConfigUtils.ACCESS_MODE_KEY, "COMPLETE");
         configMap.put("ingestion.min_bucket_size", 1048576L);
         configMap.put("ingestion.max_delay_ms", 2000L);
-        // Not setting: flight_sql.host, flight_sql.port, use_encryption, producerId, query_timeout_minutes
+        // Not setting: flight_sql.host, flight_sql.port, use_encryption, query_timeout_minutes
 
         Config config = ConfigFactory.parseMap(configMap);
 
@@ -454,7 +467,7 @@ public class FlightSqlProducerFactoryTest {
 
         // Verify defaults
         assertEquals(Location.forGrpcInsecure("0.0.0.0", 32010), producer.getExternalLocation());
-        assertNotNull(producer.getProducerId()); // Should be a generated UUID
+        assertEquals("test-producer", producer.getProducerId());
         assertFalse(producer instanceof RestrictedFlightSqlProducer); // Default is COMPLETE mode
 
         // Clean up

@@ -3,6 +3,7 @@ package io.dazzleduck.sql.flight.server.auth2;
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigObject;
 import io.dazzleduck.sql.common.auth.Validator;
+import io.dazzleduck.sql.common.util.ConfigUtils;
 import org.apache.arrow.flight.CallHeaders;
 import org.apache.arrow.flight.auth2.CallHeaderAuthenticator;
 
@@ -18,8 +19,8 @@ public class ConfBasedCredentialValidator implements AdvanceBasicCallHeaderAuthe
         List<? extends ConfigObject> users = config.getObjectList("users");
         Map<String, String> passwords = new HashMap<>();
         users.forEach(o -> {
-            String name = o.toConfig().getString("username");
-            String password = o.toConfig().getString("password");
+            String name = o.toConfig().getString(ConfigUtils.USERNAME_KEY);
+            String password = o.toConfig().getString(ConfigUtils.PASSWORD_KEY);
             passwords.put(name, password);
         });
         passwords.forEach((u, p) -> userHashMap.put(u, Validator.hash(p)));

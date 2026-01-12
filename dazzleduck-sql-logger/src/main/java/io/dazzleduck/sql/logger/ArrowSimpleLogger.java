@@ -4,6 +4,7 @@ import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.client.HttpProducer;
 import io.dazzleduck.sql.client.FlightProducer;
+import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.common.types.JavaRow;
 import org.apache.arrow.vector.types.pojo.*;
 import org.slf4j.Marker;
@@ -36,9 +37,9 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
     ));
 
     private static final Config config = ConfigFactory.load().getConfig("dazzleduck_logger");
-    private static final String CONFIG_APPLICATION_ID = config.getString("application_id");
-    private static final String CONFIG_APPLICATION_NAME = config.getString("application_name");
-    private static final String CONFIG_APPLICATION_HOST = config.getString("application_host");
+    private static final String CONFIG_APPLICATION_ID = config.getString(ConfigUtils.APPLICATION_ID_KEY);
+    private static final String CONFIG_APPLICATION_NAME = config.getString(ConfigUtils.APPLICATION_NAME_KEY);
+    private static final String CONFIG_APPLICATION_HOST = config.getString(ConfigUtils.APPLICATION_HOST_KEY);
 
     private static final DateTimeFormatter TS_FORMAT = DateTimeFormatter.ISO_INSTANT;
 
@@ -61,24 +62,24 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
     }
 
     private static FlightProducer createSenderFromConfig() {
-        Config http = config.getConfig("http");
-        String targetPath = http.getString("target_path");
+        Config http = config.getConfig(ConfigUtils.HTTP_PREFIX);
+        String targetPath = http.getString(ConfigUtils.TARGET_PATH_KEY);
         return new HttpProducer(
                 schema,
-                http.getString("base_url"),
-                http.getString("username"),
-                http.getString("password"),
+                http.getString(ConfigUtils.BASE_URL_KEY),
+                http.getString(ConfigUtils.USERNAME_KEY),
+                http.getString(ConfigUtils.PASSWORD_KEY),
                 targetPath,
-                Duration.ofMillis(http.getLong("http_client_timeout_ms")),
-                config.getLong("min_batch_size"),
-                config.getLong("max_batch_size"),
-                Duration.ofMillis(config.getLong("max_send_interval_ms")),
-                config.getInt("retry_count"),
-                config.getLong("retry_interval_ms"),
-                config.getStringList("transformations"),
-                config.getStringList("partition_by"),
-                config.getLong("max_in_memory_bytes"),
-                config.getLong("max_on_disk_bytes")
+                Duration.ofMillis(http.getLong(ConfigUtils.HTTP_CLIENT_TIMEOUT_MS_KEY)),
+                config.getLong(ConfigUtils.MIN_BATCH_SIZE_KEY),
+                config.getLong(ConfigUtils.MAX_BATCH_SIZE_KEY),
+                Duration.ofMillis(config.getLong(ConfigUtils.MAX_SEND_INTERVAL_MS_KEY)),
+                config.getInt(ConfigUtils.RETRY_COUNT_KEY),
+                config.getLong(ConfigUtils.RETRY_INTERVAL_MS_KEY),
+                config.getStringList(ConfigUtils.TRANSFORMATIONS_KEY),
+                config.getStringList(ConfigUtils.PARTITION_BY_KEY),
+                config.getLong(ConfigUtils.MAX_IN_MEMORY_BYTES_KEY),
+                config.getLong(ConfigUtils.MAX_ON_DISK_BYTES_KEY)
         );
     }
 
