@@ -1,6 +1,7 @@
 package io.dazzleduck.sql.commons.delta;
 
 
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -22,6 +23,7 @@ public class PartitionPruningTest {
     }
 
     @Test
+    @Disabled("Requires Hadoop 3.4.3+ for Java 23+ compatibility (HADOOP-19212)")
     public void pruneFilesPartitionTest() throws SQLException, IOException {
         /*
          * +---+-----+----------+---+-------------------------------------------------------------------+
