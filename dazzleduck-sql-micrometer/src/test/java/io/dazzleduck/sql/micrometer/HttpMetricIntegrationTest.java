@@ -10,6 +10,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import org.junit.jupiter.api.*;
 import io.dazzleduck.sql.runtime.SharedTestServer;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -19,6 +20,10 @@ import java.util.concurrent.TimeUnit;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class HttpMetricIntegrationTest {
+
+    @TempDir
+    static Path warehouse;
+
     private SharedTestServer server;
 
     private static final int HTTP_PORT = 8081;
@@ -33,26 +38,7 @@ public class HttpMetricIntegrationTest {
     @BeforeAll
     void setup() throws Exception {
         server = new SharedTestServer();
-
-        server.startWithPorts(
-                HTTP_PORT,
-                0,
-                "http.auth=none",
-                // DuckLake ingestion
-                "post_ingestion_task_factory_provider.class=io.dazzleduck.sql.commons.ingestion.DuckLakePostIngestionTaskFactoryProvider",
-                "post_ingestion_task_factory_provider.catalog_name=" + CATALOG_NAME,
-                // Mapping
-                "post_ingestion_task_factory_provider.path_to_table_mapping.0.table_name=" + TABLE_NAME,
-                "post_ingestion_task_factory_provider.path_to_table_mapping.0.schema_name=" + SCHEMA_NAME,
-                "post_ingestion_task_factory_provider.path_to_table_mapping.0.base_path=" + INGEST_PATH
-        );
-        Files.createDirectories(Path.of(server.getWarehousePath(), INGEST_PATH));
-        setupDuckLake();
-    }
-
-    private void setupDuckLake() throws Exception {
-        String warehouse = server.getWarehousePath().replace("\\", "/");
-        ConnectionPool.execute("""
+        String STARTUP_SCRIPT = """
                 INSTALL arrow;
                 LOAD arrow;
                 
@@ -60,8 +46,25 @@ public class HttpMetricIntegrationTest {
                 ATTACH 'ducklake:%s/%s' AS %s (DATA_PATH '%s/%s');
                 USE %s;
                 CREATE TABLE IF NOT EXISTS %s (name VARCHAR, type VARCHAR, value DOUBLE, application_id VARCHAR, application_name VARCHAR, application_host VARCHAR);
-                """.formatted(warehouse, CATALOG_NAME, CATALOG_NAME, warehouse, DUCKLAKE_DATA_DIR, CATALOG_NAME, TABLE_NAME)
+                """.formatted(warehouse, CATALOG_NAME, CATALOG_NAME, warehouse, DUCKLAKE_DATA_DIR, CATALOG_NAME, TABLE_NAME);
+
+        server.startWithWarehouse(
+                HTTP_PORT,
+                0,
+                "http.auth=none",
+                "warehouse=" + warehouse.toAbsolutePath(),
+                // DuckLake ingestion
+                "post_ingestion_task_factory_provider.class=io.dazzleduck.sql.commons.ingestion.DuckLakePostIngestionTaskFactoryProvider",
+                "post_ingestion_task_factory_provider.catalog_name=" + CATALOG_NAME,
+                // Mapping
+                "post_ingestion_task_factory_provider.path_to_table_mapping.0.table_name=" + TABLE_NAME,
+                "post_ingestion_task_factory_provider.path_to_table_mapping.0.schema_name=" + SCHEMA_NAME,
+                "post_ingestion_task_factory_provider.path_to_table_mapping.0.base_path=" + INGEST_PATH,
+                // Startup script
+                "startup_script_provider.class=io.dazzleduck.sql.common.ConfigBasedStartupScriptProvider",
+                "startup_script_provider.content=" + STARTUP_SCRIPT
         );
+        Files.createDirectories(Path.of(server.getWarehousePath(), INGEST_PATH));
     }
 
     @Test

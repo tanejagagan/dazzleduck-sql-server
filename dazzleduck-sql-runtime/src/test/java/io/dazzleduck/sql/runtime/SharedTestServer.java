@@ -75,7 +75,7 @@ public final class SharedTestServer implements Closeable {
      * Starts the test server with fixed ports.
      * Use this when tests depend on config files with hardcoded ports (e.g., ArrowSimpleLogger).
      *
-     * @param fixedHttpPort the HTTP port to use (0 for dynamic)
+     * @param fixedHttpPort   the HTTP port to use (0 for dynamic)
      * @param fixedFlightPort the Flight SQL port to use (0 for dynamic)
      * @param configOverrides additional config overrides
      */
@@ -118,6 +118,52 @@ public final class SharedTestServer implements Closeable {
 
         started = true;
         logger.info("Test server started successfully");
+    }
+
+    /**
+     * Starts the test server using a warehouse path provided via config overrides.
+     * The warehouse MUST be supplied in configOverrides:
+     * -> warehouse=/path/to/warehouse
+     *
+     * @param fixedHttpPort   the HTTP port to use (0 for dynamic)
+     * @param fixedFlightPort the Flight SQL port to use (0 for dynamic)
+     * @param configOverrides additional config overrides
+     */
+    public void startWithWarehouse(int fixedHttpPort, int fixedFlightPort, String... configOverrides) throws Exception {
+        if (started) {
+            return;
+        }
+
+        httpPort = fixedHttpPort > 0 ? fixedHttpPort : findAvailablePort();
+        flightPort = fixedFlightPort > 0 ? fixedFlightPort : findAvailablePort();
+        Config baseConfig = ConfigFactory.load().getConfig(ConfigUtils.CONFIG_PATH);
+
+        config = baseConfig
+                .withValue("networking_modes", ConfigValueFactory.fromIterable(List.of("http", "flight-sql")))
+                .withValue("http.port", ConfigValueFactory.fromAnyRef(httpPort))
+                .withValue("flight_sql.port", ConfigValueFactory.fromAnyRef(flightPort))
+                .withValue("flight_sql.host", ConfigValueFactory.fromAnyRef("localhost"))
+                .withValue("flight_sql.use_encryption", ConfigValueFactory.fromAnyRef(false))
+                .withValue("http.auth", ConfigValueFactory.fromAnyRef("jwt"))
+                .withValue("ingestion.max_delay_ms", ConfigValueFactory.fromAnyRef(50));
+
+        for (String override : configOverrides) {
+            String[] parts = override.split("=", 2);
+            if (parts.length == 2) {
+                config = config.withValue(parts[0].trim(), ConfigValueFactory.fromAnyRef(parseValue(parts[1].trim())));
+            }
+        }
+        warehousePath = ConfigUtils.getWarehousePath(config);
+
+        logger.info("Starting test server with custom warehouse - HTTP port: {}, Flight port: {}, Warehouse: {}", httpPort, flightPort, warehousePath);
+
+        runtime = Runtime.start(config);
+
+        waitForServer("localhost", httpPort, 10_000);
+        waitForServer("localhost", flightPort, 10_000);
+
+        started = true;
+        logger.info("Test server started successfully (warehouse override)");
     }
 
     @Override

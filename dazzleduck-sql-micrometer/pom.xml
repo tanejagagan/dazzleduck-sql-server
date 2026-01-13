@@ -83,7 +83,7 @@
         <dependency>
             <groupId>io.dazzleduck.sql</groupId>
             <artifactId>dazzleduck-sql-runtime</artifactId>
-            <version>0.0.13-SNAPSHOT</version>
+            <version>0.0.14</version>
             <type>test-jar</type>
             <scope>test</scope>
         </dependency>
