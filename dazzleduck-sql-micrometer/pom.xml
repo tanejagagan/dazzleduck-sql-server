@@ -50,13 +50,6 @@
             <artifactId>slf4j-api</artifactId>
             <version>${slf4j.version}</version>
         </dependency>
-        <!-- Exclude slf4j-simple from parent - let consuming apps choose their SLF4J provider -->
-        <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-simple</artifactId>
-            <version>${slf4j.version}</version>
-            <scope>provided</scope>
-        </dependency>
 
         <!-- Jackson for JSON -->
         <dependency>
@@ -85,13 +78,6 @@
             <groupId>io.dazzleduck.sql</groupId>
             <artifactId>dazzleduck-sql-runtime</artifactId>
             <version>0.0.14</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>io.dazzleduck.sql</groupId>
-            <artifactId>dazzleduck-sql-runtime</artifactId>
-            <version>0.0.13-SNAPSHOT</version>
-            <type>test-jar</type>
             <scope>test</scope>
         </dependency>
     </dependencies>

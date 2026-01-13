@@ -2,6 +2,41 @@
 
 A drop-in SLF4J logging provider that sends logs directly to a DazzleDuck server in Apache Arrow format. Logs are batched, compressed, and stored as Parquet files for high-performance analytics.
 
+---
+
+## Which Module Should I Use?
+
+Before adding this dependency, check if you already have a logging implementation in your project:
+
+| Your Situation | Recommended Module |
+|----------------|-------------------|
+| New project with no existing logger | **dazzleduck-sql-logger** (this module) |
+| Already using Logback | **dazzleduck-sql-logback** |
+| Already using Log4j2 | **dazzleduck-sql-logback** |
+| Spring Boot / Spring Framework | **dazzleduck-sql-logback** |
+| Any project with existing SLF4J provider | **dazzleduck-sql-logback** |
+
+### Why?
+
+- **dazzleduck-sql-logger** is a complete SLF4J provider replacement. It **replaces** your existing logging implementation.
+- **dazzleduck-sql-logback** is a Logback appender that **works alongside** your existing Logback setup.
+
+> **Spring Users:** Spring Boot and Spring Framework include Logback by default. Use **dazzleduck-sql-logback** instead of this module.
+
+### How to Check Your Current Logger
+
+```bash
+# Maven
+mvn dependency:tree | grep -E "(logback|log4j|slf4j-simple)"
+
+# Gradle
+gradle dependencies | grep -E "(logback|log4j|slf4j-simple)"
+```
+
+If you see `logback-classic`, `log4j-slf4j-impl`, or `slf4j-simple`, use **dazzleduck-sql-logback** instead.
+
+---
+
 ## Features
 
 - **SLF4J 2.0 Compatible** - Use standard SLF4J API, logs are automatically sent to DazzleDuck
@@ -15,8 +50,8 @@ A drop-in SLF4J logging provider that sends logs directly to a DazzleDuck server
 
 ## Table of Contents
 
-1. [Quick Start](#quick-start)
-2. [Spring Boot Integration](#spring-boot-integration)
+1. [Which Module Should I Use?](#which-module-should-i-use)
+2. [Quick Start](#quick-start)
 3. [Configuration](#configuration)
 4. [Configuration Methods](#configuration-methods)
 5. [Log Schema](#log-schema)
@@ -35,7 +70,7 @@ A drop-in SLF4J logging provider that sends logs directly to a DazzleDuck server
 <dependency>
     <groupId>io.dazzleduck.sql</groupId>
     <artifactId>dazzleduck-sql-logger</artifactId>
-    <version>0.0.13-SNAPSHOT</version>
+    <version>0.0.14</version>
 </dependency>
 ```
 
@@ -89,120 +124,6 @@ public class MyApplication {
     }
 }
 ```
-
----
-
-## Spring Boot Integration
-
-Since this library replaces SLF4J's default provider, you must exclude Logback from Spring Boot.
-
-### Step 1: Update `pom.xml`
-
-```xml
-<dependencies>
-    <!-- Spring Boot with Logback excluded -->
-    <dependency>
-        <groupId>org.springframework.boot</groupId>
-        <artifactId>spring-boot-starter</artifactId>
-        <exclusions>
-            <exclusion>
-                <groupId>ch.qos.logback</groupId>
-                <artifactId>logback-classic</artifactId>
-            </exclusion>
-        </exclusions>
-    </dependency>
-
-    <!-- For web applications -->
-    <dependency>
-        <groupId>org.springframework.boot</groupId>
-        <artifactId>spring-boot-starter-web</artifactId>
-        <exclusions>
-            <exclusion>
-                <groupId>ch.qos.logback</groupId>
-                <artifactId>logback-classic</artifactId>
-            </exclusion>
-        </exclusions>
-    </dependency>
-
-    <!-- DazzleDuck Logger -->
-    <dependency>
-        <groupId>io.dazzleduck.sql</groupId>
-        <artifactId>dazzleduck-sql-logger</artifactId>
-        <version>0.0.13-SNAPSHOT</version>
-    </dependency>
-</dependencies>
-```
-
-### Step 2: Create `src/main/resources/application.conf`
-
-```hocon
-dazzleduck_logger {
-  application_id   = "spring-boot-app"
-  application_name = "MySpringBootApplication"
-  application_host = "localhost"
-  log_level        = "INFO"
-
-  http {
-    base_url               = "http://localhost:8081"
-    username               = "admin"
-    password               = "admin"
-    target_path            = "logs/spring-app"
-    http_client_timeout_ms = 30000
-  }
-
-  min_batch_size       = 100
-  max_batch_size       = 10000
-  max_send_interval_ms = 5000
-  retry_count          = 3
-  retry_interval_ms    = 1000
-  max_in_memory_bytes  = 10485760
-  max_on_disk_bytes    = 104857600
-  transformations      = []
-  partition_by         = []
-}
-```
-
-### Step 3: Use in Your Spring Boot Application
-
-```java
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.web.bind.annotation.*;
-
-@RestController
-@RequestMapping("/api")
-public class MyController {
-
-    private static final Logger log = LoggerFactory.getLogger(MyController.class);
-
-    @GetMapping("/hello")
-    public String hello(@RequestParam String name) {
-        log.info("Hello endpoint called with name: {}", name);
-        return "Hello, " + name + "!";
-    }
-
-    @PostMapping("/process")
-    public String process(@RequestBody String data) {
-        log.debug("Processing data: {}", data);
-        try {
-            // Process data
-            log.info("Data processed successfully");
-            return "OK";
-        } catch (Exception e) {
-            log.error("Failed to process data", e);
-            throw e;
-        }
-    }
-}
-```
-
-### Step 4: Run Your Application
-
-```bash
-./mvnw spring-boot:run
-```
-
-**Note:** You will lose Spring Boot's colored console output since Logback is excluded. All logs go directly to DazzleDuck server.
 
 ---
 
@@ -352,7 +273,7 @@ Each log entry is stored with the following Arrow schema:
 | `logger` | Utf8 | Logger name (usually class name) |
 | `thread` | Utf8 | Thread name |
 | `message` | Utf8 | Formatted log message (includes stack traces) |
-| `mdc` | Utf8 | MDC context as JSON |
+| `mdc` | Map<Utf8, Utf8> | MDC context as key-value pairs |
 | `marker` | Utf8 | Log marker name |
 | `application_id` | Utf8 | Application identifier |
 | `application_name` | Utf8 | Application name |
@@ -496,20 +417,9 @@ dazzleduck_logger {
 SLF4J: Class path contains multiple SLF4J providers.
 ```
 
-**Solution:** You have multiple SLF4J implementations on the classpath. Remove other providers:
-
-```xml
-<dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter</artifactId>
-    <exclusions>
-        <exclusion>
-            <groupId>ch.qos.logback</groupId>
-            <artifactId>logback-classic</artifactId>
-        </exclusion>
-    </exclusions>
-</dependency>
-```
+**Solution:** You have multiple SLF4J implementations on the classpath. Either:
+- Remove the other providers (logback-classic, slf4j-simple, log4j-slf4j-impl), OR
+- Use **dazzleduck-sql-logback** instead if you want to keep your existing logger
 
 ### ClassCastException with LoggerContext
 
@@ -518,7 +428,7 @@ java.lang.ClassCastException: io.dazzleduck.sql.logger.ArrowSimpleLoggerFactory
 cannot be cast to ch.qos.logback.classic.LoggerContext
 ```
 
-**Solution:** Same as above - Logback is still on the classpath. Exclude it from all Spring Boot starters.
+**Solution:** Logback is on your classpath. Use **dazzleduck-sql-logback** instead of this module.
 
 ### Logs Not Appearing in DazzleDuck
 
