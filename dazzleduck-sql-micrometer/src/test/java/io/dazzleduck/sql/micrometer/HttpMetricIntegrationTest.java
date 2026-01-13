@@ -1,148 +1,67 @@
 package io.dazzleduck.sql.micrometer;
 
-import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.dazzleduck.sql.micrometer.metrics.MetricsRegistryFactory;
-import io.dazzleduck.sql.runtime.Runtime;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import org.junit.jupiter.api.*;
-import org.junit.jupiter.api.io.TempDir;
+import io.dazzleduck.sql.runtime.SharedTestServer;
 
 import java.io.IOException;
-import java.net.http.HttpClient;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.sql.Connection;
-import java.sql.SQLException;
-import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.List;
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-@Disabled
 public class HttpMetricIntegrationTest {
-    private static HttpClient client;
+    private SharedTestServer server;
 
-    @TempDir
-    private static Path warehousePath;
+    private static final int HTTP_PORT = 8081;
 
-    @TempDir
-    private static Path tempDir;
+    private static final String CATALOG_NAME = "test_ducklake";
+    private static final String TABLE_NAME = "test_metrics";
+    private static final String SCHEMA_NAME = "main";
 
-    private Runtime runtime;
-
-    private static String detectedDatabase;
-    private static String detectedMetadataDatabase;
-    private static String ducklakeCatalogPath;
-    private static String ducklakeDataPath;
-    private static Long tableId;
-
-    private static final int TEST_PORT = 8096;
-    private static final String BASE_URL = "http://localhost:" + TEST_PORT;
-    private static final String DUCKLAKE_CATALOG = "test_ducklake";
-    private static final String DUCKLAKE_METADATA = "__ducklake_metadata_" + DUCKLAKE_CATALOG;
-    private static final String TEST_TABLE = "test_metrics";
     private static final String INGEST_PATH = "metrics";
+    private static final String DUCKLAKE_DATA_DIR = "ducklake_data";
 
     @BeforeAll
-    void startServers() throws Exception {
-        client = HttpClient.newHttpClient();
+    void setup() throws Exception {
+        server = new SharedTestServer();
 
-        ducklakeCatalogPath = tempDir.resolve(DUCKLAKE_CATALOG).toString();
-        ducklakeDataPath = tempDir.resolve("ducklake_data").toString();
-        // Create ingestion directory
-        Files.createDirectories(warehousePath.resolve(INGEST_PATH));
-        // Initialize DuckLake
-        setupDuckLake();
-        // Wait for server to start
-        Thread.sleep(2000);
-
-        Config config = overriddenConfig().getConfig(ConfigUtils.CONFIG_PATH);
-        runtime = Runtime.start(config);
-        waitForHttpServer();
-    }
-
-    private static void setupDuckLake() throws SQLException {
-        try (Connection conn = ConnectionPool.getConnection()) {
-            ConnectionPool.executeBatchInTxn(conn, new String[]{
-                    "INSTALL arrow",
-                    "LOAD arrow"
-            });
-            // Install and load DuckLake
-            String[] setupQueries = {
-                    "LOAD ducklake",
-                    String.format("ATTACH 'ducklake:%s' AS %s (DATA_PATH '%s')", ducklakeCatalogPath, DUCKLAKE_CATALOG, ducklakeDataPath),
-                    "USE " + DUCKLAKE_CATALOG,
-                    // Create test table with the schema matching our test data
-                    String.format("""
-                                CREATE TABLE IF NOT EXISTS %s (
-                                    name VARCHAR,
-                                    type VARCHAR,
-                                    value DOUBLE,
-                                    application_id VARCHAR,
-                                    application_name VARCHAR,
-                                    application_host VARCHAR
-                                )
-                            """, TEST_TABLE)
-            };
-            ConnectionPool.executeBatchInTxn(conn, setupQueries);
-
-            // Detect database names
-            List<String> dbs = new ArrayList<>();
-            ConnectionPool.collectFirstColumn(conn, "SHOW DATABASES", String.class).forEach(dbs::add);
-            // Detect metadata database
-            detectedMetadataDatabase = dbs.stream().filter(d -> d != null && d.startsWith("__ducklake_metadata_")).findFirst().orElseThrow(() -> new IllegalStateException("Metadata DB not found. DBs: " + dbs));
-            // Detect attached database
-            detectedDatabase = dbs.stream().filter(d -> d != null && !"memory".equalsIgnoreCase(d) && !d.startsWith("__ducklake_metadata_")).findFirst().orElseThrow(() -> new IllegalStateException("Attached DB not found. DBs: " + dbs));
-            // Get table ID from metadata
-            String getTableIdSql = String.format("SELECT table_id FROM %s.ducklake_table WHERE table_name = '%s'", detectedMetadataDatabase, TEST_TABLE);
-            tableId = ConnectionPool.collectFirst(conn, getTableIdSql, Long.class);
-            assertNotNull(tableId, "Table ID should not be null");
-        }
-    }
-
-    private Config overriddenConfig() {
-        String override = """
-                dazzleduck_server {
-                  http {
-                    port = 8081
-                    host = "0.0.0.0"
-                    authentication = "none"
-                  }
-                
-                  warehouse = "%s"
-                  temp_write_location = "%s"
-                
-                  post_ingestion_task_factory_provider {
-                    class = "io.dazzleduck.sql.commons.ingestion.DuckLakePostIngestionTaskFactoryProvider"
-                    catalog_name = "%s"
-                
-                    path_to_table_mapping = [
-                      {
-                        table_name = "%s"
-                        schema_name = "main"
-                        base_path = "%s"
-                      }
-                    ]
-                  }
-                }
-                """.formatted(
-                warehousePath.toString().replace("\\", "/"),
-                warehousePath.resolve("_tmp").toString().replace("\\", "/"),
-                DUCKLAKE_CATALOG,
-                TEST_TABLE,
-                INGEST_PATH
+        server.startWithPorts(
+                HTTP_PORT,
+                0,
+                "http.auth=none",
+                // DuckLake ingestion
+                "post_ingestion_task_factory_provider.class=io.dazzleduck.sql.commons.ingestion.DuckLakePostIngestionTaskFactoryProvider",
+                "post_ingestion_task_factory_provider.catalog_name=" + CATALOG_NAME,
+                // Mapping
+                "post_ingestion_task_factory_provider.path_to_table_mapping.0.table_name=" + TABLE_NAME,
+                "post_ingestion_task_factory_provider.path_to_table_mapping.0.schema_name=" + SCHEMA_NAME,
+                "post_ingestion_task_factory_provider.path_to_table_mapping.0.base_path=" + INGEST_PATH
         );
+        Files.createDirectories(Path.of(server.getWarehousePath(), INGEST_PATH));
+        setupDuckLake();
+    }
 
-        return ConfigFactory.parseString(override).withFallback(ConfigFactory.load()).resolve();
+    private void setupDuckLake() throws Exception {
+        String warehouse = server.getWarehousePath().replace("\\", "/");
+        ConnectionPool.execute("""
+                INSTALL arrow;
+                LOAD arrow;
+                
+                LOAD ducklake;
+                ATTACH 'ducklake:%s/%s' AS %s (DATA_PATH '%s/%s');
+                USE %s;
+                CREATE TABLE IF NOT EXISTS %s (name VARCHAR, type VARCHAR, value DOUBLE, application_id VARCHAR, application_name VARCHAR, application_host VARCHAR);
+                """.formatted(warehouse, CATALOG_NAME, CATALOG_NAME, warehouse, DUCKLAKE_DATA_DIR, CATALOG_NAME, TABLE_NAME)
+        );
     }
 
     @Test
@@ -163,7 +82,7 @@ public class HttpMetricIntegrationTest {
             registry.close();
         }
 
-        Path metricDir = Path.of(warehousePath.toString(), INGEST_PATH);
+        Path metricDir = Path.of(server.getWarehousePath(), INGEST_PATH);
         Path metricFile = waitForMetricFile(metricDir.toString());
 
         TestUtils.isEqual("""
@@ -184,10 +103,8 @@ public class HttpMetricIntegrationTest {
 
     @AfterAll
     void cleanup() throws Exception {
-        if (runtime != null) {
-            runtime.close();
-        }
-        ConnectionPool.execute("DETACH " + DUCKLAKE_CATALOG);
+        if (server != null) server.close();
+        ConnectionPool.execute("DETACH " + CATALOG_NAME);
         String warehousePath = ConfigUtils.getWarehousePath(ConfigFactory.load().getConfig(ConfigUtils.CONFIG_PATH));
         Path path = Path.of(warehousePath);
         if (Files.exists(path)) {
@@ -201,20 +118,6 @@ public class HttpMetricIntegrationTest {
         }
 
         Files.createDirectories(path);
-    }
-
-    private void waitForHttpServer() throws Exception {
-        int port = 8081;
-        long deadline = System.currentTimeMillis() + 10_000;
-
-        while (System.currentTimeMillis() < deadline) {
-            try (var socket = new java.net.Socket("localhost", port)) {
-                return;
-            } catch (IOException e) {
-                Thread.sleep(100);
-            }
-        }
-        throw new IllegalStateException("HTTP server did not start");
     }
 
     private Path waitForMetricFile(String warehousePath) throws Exception {
