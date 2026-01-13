@@ -18,6 +18,8 @@ import java.util.concurrent.atomic.AtomicLong;
 
 public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<T, R> {
 
+
+
     public static Path writeAndValidateTempArrowFile(Path tempDir, ArrowReader reader) throws IOException {
         String uniqueFileName = "ingestion_" + UUID.randomUUID() + ".arrow";
         Path tempFilePath = tempDir.resolve(uniqueFileName);
@@ -31,7 +33,7 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
         return tempFilePath;
     }
     private static final int MAX_PRODUCER_IDS = 10000;
-    private final Map<String, Long> inProgressBatchIds = new LinkedHashMap<String, Long>(16, 0.75f, true) {
+    private final Map<String, Long> inProgressBatchIds = new LinkedHashMap<>(16, 0.75f, true) {
         @Override
         protected boolean removeEldestEntry(Map.Entry<String, Long> eldest) {
             return size() > MAX_PRODUCER_IDS;
@@ -55,6 +57,9 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
     private final AtomicLong totalWriteBuckets = new AtomicLong();
     private final AtomicLong acceptedBatches = new AtomicLong();
     private final AtomicLong bucketsCreated =  new AtomicLong();
+    private final AtomicLong totalWrite = new AtomicLong();
+
+    private final AtomicLong timeSpentWriting = new AtomicLong();
 
     public BulkIngestQueue(String identifier,
                            long minBucketSize,
@@ -85,9 +90,14 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
                 var task = writeQueue.take();
                 runningWrite = task;
                 try {
+                    var start = clock.instant();
                     write(task);
-                    totalWriteBatches.addAndGet(task.bucket().batches().size());
+                    var end = clock.instant();
+                    var bucket = task.bucket();
+                    totalWriteBatches.addAndGet(bucket.batches().size());
+                    totalWrite.addAndGet(bucket.size());
                     totalWriteBuckets.incrementAndGet();
+                    timeSpentWriting.addAndGet(Duration.between(start, end).toMillis());
                 } catch (Exception e) {
                     // Complete futures with exception but continue processing remaining tasks
                     for (var future : task.bucket().futures()) {
@@ -108,9 +118,23 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
 
     @Override
     public Stats getStats(){
-        var totalWrite = totalWriteBatches.get();
-        var accepted = acceptedBatches.get();
-        return new Stats(identifier, 0, totalWriteBatches.get(), totalWriteBuckets.get(), 0,accepted - totalWrite, writeQueue.size());
+        return new Stats(identifier, totalWrite.get(), totalWriteBatches.get(), totalWriteBuckets.get(), timeSpentWriting.get(),acceptedBatches.get() - totalWrite.get(), writeQueue.size());
+    }
+
+    public long getTotalWriteBatches() {
+        return totalWriteBatches.get();
+    }
+
+    public long getTotalWriteBuckets() {
+        return totalWriteBuckets.get();
+    }
+
+    public long getTotalWrite() {
+        return totalWrite.get();
+    }
+
+    public long getTimeSpentWriting() {
+        return timeSpentWriting.get();
     }
 
     @Override
@@ -172,7 +196,7 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
         var toWrite = currentBucket;
         toWrite.markFinalized();
         createNewBucket();
-        var writeTask = new WriteTask<T, R>(writeTaskId++, clock.instant(), toWrite);
+        var writeTask = new WriteTask<>(writeTaskId++, clock.instant(), toWrite);
         lastWrite = clock.instant();
         writeQueue.offer(writeTask);
         if (!terminating) {

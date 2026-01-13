@@ -35,6 +35,29 @@ public interface FlightProducer extends Closeable {
     void enqueue(byte[] input);
 
     /**
+     * Converts a Java Record to a JavaRow and adds it to the producer.
+     * The record's components are extracted in declaration order and stored in the JavaRow.
+     *
+     * @param r the Record to add
+     * @throws IllegalArgumentException if the input is not a Record or if component extraction fails
+     */
+    default void add(Record r) {
+        if (r == null) {
+            throw new IllegalArgumentException("Record cannot be null");
+        }
+        try {
+            var components = r.getClass().getRecordComponents();
+            Object[] values = new Object[components.length];
+            for (int i = 0; i < components.length; i++) {
+                values[i] = components[i].getAccessor().invoke(r);
+            }
+            addRow(new JavaRow(values));
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalArgumentException("Failed to extract record components", e);
+        }
+    }
+
+    /**
      * Creates combined Arrow stream bytes from a list of SendElements.
      * This utility method reads all Arrow batches from the input elements and combines them
      * into a single Arrow stream byte array.

@@ -164,9 +164,6 @@ public class UIService implements HttpService {
                             <th>Running Prepared Statements</th>
                             <th>Completed Prepared Statements</th>
                             <th>Cancelled Prepared Statements</th>
-                            <th>Running Bulk Ingest</th>
-                            <th>Completed Bulk Ingest</th>
-                            <th>Canceled Bulk Ingest</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -178,9 +175,6 @@ public class UIService implements HttpService {
                             <td>%d</td>
                             <td>%d</td>
                             <td>%d</td>
-                            <td>No get method</td>
-                            <td>%d</td>
-                            <td>No GM</td>
                         </tr>
                     </tbody>
                 </table>
@@ -191,8 +185,7 @@ public class UIService implements HttpService {
                 producerMBean.getCancelledStatements(),
                 producerMBean.getRunningPreparedStatements(),
                 producerMBean.getCompletedPreparedStatements(),
-                producerMBean.getCancelledPreparedStatements(),
-                producerMBean.getCompletedBulkIngest());
+                producerMBean.getCancelledPreparedStatements());
     }
 
     private String buildNetworkMetricsTable() {
@@ -288,7 +281,7 @@ public class UIService implements HttpService {
                 stats.totalWriteBytes(),
                 stats.totalWriteBatches(),
                 stats.totalWriteBuckets(),
-                stats.timeSpendWriting(),
+                stats.timeSpentWriting(),
                 stats.scheduledWriteBatches(),
                 queueDepth
         );

@@ -5,7 +5,7 @@ public record Stats(String identifier,
                     long totalWriteBytes,
                     long totalWriteBatches,
                     long totalWriteBuckets,
-                    long timeSpendWriting,
+                    long timeSpentWriting,
                     long scheduledWriteBatches,
                     long scheduledWriteBuckets
                     ) {

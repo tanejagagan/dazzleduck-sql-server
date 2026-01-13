@@ -3,6 +3,9 @@ package io.dazzleduck.sql.flight;
 import io.dazzleduck.sql.flight.server.DuckDBFlightSqlProducer.CacheKey;
 import io.dazzleduck.sql.flight.server.StatementContext;
 
+import java.util.Map;
+import java.util.function.LongSupplier;
+
 public interface FlightRecorder {
 
     void recordStatementCancel(CacheKey key, StatementContext<?> ctx);
@@ -57,12 +60,6 @@ public interface FlightRecorder {
 
     void errorPreparedStreamStatement();
 
-    void startBulkIngest();
-
-    void endBulkIngest();
-
-    void errorBulkIngest();
-
     void recordGetStreamPreparedStatement(long size);
 
     default void recordGetStream(boolean preparedStatement, long size) {
@@ -76,6 +73,7 @@ public interface FlightRecorder {
     void recordGetStreamStatement(long size);
 
 
+    void registerWriteQueue(String identifier, Map<String, LongSupplier> counters);
     double getBytesOut();
 
     double getBytesIn();
@@ -88,9 +86,5 @@ public interface FlightRecorder {
 
     long getCompletedPreparedStatements();
 
-    long getCompletedBulkIngest();
-
-
-    // Add other methods which needs to be recorded
 }
 

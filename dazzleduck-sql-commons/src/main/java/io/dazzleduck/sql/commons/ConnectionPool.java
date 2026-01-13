@@ -122,32 +122,42 @@ public enum ConnectionPool {
         } catch (NoSuchMethodException e) {
             throw new RuntimeException(e);
         }
-        return collectAll(connection, sql, rs -> {
-            RecordComponent[] recordComponents = rClass.getRecordComponents();
-            Object[] read = new Object[recordComponents.length];
-            for(int i = 0; i < recordComponents.length; i++) {
-                var type = recordComponents[i].getType();
-                if (type.isArray()) {
-                    var a = rs.getArray(i + 1);
+
+        // Pre-construct extract functions based on record definition
+        RecordComponent[] recordComponents = rClass.getRecordComponents();
+        @SuppressWarnings("unchecked")
+        Extractor<Object>[] extractors = new Extractor[recordComponents.length];
+
+        for (int i = 0; i < recordComponents.length; i++) {
+            final int columnIndex = i + 1;
+            final Class<?> type = recordComponents[i].getType();
+
+            if (type.isArray()) {
+                final Class<?> componentType = type.getComponentType();
+                extractors[i] = rs -> {
+                    var a = rs.getArray(columnIndex);
                     if (a == null) {
-                        read[i] = null;
-                    } else {
-                        Object[] objArray = (Object[]) a.getArray();
-                        Class<?> componentType = type.getComponentType();
-                        Object typedArray = java.lang.reflect.Array.newInstance(componentType, objArray.length);
-                        for (int j = 0; j < objArray.length; j++) {
-                            java.lang.reflect.Array.set(typedArray, j, objArray[j]);
-                        }
-                        read[i] = typedArray;
+                        return null;
                     }
-                } else {
-                    Object value = rs.getObject(i + 1);
-                    if (rs.wasNull()) {
-                        read[i] = null;
-                    } else {
-                        read[i] = value;
+                    Object[] objArray = (Object[]) a.getArray();
+                    Object typedArray = java.lang.reflect.Array.newInstance(componentType, objArray.length);
+                    for (int j = 0; j < objArray.length; j++) {
+                        java.lang.reflect.Array.set(typedArray, j, objArray[j]);
                     }
-                }
+                    return typedArray;
+                };
+            } else {
+                extractors[i] = rs -> {
+                    Object value = rs.getObject(columnIndex);
+                    return rs.wasNull() ? null : value;
+                };
+            }
+        }
+
+        return collectAll(connection, sql, rs -> {
+            Object[] read = new Object[extractors.length];
+            for (int i = 0; i < extractors.length; i++) {
+                read[i] = extractors[i].extract(rs);
             }
             try {
                 return constructor.newInstance(read);

@@ -6,7 +6,9 @@ import io.dazzleduck.sql.flight.server.StatementContext;
 import io.micrometer.core.instrument.*;
 import org.slf4j.MarkerFactory;
 
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongSupplier;
 
 public class MicroMeterFlightRecorder implements FlightRecorder {
 
@@ -21,9 +23,6 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
     private final Counter streamPreparedStatementCounter;
 
     private final Counter stremPreparedStatementBytesOutCounter;
-    private final Counter bulkIngestCounter;
-
-    private final Counter bulkIngestErrorCounter;
 
     private final Counter cancelStatementCounter;
     private final Counter cancelPreparedStatementCounter;
@@ -55,7 +54,6 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
 
         this.streamStatementCounter = counter("stream_statement", producerId);
         this.streamPreparedStatementCounter = counter("stream_prepared_statement", producerId);
-        this.bulkIngestCounter = counter("bulk_ingest", producerId);
         this.streamPreparedStatementErrorCounter = counter("stream_prepared_statement_error", producerId);
         this.streamStatementErrorCounter = counter("stream_statement_error", producerId);
         this.timeoutStatementCounter = counter("stream_statement_timeout", producerId);
@@ -69,11 +67,8 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
         this.streamStatementCompletedCounter = counter("stream_statement_completed", producerId);
         this.streamPreparedStatementCompletedCounter = counter("stream_prepared_statement_completed", producerId);
         this.bulkIngestCompletedCounter = counter("bulk_ingest_completed", producerId);
-        this.bulkIngestErrorCounter = counter("bulk_ingest_error", producerId);
-
         this.stremPreparedStatementBytesOutCounter = counter("stream_prepared_statement_bytes_out", producerId);
         this.stremStatementBytesOutCounter = counter("stream_statement_bytes_out", producerId);
-
         this.statementStart = counter("statement_start", producerId);
         this.statementEnd = counter("statement_end", producerId);
         this.statementError = counter("statement_error", producerId);
@@ -177,22 +172,8 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
         streamStatementErrorCounter.increment();
     }
 
-    // ---------------- Bulk Ingest ----------------
 
-    @Override
-    public void startBulkIngest() {
-        startNanos.set(System.nanoTime());
-    }
 
-    @Override
-    public void endBulkIngest() {
-        bulkIngestCompletedCounter.increment();
-    }
-
-    @Override
-    public void errorBulkIngest() {
-        bulkIngestErrorCounter.increment();
-    }
 
     @Override
     public void recordGetStreamPreparedStatement(long size) {
@@ -202,6 +183,15 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
     @Override
     public void recordGetStreamStatement(long size) {
         stremStatementBytesOutCounter.increment(size);
+    }
+
+    @Override
+    public void registerWriteQueue(String identifier, Map<String, LongSupplier> counters)  {
+        counters.forEach((name, supplier) -> {
+            FunctionCounter.builder("dazzleduck.flight.ingest_queue." + name, supplier, LongSupplier::getAsLong)
+                    .tag("identifier", identifier)
+                    .register(registry);
+        });
     }
 
 
@@ -223,10 +213,7 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
     public long getCompletedPreparedStatements() {
         return (long) streamPreparedStatementCompletedCounter.count();
     }
-    @Override
-    public long getCompletedBulkIngest() {
-        return (long) bulkIngestCompletedCounter.count();
-    }
+
     @Override
     public long getCancelledStatements() {
         return (long) cancelStatementCounter.count();

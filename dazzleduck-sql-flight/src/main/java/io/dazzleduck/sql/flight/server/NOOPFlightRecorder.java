@@ -4,7 +4,9 @@ import io.dazzleduck.sql.flight.FlightRecorder;
 import io.dazzleduck.sql.flight.model.FlightMetricsSnapshot;
 import io.dazzleduck.sql.flight.server.DuckDBFlightSqlProducer.CacheKey;
 
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongSupplier;
 
 public class NOOPFlightRecorder implements FlightRecorder {
 
@@ -96,20 +98,6 @@ public class NOOPFlightRecorder implements FlightRecorder {
         failedPreparedStatements.incrementAndGet();
     }
 
-    @Override
-    public void startBulkIngest() {
-        // Logic for when bulk ingest starts
-    }
-
-    @Override
-    public void endBulkIngest() {
-        completedBulkIngest.incrementAndGet();
-    }
-
-    @Override
-    public void errorBulkIngest() {
-        failedBulkIngest.incrementAndGet();
-    }
 
     @Override
     public void recordGetStreamPreparedStatement(long networkSize) {
@@ -123,6 +111,11 @@ public class NOOPFlightRecorder implements FlightRecorder {
         if (size > 0) {
             bytesIn.addAndGet(size);
         }
+    }
+
+    @Override
+    public void registerWriteQueue(String identifier, Map<String, LongSupplier> counters) {
+
     }
 
     @Override
@@ -155,8 +148,4 @@ public class NOOPFlightRecorder implements FlightRecorder {
         return completedPreparedStatements.get();
     }
 
-    @Override
-    public long getCompletedBulkIngest() {
-        return completedBulkIngest.get();
-    }
 }
