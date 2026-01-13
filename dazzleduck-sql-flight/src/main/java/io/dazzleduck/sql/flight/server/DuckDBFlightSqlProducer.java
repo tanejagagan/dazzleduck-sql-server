@@ -118,10 +118,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         return recorder.getCompletedPreparedStatements();
     }
 
-    @Override
-    public long getCompletedBulkIngest() {
-        return recorder.getCompletedBulkIngest();
-    }
 
     @Override
     public long getCancelledStatements() {
@@ -216,6 +212,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     private final List<Location> locations = new ArrayList<>();
     private final String producerId;
     protected final String secretKey;
+
     protected final BufferAllocator allocator;
     private final String warehousePath;
     private final Cache<CacheKey, StatementContext<PreparedStatement>> preparedStatementLoadingCache;
@@ -715,6 +712,31 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     }
 
 
+    /**
+     * Gets an existing ParquetIngestionQueue for the given path, or creates a new one if absent.
+     * Uses computeIfAbsent to ensure thread-safe access to the ingestion queue map.
+     *
+     * @param path the complete path for the ingestion queue
+     * @return the BulkIngestQueue for the specified path
+     */
+    protected BulkIngestQueue<String, IngestionResult> getOrCreateParquetIngestionQueue(String path) {
+        return ingestionQueueMap.computeIfAbsent(path, p -> {
+            var queue = new ParquetIngestionQueue(producerId, TEMP_WRITE_FORMAT, p, p,
+                    bulkIngestionConfig.minBucketSize(),
+                    bulkIngestionConfig.maxDelay(),
+                    postIngestionTaskFactory,
+                    Executors.newSingleThreadScheduledExecutor(),
+                    Clock.systemDefaultZone());
+            recorder.registerWriteQueue(p, Map.of(
+                    "write_batches", queue::getTotalWriteBatches,
+                    "write_buckets", queue::getTotalWriteBuckets,
+                    "total_write", queue::getTotalWrite,
+                    "time_spent_writing", queue::getTimeSpentWriting
+            ));
+            return queue;
+        });
+    }
+
     @Override
     public Runnable acceptPutStatementBulkIngest(
             FlightSql.CommandStatementIngest command,
@@ -728,14 +750,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             try (reader) {
                 tempFile = BulkIngestQueue.writeAndValidateTempArrowFile(tempDir, reader);
                 var batch = ingestionParameters.constructBatch(Files.size(tempFile), tempFile.toAbsolutePath().toString());
-                var ingestionQueue = ingestionQueueMap.computeIfAbsent(ingestionParameters.completePath(warehousePath), p -> {
-                    return new ParquetIngestionQueue(producerId, TEMP_WRITE_FORMAT, p, p,
-                            bulkIngestionConfig.minBucketSize(),
-                            bulkIngestionConfig.maxDelay(),
-                            postIngestionTaskFactory,
-                            Executors.newSingleThreadScheduledExecutor(),
-                            Clock.systemDefaultZone());
-                });
+                var ingestionQueue = getOrCreateParquetIngestionQueue(ingestionParameters.completePath(warehousePath));
                 var result = ingestionQueue.add(batch);
                 result.get();
                 ackStream.onNext(PutResult.empty());
@@ -757,14 +772,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             try (ArrowReader inputReader = new ArrowStreamReader(inputStream, allocator)) {
                 tempFile = BulkIngestQueue.writeAndValidateTempArrowFile(tempDir, inputReader);
                 var batch = ingestionParameters.constructBatch(Files.size(tempFile), tempFile.toAbsolutePath().toString());
-                var ingestionQueue = ingestionQueueMap.computeIfAbsent(ingestionParameters.completePath(warehousePath), p -> {
-                    return new ParquetIngestionQueue(producerId, TEMP_WRITE_FORMAT, p, p,
-                            bulkIngestionConfig.minBucketSize(),
-                            bulkIngestionConfig.maxDelay(),
-                            postIngestionTaskFactory,
-                            Executors.newSingleThreadScheduledExecutor(),
-                            Clock.systemDefaultZone());
-                });
+                var ingestionQueue = getOrCreateParquetIngestionQueue(ingestionParameters.completePath(warehousePath));
                 var result = ingestionQueue.add(batch);
                 result.get();
                 ackStream.onNext(PutResult.empty());

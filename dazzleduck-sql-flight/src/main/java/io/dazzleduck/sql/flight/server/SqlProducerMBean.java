@@ -15,7 +15,6 @@ public interface SqlProducerMBean {
     Instant getStartTime();
     long getCompletedStatements();
     long getCompletedPreparedStatements();
-    long getCompletedBulkIngest();
     long getCancelledStatements();
     long getCancelledPreparedStatements();
     List<RunningStatementInfo> getRunningStatementDetails();

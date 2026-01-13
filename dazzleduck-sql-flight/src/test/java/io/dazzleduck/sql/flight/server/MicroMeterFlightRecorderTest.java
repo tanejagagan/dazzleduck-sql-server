@@ -68,12 +68,6 @@ public class MicroMeterFlightRecorderTest {
         assertEquals(1.0, counter("stream_prepared_statement_completed").count());
     }
 
-    @Test
-    void testStartAndEndBulkIngest() {
-        recorder.startBulkIngest();
-        recorder.endBulkIngest();
-        assertEquals(1.0, counter("bulk_ingest_completed").count());
-    }
 
     @Test
     void testRecordGetStreamPreparedStatementDoesNotThrow() {
