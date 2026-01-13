@@ -87,7 +87,7 @@ public final class LogProcessorMain {
         // Start processing
         processor.start();
 
-        logger.info("Processor started. Monitoring directory for log files 💽📂...");
+        logger.info("Processor started. Monitoring directory for log files...");
 
         // Keep main thread alive
         while (processor.isRunning()) {

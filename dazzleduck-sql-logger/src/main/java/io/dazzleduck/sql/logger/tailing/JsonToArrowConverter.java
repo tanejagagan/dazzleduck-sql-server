@@ -7,6 +7,8 @@ import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.BigIntVector;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.arrow.vector.complex.MapVector;
+import org.apache.arrow.vector.complex.impl.UnionMapWriter;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.FieldType;
@@ -16,8 +18,10 @@ import org.slf4j.LoggerFactory;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -95,6 +99,18 @@ public final class JsonToArrowConverter implements Closeable {
     }
 
     private Schema createArrowSchema() {
+        // MDC field as Map<String, String>
+        Field mdcField = new Field("mdc", FieldType.nullable(new ArrowType.Map(false)),
+                List.of(
+                        new Field("entries", FieldType.notNullable(new ArrowType.Struct()),
+                                List.of(
+                                        new Field("key", FieldType.notNullable(new ArrowType.Utf8()), null),
+                                        new Field("value", FieldType.nullable(new ArrowType.Utf8()), null)
+                                )
+                        )
+                )
+        );
+
         return new Schema(List.of(
                 new Field("s_no", FieldType.nullable(new ArrowType.Int(64, true)), null),
                 new Field("timestamp", FieldType.nullable(new ArrowType.Utf8()), null),
@@ -102,7 +118,7 @@ public final class JsonToArrowConverter implements Closeable {
                 new Field("logger", FieldType.nullable(new ArrowType.Utf8()), null),
                 new Field("thread", FieldType.nullable(new ArrowType.Utf8()), null),
                 new Field("message", FieldType.nullable(new ArrowType.Utf8()), null),
-                new Field("mdc", FieldType.nullable(new ArrowType.Utf8()), null),
+                mdcField,
                 new Field("marker", FieldType.nullable(new ArrowType.Utf8()), null),
                 new Field("application_id", FieldType.nullable(new ArrowType.Utf8()), null),
                 new Field("application_name", FieldType.nullable(new ArrowType.Utf8()), null),
@@ -118,12 +134,15 @@ public final class JsonToArrowConverter implements Closeable {
         VarCharVector loggerVec = (VarCharVector) root.getVector("logger");
         VarCharVector threadVec = (VarCharVector) root.getVector("thread");
         VarCharVector messageVec = (VarCharVector) root.getVector("message");
-        VarCharVector mdcVec = (VarCharVector) root.getVector("mdc");
+        MapVector mdcVec = (MapVector) root.getVector("mdc");
         VarCharVector markerVec = (VarCharVector) root.getVector("marker");
         VarCharVector applicationIdVec = (VarCharVector) root.getVector("application_id");
         VarCharVector applicationNameVec = (VarCharVector) root.getVector("application_name");
         VarCharVector applicationHostVec = (VarCharVector) root.getVector("application_host");
         VarCharVector fileNameVec = (VarCharVector) root.getVector("file_name");
+
+        mdcVec.allocateNew();
+        UnionMapWriter mdcWriter = mdcVec.getWriter();
 
         for (int i = 0; i < logMessages.size(); i++) {
             LogMessage log = logMessages.get(i);
@@ -136,21 +155,41 @@ public final class JsonToArrowConverter implements Closeable {
             setVectorValue(loggerVec, i, log.logger());
             setVectorValue(threadVec, i, log.thread());
             setVectorValue(messageVec, i, log.message());
-            setVectorValue(mdcVec, i, log.mdc());
+            setMapValue(mdcWriter, i, log.mdc());
             setVectorValue(markerVec, i, log.marker());
             setVectorValue(applicationIdVec, i, application_id);
             setVectorValue(applicationNameVec, i, application_name);
             setVectorValue(applicationHostVec, i, application_host);
             setVectorValue(fileNameVec, i, fileName);
         }
+
+        mdcVec.setValueCount(logMessages.size());
     }
 
     private void setVectorValue(VarCharVector vector, int index, String value) {
         if (value != null && !value.isEmpty()) {
-            vector.setSafe(index, value.getBytes());
+            vector.setSafe(index, value.getBytes(StandardCharsets.UTF_8));
         } else {
             vector.setNull(index);
         }
+    }
+
+    private void setMapValue(UnionMapWriter writer, int index, Map<String, String> map) {
+        writer.setPosition(index);
+        writer.startMap();
+        if (map != null && !map.isEmpty()) {
+            for (Map.Entry<String, String> entry : map.entrySet()) {
+                writer.startEntry();
+                writer.key().varChar().writeVarChar(entry.getKey());
+                if (entry.getValue() != null) {
+                    writer.value().varChar().writeVarChar(entry.getValue());
+                } else {
+                    writer.value().writeNull();
+                }
+                writer.endEntry();
+            }
+        }
+        writer.endMap();
     }
 
     @Override

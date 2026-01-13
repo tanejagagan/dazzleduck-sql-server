@@ -3,6 +3,9 @@ package io.dazzleduck.sql.logger.tailing.model;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import java.util.Collections;
+import java.util.Map;
+
 /**
  * Model for JSON log message structure
  */
@@ -13,7 +16,7 @@ public record LogMessage(
         @JsonProperty("logger") String logger,
         @JsonProperty("thread") String thread,
         @JsonProperty("message") String message,
-        @JsonProperty("mdc") String mdc,
+        @JsonProperty("mdc") Map<String, String> mdc,
         @JsonProperty("marker") String marker
 ) {
     // Compact constructor for validation
@@ -31,6 +34,11 @@ public record LogMessage(
         // Message defaults to empty string if not provided
         if (message == null) {
             message = "";
+        }
+
+        // MDC defaults to empty map if not provided
+        if (mdc == null) {
+            mdc = Collections.emptyMap();
         }
     }
 }
