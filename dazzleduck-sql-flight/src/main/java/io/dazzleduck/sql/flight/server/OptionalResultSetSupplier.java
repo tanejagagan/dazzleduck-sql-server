@@ -14,6 +14,27 @@ public interface OptionalResultSetSupplier {
 
     void execute() throws SQLException;
 
+    static OptionalResultSetSupplier of(final Statement statement, String query) {
+        return new OptionalResultSetSupplier() {
+            boolean hasResultSet;
+
+            @Override
+            public boolean hasResultSet() {
+                return hasResultSet;
+            }
+
+            @Override
+            public DuckDBResultSet get() throws SQLException {
+                return (DuckDBResultSet) statement.getResultSet();
+            }
+
+            @Override
+            public void execute() throws SQLException {
+                hasResultSet = statement.execute(query);
+            }
+        };
+    }
+
     static OptionalResultSetSupplier of(final Statement statement, String query, QueryOptimizer queryOptimizer) {
         return new OptionalResultSetSupplier() {
             boolean hasResultSet;
