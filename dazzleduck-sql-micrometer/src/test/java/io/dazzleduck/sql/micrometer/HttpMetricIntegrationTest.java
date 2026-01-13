@@ -1,15 +1,16 @@
 package io.dazzleduck.sql.micrometer;
 
-import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.common.util.ConfigUtils;
+import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.dazzleduck.sql.micrometer.metrics.MetricsRegistryFactory;
-import io.dazzleduck.sql.runtime.Runtime;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import org.junit.jupiter.api.*;
+import io.dazzleduck.sql.runtime.SharedTestServer;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -18,16 +19,52 @@ import java.util.Comparator;
 import java.util.concurrent.TimeUnit;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-@Disabled
 public class HttpMetricIntegrationTest {
 
-    private Runtime runtime;
+    @TempDir
+    static Path warehouse;
+
+    private SharedTestServer server;
+
+    private static final int HTTP_PORT = 8081;
+
+    private static final String CATALOG_NAME = "test_ducklake";
+    private static final String TABLE_NAME = "test_metrics";
+    private static final String SCHEMA_NAME = "main";
+
+    private static final String INGEST_PATH = "metrics";
+    private static final String DUCKLAKE_DATA_DIR = "ducklake_data";
 
     @BeforeAll
-    void startServers() throws Exception {
-        Config config = ConfigFactory.load().getConfig(ConfigUtils.CONFIG_PATH);
-        runtime = Runtime.start(config);
-        waitForHttpServer();
+    void setup() throws Exception {
+        server = new SharedTestServer();
+        String STARTUP_SCRIPT = """
+                INSTALL arrow;
+                LOAD arrow;
+                
+                LOAD ducklake;
+                ATTACH 'ducklake:%s/%s' AS %s (DATA_PATH '%s/%s');
+                USE %s;
+                CREATE TABLE IF NOT EXISTS %s (name VARCHAR, type VARCHAR, value DOUBLE, application_id VARCHAR, application_name VARCHAR, application_host VARCHAR);
+                """.formatted(warehouse, CATALOG_NAME, CATALOG_NAME, warehouse, DUCKLAKE_DATA_DIR, CATALOG_NAME, TABLE_NAME);
+
+        server.startWithWarehouse(
+                HTTP_PORT,
+                0,
+                "http.auth=none",
+                "warehouse=" + warehouse.toAbsolutePath(),
+                // DuckLake ingestion
+                "post_ingestion_task_factory_provider.class=io.dazzleduck.sql.commons.ingestion.DuckLakePostIngestionTaskFactoryProvider",
+                "post_ingestion_task_factory_provider.catalog_name=" + CATALOG_NAME,
+                // Mapping
+                "post_ingestion_task_factory_provider.path_to_table_mapping.0.table_name=" + TABLE_NAME,
+                "post_ingestion_task_factory_provider.path_to_table_mapping.0.schema_name=" + SCHEMA_NAME,
+                "post_ingestion_task_factory_provider.path_to_table_mapping.0.base_path=" + INGEST_PATH,
+                // Startup script
+                "startup_script_provider.class=io.dazzleduck.sql.common.ConfigBasedStartupScriptProvider",
+                "startup_script_provider.content=" + STARTUP_SCRIPT
+        );
+        Files.createDirectories(Path.of(server.getWarehousePath(), INGEST_PATH));
     }
 
     @Test
@@ -36,14 +73,8 @@ public class HttpMetricIntegrationTest {
         MeterRegistry registry = MetricsRegistryFactory.create();
 
         try {
-            Counter counter = Counter.builder("records.processed")
-                            .description("Number of records processed")
-                            .register(registry);
-
-            Timer timer = Timer.builder("record.processing.time")
-                            .description("Time spent processing records")
-                            .register(registry);
-
+            Counter counter = Counter.builder("records.processed").description("Number of records processed").register(registry);
+            Timer timer = Timer.builder("record.processing.time").description("Time spent processing records").register(registry);
             for (int i = 0; i < 10; i++) {
                 timer.record(100, TimeUnit.MILLISECONDS);
                 counter.increment();
@@ -54,31 +85,29 @@ public class HttpMetricIntegrationTest {
             registry.close();
         }
 
-        String warehousePath = ConfigUtils.getWarehousePath(ConfigFactory.load().getConfig(ConfigUtils.CONFIG_PATH));
-        Path metricFile = waitForMetricFile(warehousePath);
+        Path metricDir = Path.of(server.getWarehousePath(), INGEST_PATH);
+        Path metricFile = waitForMetricFile(metricDir.toString());
 
         TestUtils.isEqual("""
-                select 'records.processed' as name,
-                       'counter'           as type,
-                       10.0                as value,
-                       'ap101'             as application_id,
-                       'MyApplication'     as application_name,
-                       'localhost'         as application_host
-                """,
+                        select 'records.processed' as name,
+                               'counter'           as type,
+                               10.0                as value,
+                               'ap101'             as application_id,
+                               'MyApplication'     as application_name,
+                               'localhost'         as application_host
+                        """,
                 """
-                select name, type, value, application_id, application_name, hostapplication_host
-                from read_parquet('%s')
-                where name = 'records.processed'
-                """.formatted(metricFile.toAbsolutePath())
+                        select name, type, value, application_id, application_name, application_host
+                        from read_parquet('%s')
+                        where name = 'records.processed'
+                        """.formatted(metricFile.toAbsolutePath())
         );
     }
 
     @AfterAll
     void cleanup() throws Exception {
-        if (runtime != null) {
-            runtime.close();
-        }
-
+        if (server != null) server.close();
+        ConnectionPool.execute("DETACH " + CATALOG_NAME);
         String warehousePath = ConfigUtils.getWarehousePath(ConfigFactory.load().getConfig(ConfigUtils.CONFIG_PATH));
         Path path = Path.of(warehousePath);
         if (Files.exists(path)) {
@@ -86,25 +115,12 @@ public class HttpMetricIntegrationTest {
                     .forEach(p -> {
                         try {
                             Files.deleteIfExists(p);
-                        } catch (IOException ignored) {}
+                        } catch (IOException ignored) {
+                        }
                     });
         }
 
         Files.createDirectories(path);
-    }
-
-    private void waitForHttpServer() throws Exception {
-        int port = 8081;
-        long deadline = System.currentTimeMillis() + 10_000;
-
-        while (System.currentTimeMillis() < deadline) {
-            try (var socket = new java.net.Socket("localhost", port)) {
-                return;
-            } catch (IOException e) {
-                Thread.sleep(100);
-            }
-        }
-        throw new IllegalStateException("HTTP server did not start");
     }
 
     private Path waitForMetricFile(String warehousePath) throws Exception {
