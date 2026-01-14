@@ -37,7 +37,7 @@ public class ConfigUtils {
     public static final String KEYSTORE_KEY = "keystore";
     public static final String SERVER_CERT_KEY = "server_cert";
     public static final String PRODUCER_ID_KEY = "producer_id";
-    public static final String QUERY_TIMEOUT_MINUTES_KEY = "query_timeout_minutes";
+    public static final String QUERY_TIMEOUT_MS_KEY = "query_timeout_ms";
 
     // Ingestion configuration keys
     public static final String INGESTION_KEY = "ingestion";

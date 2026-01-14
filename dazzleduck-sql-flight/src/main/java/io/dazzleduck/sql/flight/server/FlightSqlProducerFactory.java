@@ -6,6 +6,8 @@ import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactory;
 import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactoryProvider;
+import io.dazzleduck.sql.flight.FlightRecorder;
+import io.dazzleduck.sql.flight.SimpleFlightRecorder;
 import io.dazzleduck.sql.flight.optimizer.QueryOptimizer;
 import io.dazzleduck.sql.flight.optimizer.QueryOptimizerProvider;
 import org.apache.arrow.flight.Location;
@@ -35,7 +37,7 @@ import java.util.concurrent.ScheduledExecutorService;
  *   <li><b>producer_id</b> - Producer identifier (required)</li>
  *   <li><b>access_mode</b> - Access mode: COMPLETE or RESTRICTED (default: COMPLETE)</li>
  *   <li><b>temp_write_location</b> - Temporary write directory (required)</li>
- *   <li><b>query_timeout_minutes</b> - Query timeout in minutes (default: 2)</li>
+ *   <li><b>query_timeout_ms</b> - Query timeout in milliseconds (required)</li>
  *   <li><b>ingestion.min_bucket_size</b> - Minimum ingestion bucket size (default: 1048576)</li>
  *   <li><b>ingestion.max_delay_ms</b> - Maximum ingestion delay in ms (default: 2000)</li>
  * </ul>
@@ -108,6 +110,7 @@ public final class FlightSqlProducerFactory {
         private Duration queryTimeout;
         private Clock clock;
         private IngestionConfig ingestionConfig;
+        private FlightRecorder flightRecorder;
 
         private ProducerBuilder(Config config) {
             this.config = config;
@@ -137,10 +140,11 @@ public final class FlightSqlProducerFactory {
                 throw new RuntimeException("Failed to create temp write directory", e);
             }
 
-            // Query timeout
-            this.queryTimeout = config.hasPath(ConfigUtils.QUERY_TIMEOUT_MINUTES_KEY)
-                ? Duration.ofMinutes(config.getLong(ConfigUtils.QUERY_TIMEOUT_MINUTES_KEY))
-                : Duration.ofMinutes(2);
+            // Query timeout (required)
+            if (!config.hasPath(ConfigUtils.QUERY_TIMEOUT_MS_KEY)) {
+                throw new IllegalArgumentException("Required configuration missing: " + ConfigUtils.QUERY_TIMEOUT_MS_KEY);
+            }
+            this.queryTimeout = Duration.ofMillis(config.getLong(ConfigUtils.QUERY_TIMEOUT_MS_KEY));
 
             // Ingestion config
             this.ingestionConfig = loadIngestionConfig(config);
@@ -157,6 +161,7 @@ public final class FlightSqlProducerFactory {
             this.allocator = null; // Will use RootAllocator if not set
             this.scheduledExecutorService = null; // Will create new one if not set
             this.clock = Clock.systemDefaultZone();
+            this.flightRecorder = null; // Will use default MicroMeterFlightRecorder if not set
         }
 
         // ==================== Getters for inspecting loaded config ====================
@@ -215,6 +220,13 @@ public final class FlightSqlProducerFactory {
          */
         public PostIngestionTaskFactory getPostIngestionTaskFactory() {
             return postIngestionTaskFactory;
+        }
+
+        /**
+         * @return the configured flight recorder, or null if not set
+         */
+        public FlightRecorder getFlightRecorder() {
+            return flightRecorder;
         }
 
         // ==================== Setters for overriding config ====================
@@ -363,6 +375,17 @@ public final class FlightSqlProducerFactory {
         }
 
         /**
+         * Sets a custom flight recorder for metrics and auditing.
+         *
+         * @param flightRecorder the flight recorder
+         * @return this builder
+         */
+        public ProducerBuilder withFlightRecorder(FlightRecorder flightRecorder) {
+            this.flightRecorder = flightRecorder;
+            return this;
+        }
+
+        /**
          * Builds the DuckDBFlightSqlProducer instance.
          *
          * <p>All configuration values have been read during builder construction.
@@ -381,6 +404,11 @@ public final class FlightSqlProducerFactory {
                 ? scheduledExecutorService
                 : Executors.newSingleThreadScheduledExecutor();
 
+            // Use provided flight recorder or create default
+            FlightRecorder finalRecorder = flightRecorder != null
+                ? flightRecorder
+                : buildRecorder(producerId);
+
             // Create appropriate producer based on access mode
             if (accessMode == AccessMode.RESTRICTED) {
                 return new RestrictedFlightSqlProducer(
@@ -394,7 +422,7 @@ public final class FlightSqlProducerFactory {
                     finalExecutorService,
                     queryTimeout,
                     clock,
-                    buildRecorder(producerId),
+                    finalRecorder,
                     queryOptimizer,
                     ingestionConfig
                 );
@@ -411,8 +439,8 @@ public final class FlightSqlProducerFactory {
                     finalExecutorService,
                     queryTimeout,
                     clock,
-                    buildRecorder(producerId),
-                        ingestionConfig
+                    finalRecorder,
+                    ingestionConfig
                 );
             }
         }
@@ -457,7 +485,7 @@ public final class FlightSqlProducerFactory {
                 var registry = new io.micrometer.core.instrument.logging.LoggingMeterRegistry();
                 return new io.dazzleduck.sql.flight.MicroMeterFlightRecorder(registry, producerId);
             } catch (Throwable t) {
-                return new NOOPFlightRecorder();
+                return new SimpleFlightRecorder();
             }
         }
     }
