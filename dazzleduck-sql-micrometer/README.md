@@ -217,7 +217,7 @@ Metrics are stored with the following Arrow schema:
 | `application_id` | String | Application identifier |
 | `application_name` | String | Application name |
 | `application_host` | String | Host where metric originated |
-| `tags` | Map<String, String> | Metric tags/labels |
+| `tags` | `Map<String, String>` | Metric tags/labels |
 | `value` | Double | Primary metric value |
 | `min` | Double | Minimum value (for distributions) |
 | `max` | Double | Maximum value (for distributions) |
