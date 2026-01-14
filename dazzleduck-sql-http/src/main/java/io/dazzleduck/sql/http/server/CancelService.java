@@ -1,11 +1,10 @@
 package io.dazzleduck.sql.http.server;
 
-import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.flight.server.HttpFlightAdaptor;
+import io.helidon.http.Status;
 import io.helidon.webserver.http.ServerRequest;
 import io.helidon.webserver.http.ServerResponse;
-import org.apache.arrow.flight.CancelStatus;
-import org.apache.arrow.flight.FlightProducer;
+import org.apache.hadoop.shaded.org.apache.http.HttpStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -30,32 +29,15 @@ public class CancelService extends AbstractQueryBasedService {
 
         Long queryId = requestObject.id();
         try {
-            httpFlightAdaptor.cancel(queryId, new FlightProducer.StreamListener<CancelStatus>() {
-                @Override
-                public void onNext(CancelStatus val) {
-                    log.info("cancel update for id {}: {}", queryId, val);
-                }
-
-                @Override
-                public void onError(Throwable t) {
-                    log.error("Failed to cancel id {}: {}", queryId, t.getMessage(), t);
-                    if (!response.isSent()) {
-                        response.status(500).send("failed to cancel query.");
-                    }
-                }
-
-                @Override
-                public void onCompleted() {
-                    log.info("Cancellation completed for id {} (status={})", queryId, CancelStatus.CANCELLED);
-                    if (!response.isSent()) {
-                        response.status(200).send("query cancel successfully.");
-                    }
-                }
-            }, context.peerIdentity());
-
+            var res = httpFlightAdaptor.tryCancel(queryId, context);
+            if (res) {
+                response.status(HttpStatus.SC_OK).send("query cancelled successfully");
+            } else {
+                response.status(HttpStatus.SC_NOT_FOUND).send("query not found");
+            }
         } catch (Exception ex) {
             log.error("Error while requesting cancel for id {}: {}", queryId, ex.getMessage(), ex);
-            response.status(500).send("Error while requesting cancel: " +  ex.getMessage());
+            response.status(Status.INTERNAL_SERVER_ERROR_500).send("Error while requesting cancel: " + ex.getMessage());
         }
     }
 }

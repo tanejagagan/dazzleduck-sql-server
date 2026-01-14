@@ -14,6 +14,7 @@ import io.dazzleduck.sql.commons.authorization.SqlAuthorizer;
 import io.dazzleduck.sql.commons.ingestion.*;
 import io.dazzleduck.sql.flight.FlightRecorder;
 import io.dazzleduck.sql.flight.MicroMeterFlightRecorder;
+import io.dazzleduck.sql.flight.SimpleFlightRecorder;
 import io.dazzleduck.sql.flight.ingestion.IngestionParameters;
 import io.dazzleduck.sql.flight.model.RunningStatementInfo;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceServerCallHeaderAuthMiddleware;
@@ -192,7 +193,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             var registry = new LoggingMeterRegistry();
             return new MicroMeterFlightRecorder(registry, producerId);
         } catch (Throwable t) {
-            return new NOOPFlightRecorder();
+            return new SimpleFlightRecorder();
         }
     }
 
@@ -400,20 +401,24 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             );
 
             scheduledExecutorService.scheduleWithFixedDelay(() -> {
-                var now = clock.instant();
-                preparedStatementLoadingCache.asMap().forEach((key, ctx) -> {
-                    if (ctx.startTime().plus(queryTimeout).isBefore(now)) {
-                        recorder.recordPreparedStatementTimeout(key, ctx);
-                        cancel(key.id, streamListener, key.peerIdentity);
-                    }
-                });
+                try {
+                    var now = clock.instant();
+                    preparedStatementLoadingCache.asMap().forEach((key, ctx) -> {
+                        if (ctx.startTime().plus(queryTimeout).isBefore(now)) {
+                            recorder.recordPreparedStatementTimeout(key, ctx);
+                            cancel(key.id, streamListener, key.peerIdentity);
+                        }
+                    });
 
-                statementLoadingCache.asMap().forEach((key, ctx) -> {
-                    if (ctx.startTime().plus(queryTimeout).isBefore(now)) {
-                        recorder.recordStatementTimeout(key, ctx);
-                        cancel(key.id, streamListener, key.peerIdentity);
-                    }
-                });
+                    statementLoadingCache.asMap().forEach((key, ctx) -> {
+                        if (ctx.startTime().plus(queryTimeout).isBefore(now)) {
+                            recorder.recordStatementTimeout(key, ctx);
+                            cancel(key.id, streamListener, key.peerIdentity);
+                        }
+                    });
+                } catch (Exception e) {
+                    logger.atError().setCause(e).log("Error checking query timeouts");
+                }
             }, 0, CANCEL_TASK_INTERVAL_SECOND, TimeUnit.SECONDS);
         } catch (SQLException e) {
             throw new RuntimeException(e);
@@ -805,6 +810,26 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         }
     }
 
+    @Override
+    public boolean tryCancel(Long queryId, CallContext context) throws SQLException {
+        var key = new CacheKey(context.peerIdentity(), queryId);
+        StatementContext<?> statementContext = getStatementContext(key);
+
+        if (statementContext == null) {
+            return false;
+        }
+        try {
+            Statement statement = statementContext.getStatement();
+            recorder.recordStatementCancel(key, statementContext);
+            statement.cancel();
+            return true;
+        } finally {
+          invalidateCache(key, statementContext);
+        }
+    }
+
+
+
 
 
     @Override
@@ -1039,8 +1064,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         cancel(statementHandle.queryId(), listener, context.peerIdentity());
     }
 
-    @Override
-    public void cancel(Long queryId,
+
+    private void cancel(Long queryId,
                        StreamListener<CancelStatus> listener,
                        String peerIdentity) {
         var key = new CacheKey(peerIdentity, queryId);
