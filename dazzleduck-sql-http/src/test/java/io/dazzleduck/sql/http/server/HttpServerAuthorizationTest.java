@@ -1,7 +1,10 @@
 package io.dazzleduck.sql.http.server;
 
+import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.commons.ConnectionPool;
+import io.dazzleduck.sql.commons.authorization.AccessType;
+import io.dazzleduck.sql.commons.authorization.SqlAuthorizer;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.dazzleduck.sql.login.LoginRequest;
 import io.dazzleduck.sql.login.LoginResponse;
@@ -50,9 +53,9 @@ public class HttpServerAuthorizationTest extends HttpServerTestBase {
     @Timeout(value = 30, unit = TimeUnit.SECONDS)
     public void testQueryWithClaimsFilter() throws Exception {
         var claims = Map.of(
-                "filter", "id = 1",
-                "table", "auth_test",
-                "path", warehousePath
+                Headers.HEADER_FILTER, "id = 1",
+                Headers.HEADER_TABLE, "auth_test",
+                Headers.HEADER_PATH, warehousePath
         );
         var jwtResponse = loginWithClaims(claims);
         assertEquals(200, jwtResponse.statusCode());
@@ -69,8 +72,8 @@ public class HttpServerAuthorizationTest extends HttpServerTestBase {
     @Timeout(value = 30, unit = TimeUnit.SECONDS)
     public void testUnauthorizedMissingTableClaim() throws Exception {
         var claims = Map.of(
-                "filter", "id = 1",
-                "path", warehousePath
+                Headers.HEADER_FILTER, "id = 1",
+                Headers.HEADER_PATH, warehousePath
         );
         var jwtResponse = loginWithClaims(claims);
         assertEquals(200, jwtResponse.statusCode());
@@ -85,8 +88,8 @@ public class HttpServerAuthorizationTest extends HttpServerTestBase {
     public void testColumnLevelAuthorization() throws Exception {
         var claims = Map.of(
                 // "columns", List.of("id", "name"),
-                "table", "auth_test",
-                "path", warehousePath
+                Headers.HEADER_TABLE, "auth_test",
+                Headers.HEADER_PATH, warehousePath
         );
         var jwtResponse = loginWithClaims(claims);
         assertEquals(200, jwtResponse.statusCode());
@@ -97,6 +100,55 @@ public class HttpServerAuthorizationTest extends HttpServerTestBase {
             var expectedSql = "select id, name from auth_test";
             TestUtils.isEqual(expectedSql, allocator, reader);
         }
+    }
+
+    @Test
+    public void testHasWriteAccessWithWriteAccessType() {
+        var authorizer = SqlAuthorizer.JWT_AUTHORIZER;
+        var claims = Map.of(
+                Headers.HEADER_ACCESS_TYPE, AccessType.WRITE.name(),
+                Headers.HEADER_PATH, "data/ingestion"
+        );
+        assertTrue(authorizer.hasWriteAccess("test_user", "data/ingestion", claims));
+        assertTrue(authorizer.hasWriteAccess("test_user", "data/ingestion/subpath", claims));
+    }
+
+    @Test
+    public void testHasWriteAccessWithoutWriteAccessType() {
+        var authorizer = SqlAuthorizer.JWT_AUTHORIZER;
+        var claims = Map.of(
+                Headers.HEADER_PATH, "data/ingestion"
+        );
+        assertFalse(authorizer.hasWriteAccess("test_user", "data/ingestion", claims));
+    }
+
+    @Test
+    public void testHasWriteAccessWithReadAccessType() {
+        var authorizer = SqlAuthorizer.JWT_AUTHORIZER;
+        var claims = Map.of(
+                Headers.HEADER_ACCESS_TYPE, AccessType.READ.name(),
+                Headers.HEADER_PATH, "data/ingestion"
+        );
+        assertFalse(authorizer.hasWriteAccess("test_user", "data/ingestion", claims));
+    }
+
+    @Test
+    public void testHasWriteAccessWithUnauthorizedPath() {
+        var authorizer = SqlAuthorizer.JWT_AUTHORIZER;
+        var claims = Map.of(
+                Headers.HEADER_ACCESS_TYPE, AccessType.WRITE.name(),
+                Headers.HEADER_PATH, "data/ingestion"
+        );
+        assertFalse(authorizer.hasWriteAccess("test_user", "other/path", claims));
+    }
+
+    @Test
+    public void testHasWriteAccessWithoutPath() {
+        var authorizer = SqlAuthorizer.JWT_AUTHORIZER;
+        var claims = Map.of(
+                Headers.HEADER_ACCESS_TYPE, AccessType.WRITE.name()
+        );
+        assertFalse(authorizer.hasWriteAccess("test_user", "data/ingestion", claims));
     }
 
     /**

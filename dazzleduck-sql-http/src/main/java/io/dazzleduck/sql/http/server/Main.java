@@ -322,7 +322,8 @@ public class Main {
                         b.addFilter(new JwtAuthenticationFilter(
                                 List.of(ENDPOINT_QUERY, ENDPOINT_PLAN, ENDPOINT_INGEST, ENDPOINT_CANCEL, ENDPOINT_UI),
                                 appConfig,
-                                secretKey
+                                secretKey,
+                                producer.getSqlAuthorizer()
                         ));
                     } else {
                         logger.warn("JWT authentication disabled - API endpoints are publicly accessible!");

@@ -1,7 +1,9 @@
 package io.dazzleduck.sql.http.server;
 
 import com.typesafe.config.Config;
+import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.common.util.ConfigUtils;
+import io.dazzleduck.sql.commons.authorization.SqlAuthorizer;
 import io.dazzleduck.sql.commons.authorization.SubjectAndVerifiedClaims;
 import io.helidon.http.HeaderNames;
 import io.helidon.http.Status;
@@ -18,6 +20,7 @@ import java.util.*;
 
 public class JwtAuthenticationFilter implements Filter {
     public static final String SUBJECT_KEY = "subject";
+    public static final String INGESTION_PATH = "/v1/ingest";
     private static final int BEARER_LENGTH = "Bearer ".length();
     private final Config config;
     private final SecretKey secretKey;
@@ -25,16 +28,18 @@ public class JwtAuthenticationFilter implements Filter {
     private final List<String> paths;
     private final List<String> claimHeader;
     private final Set<String> validateHeaders;
+    private final SqlAuthorizer sqlAuthorizer;
 
-    public JwtAuthenticationFilter(List<String> paths, Config config, SecretKey secretKey) {
+    public JwtAuthenticationFilter(List<String> paths, Config config, SecretKey secretKey, SqlAuthorizer sqlAuthorizer) {
         this.config = config;
         this.secretKey = secretKey;
-        this.jwtParser = Jwts.parser()     // (1)
-                .verifyWith(secretKey)      //     or a constant key used to verify all signed JWTs
+        this.jwtParser = Jwts.parser()
+                .verifyWith(secretKey)
                 .build();
         this.paths = paths;
         this.claimHeader = config.getStringList(ConfigUtils.JWT_TOKEN_CLAIMS_GENERATE_HEADERS_KEY);
         this.validateHeaders = new HashSet<>(config.getStringList(ConfigUtils.JWT_TOKEN_CLAIMS_VALIDATE_HEADERS_KEY));
+        this.sqlAuthorizer = sqlAuthorizer;
     }
 
     public SubjectAndVerifiedClaims authenticate(String token) {
@@ -83,8 +88,24 @@ public class JwtAuthenticationFilter implements Filter {
             res.send();
         } else {
             try {
-                var subject = authenticate(removeBearer(token.get()));
-                req.context().register(SUBJECT_KEY, subject);
+                var subjectAndClaims = authenticate(removeBearer(token.get()));
+
+                // Check write access for ingestion requests
+                if (req.path().path().startsWith(INGESTION_PATH)) {
+                    var path = req.query().get(Headers.HEADER_PATH);
+                    if (path == null || path.isEmpty()) {
+                        res.status(Status.BAD_REQUEST_400);
+                        res.send("Path parameter is required for ingestion".getBytes());
+                        return;
+                    }
+                    if (!sqlAuthorizer.hasWriteAccess(subjectAndClaims.subject(), path, subjectAndClaims.verifiedClaims())) {
+                        res.status(Status.FORBIDDEN_403);
+                        res.send(("No write access to path: " + path).getBytes());
+                        return;
+                    }
+                }
+
+                req.context().register(SUBJECT_KEY, subjectAndClaims);
                 chain.proceed();
             } catch (UnauthorizedException unauthorizedException) {
                 String errorMsg = unauthorizedException.getMessage() != null

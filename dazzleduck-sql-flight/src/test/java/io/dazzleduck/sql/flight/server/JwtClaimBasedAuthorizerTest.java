@@ -1,11 +1,15 @@
 package io.dazzleduck.sql.flight.server;
 
+import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.commons.ConnectionPool;
+import io.dazzleduck.sql.commons.authorization.AccessType;
+import io.dazzleduck.sql.commons.authorization.SqlAuthorizer;
 import io.dazzleduck.sql.commons.util.TestConstants;
 import org.apache.arrow.flight.FlightRuntimeException;
 import org.apache.arrow.flight.Location;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -16,6 +20,7 @@ import java.io.IOException;
 import java.security.NoSuchAlgorithmException;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 
@@ -37,9 +42,10 @@ public class JwtClaimBasedAuthorizerTest {
         var  tableName = "%s.%s.%s".formatted(TEST_CATALOG, TEST_SCHEMA, TEST_TABLE);
         var  unauthorizedTableName = "%s.%s.%s".formatted(TEST_CATALOG, TEST_SCHEMA, UNAUTHORIZED_TABLE);
 
-        SERVER_CLIENT = flightTestUtils.createRestrictedServerClient(SERVER_TEST_LOCATION,  Map.of("table", TEST_TABLE,
-                        "filter", "key = 'k2'",
-                        "path", "example/hive_table"));
+        SERVER_CLIENT = flightTestUtils.createRestrictedServerClient(SERVER_TEST_LOCATION,  Map.of(
+                        Headers.HEADER_TABLE, TEST_TABLE,
+                        Headers.HEADER_FILTER, "key = 'k2'",
+                        Headers.HEADER_PATH, "example/hive_table"));
         var setupSql = getSetupSql(tableName, unauthorizedTableName);
         ConnectionPool.executeBatch(setupSql);
     }
@@ -117,5 +123,54 @@ public class JwtClaimBasedAuthorizerTest {
     public void testUnAuthorizedPath(String testQuery) throws Exception {
         var expectedQuery = "%s where key =  'k2'".formatted(TestConstants.SUPPORTED_HIVE_PATH_QUERY);
         assertThrows(FlightRuntimeException.class, () -> FlightTestUtils.testQuery(expectedQuery,  testQuery, SERVER_CLIENT.flightSqlClient(), SERVER_CLIENT.clientAllocator()));
+    }
+
+    @Test
+    public void testHasWriteAccessWithWriteAccessType() {
+        var authorizer = SqlAuthorizer.JWT_AUTHORIZER;
+        var claims = Map.of(
+                Headers.HEADER_ACCESS_TYPE, AccessType.WRITE.name(),
+                Headers.HEADER_PATH, "example/hive_table"
+        );
+        assertTrue(authorizer.hasWriteAccess(TEST_USER, "example/hive_table", claims));
+        assertTrue(authorizer.hasWriteAccess(TEST_USER, "example/hive_table/subpath", claims));
+    }
+
+    @Test
+    public void testHasWriteAccessWithoutWriteAccessType() {
+        var authorizer = SqlAuthorizer.JWT_AUTHORIZER;
+        var claims = Map.of(
+                Headers.HEADER_PATH, "example/hive_table"
+        );
+        assertFalse(authorizer.hasWriteAccess(TEST_USER, "example/hive_table", claims));
+    }
+
+    @Test
+    public void testHasWriteAccessWithReadAccessType() {
+        var authorizer = SqlAuthorizer.JWT_AUTHORIZER;
+        var claims = Map.of(
+                Headers.HEADER_ACCESS_TYPE, AccessType.READ.name(),
+                Headers.HEADER_PATH, "example/hive_table"
+        );
+        assertFalse(authorizer.hasWriteAccess(TEST_USER, "example/hive_table", claims));
+    }
+
+    @Test
+    public void testHasWriteAccessWithUnauthorizedPath() {
+        var authorizer = SqlAuthorizer.JWT_AUTHORIZER;
+        var claims = Map.of(
+                Headers.HEADER_ACCESS_TYPE, AccessType.WRITE.name(),
+                Headers.HEADER_PATH, "example/hive_table"
+        );
+        assertFalse(authorizer.hasWriteAccess(TEST_USER, "other/path", claims));
+    }
+
+    @Test
+    public void testHasWriteAccessWithoutPath() {
+        var authorizer = SqlAuthorizer.JWT_AUTHORIZER;
+        var claims = Map.of(
+                Headers.HEADER_ACCESS_TYPE, AccessType.WRITE.name()
+        );
+        assertFalse(authorizer.hasWriteAccess(TEST_USER, "example/hive_table", claims));
     }
 }

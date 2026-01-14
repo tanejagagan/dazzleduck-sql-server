@@ -2,6 +2,7 @@ package io.dazzleduck.sql.commons.authorization;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.common.auth.UnauthorizedException;
 import io.dazzleduck.sql.commons.ExpressionConstants;
 import io.dazzleduck.sql.commons.Transformations;
@@ -30,11 +31,11 @@ public class JwtClaimBasedAuthorizer implements SqlAuthorizer {
     private JsonNode withUpdatedDatabaseSchema(JsonNode tree, String database, String schema ) {
         var copy = tree.deepCopy();
         var f = Transformations.identity().andThen(Transformations::getFirstStatementNode).apply(copy);
-        var fromTable = (ObjectNode)f.get("from_table");
-        var type = fromTable.get("type").asText();
+        var fromTable = (ObjectNode)f.get(ExpressionConstants.FIELD_FROM_TABLE);
+        var type = fromTable.get(ExpressionConstants.FIELD_TYPE).asText();
         if( type.equals( ExpressionConstants.BASE_TABLE_TYPE)) {
-            fromTable.put("catalog_name", database);
-            fromTable.put("schema_name",  schema);
+            fromTable.put(ExpressionConstants.FIELD_CATALOG_NAME, database);
+            fromTable.put(ExpressionConstants.FIELD_SCHEMA_NAME,  schema);
             return copy;
         }
         return tree;
@@ -50,9 +51,9 @@ public class JwtClaimBasedAuthorizer implements SqlAuthorizer {
 
         var updatedQuery = withUpdatedDatabaseSchema(query, database, schema );
         var catalogSchemaTable = catalogSchemaTables.get(0);
-        var path = verifiedClaims.get("path");
-        var functionName = verifiedClaims.get("function");
-        var table = verifiedClaims.get("table");
+        var path = verifiedClaims.get(Headers.HEADER_PATH);
+        var functionName = verifiedClaims.get(Headers.HEADER_FUNCTION);
+        var table = verifiedClaims.get(Headers.HEADER_TABLE);
         if (path == null && table == null) {
             throw new UnauthorizedException("No access to %s".formatted(catalogSchemaTable));
         }
@@ -70,7 +71,7 @@ public class JwtClaimBasedAuthorizer implements SqlAuthorizer {
                 (table == null || !SqlAuthorizer.hasAccessToTable(database, schema, table, catalogSchemaTable))){
             throw new UnauthorizedException("No access to %s".formatted(catalogSchemaTable));
         }
-        var filter = verifiedClaims.get("filter");
+        var filter = verifiedClaims.get(Headers.HEADER_FILTER);
         if (filter == null) {
             return updatedQuery;
         }
@@ -86,5 +87,18 @@ public class JwtClaimBasedAuthorizer implements SqlAuthorizer {
                 return null;
             }
         }
+    }
+
+    @Override
+    public boolean hasWriteAccess(String user, String path, Map<String, String> verifiedClaims) {
+        var accessType = verifiedClaims.get(Headers.HEADER_ACCESS_TYPE);
+        if (!AccessType.WRITE.name().equalsIgnoreCase(accessType)) {
+            return false;
+        }
+        var authorizedPath = verifiedClaims.get(Headers.HEADER_PATH);
+        if (authorizedPath == null) {
+            return false;
+        }
+        return SqlAuthorizer.hasAccessToPath(authorizedPath, path);
     }
 }
