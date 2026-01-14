@@ -1037,3 +1037,16 @@ Current version: **0.0.14**
 ## License
 
 Apache-2.0
+
+## Documentation & MDX Rules (IMPORTANT)
+
+When editing or creating any `.md` or `README.md` file:
+
+- Always write **Docusaurus-compatible MDX**
+- **Never use raw HTML generics or Java-like syntax** in text (e.g. `Map<String, String>`, `List<T>`, `<T>`)
+- Wrap all code, types, generics, and signatures **inside fenced code blocks**
+- Do not use angle brackets (`< >`) in normal text — escape or move them to code blocks
+- Prefer Markdown tables, lists, and headings over HTML
+- Assume all docs are rendered by **Docusaurus MDX parser**
+
+Failure to follow these rules will break the documentation build.
