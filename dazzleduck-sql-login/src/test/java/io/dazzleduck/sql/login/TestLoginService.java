@@ -33,7 +33,7 @@ public class TestLoginService {
             }
         });
         t.start();
-        Thread.sleep(100);
+        Thread.sleep(500);
         client = HttpClient.newHttpClient();
     }
     @Test
