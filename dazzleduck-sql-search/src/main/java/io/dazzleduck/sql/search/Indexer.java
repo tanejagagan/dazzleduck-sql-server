@@ -64,7 +64,7 @@ public interface Indexer {
             source = sourceFiles.stream().map(s -> String.format("'%s/%s'", sourcePrefix, s)).collect(Collectors.joining(","));
         }
         String selectCols = String.join(",", sourceFields);
-        return "SELECT file_row_number as row_num, %s, %s FROM read_parquet([%s])".formatted(timeField, selectCols, source);
+        return "SELECT file_row_number as row_num, filename as file_name, %s, %s FROM read_parquet([%s], filename=true)".formatted(timeField, selectCols, source);
     }
 
 
@@ -73,14 +73,14 @@ public interface Indexer {
                                     String inputStructName,
                                     String inputTable) {
         var fs = fieldsForIndexing.stream().map(f -> String.format("%s.%s as %s", inputStructName, f, f)).collect(Collectors.joining(", "));
-        var inner = "SELECT row_num, %s, %s FROM %s".formatted(timeField, fs, inputTable);
+        var inner = "SELECT row_num, file_name, %s, %s FROM %s".formatted(timeField, fs, inputTable);
         var fieldList = String.join(",", fieldsForIndexing);
         return "WITH inner0 AS (%s),\n ".formatted(inner) +
                 "inner1 AS (UNPIVOT inner0 ON %s INTO NAME field VALUE tokens),\n".formatted(fieldList) +
-                "inner2 AS (SELECT field, row_num, %s, UNNEST(tokens) as token FROM inner1), \n".formatted(timeField) +
-                "inner3 AS (SELECT field, token, list(row_num) as row_nums, count(row_num) as count FROM inner2 GROUP BY token, field),\n" +
-                "inner4 AS (SELECT field, token, CASE WHEN count > 1000 THEN NULL ELSE row_nums END AS row_nums, count FROM inner3)\n" +
-                "SELECT * FROM inner4 ORDER BY token, field";
+                "inner2 AS (SELECT field, row_num, file_name, %s, UNNEST(tokens) as token FROM inner1), \n".formatted(timeField) +
+                "inner3 AS (SELECT field, token, file_name, list(row_num) as row_nums, count(row_num) as count FROM inner2 GROUP BY token, field, file_name),\n" +
+                "inner4 AS (SELECT field, token, file_name, CASE WHEN count > 1000 THEN NULL ELSE row_nums END AS row_nums, count FROM inner3)\n" +
+                "SELECT * FROM inner4 ORDER BY token, field, file_name";
     }
 
     private static void readTransformExecute(String inputSql, MappedReader.Function function, List<String> sourceCol, Field targetField, String tempTableName, String outputSql, int batchSize) throws SQLException, IOException {
