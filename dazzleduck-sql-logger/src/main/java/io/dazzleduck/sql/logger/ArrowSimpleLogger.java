@@ -7,6 +7,7 @@ import io.dazzleduck.sql.client.FlightProducer;
 import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.common.types.JavaRow;
 import org.apache.arrow.vector.types.pojo.*;
+import org.slf4j.MDC;
 import org.slf4j.Marker;
 import org.slf4j.event.Level;
 import org.slf4j.event.LoggingEvent;
@@ -19,29 +20,96 @@ import java.io.StringWriter;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
+import java.util.Collections;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoCloseable {
 
     @Serial
     private static final long serialVersionUID = 1L;
 
-    private static final Schema schema = new Schema(java.util.List.of(
-            new Field("timestamp", FieldType.nullable(new ArrowType.Utf8()), null),
-            new Field("level", FieldType.nullable(new ArrowType.Utf8()), null),
-            new Field("logger", FieldType.nullable(new ArrowType.Utf8()), null),
-            new Field("thread", FieldType.nullable(new ArrowType.Utf8()), null),
-            new Field("message", FieldType.nullable(new ArrowType.Utf8()), null),
-            new Field("application_id", FieldType.nullable(new ArrowType.Utf8()), null),
-            new Field("application_name", FieldType.nullable(new ArrowType.Utf8()), null),
-            new Field("application_host", FieldType.nullable(new ArrowType.Utf8()), null)
-    ));
-
-    private static final Config config = ConfigFactory.load().getConfig("dazzleduck_logger");
-    private static final String CONFIG_APPLICATION_ID = config.getString(ConfigUtils.APPLICATION_ID_KEY);
-    private static final String CONFIG_APPLICATION_NAME = config.getString(ConfigUtils.APPLICATION_NAME_KEY);
-    private static final String CONFIG_APPLICATION_HOST = config.getString(ConfigUtils.APPLICATION_HOST_KEY);
+    // Global sequence number generator
+    private static final AtomicLong SEQUENCE_GENERATOR = new AtomicLong(0);
 
     private static final DateTimeFormatter TS_FORMAT = DateTimeFormatter.ISO_INSTANT;
+
+    // Configuration - initialized FIRST before any Arrow classes to avoid circular initialization
+    private static final Config config;
+    private static final String CONFIG_APPLICATION_ID;
+    private static final String CONFIG_APPLICATION_NAME;
+    private static final String CONFIG_APPLICATION_HOST;
+    private static final Level CONFIG_LOG_LEVEL;
+
+    // Flag to track if we're in the middle of static initialization (including schema creation)
+    private static final boolean fullyInitialized;
+
+    // Thread-local flag to prevent recursion when creating HttpProducer (which uses SLF4J)
+    private static final ThreadLocal<Boolean> creatingProducer = ThreadLocal.withInitial(() -> Boolean.FALSE);
+
+    // Schema - must be declared before static block but initialized lazily
+    private static final Schema schema;
+
+    static {
+        Config tempConfig = null;
+        String appId = "unknown";
+        String appName = "unknown";
+        String appHost = "localhost";
+        Level logLevel = Level.INFO;
+
+        try {
+            tempConfig = ConfigFactory.load().getConfig("dazzleduck_logger");
+            appId = tempConfig.getString("application_id");
+            appName = tempConfig.getString("application_name");
+            appHost = tempConfig.getString("application_host");
+
+            String levelStr = tempConfig.hasPath("log_level") ? tempConfig.getString("log_level") : "INFO";
+            logLevel = Level.valueOf(levelStr.toUpperCase());
+        } catch (Exception e) {
+            System.err.println("[ArrowSimpleLogger] Failed to load config, using defaults: " + e.getMessage());
+        }
+
+        config = tempConfig;
+        CONFIG_APPLICATION_ID = appId;
+        CONFIG_APPLICATION_NAME = appName;
+        CONFIG_APPLICATION_HOST = appHost;
+        CONFIG_LOG_LEVEL = logLevel;
+
+        // Create schema - this may trigger SLF4J logging from Arrow's Field class
+        // Any loggers created during this will use NoOpFlightProducer
+        schema = createSchema();
+
+        // Now mark as fully initialized - subsequent loggers can use HttpProducer
+        fullyInitialized = true;
+    }
+
+    private static Schema createSchema() {
+        // MDC field as Map<String, String>
+        Field mdcField = new Field("mdc", FieldType.nullable(new ArrowType.Map(false)),
+                java.util.List.of(
+                        new Field("entries", FieldType.notNullable(new ArrowType.Struct()),
+                                java.util.List.of(
+                                        new Field("key", FieldType.notNullable(new ArrowType.Utf8()), null),
+                                        new Field("value", FieldType.nullable(new ArrowType.Utf8()), null)
+                                )
+                        )
+                )
+        );
+
+        return new Schema(java.util.List.of(
+                new Field("s_no", FieldType.nullable(new ArrowType.Int(64, true)), null),
+                new Field("timestamp", FieldType.nullable(new ArrowType.Utf8()), null),
+                new Field("level", FieldType.nullable(new ArrowType.Utf8()), null),
+                new Field("logger", FieldType.nullable(new ArrowType.Utf8()), null),
+                new Field("thread", FieldType.nullable(new ArrowType.Utf8()), null),
+                new Field("message", FieldType.nullable(new ArrowType.Utf8()), null),
+                mdcField,
+                new Field("marker", FieldType.nullable(new ArrowType.Utf8()), null),
+                new Field("application_id", FieldType.nullable(new ArrowType.Utf8()), null),
+                new Field("application_name", FieldType.nullable(new ArrowType.Utf8()), null),
+                new Field("application_host", FieldType.nullable(new ArrowType.Utf8()), null)
+        ));
+    }
 
     private final String name;
     private final FlightProducer flightProducer;
@@ -62,25 +130,42 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
     }
 
     private static FlightProducer createSenderFromConfig() {
-        Config http = config.getConfig(ConfigUtils.HTTP_PREFIX);
-        String targetPath = http.getString(ConfigUtils.TARGET_PATH_KEY);
-        return new HttpProducer(
-                schema,
-                http.getString(ConfigUtils.BASE_URL_KEY),
-                http.getString(ConfigUtils.USERNAME_KEY),
-                http.getString(ConfigUtils.PASSWORD_KEY),
-                targetPath,
-                Duration.ofMillis(http.getLong(ConfigUtils.HTTP_CLIENT_TIMEOUT_MS_KEY)),
-                config.getLong(ConfigUtils.MIN_BATCH_SIZE_KEY),
-                config.getLong(ConfigUtils.MAX_BATCH_SIZE_KEY),
-                Duration.ofMillis(config.getLong(ConfigUtils.MAX_SEND_INTERVAL_MS_KEY)),
-                config.getInt(ConfigUtils.RETRY_COUNT_KEY),
-                config.getLong(ConfigUtils.RETRY_INTERVAL_MS_KEY),
-                config.getStringList(ConfigUtils.TRANSFORMATIONS_KEY),
-                config.getStringList(ConfigUtils.PARTITION_BY_KEY),
-                config.getLong(ConfigUtils.MAX_IN_MEMORY_BYTES_KEY),
-                config.getLong(ConfigUtils.MAX_ON_DISK_BYTES_KEY)
-        );
+        // If not fully initialized, config is unavailable, or we're already creating a producer,
+        // return null (no-op). This handles:
+        // 1. Circular initialization when Arrow's Field class triggers SLF4J logging
+        // 2. Recursive calls when HttpProducer's static initializer uses SLF4J logging
+        if (!fullyInitialized || config == null || creatingProducer.get()) {
+            return null;
+        }
+
+        // Set flag to prevent recursion
+        creatingProducer.set(Boolean.TRUE);
+        try {
+            Config http = config.getConfig(ConfigUtils.HTTP_PREFIX);
+            String targetPath = http.getString(ConfigUtils.TARGET_PATH_KEY);
+            return new HttpProducer(
+                    schema,
+                    http.getString(ConfigUtils.BASE_URL_KEY),
+                    http.getString(ConfigUtils.USERNAME_KEY),
+                    http.getString(ConfigUtils.PASSWORD_KEY),
+                    targetPath,
+                    Duration.ofMillis(http.getLong(ConfigUtils.HTTP_CLIENT_TIMEOUT_MS_KEY)),
+                    config.getLong(ConfigUtils.MIN_BATCH_SIZE_KEY),
+                    config.getLong(ConfigUtils.MAX_BATCH_SIZE_KEY),
+                    Duration.ofMillis(config.getLong(ConfigUtils.MAX_SEND_INTERVAL_MS_KEY)),
+                    config.getInt(ConfigUtils.RETRY_COUNT_KEY),
+                    config.getLong(ConfigUtils.RETRY_INTERVAL_MS_KEY),
+                    config.getStringList(ConfigUtils.TRANSFORMATIONS_KEY),
+                    config.getStringList(ConfigUtils.PARTITION_BY_KEY),
+                    config.getLong(ConfigUtils.MAX_IN_MEMORY_BYTES_KEY),
+                    config.getLong(ConfigUtils.MAX_ON_DISK_BYTES_KEY)
+            );
+        } catch (Exception ex) {
+            System.err.println("[ArrowSimpleLogger] Failed to create HttpProducer: " + ex.getMessage());
+            return null;
+        } finally {
+            creatingProducer.set(Boolean.FALSE);
+        }
     }
 
     @Override
@@ -93,6 +178,10 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
             Level level, Marker marker, String messagePattern,
             Object[] args, Throwable throwable) {
 
+        if (!isLevelEnabled(level.toInt())) {
+            return;
+        }
+
         String message = format(messagePattern, args);
         if (throwable != null) {
             StringWriter sw = new StringWriter();
@@ -100,31 +189,51 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
             throwable.printStackTrace(pw);
             message += "\n" + sw.toString();
         }
-        if (marker != null) {
-            message = "[Marker:" + marker.getName() + "] " + message;
-        }
-        writeArrowAsync(level, message);
+
+        writeArrowAsync(level, marker, message);
     }
+
     private String format(String pattern, Object[] args) {
         if (args == null || args.length == 0)
             return pattern;
         return MessageFormatter.arrayFormat(pattern, args).getMessage();
     }
-    /** Collect logs in batches of 10 and send to Flight */
-    private void writeArrowAsync(Level level, String message) {
+
+    /** Collect logs and send to Flight */
+    private void writeArrowAsync(Level level, Marker marker, String message) {
+        if (flightProducer == null) {
+            return;
+        }
+
         try {
+            long sequenceNo = SEQUENCE_GENERATOR.incrementAndGet();
+            String timestamp = TS_FORMAT.format(Instant.now());
+            String threadName = Thread.currentThread().getName();
+
+            // Get MDC context - use empty map if null
+            Map<String, String> mdcMap = MDC.getCopyOfContextMap();
+            if (mdcMap == null) {
+                mdcMap = Collections.emptyMap();
+            }
+
+            // Get marker name
+            String markerName = marker != null ? marker.getName() : null;
+
             JavaRow row = new JavaRow(new Object[]{
-                    TS_FORMAT.format(Instant.now()),
+                    sequenceNo,
+                    timestamp,
                     level.toString(),
                     name,
-                    Thread.currentThread().getName(),
+                    threadName,
                     message,
+                    mdcMap,
+                    markerName,
                     application_id,
                     application_name,
                     application_host
             });
 
-            // FlightSender handles batching, serialization, and sending
+            // FlightProducer handles batching, serialization, and sending
             flightProducer.addRow(row);
 
         } catch (Exception e) {
@@ -141,18 +250,44 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
 
     public void log(LoggingEvent event) {
         if (isLevelEnabled(event.getLevel().toInt())) {
-            writeArrowAsync(event.getLevel(), event.getMessage());
+            writeArrowAsync(event.getLevel(), event.getMarkers().isEmpty() ? null : event.getMarkers().get(0), event.getMessage());
         }
     }
 
     // === Log level controls ===
-    @Override public boolean isTraceEnabled() { return isLevelEnabled(0); }
-    @Override public boolean isDebugEnabled() { return isLevelEnabled(10); }
-    @Override public boolean isInfoEnabled()  { return isLevelEnabled(20); }
-    @Override public boolean isWarnEnabled()  { return isLevelEnabled(30); }
-    @Override public boolean isErrorEnabled() { return isLevelEnabled(40); }
+    @Override
+    public boolean isTraceEnabled() {
+        return isLevelEnabled(Level.TRACE.toInt());
+    }
+
+    @Override
+    public boolean isDebugEnabled() {
+        return isLevelEnabled(Level.DEBUG.toInt());
+    }
+
+    @Override
+    public boolean isInfoEnabled() {
+        return isLevelEnabled(Level.INFO.toInt());
+    }
+
+    @Override
+    public boolean isWarnEnabled() {
+        return isLevelEnabled(Level.WARN.toInt());
+    }
+
+    @Override
+    public boolean isErrorEnabled() {
+        return isLevelEnabled(Level.ERROR.toInt());
+    }
 
     protected boolean isLevelEnabled(int levelInt) {
-        return true; // let backend decide
+        return levelInt >= CONFIG_LOG_LEVEL.toInt();
+    }
+
+    /**
+     * Get the Arrow schema used for log records.
+     */
+    public static Schema getSchema() {
+        return schema;
     }
 }
