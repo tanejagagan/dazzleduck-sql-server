@@ -54,12 +54,12 @@ public final class HttpProducer extends FlightProducer.AbstractFlightProducer {
             Duration maxSendInterval,
             int retryCount,
             long retryIntervalMillis,
-            java.util.List<String> transformations,
+            java.util.List<String> projections,
             java.util.List<String> partitionBy,
             long maxInMemorySize,
             long maxOnDiskSize
     ) {
-        this(schema, baseUrl, username, password, targetPath, httpClientTimeout, minBatchSize, maxBatchSize, maxSendInterval, retryCount, retryIntervalMillis, transformations, partitionBy, maxInMemorySize, maxOnDiskSize, Clock.systemUTC());
+        this(schema, baseUrl, username, password, targetPath, httpClientTimeout, minBatchSize, maxBatchSize, maxSendInterval, retryCount, retryIntervalMillis, projections, partitionBy, maxInMemorySize, maxOnDiskSize, Clock.systemUTC());
     }
     public HttpProducer(
             Schema schema,
@@ -73,13 +73,13 @@ public final class HttpProducer extends FlightProducer.AbstractFlightProducer {
             Duration maxSendInterval,
             int retryCount,
             long retryIntervalMillis,
-            java.util.List<String> transformations,
+            java.util.List<String> projections,
             java.util.List<String> partitionBy,
             long maxInMemorySize,
             long maxOnDiskSize,
             Clock clock
     ) {
-        super(minBatchSize, maxBatchSize, maxSendInterval, schema, clock, retryCount, retryIntervalMillis, transformations, partitionBy);
+        super(minBatchSize, maxBatchSize, maxSendInterval, schema, clock, retryCount, retryIntervalMillis, projections, partitionBy);
 
         // Issue #3: Parameter validation
         Objects.requireNonNull(baseUrl, "baseUrl must not be null");
@@ -313,11 +313,11 @@ public final class HttpProducer extends FlightProducer.AbstractFlightProducer {
                 .header("Authorization", getJwt())
                 .header("Content-Type", "application/vnd.apache.arrow.stream");
 
-        // Add transformations and partitionBy headers if present (URL encoded)
-        if (!getTransformations().isEmpty()) {
-            String transformationsValue = String.join(",", getTransformations());
-            requestBuilder.header(io.dazzleduck.sql.common.Headers.HEADER_DATA_TRANSFORMATION,
-                java.net.URLEncoder.encode(transformationsValue, java.nio.charset.StandardCharsets.UTF_8));
+        // Add projections and partitionBy headers if present (URL encoded)
+        if (!getProjections().isEmpty()) {
+            String projectionsValue = String.join(",", getProjections());
+            requestBuilder.header(io.dazzleduck.sql.common.Headers.HEADER_DATA_PROJECTIONS,
+                java.net.URLEncoder.encode(projectionsValue, java.nio.charset.StandardCharsets.UTF_8));
         }
         if (!getPartitionBy().isEmpty()) {
             String partitionByValue = String.join(",", getPartitionBy());

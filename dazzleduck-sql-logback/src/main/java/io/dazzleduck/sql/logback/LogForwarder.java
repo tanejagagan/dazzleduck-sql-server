@@ -60,13 +60,6 @@ public final class LogForwarder implements Closeable {
                 config.enabled()
         );
 
-        // Create transformations for application metadata
-        java.util.List<String> transformations = new java.util.ArrayList<>(config.transformations());
-        transformations.add(String.format("'%s' AS application_id", config.applicationId()));
-        transformations.add(String.format("'%s' AS application_name", config.applicationName()));
-        transformations.add(String.format("'%s' AS application_host", config.applicationHost()));
-        transformations.addAll(config.transformations());
-
         // Create HttpProducer
         this.httpProducer = new HttpProducer(
                 converter.getSchema(),
@@ -80,7 +73,7 @@ public final class LogForwarder implements Closeable {
                 config.maxSendInterval(),
                 config.retryCount(),
                 config.retryIntervalMillis(),
-                transformations,
+                config.projections(),
                 config.partitionBy(),
                 config.maxInMemorySize(),
                 config.maxOnDiskSize()
@@ -174,7 +167,7 @@ public final class LogForwarder implements Closeable {
      * Convert a LogEntry to a JavaRow for the HttpProducer.
      * The field order must match the schema from LogToArrowConverter:
      * s_no, timestamp, level, logger, thread, message
-     * Note: application_id, application_name, application_host are added via transformations
+     * Note: application_id, application_name, application_host are added via projections
      */
     private JavaRow convertToJavaRow(LogEntry entry) {
         Object[] fields = new Object[6];

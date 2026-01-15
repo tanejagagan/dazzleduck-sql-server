@@ -36,7 +36,7 @@ import java.time.Duration;
  *   max_on_disk_bytes = 1073741824
  *   retry_count = 3
  *   retry_interval_ms = 1000
- *   transformations = []
+ *   projections = []
  *   partition_by = []
  * }
  * }</pre>
@@ -91,7 +91,7 @@ public final class MetricsRegistryFactory {
                 .maxOnDiskSize(config.getLong(ConfigUtils.MAX_ON_DISK_BYTES_KEY))
                 .retryCount(config.getInt(ConfigUtils.RETRY_COUNT_KEY))
                 .retryIntervalMillis(config.getLong(ConfigUtils.RETRY_INTERVAL_MS_KEY))
-                .transformations(config.getStringList(ConfigUtils.TRANSFORMATIONS_KEY))
+                .projections(config.getStringList(ConfigUtils.PROJECTIONS_KEY))
                 .partitionBy(config.getStringList(ConfigUtils.PARTITION_BY_KEY))
                 .enabled(config.getBoolean(ConfigUtils.ENABLED_KEY))
                 .build();

@@ -134,7 +134,7 @@ class GrpcFlightProducerTest {
 
 
     @Test
-    void testTransformationsAndPartitionByParameters() throws Exception {
+    void testProjectionsAndPartitionByParameters() throws Exception {
         Schema schema = new Schema(List.of(new Field("value", FieldType.nullable(new ArrowType.Int(32, true)), null)));
         String path = "both-params-grpc-test";
         Files.createDirectories(Path.of(warehouse, path));
@@ -147,7 +147,7 @@ class GrpcFlightProducerTest {
                 Clock.systemUTC(),
                 3,
                 1000,
-                java.util.List.of("'c1' as c1", "'c2' as  c2"),
+                java.util.List.of("*", "'c1' as c1", "'c2' as  c2"),
                 java.util.List.of("c1", "c2"),
                 5_000_000,
                 20_000_000,

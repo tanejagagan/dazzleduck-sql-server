@@ -178,7 +178,7 @@ public interface FlightProducer extends Closeable {
 
         private final long retryIntervalMillis;
 
-        private final java.util.List<String> transformations;
+        private final java.util.List<String> projections;
 
         private final java.util.List<String> partitionBy;
 
@@ -193,10 +193,10 @@ public interface FlightProducer extends Closeable {
         private long currentBatchId = 0;
 
 
-        public AbstractFlightProducer(long minBatchSize, long maxBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock, int retryCount, long retryIntervalMillis, java.util.List<String> transformations, java.util.List<String> partitionBy){
-            this(minBatchSize, maxBatchSize, maxDataSendInterval, schema, clock, retryCount, retryIntervalMillis, transformations, partitionBy, Executors.newSingleThreadScheduledExecutor());
+        public AbstractFlightProducer(long minBatchSize, long maxBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock, int retryCount, long retryIntervalMillis, java.util.List<String> projections, java.util.List<String> partitionBy){
+            this(minBatchSize, maxBatchSize, maxDataSendInterval, schema, clock, retryCount, retryIntervalMillis, projections, partitionBy, Executors.newSingleThreadScheduledExecutor());
         }
-        public AbstractFlightProducer(long minBatchSize, long maxBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock, int retryCount, long retryIntervalMillis, java.util.List<String> transformations, java.util.List<String> partitionBy, ScheduledExecutorService scheduledExecutorService ){
+        public AbstractFlightProducer(long minBatchSize, long maxBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock, int retryCount, long retryIntervalMillis, java.util.List<String> projections, java.util.List<String> partitionBy, ScheduledExecutorService scheduledExecutorService ){
             // Validate parameters
             if (minBatchSize <= 0) {
                 throw new IllegalArgumentException("minBatchSize must be positive, got: " + minBatchSize);
@@ -222,8 +222,8 @@ public interface FlightProducer extends Closeable {
             if (retryIntervalMillis < 0) {
                 throw new IllegalArgumentException("retryIntervalMillis must be non-negative, got: " + retryIntervalMillis);
             }
-            if (transformations == null) {
-                throw new IllegalArgumentException("transformations must not be null");
+            if (projections == null) {
+                throw new IllegalArgumentException("projections must not be null");
             }
             if (partitionBy == null) {
                 throw new IllegalArgumentException("partitionBy must not be null");
@@ -232,13 +232,13 @@ public interface FlightProducer extends Closeable {
                 throw new IllegalArgumentException("scheduledExecutorService must not be null");
             }
 
-            logger.info("FlightSender started at {} with send interval {}, retryCount {}, retryIntervalMillis {}, transformations {}, partitionBy {}", clock.instant(), maxDataSendInterval, retryCount, retryIntervalMillis, transformations, partitionBy);
+            logger.info("FlightSender started at {} with send interval {}, retryCount {}, retryIntervalMillis {}, projections {}, partitionBy {}", clock.instant(), maxDataSendInterval, retryCount, retryIntervalMillis, projections, partitionBy);
             this.minBatchSize = minBatchSize;
             this.maxBatchSize = maxBatchSize;
             this.maxDataSendInterval = maxDataSendInterval;
             this.retryCount = retryCount;
             this.retryIntervalMillis = retryIntervalMillis;
-            this.transformations = List.copyOf(transformations);
+            this.projections = List.copyOf(projections);
             this.partitionBy = List.copyOf(partitionBy);
             this.clock = clock;
             this.schema = schema;
@@ -506,8 +506,8 @@ public interface FlightProducer extends Closeable {
             return retryIntervalMillis;
         }
 
-        protected java.util.List<String> getTransformations() {
-            return transformations;
+        protected java.util.List<String> getProjections() {
+            return projections;
         }
 
         protected java.util.List<String> getPartitionBy() {

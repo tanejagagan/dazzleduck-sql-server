@@ -64,7 +64,7 @@ public final class LogProcessorMain {
                 Duration.ofMillis(CONFIG_MAX_SEND_INTERVAL_MS),
                 config.getInt(ConfigUtils.RETRY_COUNT_KEY),
                 config.getLong(ConfigUtils.RETRY_INTERVAL_MS_KEY),
-                config.getStringList(ConfigUtils.TRANSFORMATIONS_KEY),
+                config.getStringList(ConfigUtils.PROJECTIONS_KEY),
                 config.getStringList(ConfigUtils.PARTITION_BY_KEY),
                 CONFIG_MAX_IN_MEMORY_BYTES,
                 CONFIG_MAX_ON_DISK_BYTES

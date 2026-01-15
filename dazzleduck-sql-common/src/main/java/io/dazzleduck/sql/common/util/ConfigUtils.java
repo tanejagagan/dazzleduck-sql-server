@@ -87,8 +87,8 @@ public class ConfigUtils {
     public static final String RETRY_COUNT_KEY = "retry_count";
     public static final String RETRY_INTERVAL_MS_KEY = "retry_interval_ms";
 
-    // Transformation keys
-    public static final String TRANSFORMATIONS_KEY = "transformations";
+    // Projection keys
+    public static final String PROJECTIONS_KEY = "projections";
     public static final String PARTITION_BY_KEY = "partition_by";
 
     // Feature flags

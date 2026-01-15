@@ -87,8 +87,7 @@ public class ParquetIngestionQueueTest {
     }
 
     @Test
-    @org.junit.jupiter.api.Disabled("Transformations syntax needs review")
-    public void testIngestionWithTransformations() throws Exception {
+    public void testIngestionWithProjections() throws Exception {
         var service = new DeterministicScheduler();
         var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
 
@@ -105,10 +104,11 @@ public class ParquetIngestionQueueTest {
                 service,
                 clock)) {
 
+            // Projections now replace * entirely, so include all columns we want
             var batch = new Batch<>(
                     null,  // sortOrder
-                    null,  // partitions
-                    new String[]{"value * 2 as doubled_value"},  // transformations
+                    new String[]{"id", "value * 2 as doubled_value"},  // projections
+                    null,  // partitionBy
                     sourceFile1.toString(),
                     "producer1",
                     0L,
@@ -122,6 +122,14 @@ public class ParquetIngestionQueueTest {
             service.tick(1, TimeUnit.MILLISECONDS);
             var result = future.get(2, SECONDS);
             assertEquals(100, result.rowCount());
+            assertFalse(result.filesCreated().isEmpty());
+
+            // Verify the output file has the projected columns
+            String outputFile = result.filesCreated().get(0);
+            var schema = ConnectionPool.collectFirst(
+                "SELECT column_name FROM (DESCRIBE SELECT * FROM read_parquet('%s'))".formatted(outputFile),
+                String.class);
+            assertNotNull(schema);
         }
     }
 
@@ -145,8 +153,8 @@ public class ParquetIngestionQueueTest {
 
             var batch = new Batch<>(
                     new String[]{"id"},  // sortOrder
-                    null,  // partitions
-                    null,  // transformations
+                    null,  // projections
+                    null,  // partitionBy
                     sourceFile1.toString(),
                     "producer1",
                     0L,
@@ -183,8 +191,8 @@ public class ParquetIngestionQueueTest {
 
             var batch = new Batch<>(
                     null,  // sortOrder
-                    new String[]{"category"},  // partitions
-                    null,  // transformations
+                    null,  // projections
+                    new String[]{"category"},  // partitionBy
                     sourceFile1.toString(),
                     "producer1",
                     0L,
@@ -419,8 +427,8 @@ public class ParquetIngestionQueueTest {
     private Batch<String> createBatch(String file, String producerId, long batchId, long totalSize) {
         return new Batch<>(
                 null,  // sortOrder
-                null,  // partitions
-                null,  // transformations
+                null,  // projections
+                null,  // partitionBy
                 file,
                 producerId,
                 batchId,

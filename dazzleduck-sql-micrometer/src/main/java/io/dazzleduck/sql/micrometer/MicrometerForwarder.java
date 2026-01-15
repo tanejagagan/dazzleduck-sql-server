@@ -10,8 +10,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.Closeable;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -96,12 +94,6 @@ public final class MicrometerForwarder implements Closeable {
         }
 
         if (started.compareAndSet(false, true)) {
-            // Create transformations for application metadata
-            List<String> transformations = new ArrayList<>(config.transformations());
-            transformations.add(String.format("'%s' AS application_id", config.applicationId()));
-            transformations.add(String.format("'%s' AS application_name", config.applicationName()));
-            transformations.add(String.format("'%s' AS application_host", config.applicationHost()));
-
             // Create HttpProducer
             this.httpProducer = new HttpProducer(
                     ArrowMetricSchema.SCHEMA,
@@ -115,7 +107,7 @@ public final class MicrometerForwarder implements Closeable {
                     config.maxSendInterval(),
                     config.retryCount(),
                     config.retryIntervalMillis(),
-                    transformations,
+                    config.projections(),
                     config.partitionBy(),
                     config.maxInMemorySize(),
                     config.maxOnDiskSize()

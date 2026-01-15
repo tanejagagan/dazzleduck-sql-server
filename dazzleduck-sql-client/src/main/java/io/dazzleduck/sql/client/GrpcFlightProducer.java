@@ -37,7 +37,7 @@ public final class GrpcFlightProducer extends FlightProducer.AbstractFlightProdu
             Clock clock,
             int retryCount,
             long retryIntervalMillis,
-            java.util.List<String> transformations,
+            java.util.List<String> projections,
             java.util.List<String> partitionBy,
             long maxInMemorySize,
             long maxOnDiskSize,
@@ -48,7 +48,7 @@ public final class GrpcFlightProducer extends FlightProducer.AbstractFlightProdu
             Map<String, String> ingestParams,
             Duration grpcTimeout
     ) {
-        super(minBatchSize, maxBatchSize, maxSendInterval, schema, clock, retryCount, retryIntervalMillis, transformations, partitionBy);
+        super(minBatchSize, maxBatchSize, maxSendInterval, schema, clock, retryCount, retryIntervalMillis, projections, partitionBy);
 
         // Validate parameters
         this.allocator = Objects.requireNonNull(allocator, "allocator must not be null");
@@ -81,11 +81,11 @@ public final class GrpcFlightProducer extends FlightProducer.AbstractFlightProdu
                         .build()
         );
 
-        // Add transformations and partitionBy to ingestParams
+        // Add projections and partitionBy to ingestParams
         Map<String, String> enrichedParams = new java.util.HashMap<>(ingestParams);
-        if (!getTransformations().isEmpty()) {
-            String transformationsValue = String.join(",", getTransformations());
-            enrichedParams.put(Headers.HEADER_DATA_TRANSFORMATION, transformationsValue);
+        if (!getProjections().isEmpty()) {
+            String projectionsValue = String.join(",", getProjections());
+            enrichedParams.put(Headers.HEADER_DATA_PROJECTIONS, projectionsValue);
         }
         if (!getPartitionBy().isEmpty()) {
             String partitionByValue = String.join(",", getPartitionBy());

@@ -260,8 +260,8 @@ public class HttpProducerTest {
     }
 
     @Test
-    void testTransformationsHeader() throws Exception {
-        String path = "transformations-test-" + System.nanoTime();
+    void testProjectionsHeader() throws Exception {
+        String path = "projections-test-" + System.nanoTime();
         Files.createDirectories(Path.of(warehouse, path));
 
         try (HttpProducer sender = new HttpProducer(
@@ -276,7 +276,7 @@ public class HttpProducerTest {
                 Duration.ofMillis(200),
                 3,
                 1000,
-                java.util.List.of("'c1' as c1", "'c2' as c2"),
+                java.util.List.of("*", "'c1' as c1", "'c2' as c2"),
                 java.util.List.of(),
                 100_000,
                 500_000)) {
@@ -290,7 +290,7 @@ public class HttpProducerTest {
     }
 
     @Test
-    void testTransformationsAndPartitionByHeaders() throws Exception {
+    void testProjectionsAndPartitionByHeaders() throws Exception {
         String path = "both-headers-test-" + System.nanoTime();
         Files.createDirectories(Path.of(warehouse, path));
 
@@ -306,7 +306,7 @@ public class HttpProducerTest {
                 Duration.ofMillis(200),
                 3,
                 1000,
-                java.util.List.of("'c1' as c1", "'c2' as  c2"),
+                java.util.List.of("*", "'c1' as c1", "'c2' as  c2"),
                 java.util.List.of("c1", "c2"),
                 100_000,
                 500_000)) {

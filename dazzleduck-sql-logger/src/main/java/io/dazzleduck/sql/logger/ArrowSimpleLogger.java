@@ -155,7 +155,7 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
                     Duration.ofMillis(config.getLong(ConfigUtils.MAX_SEND_INTERVAL_MS_KEY)),
                     config.getInt(ConfigUtils.RETRY_COUNT_KEY),
                     config.getLong(ConfigUtils.RETRY_INTERVAL_MS_KEY),
-                    config.getStringList(ConfigUtils.TRANSFORMATIONS_KEY),
+                    config.getStringList(ConfigUtils.PROJECTIONS_KEY),
                     config.getStringList(ConfigUtils.PARTITION_BY_KEY),
                     config.getLong(ConfigUtils.MAX_IN_MEMORY_BYTES_KEY),
                     config.getLong(ConfigUtils.MAX_ON_DISK_BYTES_KEY)
