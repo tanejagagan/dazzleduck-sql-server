@@ -524,7 +524,7 @@ Headers.HEADER_PRODUCER_ID        // "producer_id"
 Headers.HEADER_QUERY_ID           // "query_id"
 Headers.HEADER_PRODUCER_BATCH_ID  // "producer_batch_id"
 Headers.HEADER_SORT_ORDER         // "sort_order"
-Headers.HEADER_DATA_TRANSFORMATION    // "transformation"
+Headers.HEADER_DATA_PROJECTIONS       // "transformation"
 Headers.HEADER_APP_DATA_TRANSFORMATION // "udf_transformation"
 
 // Type extractors for parsing header values
