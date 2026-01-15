@@ -65,7 +65,6 @@ public final class LogForwarder implements Closeable {
         transformations.add(String.format("'%s' AS application_id", config.applicationId()));
         transformations.add(String.format("'%s' AS application_name", config.applicationName()));
         transformations.add(String.format("'%s' AS application_host", config.applicationHost()));
-        transformations.addAll(config.transformations());
 
         // Create HttpProducer
         this.httpProducer = new HttpProducer(

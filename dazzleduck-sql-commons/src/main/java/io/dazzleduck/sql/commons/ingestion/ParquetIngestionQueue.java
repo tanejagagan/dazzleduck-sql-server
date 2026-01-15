@@ -96,7 +96,7 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
                 COPY
                     (SELECT %s FROM read_%s([%s]) %s)
                     TO '%s'
-                    (FORMAT %s %s, RETURN_FILES);
+                    (FORMAT %s %s, RETURN_FILES, APPEND);
                 """.formatted(selectClause, this.inputFormat, arrowFiles, firstSortOrder, fullFilePath, outputFormat, firstPartitionString);
         List<String> files = new ArrayList<>();
         long count = 0;
