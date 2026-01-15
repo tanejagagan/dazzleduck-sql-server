@@ -9,6 +9,7 @@ import com.google.protobuf.*;
 import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.commons.ConnectionPool;
+import io.dazzleduck.sql.common.auth.UnauthorizedException;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.authorization.SqlAuthorizer;
 import io.dazzleduck.sql.commons.ingestion.*;
@@ -721,12 +722,13 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
      * Gets an existing ParquetIngestionQueue for the given path, or creates a new one if absent.
      * Uses computeIfAbsent to ensure thread-safe access to the ingestion queue map.
      *
-     * @param path the complete path for the ingestion queue
+     * @param relativePath the relative path for the ingestion queue
      * @return the BulkIngestQueue for the specified path
      */
-    protected BulkIngestQueue<String, IngestionResult> getOrCreateParquetIngestionQueue(String path) {
-        return ingestionQueueMap.computeIfAbsent(path, p -> {
-            var queue = new ParquetIngestionQueue(producerId, TEMP_WRITE_FORMAT, p, p,
+    protected BulkIngestQueue<String, IngestionResult> getOrCreateParquetIngestionQueue(String relativePath) {
+        return ingestionQueueMap.computeIfAbsent(relativePath, p -> {
+            String absolutePath = Path.of(warehousePath).resolve(p).toString();
+            var queue = new ParquetIngestionQueue(producerId, TEMP_WRITE_FORMAT, absolutePath, p,
                     bulkIngestionConfig.minBucketSize(),
                     bulkIngestionConfig.maxDelay(),
                     postIngestionTaskFactory,
@@ -749,13 +751,20 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             FlightStream flightStream,
             StreamListener<PutResult> ackStream) {
         IngestionParameters ingestionParameters = IngestionParameters.getIngestionParameters(command);
+        String user = context.peerIdentity();
+        String path = ingestionParameters.path();
+        Map<String, String> verifiedClaims = getVerifiedClaims(context);
+        if (!sqlAuthorizer.hasWriteAccess(user, path, verifiedClaims)) {
+            ErrorHandling.handleUnauthorized(ackStream, new UnauthorizedException("No write access to path: " + path));
+            return () -> {};
+        }
         FlightStreamReader reader = FlightStreamReader.of(flightStream, allocator);
         return () -> {
             Path tempFile;
             try (reader) {
                 tempFile = BulkIngestQueue.writeAndValidateTempArrowFile(tempDir, reader);
                 var batch = ingestionParameters.constructBatch(Files.size(tempFile), tempFile.toAbsolutePath().toString());
-                var ingestionQueue = getOrCreateParquetIngestionQueue(ingestionParameters.completePath(warehousePath));
+                var ingestionQueue = getOrCreateParquetIngestionQueue(path);
                 var result = ingestionQueue.add(batch);
                 result.get();
                 ackStream.onNext(PutResult.empty());
@@ -772,12 +781,19 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             IngestionParameters ingestionParameters,
             InputStream inputStream,
             StreamListener<PutResult> ackStream) {
+        String user = context.peerIdentity();
+        String path = ingestionParameters.path();
+        Map<String, String> verifiedClaims = getVerifiedClaims(context);
+        if (!sqlAuthorizer.hasWriteAccess(user, path, verifiedClaims)) {
+            ErrorHandling.handleUnauthorized(ackStream, new UnauthorizedException("No write access to path: " + path));
+            return () -> {};
+        }
         return () -> {
             Path tempFile;
             try (ArrowReader inputReader = new ArrowStreamReader(inputStream, allocator)) {
                 tempFile = BulkIngestQueue.writeAndValidateTempArrowFile(tempDir, inputReader);
                 var batch = ingestionParameters.constructBatch(Files.size(tempFile), tempFile.toAbsolutePath().toString());
-                var ingestionQueue = getOrCreateParquetIngestionQueue(ingestionParameters.completePath(warehousePath));
+                var ingestionQueue = getOrCreateParquetIngestionQueue(path);
                 var result = ingestionQueue.add(batch);
                 result.get();
                 ackStream.onNext(PutResult.empty());

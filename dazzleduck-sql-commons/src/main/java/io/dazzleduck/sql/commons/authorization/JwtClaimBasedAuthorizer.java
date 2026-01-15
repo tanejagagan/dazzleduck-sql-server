@@ -2,6 +2,7 @@ package io.dazzleduck.sql.commons.authorization;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.common.auth.UnauthorizedException;
 import io.dazzleduck.sql.commons.ExpressionConstants;
 import io.dazzleduck.sql.commons.Transformations;
@@ -9,15 +10,48 @@ import io.dazzleduck.sql.commons.Transformations;
 import java.util.Map;
 
 /**
- * Claim based Authorizer which respect all the data showing up in the jwt  claim
- * Following claims are required
- * filter = 'a > 10'
- * columns = [a, b, c]
- * Path based access
- *  path = '/a/b/c'
- *  function = 'parquet, json, csv'
- * Or Identifier based access
- *  identifier = catalog.schema.table
+ * JWT Claim-based Authorizer for SQL query and write access authorization.
+ *
+ * <h2>Supported JWT Claims for Authorization</h2>
+ *
+ * <h3>Read Access Claims (for SQL queries)</h3>
+ * <ul>
+ *   <li><b>database</b> - The database/catalog name for query execution context</li>
+ *   <li><b>schema</b> - The schema name for query execution context</li>
+ *   <li><b>table</b> - The table name the user is authorized to access (for BASE_TABLE queries)</li>
+ *   <li><b>path</b> - The file path prefix the user is authorized to access (for TABLE_FUNCTION queries like read_parquet)</li>
+ *   <li><b>function</b> - The table function name the user is authorized to use (e.g., 'read_parquet', 'read_delta')</li>
+ *   <li><b>filter</b> - A SQL filter expression that will be automatically applied to all queries (row-level security).
+ *       Example: "tenant_id = 'abc'" or "region IN ('us-east', 'us-west')"</li>
+ * </ul>
+ *
+ * <h3>Write Access Claims (for data ingestion)</h3>
+ * <ul>
+ *   <li><b>access_type</b> - Must be "WRITE" to grant write access</li>
+ *   <li><b>path</b> - The file path prefix the user is authorized to write to</li>
+ * </ul>
+ *
+ * <h3>Authorization Logic</h3>
+ * <p><b>For Read Access:</b></p>
+ * <ul>
+ *   <li>Either 'table' or 'path' claim must be present</li>
+ *   <li>For BASE_TABLE queries: 'table' claim must match the queried table name</li>
+ *   <li>For TABLE_FUNCTION queries: 'path' must be a prefix of the queried path, OR 'function' must match</li>
+ *   <li>If 'filter' claim is present, it is automatically added to the query's WHERE clause</li>
+ * </ul>
+ *
+ * <p><b>For Write Access:</b></p>
+ * <ul>
+ *   <li>'access_type' claim must be "WRITE" (case-insensitive)</li>
+ *   <li>'path' claim must be present and be a prefix of the target write path</li>
+ * </ul>
+ *
+ * <h3>Path Matching</h3>
+ * <p>Path authorization uses prefix matching. If authorized path is "data/tenant1",
+ * the user can access "data/tenant1", "data/tenant1/subfolder", "data/tenant1/file.parquet", etc.</p>
+ *
+ * @see SqlAuthorizer
+ * @see AccessType
  */
 public class JwtClaimBasedAuthorizer implements SqlAuthorizer {
 
@@ -30,11 +64,11 @@ public class JwtClaimBasedAuthorizer implements SqlAuthorizer {
     private JsonNode withUpdatedDatabaseSchema(JsonNode tree, String database, String schema ) {
         var copy = tree.deepCopy();
         var f = Transformations.identity().andThen(Transformations::getFirstStatementNode).apply(copy);
-        var fromTable = (ObjectNode)f.get("from_table");
-        var type = fromTable.get("type").asText();
+        var fromTable = (ObjectNode)f.get(ExpressionConstants.FIELD_FROM_TABLE);
+        var type = fromTable.get(ExpressionConstants.FIELD_TYPE).asText();
         if( type.equals( ExpressionConstants.BASE_TABLE_TYPE)) {
-            fromTable.put("catalog_name", database);
-            fromTable.put("schema_name",  schema);
+            fromTable.put(ExpressionConstants.FIELD_CATALOG_NAME, database);
+            fromTable.put(ExpressionConstants.FIELD_SCHEMA_NAME,  schema);
             return copy;
         }
         return tree;
@@ -50,9 +84,9 @@ public class JwtClaimBasedAuthorizer implements SqlAuthorizer {
 
         var updatedQuery = withUpdatedDatabaseSchema(query, database, schema );
         var catalogSchemaTable = catalogSchemaTables.get(0);
-        var path = verifiedClaims.get("path");
-        var functionName = verifiedClaims.get("function");
-        var table = verifiedClaims.get("table");
+        var path = verifiedClaims.get(Headers.HEADER_PATH);
+        var functionName = verifiedClaims.get(Headers.HEADER_FUNCTION);
+        var table = verifiedClaims.get(Headers.HEADER_TABLE);
         if (path == null && table == null) {
             throw new UnauthorizedException("No access to %s".formatted(catalogSchemaTable));
         }
@@ -70,7 +104,7 @@ public class JwtClaimBasedAuthorizer implements SqlAuthorizer {
                 (table == null || !SqlAuthorizer.hasAccessToTable(database, schema, table, catalogSchemaTable))){
             throw new UnauthorizedException("No access to %s".formatted(catalogSchemaTable));
         }
-        var filter = verifiedClaims.get("filter");
+        var filter = verifiedClaims.get(Headers.HEADER_FILTER);
         if (filter == null) {
             return updatedQuery;
         }
@@ -86,5 +120,18 @@ public class JwtClaimBasedAuthorizer implements SqlAuthorizer {
                 return null;
             }
         }
+    }
+
+    @Override
+    public boolean hasWriteAccess(String user, String path, Map<String, String> verifiedClaims) {
+        var accessType = verifiedClaims.get(Headers.HEADER_ACCESS_TYPE);
+        if (!AccessType.WRITE.name().equalsIgnoreCase(accessType)) {
+            return false;
+        }
+        var authorizedPath = verifiedClaims.get(Headers.HEADER_PATH);
+        if (authorizedPath == null) {
+            return false;
+        }
+        return SqlAuthorizer.hasAccessToPath(authorizedPath, path);
     }
 }
