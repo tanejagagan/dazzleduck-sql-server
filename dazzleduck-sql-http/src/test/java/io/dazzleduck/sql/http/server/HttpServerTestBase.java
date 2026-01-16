@@ -1,10 +1,10 @@
 package io.dazzleduck.sql.http.server;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.dazzleduck.sql.common.util.ConfigUtils;
+import io.dazzleduck.sql.common.ConfigConstants;
 import io.dazzleduck.sql.commons.ConnectionPool;
-import io.dazzleduck.sql.login.LoginRequest;
-import io.dazzleduck.sql.login.LoginResponse;
+import io.dazzleduck.sql.common.auth.LoginRequest;
+import io.dazzleduck.sql.common.auth.LoginResponse;
 import io.helidon.http.HeaderValues;
 
 import java.io.File;
@@ -57,7 +57,7 @@ public abstract class HttpServerTestBase {
 
     protected static void startServer(String... extraArgs) throws Exception {
         String[] baseArgs = {"--conf", "dazzleduck_server.http.port=%s".formatted(serverPort),
-                "--conf", "dazzleduck_server.%s=%s".formatted(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehousePath),
+                "--conf", "dazzleduck_server.%s=%s".formatted(ConfigConstants.WAREHOUSE_CONFIG_KEY, warehousePath),
                 "--conf", "dazzleduck_server.ingestion.max_delay_ms=500"};
         String[] args = new String[baseArgs.length + extraArgs.length];
         System.arraycopy(baseArgs, 0, args, 0, baseArgs.length);

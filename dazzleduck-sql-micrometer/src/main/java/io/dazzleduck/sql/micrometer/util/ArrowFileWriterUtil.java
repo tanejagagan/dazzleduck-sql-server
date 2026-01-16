@@ -15,6 +15,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.*;
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -35,7 +36,7 @@ public final class ArrowFileWriterUtil {
     /**
      * Writes meters to an Arrow IPC file on disk.
      */
-    public static void writeMetersToFile(List<Meter> meters, String filePath, String applicationId, String applicationName, String host) throws IOException {
+    public static void writeMetersToFile(List<Meter> meters, String filePath) throws IOException {
         if (meters == null || meters.isEmpty()) {
             log.debug("No meters to write to file: {}", filePath);
             return;
@@ -43,7 +44,7 @@ public final class ArrowFileWriterUtil {
         Objects.requireNonNull(filePath, "filePath must not be null");
         try (BufferAllocator allocator = new RootAllocator();
              FileOutputStream fos = new FileOutputStream(filePath)) {
-            writeMetersInternal(allocator, meters, fos, applicationId, applicationName, host);
+            writeMetersInternal(allocator, meters, fos);
             log.info("Successfully wrote {} meters to Arrow file: {}", meters.size(), filePath);
         }
     }
@@ -51,7 +52,7 @@ public final class ArrowFileWriterUtil {
     /**
      * Converts meters into Arrow IPC bytes (in-memory).
      */
-    public static byte[] convertMetersToArrowBytes(List<Meter> meters, String applicationId, String applicationName, String host) throws IOException {
+    public static byte[] convertMetersToArrowBytes(List<Meter> meters) throws IOException {
         if (meters == null || meters.isEmpty()) {
             log.debug("No meters to convert to Arrow bytes");
             return new byte[0];
@@ -59,12 +60,12 @@ public final class ArrowFileWriterUtil {
 
         try (BufferAllocator allocator = new RootAllocator();
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-            writeMetersInternal(allocator, meters, out, applicationId, applicationName, host);
+            writeMetersInternal(allocator, meters, out);
             return out.toByteArray();
         }
     }
 
-    private static void writeMetersInternal(BufferAllocator allocator, List<Meter> meters, OutputStream os, String applicationId, String applicationName, String host) throws IOException {
+    private static void writeMetersInternal(BufferAllocator allocator, List<Meter> meters, OutputStream os) throws IOException {
         try (VectorSchemaRoot root = VectorSchemaRoot.create(METER_SCHEMA, allocator);
              ArrowStreamWriter writer = new ArrowStreamWriter(root, null, os)) {
 
@@ -154,6 +155,7 @@ public final class ArrowFileWriterUtil {
 
         return new JavaRow(new Object[]{
                 sNo,
+                Instant.now().toEpochMilli(),
                 id.getName(),
                 id.getType().name().toLowerCase(),
                 tagsMap,
@@ -172,6 +174,7 @@ public final class ArrowFileWriterUtil {
         List<Field> fields = new ArrayList<>();
 
         fields.add(new Field("s_no", FieldType.notNullable(new ArrowType.Int(64, true)), null));
+        fields.add(new Field("timestamp", FieldType.notNullable(new ArrowType.Timestamp(org.apache.arrow.vector.types.TimeUnit.MILLISECOND, "UTC")), null));
         fields.add(new Field("name", FieldType.notNullable(new ArrowType.Utf8()), null));
         fields.add(new Field("type", FieldType.notNullable(new ArrowType.Utf8()), null));
         // tags: Map<String, String>

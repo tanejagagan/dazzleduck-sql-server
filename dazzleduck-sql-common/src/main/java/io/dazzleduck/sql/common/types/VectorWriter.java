@@ -1,13 +1,10 @@
 package io.dazzleduck.sql.common.types;
 
-
 import org.apache.arrow.vector.*;
 import org.apache.arrow.vector.complex.ListVector;
 import org.apache.arrow.vector.complex.MapVector;
 import org.apache.arrow.vector.complex.impl.UnionListWriter;
 import org.apache.arrow.vector.complex.impl.UnionMapWriter;
-import org.apache.arrow.vector.holders.Decimal256Holder;
-import org.apache.arrow.vector.holders.DecimalHolder;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;

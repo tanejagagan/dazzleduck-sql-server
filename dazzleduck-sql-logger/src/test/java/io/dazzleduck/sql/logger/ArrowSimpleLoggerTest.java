@@ -1,6 +1,6 @@
 package io.dazzleduck.sql.logger;
 
-import io.dazzleduck.sql.client.FlightProducer;
+import io.dazzleduck.sql.client.ArrowProducer;
 import org.apache.arrow.vector.types.pojo.*;
 import org.junit.jupiter.api.*;
 
@@ -15,11 +15,11 @@ import static org.junit.jupiter.api.Assertions.*;
 class ArrowSimpleLoggerTest {
 
     private ArrowSimpleLogger logger;
-    private TestFlightProducer sender;
+    private TestArrowProducer sender;
 
     @BeforeEach
     void setup() {
-        sender = new TestFlightProducer();
+        sender = new TestArrowProducer();
         logger = new ArrowSimpleLogger("test-logger", sender);
     }
 
@@ -91,12 +91,12 @@ class ArrowSimpleLoggerTest {
         assertEquals("A X B 1", out);
     }
 
-    static class TestFlightProducer extends FlightProducer.AbstractFlightProducer {
+    static class TestArrowProducer extends ArrowProducer.AbstractArrowProducer {
 
         final AtomicInteger rowsReceived = new AtomicInteger();
         final CountDownLatch latch = new CountDownLatch(10);
 
-        TestFlightProducer() {
+        TestArrowProducer() {
             super(
                     1,  // minBatchSize - set to 1 to send immediately
                     1024 * 1024,

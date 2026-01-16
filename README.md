@@ -20,9 +20,22 @@
 - **JWT Authentication**: Secure access control for HTTP endpoints
 - **Remote Query Execution**: Run DuckDB queries remotely with distributed execution support
 
+### Client Modules
+
+The project includes JDK 11 compatible client libraries:
+
+| Module | Description |
+|--------|-------------|
+| `dazzleduck-sql-client` | HTTP client (`HttpArrowProducer`) for Arrow data ingestion |
+| `dazzleduck-sql-client-grpc` | gRPC/Flight SQL client (`GrpcArrowProducer`) for Arrow data ingestion |
+| `dazzleduck-sql-common` | Shared types and utilities (LoginRequest, LoginResponse, DataType, etc.) |
+| `dazzleduck-sql-logger` | SLF4J provider for Arrow-based logging |
+| `dazzleduck-sql-logback` | Logback appender for log forwarding |
+
 ## Dev Setup
-Requirement
-JDK  21
+### Requirements
+- **Server modules**: JDK 21
+- **Client modules** (dazzleduck-sql-client, dazzleduck-sql-client-grpc, dazzleduck-sql-common, dazzleduck-sql-logger, dazzleduck-sql-logback): JDK 11+
 
 ## Getting started with Docker
 - Build the docker image.
@@ -37,7 +50,7 @@ JDK  21
   This will print the following on the console:
   ```
   ============================================================
-  DazzleDuck SQL Server v0.0.13-SNAPSHOT
+  DazzleDuck SQL Server v0.0.15
   ============================================================
   Warehouse Path: /data
   HTTP Server started successfully

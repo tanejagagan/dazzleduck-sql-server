@@ -3,7 +3,7 @@ package io.dazzleduck.sql.runtime;
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 import com.typesafe.config.ConfigValueFactory;
-import io.dazzleduck.sql.common.util.ConfigUtils;
+import io.dazzleduck.sql.common.ConfigConstants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -91,7 +91,7 @@ public final class SharedTestServer implements Closeable {
         logger.info("Starting test server - HTTP port: {}, Flight port: {}, Warehouse: {}",
                 httpPort, flightPort, warehousePath);
 
-        Config baseConfig = ConfigFactory.load().getConfig(ConfigUtils.CONFIG_PATH);
+        Config baseConfig = ConfigFactory.load().getConfig(ConfigConstants.CONFIG_PATH);
 
         config = baseConfig
                 .withValue("networking_modes", ConfigValueFactory.fromIterable(List.of("http", "flight-sql")))
@@ -136,7 +136,7 @@ public final class SharedTestServer implements Closeable {
 
         httpPort = fixedHttpPort > 0 ? fixedHttpPort : findAvailablePort();
         flightPort = fixedFlightPort > 0 ? fixedFlightPort : findAvailablePort();
-        Config baseConfig = ConfigFactory.load().getConfig(ConfigUtils.CONFIG_PATH);
+        Config baseConfig = ConfigFactory.load().getConfig(ConfigConstants.CONFIG_PATH);
 
         config = baseConfig
                 .withValue("networking_modes", ConfigValueFactory.fromIterable(List.of("http", "flight-sql")))
@@ -153,7 +153,7 @@ public final class SharedTestServer implements Closeable {
                 config = config.withValue(parts[0].trim(), ConfigValueFactory.fromAnyRef(parseValue(parts[1].trim())));
             }
         }
-        warehousePath = ConfigUtils.getWarehousePath(config);
+        warehousePath = ConfigConstants.getWarehousePath(config);
 
         logger.info("Starting test server with custom warehouse - HTTP port: {}, Flight port: {}, Warehouse: {}", httpPort, flightPort, warehousePath);
 

@@ -9,9 +9,9 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Tests for MetricsForwarder - queuing metrics to HttpProducer.
+ * Tests for MetricsForwarder - queuing metrics to HttpArrowProducer.
  *
- * Note: HttpProducer handles actual HTTP sending asynchronously with authentication,
+ * Note: HttpArrowProducer handles actual HTTP sending asynchronously with authentication,
  * so these tests focus on the queuing behavior and schema validation.
  */
 class MetricsForwarderTest {

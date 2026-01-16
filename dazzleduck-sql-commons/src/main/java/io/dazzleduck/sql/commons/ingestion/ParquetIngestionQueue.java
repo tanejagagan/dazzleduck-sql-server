@@ -71,16 +71,16 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
         var batches = writeTask.bucket().batches();
         // All Arrow files
         var arrowFiles = batches.stream().map(Batch::record).map("'%s'"::formatted).collect(Collectors.joining(","));
-        String firstTransformationString = getClause(batches.get(0).transformations(), "%s");
-        String firstPartitionString = getClause(batches.get(0).partitions(), ", PARTITION_BY(%s)");
-        var firstSortOrder = getClause(batches.get(0).sortOrder(), "ORDER BY %s ");
+        String projectionsClause = getClause(batches.get(0).projections(), "%s");
+        String partitionByClause = getClause(batches.get(0).partitionBy(), ", PARTITION_BY(%s)");
+        String sortOrderClause = getClause(batches.get(0).sortOrder(), "ORDER BY %s ");
 
-        // Select clause
-        var selectClause = firstTransformationString.isEmpty() ? "*" : "*, " + firstTransformationString;
+        // Select clause: use projections if specified, otherwise select all columns
+        var selectClause = projectionsClause.isEmpty() ? "*" : projectionsClause;
         // Last format
         var outputFormat = batches.isEmpty() ? "" : batches.get(batches.size() - 1).format();
         String fullFilePath;
-        if (firstPartitionString.isEmpty()) {
+        if (partitionByClause.isEmpty()) {
             String uniqueFileName = "dd_" + UUID.randomUUID() + "." + outputFormat;
             fullFilePath = this.path + "/" + uniqueFileName;
         } else {
@@ -97,7 +97,7 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
                     (SELECT %s FROM read_%s([%s]) %s)
                     TO '%s'
                     (FORMAT %s %s, RETURN_FILES, APPEND);
-                """.formatted(selectClause, this.inputFormat, arrowFiles, firstSortOrder, fullFilePath, outputFormat, firstPartitionString);
+                """.formatted(selectClause, this.inputFormat, arrowFiles, sortOrderClause, fullFilePath, outputFormat, partitionByClause);
         List<String> files = new ArrayList<>();
         long count = 0;
         try (var conn = ConnectionPool.getConnection();

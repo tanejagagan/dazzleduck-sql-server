@@ -3,8 +3,6 @@ package io.dazzleduck.sql.client;
 import io.dazzleduck.sql.common.types.JavaRow;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.util.TestUtils;
-import io.dazzleduck.sql.runtime.SharedTestServer;
-import org.apache.arrow.flight.Location;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
@@ -28,10 +26,9 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 
 /**
- * Resilience tests for GrpcFlightProducer and HttpProducer.
+ * Resilience tests for HttpArrowProducer.
  *
  * Test flow:
  * 1. Create producer on fixed port BEFORE server starts
@@ -54,7 +51,6 @@ public class ProducerResilienceTest {
     private static final int EVENT_INTERVAL_MS = 10;
     private static final int SERVER_START_DELAY_MS = 500;
     private static final int SERVER_UP_DURATION_MS = 2_000;
-    private static final int SERVER_DOWN_DURATION_MS = 500;
 
     private RootAllocator allocator;
 
@@ -78,104 +74,7 @@ public class ProducerResilienceTest {
     }
 
     @Test
-    void testGrpcFlightProducerResilience() throws Exception {
-        int fixedFlightPort = findAvailablePort();
-        int fixedHttpPort = findAvailablePort();
-        Path warehousePath = Files.createTempDirectory("grpc-resilience-test");
-        String testPath = "grpc-data";
-        Files.createDirectories(warehousePath.resolve(testPath));
-
-        Schema schema = new Schema(List.of(
-                new Field("id", FieldType.nullable(new ArrowType.Int(64, true)), null)
-        ));
-
-        int expectedEvents = TEST_DURATION_MS / EVENT_INTERVAL_MS;
-
-        // Server starts late and stays up until end (no cycling to avoid port reuse issues)
-        SharedTestServer server = new SharedTestServer();
-
-        // Start server in background after delay
-        Thread serverThread = new Thread(() -> {
-            try {
-                logger.info("Server thread: waiting {}ms before start...", SERVER_START_DELAY_MS);
-                Thread.sleep(SERVER_START_DELAY_MS);
-
-                logger.info("Starting server on ports HTTP:{}, Flight:{}", fixedHttpPort, fixedFlightPort);
-                server.startWithPorts(fixedHttpPort, fixedFlightPort,
-                        "warehouse=" + warehousePath,
-                        "ingestion.max_delay_ms=0");
-                logger.info("Server started successfully");
-
-            } catch (InterruptedException e) {
-                logger.info("Server thread interrupted before start");
-            } catch (Exception e) {
-                logger.error("Server start failed", e);
-            }
-        });
-        serverThread.setDaemon(true);
-        serverThread.start();
-
-        try {
-            // Create producer BEFORE server starts and send events
-            logger.info("Creating GrpcFlightProducer on port {} (server not yet started)", fixedFlightPort);
-            try (GrpcFlightProducer producer = new GrpcFlightProducer(
-                    schema,
-                    1024,
-                    2048,
-                    Duration.ofMillis(100),
-                    Clock.systemUTC(),
-                    2000, // retryCount - high for resilience during initial outage
-                    100,  // retryIntervalMillis
-                    List.of(),
-                    List.of(),
-                    10_000_000,  // larger buffer
-                    50_000_000,  // larger disk buffer
-                    allocator,
-                    Location.forGrpcInsecure(HOST, fixedFlightPort),
-                    USER,
-                    PASSWORD,
-                    Map.of("path", testPath),
-                    Duration.ofSeconds(60)
-            )) {
-                logger.info("Sending {} events over {}ms...", expectedEvents, TEST_DURATION_MS);
-                long startTime = System.currentTimeMillis();
-
-                for (int i = 0; i < expectedEvents; i++) {
-                    producer.addRow(new JavaRow(new Object[]{(long) i}));
-                    Thread.sleep(EVENT_INTERVAL_MS);
-                }
-
-                long elapsed = System.currentTimeMillis() - startTime;
-                logger.info("Finished sending {} events in {}ms", expectedEvents, elapsed);
-
-                // Wait for server thread to complete startup if it hasn't already
-                serverThread.join(5000);
-
-                // Wait for producer to flush remaining data
-                logger.info("Waiting for producer to flush data...");
-                Thread.sleep(3000);
-            }
-            // Producer closed, all data should be flushed
-
-            // Wait for server to finish writing
-            Thread.sleep(2000);
-
-            // Verify all distinct events received
-            logger.info("Verifying data...");
-            var actualQuery = "SELECT DISTINCT id FROM read_parquet('%s/%s/*.parquet') ORDER BY id".formatted(warehousePath, testPath);
-            var expectedQuery = "SELECT * FROM generate_series(0, %d) AS t(id) ORDER BY id".formatted(expectedEvents - 1);
-            TestUtils.isEqual(expectedQuery, actualQuery);
-
-            logger.info("GrpcFlightProducer resilience test passed - all {} distinct events received", expectedEvents);
-
-        } finally {
-            server.close();
-            cleanupDirectory(warehousePath);
-        }
-    }
-
-    @Test
-    void testHttpProducerResilience() throws Exception {
+    void testHttpArrowProducerResilience() throws Exception {
         int fixedHttpPort = findAvailablePort();
         Path warehousePath = Files.createTempDirectory("http-resilience-test");
         String testPath = "http-data";
@@ -225,8 +124,8 @@ public class ProducerResilienceTest {
 
         try {
             // Create producer BEFORE server starts and send events
-            logger.info("Creating HttpProducer on port {} (server not yet started)", fixedHttpPort);
-            try (HttpProducer producer = new HttpProducer(
+            logger.info("Creating HttpArrowProducer on port {} (server not yet started)", fixedHttpPort);
+            try (HttpArrowProducer producer = new HttpArrowProducer(
                     schema,
                     baseUrl,
                     USER,
@@ -273,7 +172,7 @@ public class ProducerResilienceTest {
             var expectedQuery = "SELECT * FROM generate_series(0, %d) AS t(id) ORDER BY id".formatted(expectedEvents - 1);
             TestUtils.isEqual(expectedQuery, actualQuery);
 
-            logger.info("HttpProducer resilience test passed - all {} distinct events received", expectedEvents);
+            logger.info("HttpArrowProducer resilience test passed - all {} distinct events received", expectedEvents);
 
         } finally {
             server.close();

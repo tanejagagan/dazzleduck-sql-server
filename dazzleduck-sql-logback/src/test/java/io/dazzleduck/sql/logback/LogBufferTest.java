@@ -172,10 +172,7 @@ class LogBufferTest {
                 "INFO",
                 "TestLogger",
                 "main",
-                message,
-                "app-1",
-                "TestApp",
-                "localhost"
+                message
         );
     }
 }

@@ -37,15 +37,9 @@ public final class JsonToArrowConverter implements Closeable {
 
     private final BufferAllocator allocator;
     private final Schema schema;
-    private final String application_id;
-    private final String application_name;
-    private final String application_host;
 
-    public JsonToArrowConverter(String applicationId, String applicationName, String applicationHost) {
+    public JsonToArrowConverter() {
         this.allocator = new RootAllocator(Long.MAX_VALUE);
-        this.application_id = applicationId;
-        this.application_name = applicationName;
-        this.application_host = applicationHost;
         this.schema = createArrowSchema();
     }
 
@@ -120,9 +114,6 @@ public final class JsonToArrowConverter implements Closeable {
                 new Field("message", FieldType.nullable(new ArrowType.Utf8()), null),
                 mdcField,
                 new Field("marker", FieldType.nullable(new ArrowType.Utf8()), null),
-                new Field("application_id", FieldType.nullable(new ArrowType.Utf8()), null),
-                new Field("application_name", FieldType.nullable(new ArrowType.Utf8()), null),
-                new Field("application_host", FieldType.nullable(new ArrowType.Utf8()), null),
                 new Field("file_name", FieldType.nullable(new ArrowType.Utf8()), null)
         ));
     }
@@ -136,9 +127,6 @@ public final class JsonToArrowConverter implements Closeable {
         VarCharVector messageVec = (VarCharVector) root.getVector("message");
         MapVector mdcVec = (MapVector) root.getVector("mdc");
         VarCharVector markerVec = (VarCharVector) root.getVector("marker");
-        VarCharVector applicationIdVec = (VarCharVector) root.getVector("application_id");
-        VarCharVector applicationNameVec = (VarCharVector) root.getVector("application_name");
-        VarCharVector applicationHostVec = (VarCharVector) root.getVector("application_host");
         VarCharVector fileNameVec = (VarCharVector) root.getVector("file_name");
 
         mdcVec.allocateNew();
@@ -157,9 +145,6 @@ public final class JsonToArrowConverter implements Closeable {
             setVectorValue(messageVec, i, log.message());
             setMapValue(mdcWriter, i, log.mdc());
             setVectorValue(markerVec, i, log.marker());
-            setVectorValue(applicationIdVec, i, application_id);
-            setVectorValue(applicationNameVec, i, application_name);
-            setVectorValue(applicationHostVec, i, application_host);
             setVectorValue(fileNameVec, i, fileName);
         }
 

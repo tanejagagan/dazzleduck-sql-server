@@ -1,10 +1,10 @@
 package io.dazzleduck.sql.http.server;
 
-import io.dazzleduck.sql.common.util.ConfigUtils;
+import io.dazzleduck.sql.common.ConfigConstants;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.util.TestUtils;
-import io.dazzleduck.sql.login.LoginRequest;
-import io.dazzleduck.sql.login.LoginResponse;
+import io.dazzleduck.sql.common.auth.LoginRequest;
+import io.dazzleduck.sql.common.auth.LoginResponse;
 import io.helidon.http.HeaderNames;
 import io.helidon.http.HeaderValues;
 import org.apache.arrow.memory.BufferAllocator;
@@ -42,7 +42,7 @@ public class HttpServerJwtTest extends HttpServerTestBase {
         initWarehouse();
         initClient();
         initPort();
-        startServer("--conf", "dazzleduck_server.http.%s=jwt".formatted(ConfigUtils.AUTHENTICATION_KEY));
+        startServer("--conf", "dazzleduck_server.http.%s=jwt".formatted(ConfigConstants.AUTHENTICATION_KEY));
         installArrowExtension();
     }
 

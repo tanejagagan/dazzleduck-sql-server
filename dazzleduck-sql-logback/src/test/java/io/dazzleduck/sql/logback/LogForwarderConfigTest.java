@@ -12,11 +12,6 @@ class LogForwarderConfigTest {
     void builder_shouldUseDefaults() {
         LogForwarderConfig config = LogForwarderConfig.builder().build();
 
-        assertEquals("default-app", config.applicationId());
-        assertEquals("DefaultApplication", config.applicationName());
-        // Verify hostname is auto-detected (not null or empty)
-        assertNotNull(config.applicationHost());
-        assertFalse(config.applicationHost().isEmpty());
         assertEquals("http://localhost:8081", config.baseUrl());
         assertEquals("admin", config.username());
         assertEquals("admin", config.password());
@@ -34,9 +29,6 @@ class LogForwarderConfigTest {
     @Test
     void builder_shouldSetCustomValues() {
         LogForwarderConfig config = LogForwarderConfig.builder()
-                .applicationId("my-app")
-                .applicationName("MyApp")
-                .applicationHost("my-host")
                 .baseUrl("http://custom:9000")
                 .username("user")
                 .password("pass")
@@ -51,9 +43,6 @@ class LogForwarderConfigTest {
                 .enabled(false)
                 .build();
 
-        assertEquals("my-app", config.applicationId());
-        assertEquals("MyApp", config.applicationName());
-        assertEquals("my-host", config.applicationHost());
         assertEquals("http://custom:9000", config.baseUrl());
         assertEquals("user", config.username());
         assertEquals("pass", config.password());
@@ -66,20 +55,6 @@ class LogForwarderConfigTest {
         assertEquals(50 * 1024 * 1024, config.maxInMemorySize());
         assertEquals(5 * 1024 * 1024 * 1024L, config.maxOnDiskSize());
         assertFalse(config.enabled());
-    }
-
-    @Test
-    void builder_shouldRejectNullApplicationId() {
-        assertThrows(NullPointerException.class, () ->
-                LogForwarderConfig.builder().applicationId(null)
-        );
-    }
-
-    @Test
-    void builder_shouldRejectNullApplicationName() {
-        assertThrows(NullPointerException.class, () ->
-                LogForwarderConfig.builder().applicationName(null)
-        );
     }
 
     @Test
@@ -128,9 +103,6 @@ class LogForwarderConfigTest {
     @Test
     void builder_shouldChainMethods() {
         LogForwarderConfig config = LogForwarderConfig.builder()
-                .applicationId("id")
-                .applicationName("name")
-                .applicationHost("host")
                 .baseUrl("http://test:8080")
                 .username("u")
                 .password("p")
@@ -138,7 +110,7 @@ class LogForwarderConfigTest {
                 .build();
 
         assertNotNull(config);
-        assertEquals("id", config.applicationId());
-        assertEquals("name", config.applicationName());
+        assertEquals("http://test:8080", config.baseUrl());
+        assertEquals("u", config.username());
     }
 }

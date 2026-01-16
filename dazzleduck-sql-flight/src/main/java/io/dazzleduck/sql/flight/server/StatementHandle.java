@@ -3,7 +3,7 @@ package io.dazzleduck.sql.flight.server;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.protobuf.ByteString;
-import io.dazzleduck.sql.common.util.CryptoUtils;
+import io.dazzleduck.sql.flight.util.CryptoUtils;
 import org.apache.arrow.flight.FlightDescriptor;
 
 import javax.annotation.Nullable;

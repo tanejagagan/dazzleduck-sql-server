@@ -1,6 +1,6 @@
 package io.dazzleduck.sql.flight.server;
 
-import io.dazzleduck.sql.common.util.ConfigUtils;
+import io.dazzleduck.sql.common.ConfigConstants;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
 import org.apache.arrow.flight.*;
 import org.apache.arrow.flight.sql.FlightSqlClient;
@@ -56,7 +56,7 @@ public class HttpLoginTest {
         Thread.sleep(100);
 
         var confOverload = new String[]{"--conf", "dazzleduck_server.flight_sql.port=" + flightPort,
-                "--conf", "dazzleduck_server.%s=\"%s\"".formatted(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehouse.toAbsolutePath().toString()),
+                "--conf", "dazzleduck_server.%s=\"%s\"".formatted(ConfigConstants.WAREHOUSE_CONFIG_KEY, warehouse.toAbsolutePath().toString()),
                 "--conf", "dazzleduck_server.login_url=\"http://localhost:%s/v1/login\"".formatted(httpPort),
                 "--conf", "dazzleduck_server.flight_sql.use_encryption=false",
                 "--conf", "dazzleduck_server.jwt_token.generation=false",
