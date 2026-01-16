@@ -41,11 +41,23 @@ public class HttpMetricIntegrationTest {
         String STARTUP_SCRIPT = """
                 INSTALL arrow;
                 LOAD arrow;
-                
+
                 LOAD ducklake;
                 ATTACH 'ducklake:%s/%s' AS %s (DATA_PATH '%s/%s');
                 USE %s;
-                CREATE TABLE IF NOT EXISTS %s (name VARCHAR, type VARCHAR, value DOUBLE, application_id VARCHAR, application_name VARCHAR, application_host VARCHAR);
+                CREATE TABLE IF NOT EXISTS %s (
+                    s_no BIGINT,
+                    timestamp TIMESTAMP,
+                    name VARCHAR,
+                    type VARCHAR,
+                    tags MAP(VARCHAR, VARCHAR),
+                    value DOUBLE,
+                    min DOUBLE,
+                    max DOUBLE,
+                    mean DOUBLE,
+                    application_host VARCHAR,
+                    date DATE
+                );
                 """.formatted(warehouse, CATALOG_NAME, CATALOG_NAME, warehouse, DUCKLAKE_DATA_DIR, CATALOG_NAME, TABLE_NAME);
 
         server.startWithWarehouse(
@@ -92,12 +104,10 @@ public class HttpMetricIntegrationTest {
                         select 'records.processed' as name,
                                'counter'           as type,
                                10.0                as value,
-                               'ap101'             as application_id,
-                               'MyApplication'     as application_name,
                                'localhost'         as application_host
                         """,
                 """
-                        select name, type, value, application_id, application_name, application_host
+                        select name, type, value, application_host
                         from read_parquet('%s')
                         where name = 'records.processed'
                         """.formatted(metricFile.toAbsolutePath())
@@ -129,8 +139,11 @@ public class HttpMetricIntegrationTest {
         long deadline = System.currentTimeMillis() + 15_000;
 
         while (System.currentTimeMillis() < deadline) {
-            try (var stream = Files.list(dir)) {
-                var file = stream.filter(Files::isRegularFile).findFirst();
+            try (var stream = Files.walk(dir)) {
+                var file = stream
+                        .filter(Files::isRegularFile)
+                        .filter(p -> p.toString().endsWith(".parquet"))
+                        .findFirst();
                 if (file.isPresent()) {
                     return file.get();
                 }

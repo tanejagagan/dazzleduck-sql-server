@@ -15,9 +15,6 @@ import java.time.Duration;
  * <p>Expected configuration format in application.conf:</p>
  * <pre>{@code
  * dazzleduck_micrometer {
- *   application_id = "my-app"
- *   application_name = "My Application"
- *   application_host = "localhost"
  *   enabled = true
  *
  *   http {
@@ -75,9 +72,6 @@ public final class MetricsRegistryFactory {
         Config http = config.getConfig(ConfigUtils.HTTP_PREFIX);
 
         return MicrometerForwarderConfig.builder()
-                .applicationId(config.getString(ConfigUtils.APPLICATION_ID_KEY))
-                .applicationName(config.getString(ConfigUtils.APPLICATION_NAME_KEY))
-                .applicationHost(config.getString(ConfigUtils.APPLICATION_HOST_KEY))
                 .baseUrl(http.getString(ConfigUtils.BASE_URL_KEY))
                 .username(http.getString(ConfigUtils.USERNAME_KEY))
                 .password(http.getString(ConfigUtils.PASSWORD_KEY))

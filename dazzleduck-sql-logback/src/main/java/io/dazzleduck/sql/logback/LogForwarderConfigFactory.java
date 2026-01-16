@@ -12,9 +12,6 @@ import java.time.Duration;
  * <p>Expected configuration format in application.conf:</p>
  * <pre>{@code
  * dazzleduck_logback {
- *   application_id = "my-app"
- *   application_name = "My Application"
- *   application_host = "localhost"
  *   enabled = true
  *
  *   max_buffer_size = 10000
@@ -35,8 +32,8 @@ import java.time.Duration;
  *   max_on_disk_bytes = 1073741824
  *   retry_count = 3
  *   retry_interval_ms = 1000
- *   projections = []
- *   partition_by = []
+ *   projections = ["*", "CAST (timestamp AS date) AS date"]
+ *   partition_by = [date]
  * }
  * }</pre>
  */
@@ -65,9 +62,6 @@ public final class LogForwarderConfigFactory {
         Config http = config.getConfig(ConfigUtils.HTTP_PREFIX);
 
         return LogForwarderConfig.builder()
-                .applicationId(config.getString(ConfigUtils.APPLICATION_ID_KEY))
-                .applicationName(config.getString(ConfigUtils.APPLICATION_NAME_KEY))
-                .applicationHost(config.getString(ConfigUtils.APPLICATION_HOST_KEY))
                 .baseUrl(http.getString(ConfigUtils.BASE_URL_KEY))
                 .username(http.getString(ConfigUtils.USERNAME_KEY))
                 .password(http.getString(ConfigUtils.PASSWORD_KEY))

@@ -25,7 +25,7 @@ class LogEntryTest {
         event.setThreadName("test-thread");
         event.setTimeStamp(1705312200000L); // 2024-01-15T10:30:00Z
 
-        LogEntry entry = LogEntry.from(42, event, "app-id-1", "TestApp", "host-1");
+        LogEntry entry = LogEntry.from(42, event);
 
         assertEquals(42, entry.sNo());
         assertEquals(Instant.ofEpochMilli(1705312200000L), entry.timestamp());
@@ -33,18 +33,15 @@ class LogEntryTest {
         assertEquals("com.example.TestLogger", entry.logger());
         assertEquals("test-thread", entry.thread());
         assertEquals("Test error message", entry.message());
-        assertEquals("app-id-1", entry.applicationId());
-        assertEquals("TestApp", entry.applicationName());
-        assertEquals("host-1", entry.applicationHost());
     }
 
     @Test
     void record_shouldSupportEquality() {
         Instant now = Instant.now();
 
-        LogEntry entry1 = new LogEntry(1, now, "INFO", "Logger1", "main", "msg", "app1", "App1", "host1");
-        LogEntry entry2 = new LogEntry(1, now, "INFO", "Logger1", "main", "msg", "app1", "App1", "host1");
-        LogEntry entry3 = new LogEntry(1, now, "ERROR", "Logger1", "main", "msg", "app1", "App1", "host1");
+        LogEntry entry1 = new LogEntry(1, now, "INFO", "Logger1", "main", "msg");
+        LogEntry entry2 = new LogEntry(1, now, "INFO", "Logger1", "main", "msg");
+        LogEntry entry3 = new LogEntry(1, now, "ERROR", "Logger1", "main", "msg");
 
         assertEquals(entry1, entry2);
         assertNotEquals(entry1, entry3);
@@ -54,8 +51,8 @@ class LogEntryTest {
     void record_shouldGenerateHashCode() {
         Instant now = Instant.now();
 
-        LogEntry entry1 = new LogEntry(1, now, "INFO", "Logger1", "main", "msg", "app1", "App1", "host1");
-        LogEntry entry2 = new LogEntry(1, now, "INFO", "Logger1", "main", "msg", "app1", "App1", "host1");
+        LogEntry entry1 = new LogEntry(1, now, "INFO", "Logger1", "main", "msg");
+        LogEntry entry2 = new LogEntry(1, now, "INFO", "Logger1", "main", "msg");
 
         assertEquals(entry1.hashCode(), entry2.hashCode());
     }
@@ -68,10 +65,7 @@ class LogEntryTest {
                 "INFO",
                 "TestLogger",
                 "main",
-                "Test message",
-                "app-1",
-                "TestApp",
-                "localhost"
+                "Test message"
         );
 
         String toString = entry.toString();
@@ -83,15 +77,12 @@ class LogEntryTest {
 
     @Test
     void record_shouldAllowNullValues() {
-        LogEntry entry = new LogEntry(1, null, null, null, null, null, null, null, null);
+        LogEntry entry = new LogEntry(1, null, null, null, null, null);
 
         assertNull(entry.timestamp());
         assertNull(entry.level());
         assertNull(entry.logger());
         assertNull(entry.thread());
         assertNull(entry.message());
-        assertNull(entry.applicationId());
-        assertNull(entry.applicationName());
-        assertNull(entry.applicationHost());
     }
 }

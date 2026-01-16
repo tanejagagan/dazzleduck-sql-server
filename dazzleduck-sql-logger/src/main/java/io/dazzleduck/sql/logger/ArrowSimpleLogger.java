@@ -2,7 +2,7 @@ package io.dazzleduck.sql.logger;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
-import io.dazzleduck.sql.client.HttpProducer;
+import io.dazzleduck.sql.client.HttpFlightProducer;
 import io.dazzleduck.sql.client.FlightProducer;
 import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.common.types.JavaRow;
@@ -36,15 +36,12 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
 
     // Configuration - initialized FIRST before any Arrow classes to avoid circular initialization
     private static final Config config;
-    private static final String CONFIG_APPLICATION_ID;
-    private static final String CONFIG_APPLICATION_NAME;
-    private static final String CONFIG_APPLICATION_HOST;
     private static final Level CONFIG_LOG_LEVEL;
 
     // Flag to track if we're in the middle of static initialization (including schema creation)
     private static final boolean fullyInitialized;
 
-    // Thread-local flag to prevent recursion when creating HttpProducer (which uses SLF4J)
+    // Thread-local flag to prevent recursion when creating HttpFlightProducer (which uses SLF4J)
     private static final ThreadLocal<Boolean> creatingProducer = ThreadLocal.withInitial(() -> Boolean.FALSE);
 
     // Schema - must be declared before static block but initialized lazily
@@ -52,16 +49,10 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
 
     static {
         Config tempConfig = null;
-        String appId = "unknown";
-        String appName = "unknown";
-        String appHost = "localhost";
         Level logLevel = Level.INFO;
 
         try {
             tempConfig = ConfigFactory.load().getConfig("dazzleduck_logger");
-            appId = tempConfig.getString("application_id");
-            appName = tempConfig.getString("application_name");
-            appHost = tempConfig.getString("application_host");
 
             String levelStr = tempConfig.hasPath("log_level") ? tempConfig.getString("log_level") : "INFO";
             logLevel = Level.valueOf(levelStr.toUpperCase());
@@ -70,16 +61,13 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
         }
 
         config = tempConfig;
-        CONFIG_APPLICATION_ID = appId;
-        CONFIG_APPLICATION_NAME = appName;
-        CONFIG_APPLICATION_HOST = appHost;
         CONFIG_LOG_LEVEL = logLevel;
 
         // Create schema - this may trigger SLF4J logging from Arrow's Field class
         // Any loggers created during this will use NoOpFlightProducer
         schema = createSchema();
 
-        // Now mark as fully initialized - subsequent loggers can use HttpProducer
+        // Now mark as fully initialized - subsequent loggers can use HttpFlightProducer
         fullyInitialized = true;
     }
 
@@ -104,18 +92,12 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
                 new Field("thread", FieldType.nullable(new ArrowType.Utf8()), null),
                 new Field("message", FieldType.nullable(new ArrowType.Utf8()), null),
                 mdcField,
-                new Field("marker", FieldType.nullable(new ArrowType.Utf8()), null),
-                new Field("application_id", FieldType.nullable(new ArrowType.Utf8()), null),
-                new Field("application_name", FieldType.nullable(new ArrowType.Utf8()), null),
-                new Field("application_host", FieldType.nullable(new ArrowType.Utf8()), null)
+                new Field("marker", FieldType.nullable(new ArrowType.Utf8()), null)
         ));
     }
 
     private final String name;
     private final FlightProducer flightProducer;
-    private final String application_id;
-    private final String application_name;
-    private final String application_host;
 
     public ArrowSimpleLogger(String name) {
         this(name, createSenderFromConfig());
@@ -124,16 +106,13 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
     public ArrowSimpleLogger(String name, FlightProducer sender) {
         this.name = name;
         this.flightProducer = sender;
-        this.application_id = CONFIG_APPLICATION_ID;
-        this.application_name = CONFIG_APPLICATION_NAME;
-        this.application_host = CONFIG_APPLICATION_HOST;
     }
 
     private static FlightProducer createSenderFromConfig() {
         // If not fully initialized, config is unavailable, or we're already creating a producer,
         // return null (no-op). This handles:
         // 1. Circular initialization when Arrow's Field class triggers SLF4J logging
-        // 2. Recursive calls when HttpProducer's static initializer uses SLF4J logging
+        // 2. Recursive calls when HttpFlightProducer's static initializer uses SLF4J logging
         if (!fullyInitialized || config == null || creatingProducer.get()) {
             return null;
         }
@@ -143,7 +122,7 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
         try {
             Config http = config.getConfig(ConfigUtils.HTTP_PREFIX);
             String targetPath = http.getString(ConfigUtils.TARGET_PATH_KEY);
-            return new HttpProducer(
+            return new HttpFlightProducer(
                     schema,
                     http.getString(ConfigUtils.BASE_URL_KEY),
                     http.getString(ConfigUtils.USERNAME_KEY),
@@ -161,7 +140,7 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
                     config.getLong(ConfigUtils.MAX_ON_DISK_BYTES_KEY)
             );
         } catch (Exception ex) {
-            System.err.println("[ArrowSimpleLogger] Failed to create HttpProducer: " + ex.getMessage());
+            System.err.println("[ArrowSimpleLogger] Failed to create HttpFlightProducer: " + ex.getMessage());
             return null;
         } finally {
             creatingProducer.set(Boolean.FALSE);
@@ -227,10 +206,7 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
                     threadName,
                     message,
                     mdcMap,
-                    markerName,
-                    application_id,
-                    application_name,
-                    application_host
+                    markerName
             });
 
             // FlightProducer handles batching, serialization, and sending

@@ -31,7 +31,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Resilience tests for GrpcFlightProducer and HttpProducer.
+ * Resilience tests for GrpcFlightProducer and HttpFlightProducer.
  *
  * Test flow:
  * 1. Create producer on fixed port BEFORE server starts
@@ -175,7 +175,7 @@ public class ProducerResilienceTest {
     }
 
     @Test
-    void testHttpProducerResilience() throws Exception {
+    void testHttpFlightProducerResilience() throws Exception {
         int fixedHttpPort = findAvailablePort();
         Path warehousePath = Files.createTempDirectory("http-resilience-test");
         String testPath = "http-data";
@@ -225,8 +225,8 @@ public class ProducerResilienceTest {
 
         try {
             // Create producer BEFORE server starts and send events
-            logger.info("Creating HttpProducer on port {} (server not yet started)", fixedHttpPort);
-            try (HttpProducer producer = new HttpProducer(
+            logger.info("Creating HttpFlightProducer on port {} (server not yet started)", fixedHttpPort);
+            try (HttpFlightProducer producer = new HttpFlightProducer(
                     schema,
                     baseUrl,
                     USER,
@@ -273,7 +273,7 @@ public class ProducerResilienceTest {
             var expectedQuery = "SELECT * FROM generate_series(0, %d) AS t(id) ORDER BY id".formatted(expectedEvents - 1);
             TestUtils.isEqual(expectedQuery, actualQuery);
 
-            logger.info("HttpProducer resilience test passed - all {} distinct events received", expectedEvents);
+            logger.info("HttpFlightProducer resilience test passed - all {} distinct events received", expectedEvents);
 
         } finally {
             server.close();

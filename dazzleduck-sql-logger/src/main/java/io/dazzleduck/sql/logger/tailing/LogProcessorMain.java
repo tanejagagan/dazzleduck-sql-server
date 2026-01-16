@@ -2,7 +2,7 @@ package io.dazzleduck.sql.logger.tailing;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
-import io.dazzleduck.sql.client.HttpProducer;
+import io.dazzleduck.sql.client.HttpFlightProducer;
 import io.dazzleduck.sql.common.util.ConfigUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,10 +21,6 @@ public final class LogProcessorMain {
     private static final String LOG_FILE_PATTERN_KEY = "log_file_pattern";
 
     private static final Config config = ConfigFactory.load().getConfig("dazzleduck_logger");
-    // Application config
-    private static final String CONFIG_APPLICATION_ID = config.getString(ConfigUtils.APPLICATION_ID_KEY);
-    private static final String CONFIG_APPLICATION_NAME = config.getString(ConfigUtils.APPLICATION_NAME_KEY);
-    private static final String CONFIG_APPLICATION_HOST = config.getString(ConfigUtils.APPLICATION_HOST_KEY);
     // Log monitoring config
     private static final String CONFIG_LOG_DIRECTORY = config.getString(LOG_DIRECTORY_KEY);
     private static final String CONFIG_LOG_FILE_PATTERN = config.getString(LOG_FILE_PATTERN_KEY);
@@ -45,14 +41,10 @@ public final class LogProcessorMain {
 
     public static void main(String[] args) throws InterruptedException {
         // Create converter to get schema
-        JsonToArrowConverter converter = new JsonToArrowConverter(
-                CONFIG_APPLICATION_ID,
-                CONFIG_APPLICATION_NAME,
-                CONFIG_APPLICATION_HOST
-        );
+        JsonToArrowConverter converter = new JsonToArrowConverter();
 
         // Create HttpSender with configuration
-        HttpProducer httpSender = new HttpProducer(
+        HttpFlightProducer httpSender = new HttpFlightProducer(
                 converter.getSchema(),
                 CONFIG_HTTP_BASE_URL,
                 CONFIG_HTTP_USERNAME,

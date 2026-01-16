@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * A mock HTTP server that mimics the DazzleDuck HTTP ingestion service.
  *
- * This server can be used for testing the HttpProducer without needing the full
+ * This server can be used for testing the HttpFlightProducer without needing the full
  * DazzleDuck server stack. It provides:
  *
  * - POST /v1/login - Returns a mock JWT token

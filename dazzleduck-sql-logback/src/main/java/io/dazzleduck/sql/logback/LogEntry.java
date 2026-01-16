@@ -15,37 +15,23 @@ public record LogEntry(
         @JsonProperty("level") String level,
         @JsonProperty("logger") String logger,
         @JsonProperty("thread") String thread,
-        @JsonProperty("message") String message,
-        @JsonProperty("application_id") String applicationId,
-        @JsonProperty("application_name") String applicationName,
-        @JsonProperty("application_host") String applicationHost
+        @JsonProperty("message") String message
 ) {
     /**
      * Factory method to create LogEntry from Logback event.
      *
      * @param sequenceNumber The sequence number for this log entry
      * @param event The Logback logging event
-     * @param applicationId Application ID
-     * @param applicationName Application name
-     * @param applicationHost Application host
      * @return A new LogEntry instance
      */
-    public static LogEntry from(
-            long sequenceNumber,
-            ILoggingEvent event,
-            String applicationId,
-            String applicationName,
-            String applicationHost) {
+    public static LogEntry from(long sequenceNumber, ILoggingEvent event) {
         return new LogEntry(
                 sequenceNumber,
                 Instant.ofEpochMilli(event.getTimeStamp()),
                 event.getLevel().toString(),
                 event.getLoggerName(),
                 event.getThreadName(),
-                event.getFormattedMessage(),
-                applicationId,
-                applicationName,
-                applicationHost
+                event.getFormattedMessage()
         );
     }
 }

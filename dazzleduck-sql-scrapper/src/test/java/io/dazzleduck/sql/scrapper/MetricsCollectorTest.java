@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * Tests for MetricsCollector - main collector with tailing support.
  *
- * Note: HttpProducer handles actual HTTP sending asynchronously with authentication,
+ * Note: HttpFlightProducer handles actual HTTP sending asynchronously with authentication,
  * so these tests focus on the collector's scraping and buffering behavior.
  */
 class MetricsCollectorTest {
@@ -28,7 +28,7 @@ class MetricsCollectorTest {
         properties = new CollectorProperties();
         properties.setEnabled(true);
         properties.setTargets(List.of(targetServer.url("/actuator/prometheus").toString()));
-        properties.setServerUrl("http://localhost:8081");  // HttpProducer will handle auth
+        properties.setServerUrl("http://localhost:8081");  // HttpFlightProducer will handle auth
         properties.setPath("metrics");
         properties.setUsername("test");
         properties.setPassword("test");

@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * Tests for MetricsCollectorServer - standalone server with HOCON config.
  *
- * Note: HttpProducer handles actual HTTP sending asynchronously with authentication,
+ * Note: HttpFlightProducer handles actual HTTP sending asynchronously with authentication,
  * so these tests focus on server lifecycle and scraping behavior.
  */
 class MetricsCollectorServerTest {
@@ -239,7 +239,7 @@ class MetricsCollectorServerTest {
         // Start in background thread
         executor.submit(server::start);
 
-        // Wait for startup - give more time for HttpProducer initialization
+        // Wait for startup - give more time for HttpFlightProducer initialization
         Thread.sleep(1000);
 
         assertTrue(server.isRunning(), "Server should be running");
@@ -309,7 +309,7 @@ class MetricsCollectorServerTest {
         // Should have scraped from target
         assertTrue(targetServer.getRequestCount() > 0, "Should have scraped at least once");
 
-        // Should have sent metrics (queued to HttpProducer)
+        // Should have sent metrics (queued to HttpFlightProducer)
         assertTrue(server.getCollector().getMetricsSentCount() > 0, "Should have sent metrics");
 
         server.shutdown();

@@ -24,7 +24,7 @@ import java.util.concurrent.TimeUnit;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.*;
 
-public class HttpProducerTimeoutTest {
+public class HttpFlightProducerTimeoutTest {
 
     private static SharedTestServer server;
     private static String warehouse;
@@ -58,8 +58,8 @@ public class HttpProducerTimeoutTest {
         org.awaitility.Awaitility.reset();
     }
 
-    private HttpProducer newSender(String file, Duration timeout) {
-        return new HttpProducer(
+    private HttpFlightProducer newSender(String file, Duration timeout) {
+        return new HttpFlightProducer(
                 schema,
                 baseUrl,
                 "admin",

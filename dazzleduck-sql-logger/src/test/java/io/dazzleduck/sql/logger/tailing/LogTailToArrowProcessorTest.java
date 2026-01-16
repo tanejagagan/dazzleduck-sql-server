@@ -1,6 +1,6 @@
 package io.dazzleduck.sql.logger.tailing;
 
-import io.dazzleduck.sql.client.HttpProducer;
+import io.dazzleduck.sql.client.HttpFlightProducer;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.junit.jupiter.api.*;
@@ -28,9 +28,6 @@ class LogTailToArrowProcessorTest {
     static Path warehouse;
     @TempDir
     Path tempDir;
-    static final String APPLICATION_ID = "test-app-id";
-    static final String APPLICATION_NAME = "TestApplication";
-    static final String APPLICATION_HOST = "localhost";
 
     @BeforeAll
     static void setup() throws Exception {
@@ -42,7 +39,7 @@ class LogTailToArrowProcessorTest {
                 "--conf", "dazzleduck_server.ingestion.max_delay_ms=500"
         });
 
-        JsonToArrowConverter converter = new JsonToArrowConverter(APPLICATION_ID, APPLICATION_NAME, APPLICATION_HOST);
+        JsonToArrowConverter converter = new JsonToArrowConverter();;
         schema = converter.getSchema();
         converter.close();
     }
@@ -67,8 +64,8 @@ class LogTailToArrowProcessorTest {
         // Generating 1 file with 2 logs
         runLogGenerator(tempDir, "1", "2");
         // Create REAL HttpSender
-        try (HttpProducer sender = new HttpProducer(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(5), 1, 2048, Duration.ofMillis(200), 3, 1000, java.util.List.of(), java.util.List.of(), 10_000_000, 10_000_000)) {
-            JsonToArrowConverter converter = new JsonToArrowConverter(APPLICATION_ID, APPLICATION_NAME, APPLICATION_HOST);
+        try (HttpFlightProducer sender = new HttpFlightProducer(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(5), 1, 2048, Duration.ofMillis(200), 3, 1000, java.util.List.of(), java.util.List.of(), 10_000_000, 10_000_000)) {
+            JsonToArrowConverter converter = new JsonToArrowConverter();
             LogTailToArrowProcessor processor = new LogTailToArrowProcessor(tempDir.toString(), "*.log", converter, sender, 100);
             processor.start();
             // Verify ingestion via DuckDB
@@ -86,9 +83,9 @@ class LogTailToArrowProcessorTest {
         Files.createDirectories(Path.of(warehouse.toString(), targetDir));
         // Generating 3 file with 2 logs per file: total = 6 logs
         runLogGenerator(tempDir, "3", "2");
-        try (HttpProducer sender = new HttpProducer(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(5), 1,  2048, Duration.ofMillis(200), 3, 1000, java.util.List.of(), java.util.List.of(), 10_000_000, 10_000_000)) {
+        try (HttpFlightProducer sender = new HttpFlightProducer(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(5), 1,  2048, Duration.ofMillis(200), 3, 1000, java.util.List.of(), java.util.List.of(), 10_000_000, 10_000_000)) {
             // Start processor
-            JsonToArrowConverter converter = new JsonToArrowConverter(APPLICATION_ID, APPLICATION_NAME, APPLICATION_HOST);
+            JsonToArrowConverter converter = new JsonToArrowConverter();
             LogTailToArrowProcessor processor = new LogTailToArrowProcessor(tempDir.toString(), "*.log", converter, sender, 100);
             processor.start();
             // Verify ingestion via DuckDB
@@ -110,8 +107,8 @@ class LogTailToArrowProcessorTest {
         // two correct logs in logFile
         runLogGeneratorWithFile(logFile);
         runLogGeneratorWithFile(logFile);
-        try (HttpProducer sender = new HttpProducer(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(5), 1,  2048, Duration.ofMillis(200), 3, 1000, java.util.List.of(), java.util.List.of(), 10_000_000, 10_000_000)) {
-            JsonToArrowConverter converter = new JsonToArrowConverter(APPLICATION_ID, APPLICATION_NAME, APPLICATION_HOST);
+        try (HttpFlightProducer sender = new HttpFlightProducer(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(5), 1,  2048, Duration.ofMillis(200), 3, 1000, java.util.List.of(), java.util.List.of(), 10_000_000, 10_000_000)) {
+            JsonToArrowConverter converter = new JsonToArrowConverter();
             LogTailToArrowProcessor processor = new LogTailToArrowProcessor(tempDir.toString(), "*.log", converter, sender, 100);
             processor.start();
             await().ignoreExceptions().untilAsserted(() -> {
@@ -130,8 +127,8 @@ class LogTailToArrowProcessorTest {
         Path logFile = tempDir.resolve("empty.log");
         Files.createFile(logFile);
 
-        try (HttpProducer sender = new HttpProducer(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(3), 1, 2048, Duration.ofMillis(200), 3, 1000, java.util.List.of(), java.util.List.of(), 10_000_000, 10_000_000)) {
-            JsonToArrowConverter converter = new JsonToArrowConverter(APPLICATION_ID, APPLICATION_NAME, APPLICATION_HOST);
+        try (HttpFlightProducer sender = new HttpFlightProducer(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(3), 1, 2048, Duration.ofMillis(200), 3, 1000, java.util.List.of(), java.util.List.of(), 10_000_000, 10_000_000)) {
+            JsonToArrowConverter converter = new JsonToArrowConverter();
             LogTailToArrowProcessor processor = new LogTailToArrowProcessor(tempDir.toString(), "*.log", converter, sender, 100);
             processor.start();
             // Wait briefly and assert file does NOT exist
@@ -148,8 +145,8 @@ class LogTailToArrowProcessorTest {
         Files.createDirectories(Path.of(warehouse.toString(), targetDir));
         tempDir.resolve("missing.log"); // not created
 
-        try (HttpProducer sender = new HttpProducer(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(3), 1, 2048, Duration.ofMillis(200), 3, 1000, java.util.List.of(), java.util.List.of(), 10_000_000, 10_000_000)) {
-            JsonToArrowConverter converter = new JsonToArrowConverter(APPLICATION_ID, APPLICATION_NAME, APPLICATION_HOST);
+        try (HttpFlightProducer sender = new HttpFlightProducer(schema, "http://localhost:" + PORT, "admin", "admin", targetDir, Duration.ofSeconds(3), 1, 2048, Duration.ofMillis(200), 3, 1000, java.util.List.of(), java.util.List.of(), 10_000_000, 10_000_000)) {
+            JsonToArrowConverter converter = new JsonToArrowConverter();
             LogTailToArrowProcessor processor = new LogTailToArrowProcessor(tempDir.toString(), "*.log", converter, sender, 100);
             processor.start();
             // Just ensure no ingestion happens and no crash

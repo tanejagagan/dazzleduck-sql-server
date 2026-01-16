@@ -9,11 +9,6 @@ import java.util.Objects;
  * Use the builder pattern for flexible configuration.
  */
 public record MicrometerForwarderConfig(
-        // Application metadata
-        String applicationId,
-        String applicationName,
-        String applicationHost,
-
         // HTTP settings
         String baseUrl,
         String username,
@@ -39,9 +34,6 @@ public record MicrometerForwarderConfig(
         boolean enabled
 ) {
     public MicrometerForwarderConfig {
-        Objects.requireNonNull(applicationId, "applicationId must not be null");
-        Objects.requireNonNull(applicationName, "applicationName must not be null");
-        Objects.requireNonNull(applicationHost, "applicationHost must not be null");
         Objects.requireNonNull(baseUrl, "baseUrl must not be null");
         Objects.requireNonNull(username, "username must not be null");
         Objects.requireNonNull(password, "password must not be null");
@@ -58,9 +50,6 @@ public record MicrometerForwarderConfig(
     }
 
     public static final class Builder {
-        private String applicationId = "default-app";
-        private String applicationName = "DefaultApplication";
-        private String applicationHost = getDefaultHostname();
         private String baseUrl = "http://localhost:8081";
         private String username = "admin";
         private String password = "admin";
@@ -79,29 +68,6 @@ public record MicrometerForwarderConfig(
         private boolean enabled = true;
 
         private Builder() {
-        }
-
-        private static String getDefaultHostname() {
-            try {
-                return java.net.InetAddress.getLocalHost().getHostName();
-            } catch (java.net.UnknownHostException e) {
-                return "localhost";
-            }
-        }
-
-        public Builder applicationId(String applicationId) {
-            this.applicationId = Objects.requireNonNull(applicationId);
-            return this;
-        }
-
-        public Builder applicationName(String applicationName) {
-            this.applicationName = Objects.requireNonNull(applicationName);
-            return this;
-        }
-
-        public Builder applicationHost(String applicationHost) {
-            this.applicationHost = Objects.requireNonNull(applicationHost);
-            return this;
         }
 
         public Builder baseUrl(String baseUrl) {
@@ -192,9 +158,6 @@ public record MicrometerForwarderConfig(
 
         public MicrometerForwarderConfig build() {
             return new MicrometerForwarderConfig(
-                    applicationId,
-                    applicationName,
-                    applicationHost,
                     baseUrl,
                     username,
                     password,

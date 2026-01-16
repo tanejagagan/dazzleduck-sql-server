@@ -1,8 +1,6 @@
 package io.dazzleduck.sql.micrometer;
 
-import com.typesafe.config.Config;
-import com.typesafe.config.ConfigFactory;
-import io.dazzleduck.sql.client.HttpProducer;
+import io.dazzleduck.sql.client.HttpFlightProducer;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.micrometer.service.ArrowMicroMeterRegistry;
 import io.dazzleduck.sql.micrometer.util.ArrowFileWriterUtil;
@@ -33,24 +31,14 @@ class ArrowMicroMeterRegistryTest {
     private MockClock testClock;
     private static final Logger log = LoggerFactory.getLogger(ArrowMicroMeterRegistryTest.class);
     private File tempFile;
-    private String application_id;
-    private String application_name;
-    private String application_host;
     static Schema schema;
     @BeforeEach
     void setup() {
-
-        // Load test metadata EXACTLY like production
-        Config dazzConfig = ConfigFactory.load().getConfig("dazzleduck_micrometer");
-        application_id = dazzConfig.getString("application_id");
-        application_name = dazzConfig.getString("application_name");
-        application_host = dazzConfig.getString("application_host");
-
         testClock = new MockClock();
 
         schema = new Schema(java.util.List.of(new Field("timestamp", FieldType.nullable(new ArrowType.Utf8()), null)));
         ConnectionPool.execute("load arrow");
-        HttpProducer sender = new HttpProducer(
+        HttpFlightProducer sender = new HttpFlightProducer(
                 schema,
                 "http://localhost:8080",
                 "admin",
@@ -72,10 +60,7 @@ class ArrowMicroMeterRegistryTest {
         registry = new ArrowMicroMeterRegistry(
                 sender,
                 testClock,
-                Duration.ofSeconds(5),      // step interval
-                application_id,
-                application_name,
-                application_host
+                Duration.ofSeconds(5)       // step interval
         );
 
     }
@@ -96,10 +81,7 @@ class ArrowMicroMeterRegistryTest {
         try {
             ArrowFileWriterUtil.writeMetersToFile(
                     new ArrayList<>(registry.getMeters()),
-                    tempFile.getAbsolutePath(),
-                    application_id,
-                    application_name,
-                    application_host
+                    tempFile.getAbsolutePath()
             );
 
             TestUtils.isEqual(
@@ -146,10 +128,7 @@ class ArrowMicroMeterRegistryTest {
         try {
             ArrowFileWriterUtil.writeMetersToFile(
                     new ArrayList<>(registry.getMeters()),
-                    tempFile.getAbsolutePath(),
-                    application_id,
-                    application_name,
-                    application_host
+                    tempFile.getAbsolutePath()
             );
 
             TestUtils.isEqual(
@@ -171,10 +150,7 @@ class ArrowMicroMeterRegistryTest {
         try {
             ArrowFileWriterUtil.writeMetersToFile(
                     new ArrayList<>(registry.getMeters()),
-                    tempFile.getAbsolutePath(),
-                    application_id,
-                    application_name,
-                    application_host
+                    tempFile.getAbsolutePath()
             );
 
             TestUtils.isEqual(
@@ -198,10 +174,7 @@ class ArrowMicroMeterRegistryTest {
         try {
             ArrowFileWriterUtil.writeMetersToFile(
                     new ArrayList<>(registry.getMeters()),
-                    tempFile.getAbsolutePath(),
-                    application_id,
-                    application_name,
-                    application_host
+                    tempFile.getAbsolutePath()
             );
 
             TestUtils.isEqual(
@@ -261,10 +234,7 @@ class ArrowMicroMeterRegistryTest {
 
         ArrowFileWriterUtil.writeMetersToFile(
                 new ArrayList<>(registry.getMeters()),
-                file.getAbsolutePath(),
-                application_id,
-                application_name,
-                application_host
+                file.getAbsolutePath()
         );
 
         return file;

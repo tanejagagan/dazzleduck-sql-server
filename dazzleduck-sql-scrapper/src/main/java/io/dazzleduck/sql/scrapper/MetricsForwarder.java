@@ -1,6 +1,6 @@
 package io.dazzleduck.sql.scrapper;
 
-import io.dazzleduck.sql.client.HttpProducer;
+import io.dazzleduck.sql.client.HttpFlightProducer;
 import io.dazzleduck.sql.common.types.JavaRow;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
@@ -16,7 +16,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Forwards collected metrics to a remote server using HttpProducer from dazzleduck-sql-client.
+ * Forwards collected metrics to a remote server using HttpFlightProducer from dazzleduck-sql-client.
  * Metrics are sent as Apache Arrow streams with automatic batching and retry logic.
  */
 public class MetricsForwarder {
@@ -24,7 +24,7 @@ public class MetricsForwarder {
     private static final Logger log = LoggerFactory.getLogger(MetricsForwarder.class);
 
     private final CollectorProperties properties;
-    private final HttpProducer producer;
+    private final HttpFlightProducer producer;
     private final Schema arrowSchema;
 
     // Column indices in the schema
@@ -66,8 +66,8 @@ public class MetricsForwarder {
                 org.apache.arrow.vector.types.FloatingPointPrecision.DOUBLE)), null)
         ));
 
-        // Create HttpProducer with configuration from properties
-        this.producer = new HttpProducer(
+        // Create HttpFlightProducer with configuration from properties
+        this.producer = new HttpFlightProducer(
             arrowSchema,
             properties.getBaseUrl(),
             properties.getUsername(),
@@ -85,7 +85,7 @@ public class MetricsForwarder {
             properties.getMaxOnDiskSize()
         );
 
-        log.info("MetricsForwarder initialized with HttpProducer: serverUrl={}, path={}",
+        log.info("MetricsForwarder initialized with HttpFlightProducer: serverUrl={}, path={}",
             properties.getServerUrl(), properties.getPath());
     }
 
