@@ -1,8 +1,9 @@
-package io.dazzleduck.sql.common.auth;
+package io.dazzleduck.sql.commons.auth;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigObject;
-import io.dazzleduck.sql.common.util.ConfigUtils;
+import io.dazzleduck.sql.commons.authorization.UnauthorizedException;
+import io.dazzleduck.sql.common.ConfigConstants;
 import io.jsonwebtoken.io.Decoders;
 import io.jsonwebtoken.security.Keys;
 
@@ -63,8 +64,8 @@ public interface Validator {
         List<? extends ConfigObject> users = config.getObjectList("users");
         final Map<String, byte[]> passwords = new HashMap<>();
         users.forEach( o -> {
-            String name = o.toConfig().getString(ConfigUtils.USERNAME_KEY);
-            String password = o.toConfig().getString(ConfigUtils.PASSWORD_KEY);
+            String name = o.toConfig().getString(ConfigConstants.USERNAME_KEY);
+            String password = o.toConfig().getString(ConfigConstants.PASSWORD_KEY);
             passwords.put(name, hash(password));
         });
         return (username, password) -> {

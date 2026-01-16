@@ -1,8 +1,9 @@
 package io.dazzleduck.sql.login;
 
 import com.typesafe.config.ConfigFactory;
-import io.dazzleduck.sql.common.auth.Validator;
-import io.dazzleduck.sql.common.util.ConfigUtils;
+import io.dazzleduck.sql.commons.auth.Validator;
+import io.dazzleduck.sql.common.ConfigConstants;
+import io.dazzleduck.sql.commons.util.CommandLineConfigUtil;
 import io.helidon.config.Config;
 import io.helidon.logging.common.LogConfig;
 import io.helidon.webserver.WebServer;
@@ -32,15 +33,15 @@ public class Main {
 
         // initialize global config from default configuration
         Config helidonConfig = Config.create();
-        var commandlineConfig = io.dazzleduck.sql.common.util.ConfigUtils.loadCommandLineConfig(args).config();
+        var commandlineConfig = CommandLineConfigUtil.loadCommandLineConfig(args).config();
         var appConfig = commandlineConfig.withFallback(ConfigFactory.load()).getConfig(CONFIG_PATH);
         var httpConfig =  appConfig.getConfig(CONFIG_HTTP);
-        var port = httpConfig.getInt(ConfigUtils.PORT_KEY);
-        var host = httpConfig.getString(ConfigUtils.HOST_KEY);
-        var secretKey = Validator.fromBase64String(appConfig.getString(ConfigUtils.SECRET_KEY_KEY));
+        var port = httpConfig.getInt(ConfigConstants.PORT_KEY);
+        var host = httpConfig.getString(ConfigConstants.HOST_KEY);
+        var secretKey = Validator.fromBase64String(appConfig.getString(ConfigConstants.SECRET_KEY_KEY));
         var jwtExpiration = appConfig.getDuration(CONFIG_JWT_EXPIRATION);
         WebServer server = WebServer.builder()
-                .config(helidonConfig.get(ConfigUtils.CONFIG_PATH))
+                .config(helidonConfig.get(ConfigConstants.CONFIG_PATH))
                 .config(helidonConfig.get(CONFIG_FLIGHT_SQL))
                 .routing(routing -> {
                     var b = routing

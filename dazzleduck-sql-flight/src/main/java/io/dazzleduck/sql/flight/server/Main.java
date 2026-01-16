@@ -2,10 +2,11 @@ package io.dazzleduck.sql.flight.server;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
-import io.dazzleduck.sql.common.ConfigBasedProvider;
-import io.dazzleduck.sql.common.ConfigBasedStartupScriptProvider;
-import io.dazzleduck.sql.common.StartupScriptProvider;
-import io.dazzleduck.sql.common.util.ConfigUtils;
+import io.dazzleduck.sql.commons.ConfigBasedProvider;
+import io.dazzleduck.sql.flight.ConfigBasedStartupScriptProvider;
+import io.dazzleduck.sql.flight.StartupScriptProvider;
+import io.dazzleduck.sql.common.ConfigConstants;
+import io.dazzleduck.sql.commons.util.CommandLineConfigUtil;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceJWTTokenAuthenticator;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceServerCallHeaderAuthMiddleware;
@@ -22,7 +23,7 @@ import java.nio.file.Paths;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import static io.dazzleduck.sql.common.util.ConfigUtils.CONFIG_PATH;
+import static io.dazzleduck.sql.common.ConfigConstants.CONFIG_PATH;
 
 
 public class Main {
@@ -32,7 +33,7 @@ public class Main {
     public static void main(String[] args) {
         try {
             printBanner();
-            var commandLineConfig = ConfigUtils.loadCommandLineConfig(args).config();
+            var commandLineConfig = CommandLineConfigUtil.loadCommandLineConfig(args).config();
             var config = commandLineConfig.withFallback(ConfigFactory.load()).getConfig(CONFIG_PATH);
             start(config);
         } catch (com.typesafe.config.ConfigException.Missing e) {
@@ -55,7 +56,7 @@ public class Main {
     }
 
     public static FlightServer createServer(String[] args) throws Exception {
-        var commandLineConfig = ConfigUtils.loadCommandLineConfig(args).config();
+        var commandLineConfig = CommandLineConfigUtil.loadCommandLineConfig(args).config();
         var config = commandLineConfig.withFallback(ConfigFactory.load()).getConfig(CONFIG_PATH);
         return createServer(config);
     }
@@ -109,10 +110,10 @@ public class Main {
      */
     public static FlightServer createServer(Config config, DuckDBFlightSqlProducer producer, BufferAllocator allocator) throws Exception {
         // Validate and load configuration
-        boolean useEncryption = config.getBoolean(ConfigUtils.FLIGHT_SQL_USE_ENCRYPTION_KEY);
-        String keystoreLocation = config.getString(ConfigUtils.KEYSTORE_KEY);
-        String serverCertLocation = config.getString(ConfigUtils.SERVER_CERT_KEY);
-        String warehousePath = ConfigUtils.getWarehousePath(config);
+        boolean useEncryption = config.getBoolean(ConfigConstants.FLIGHT_SQL_USE_ENCRYPTION_KEY);
+        String keystoreLocation = config.getString(ConfigConstants.KEYSTORE_KEY);
+        String serverCertLocation = config.getString(ConfigConstants.SERVER_CERT_KEY);
+        String warehousePath = ConfigConstants.getWarehousePath(config);
 
         // Validate warehouse path
         validateWarehousePath(config, warehousePath);

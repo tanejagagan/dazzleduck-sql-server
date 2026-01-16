@@ -2,8 +2,8 @@ package io.dazzleduck.sql.client;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.dazzleduck.sql.login.LoginRequest;
-import io.dazzleduck.sql.login.LoginResponse;
+import io.dazzleduck.sql.common.auth.LoginRequest;
+import io.dazzleduck.sql.common.auth.LoginResponse;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

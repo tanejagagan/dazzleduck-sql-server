@@ -3,11 +3,12 @@ package io.dazzleduck.sql.runtime;
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 
-import static io.dazzleduck.sql.common.util.ConfigUtils.CONFIG_PATH;
-import io.dazzleduck.sql.common.ConfigBasedProvider;
-import io.dazzleduck.sql.common.ConfigBasedStartupScriptProvider;
-import io.dazzleduck.sql.common.StartupScriptProvider;
-import io.dazzleduck.sql.common.util.ConfigUtils;
+import static io.dazzleduck.sql.common.ConfigConstants.CONFIG_PATH;
+import io.dazzleduck.sql.commons.ConfigBasedProvider;
+import io.dazzleduck.sql.commons.util.CommandLineConfigUtil;
+import io.dazzleduck.sql.flight.ConfigBasedStartupScriptProvider;
+import io.dazzleduck.sql.flight.StartupScriptProvider;
+import io.dazzleduck.sql.common.ConfigConstants;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.flight.server.DuckDBFlightSqlProducer;
 import io.dazzleduck.sql.flight.server.FlightSqlProducerFactory;
@@ -42,13 +43,13 @@ public class Runtime implements Closeable {
     }
 
     public static Runtime start(String[] args) throws Exception {
-        Config overrides = ConfigUtils.loadCommandLineConfig(args).config();
+        Config overrides = CommandLineConfigUtil.loadCommandLineConfig(args).config();
         Config config = overrides.withFallback(ConfigFactory.load()).getConfig(CONFIG_PATH);
         return start(config);
     }
 
     public static Runtime start(Config config) throws Exception {
-        String warehousePath = ConfigUtils.getWarehousePath(config);
+        String warehousePath = ConfigConstants.getWarehousePath(config);
         validateWarehousePath(warehousePath);
 
         List<String> networkingModes = config.getStringList("networking_modes");

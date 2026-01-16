@@ -3,7 +3,7 @@ package io.dazzleduck.sql.commons.authorization;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.dazzleduck.sql.common.Headers;
-import io.dazzleduck.sql.common.auth.UnauthorizedException;
+import io.dazzleduck.sql.commons.authorization.UnauthorizedException;
 import io.dazzleduck.sql.commons.ExpressionConstants;
 import io.dazzleduck.sql.commons.Transformations;
 

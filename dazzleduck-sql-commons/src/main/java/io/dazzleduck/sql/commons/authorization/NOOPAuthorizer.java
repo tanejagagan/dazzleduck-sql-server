@@ -1,7 +1,7 @@
 package io.dazzleduck.sql.commons.authorization;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import io.dazzleduck.sql.common.auth.UnauthorizedException;
+import io.dazzleduck.sql.commons.authorization.UnauthorizedException;
 
 import java.util.Map;
 

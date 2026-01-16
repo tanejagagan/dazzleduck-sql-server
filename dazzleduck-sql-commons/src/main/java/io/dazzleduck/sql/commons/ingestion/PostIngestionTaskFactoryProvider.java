@@ -1,7 +1,7 @@
 package io.dazzleduck.sql.commons.ingestion;
 
 import com.typesafe.config.Config;
-import io.dazzleduck.sql.common.ConfigBasedProvider;
+import io.dazzleduck.sql.commons.ConfigBasedProvider;
 
 public interface PostIngestionTaskFactoryProvider extends ConfigBasedProvider {
 

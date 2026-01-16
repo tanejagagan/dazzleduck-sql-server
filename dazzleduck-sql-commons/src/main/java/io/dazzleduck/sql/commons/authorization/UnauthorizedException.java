@@ -1,4 +1,4 @@
-package io.dazzleduck.sql.common.auth;
+package io.dazzleduck.sql.commons.authorization;
 
 public class UnauthorizedException extends Exception {
     final String msg;

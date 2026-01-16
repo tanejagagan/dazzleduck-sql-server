@@ -1,6 +1,5 @@
-package io.dazzleduck.sql.commons.types;
+package io.dazzleduck.sql.common.types;
 
-import io.dazzleduck.sql.common.types.JavaRow;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.*;
 import org.apache.arrow.vector.types.DateUnit;

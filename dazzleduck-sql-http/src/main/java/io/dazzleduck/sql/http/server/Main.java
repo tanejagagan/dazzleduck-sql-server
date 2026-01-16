@@ -3,8 +3,9 @@ package io.dazzleduck.sql.http.server;
 
 
 import com.typesafe.config.ConfigFactory;
-import io.dazzleduck.sql.common.auth.Validator;
-import io.dazzleduck.sql.common.util.ConfigUtils;
+import io.dazzleduck.sql.commons.auth.Validator;
+import io.dazzleduck.sql.common.ConfigConstants;
+import io.dazzleduck.sql.commons.util.CommandLineConfigUtil;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.flight.server.DuckDBFlightSqlProducer;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
@@ -23,7 +24,7 @@ import java.nio.file.Files;
 import java.util.List;
 import java.util.UUID;
 
-import static io.dazzleduck.sql.common.util.ConfigUtils.CONFIG_PATH;
+import static io.dazzleduck.sql.common.ConfigConstants.CONFIG_PATH;
 
 
 /**
@@ -46,10 +47,10 @@ public class Main {
     private static final String ENDPOINT_UI = API_VERSION_PREFIX + "/ui";
 
     // Configuration keys
-    private static final String CONFIG_HTTP = ConfigUtils.HTTP_PREFIX;
-    private static final String CONFIG_JWT_EXPIRATION = ConfigUtils.JWT_TOKEN_EXPIRATION_KEY;
-    private static final String CONFIG_ALLOW_ORIGIN = ConfigUtils.ALLOW_ORIGIN_KEY;
-    private static final String CONFIG_FLIGHT_SQL = ConfigUtils.FLIGHT_SQL_PREFIX;
+    private static final String CONFIG_HTTP = ConfigConstants.HTTP_PREFIX;
+    private static final String CONFIG_JWT_EXPIRATION = ConfigConstants.JWT_TOKEN_EXPIRATION_KEY;
+    private static final String CONFIG_ALLOW_ORIGIN = ConfigConstants.ALLOW_ORIGIN_KEY;
+    private static final String CONFIG_FLIGHT_SQL = ConfigConstants.FLIGHT_SQL_PREFIX;
 
     // CORS configuration
     private static final String CORS_DEFAULT_ALLOW_ORIGIN = "*";
@@ -59,8 +60,8 @@ public class Main {
     private static final String HEADER_AUTHORIZATION = "Authorization";
 
     // Authentication types
-    private static final String AUTH_NONE = ConfigUtils.AUTH_NONE;
-    private static final String AUTH_JWT = ConfigUtils.AUTH_JWT;
+    private static final String AUTH_NONE = ConfigConstants.AUTH_NONE;
+    private static final String AUTH_JWT = ConfigConstants.AUTH_JWT;
 
     // HTTP protocols
     private static final String PROTOCOL_HTTP = "http";
@@ -98,7 +99,7 @@ public class Main {
     public static void main(String[] args) {
         try {
             printBanner();
-            var commandlineConfig = io.dazzleduck.sql.common.util.ConfigUtils.loadCommandLineConfig(args).config();
+            var commandlineConfig = CommandLineConfigUtil.loadCommandLineConfig(args).config();
             var appConfig = commandlineConfig.withFallback(ConfigFactory.load()).getConfig(CONFIG_PATH);
             start(appConfig);
         } catch (com.typesafe.config.ConfigException.Missing e) {
@@ -126,10 +127,10 @@ public class Main {
 
         try {
             // Validate and load configuration
-            String warehousePath = ConfigUtils.getWarehousePath(appConfig);
+            String warehousePath = ConfigConstants.getWarehousePath(appConfig);
             validateWarehousePath(warehousePath);
 
-            String base64SecretKey = appConfig.getString(ConfigUtils.SECRET_KEY_KEY);
+            String base64SecretKey = appConfig.getString(ConfigConstants.SECRET_KEY_KEY);
             validateSecretKey(base64SecretKey);
 
             var tempWriteDir = DuckDBFlightSqlProducer.getTempWriteDir(appConfig);
@@ -138,10 +139,10 @@ public class Main {
             AccessMode accessMode = DuckDBFlightSqlProducer.getAccessMode(appConfig);
 
             var httpConfig = appConfig.getConfig(CONFIG_HTTP);
-            var port = httpConfig.getInt(ConfigUtils.PORT_KEY);
+            var port = httpConfig.getInt(ConfigConstants.PORT_KEY);
             validatePort(port);
 
-            var host = httpConfig.getString(ConfigUtils.HOST_KEY);
+            var host = httpConfig.getString(ConfigConstants.HOST_KEY);
 
             logger.info("Starting server with configuration:");
             logger.info("  Host: {}", host);
@@ -274,10 +275,10 @@ public class Main {
         LogConfig.configureRuntime();
         Config helidonConfig = Config.create();
         var httpConfig = appConfig.getConfig(CONFIG_HTTP);
-        var port = httpConfig.getInt(ConfigUtils.PORT_KEY);
-        var host = httpConfig.getString(ConfigUtils.HOST_KEY);
-        var auth = httpConfig.hasPath(ConfigUtils.AUTHENTICATION_KEY) ? httpConfig.getString(ConfigUtils.AUTHENTICATION_KEY) : AUTH_NONE;
-       String base64SecretKey = appConfig.getString(ConfigUtils.SECRET_KEY_KEY);
+        var port = httpConfig.getInt(ConfigConstants.PORT_KEY);
+        var host = httpConfig.getString(ConfigConstants.HOST_KEY);
+        var auth = httpConfig.hasPath(ConfigConstants.AUTHENTICATION_KEY) ? httpConfig.getString(ConfigConstants.AUTHENTICATION_KEY) : AUTH_NONE;
+       String base64SecretKey = appConfig.getString(ConfigConstants.SECRET_KEY_KEY);
         var secretKey = Validator.fromBase64String(base64SecretKey);
         String location = PROTOCOL_HTTP + "://%s:%s".formatted(host, port);
         AccessMode accessMode = DuckDBFlightSqlProducer.getAccessMode(appConfig);
@@ -290,8 +291,8 @@ public class Main {
                         .build())
                 .build();
         HttpService loginService;
-        if (appConfig.hasPath(ConfigUtils.LOGIN_URL_KEY)) {
-            var proxyUrl = appConfig.getString(ConfigUtils.LOGIN_URL_KEY);
+        if (appConfig.hasPath(ConfigConstants.LOGIN_URL_KEY)) {
+            var proxyUrl = appConfig.getString(ConfigConstants.LOGIN_URL_KEY);
             loginService = new ProxyLoginService(proxyUrl);
         } else {
             loginService = new LoginService(appConfig, secretKey, jwtExpiration);
@@ -303,7 +304,7 @@ public class Main {
         boolean requiresJwt = AUTH_JWT.equals(auth) || accessMode == AccessMode.RESTRICTED;
 
         WebServer server = WebServer.builder()
-                .config(helidonConfig.get(ConfigUtils.CONFIG_PATH))
+                .config(helidonConfig.get(ConfigConstants.CONFIG_PATH))
                 .config(helidonConfig.get(CONFIG_FLIGHT_SQL))
                 .routing(routing -> {
                     routing.register(cors);

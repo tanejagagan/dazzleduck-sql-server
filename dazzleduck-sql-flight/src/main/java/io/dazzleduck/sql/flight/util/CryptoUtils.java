@@ -1,4 +1,4 @@
-package io.dazzleduck.sql.common.util;
+package io.dazzleduck.sql.flight.util;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;

@@ -1,7 +1,7 @@
 package io.dazzleduck.sql.micrometer;
 
 import com.typesafe.config.ConfigFactory;
-import io.dazzleduck.sql.common.util.ConfigUtils;
+import io.dazzleduck.sql.common.ConfigConstants;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.dazzleduck.sql.micrometer.metrics.MetricsRegistryFactory;
@@ -73,7 +73,7 @@ public class HttpMetricIntegrationTest {
                 "post_ingestion_task_factory_provider.path_to_table_mapping.0.schema_name=" + SCHEMA_NAME,
                 "post_ingestion_task_factory_provider.path_to_table_mapping.0.base_path=" + INGEST_PATH,
                 // Startup script
-                "startup_script_provider.class=io.dazzleduck.sql.common.ConfigBasedStartupScriptProvider",
+                "startup_script_provider.class=io.dazzleduck.sql.flight.ConfigBasedStartupScriptProvider",
                 "startup_script_provider.content=" + STARTUP_SCRIPT
         );
         Files.createDirectories(Path.of(server.getWarehousePath(), INGEST_PATH));
@@ -118,7 +118,7 @@ public class HttpMetricIntegrationTest {
     void cleanup() throws Exception {
         if (server != null) server.close();
         ConnectionPool.execute("DETACH " + CATALOG_NAME);
-        String warehousePath = ConfigUtils.getWarehousePath(ConfigFactory.load().getConfig(ConfigUtils.CONFIG_PATH));
+        String warehousePath = ConfigConstants.getWarehousePath(ConfigFactory.load().getConfig(ConfigConstants.CONFIG_PATH));
         Path path = Path.of(warehousePath);
         if (Files.exists(path)) {
             Files.walk(path).sorted(Comparator.reverseOrder())

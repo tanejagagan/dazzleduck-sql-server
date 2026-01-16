@@ -3,7 +3,7 @@ package io.dazzleduck.sql.http.server;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.util.TestConstants;
 import io.dazzleduck.sql.flight.server.StatementHandle;
-import io.dazzleduck.sql.login.LoginRequest;
+import io.dazzleduck.sql.common.auth.LoginRequest;
 import io.helidon.http.HeaderNames;
 import io.helidon.http.HeaderValues;
 import org.apache.arrow.memory.RootAllocator;

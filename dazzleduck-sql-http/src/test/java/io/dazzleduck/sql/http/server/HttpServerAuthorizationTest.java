@@ -1,13 +1,13 @@
 package io.dazzleduck.sql.http.server;
 
 import io.dazzleduck.sql.common.Headers;
-import io.dazzleduck.sql.common.util.ConfigUtils;
+import io.dazzleduck.sql.common.ConfigConstants;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.authorization.AccessType;
 import io.dazzleduck.sql.commons.authorization.SqlAuthorizer;
 import io.dazzleduck.sql.commons.util.TestUtils;
-import io.dazzleduck.sql.login.LoginRequest;
-import io.dazzleduck.sql.login.LoginResponse;
+import io.dazzleduck.sql.common.auth.LoginRequest;
+import io.dazzleduck.sql.common.auth.LoginResponse;
 import io.helidon.http.HeaderNames;
 import io.helidon.http.HeaderValues;
 import org.apache.arrow.memory.RootAllocator;
@@ -38,7 +38,7 @@ public class HttpServerAuthorizationTest extends HttpServerTestBase {
         initPort();
         startServer(
                 "--conf", "dazzleduck_server.access_mode=RESTRICTED",
-                "--conf", "dazzleduck_server.http.%s=jwt".formatted(ConfigUtils.AUTHENTICATION_KEY));
+                "--conf", "dazzleduck_server.http.%s=jwt".formatted(ConfigConstants.AUTHENTICATION_KEY));
         ConnectionPool.execute("CREATE TABLE auth_test(id INTEGER, name STRING, city STRING, age INTEGER)");
         ConnectionPool.execute("INSERT INTO auth_test VALUES (1, 'shivam', 'chhindwara', 21), (2, 'hariom', 'delhi', 22), (3, 'piyush', 'bhopal', 21)");
     }

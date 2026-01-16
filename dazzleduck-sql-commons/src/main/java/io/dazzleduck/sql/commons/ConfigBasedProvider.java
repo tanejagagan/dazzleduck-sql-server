@@ -1,4 +1,4 @@
-package io.dazzleduck.sql.common;
+package io.dazzleduck.sql.commons;
 
 import com.typesafe.config.Config;
 

@@ -4,7 +4,8 @@ import com.typesafe.config.ConfigFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import io.dazzleduck.sql.common.Headers;
-import io.dazzleduck.sql.common.util.ConfigUtils;
+import io.dazzleduck.sql.common.ConfigConstants;
+import io.dazzleduck.sql.commons.util.CommandLineConfigUtil;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.ingestion.NOOPPostIngestionTaskFactoryProvider;
 import io.dazzleduck.sql.commons.util.TestUtils;
@@ -131,9 +132,9 @@ public interface FlightTestUtils {
         var sqlClient = new FlightSqlClient(FlightClient.builder(clientAllocator, flightServer.getLocation())
                 .intercept(AuthUtils.createClientMiddlewareFactory(user, password, clientHeaders))
                 .build());
-        var commandLineConfig = ConfigUtils.loadCommandLineConfig(confOverload).config();
-        var serverconfig = commandLineConfig.getConfig(ConfigUtils.CONFIG_PATH);
-        return new ServerClient(flightServer, sqlClient, clientAllocator, ConfigUtils.getWarehousePath(serverconfig));
+        var commandLineConfig = CommandLineConfigUtil.loadCommandLineConfig(confOverload).config();
+        var serverconfig = commandLineConfig.getConfig(ConfigConstants.CONFIG_PATH);
+        return new ServerClient(flightServer, sqlClient, clientAllocator, ConfigConstants.getWarehousePath(serverconfig));
     }
 
     static void testQuery(String testQuery, FlightSqlClient sqlClient, BufferAllocator clientAllocator) throws Exception {

@@ -2,7 +2,7 @@ package io.dazzleduck.sql.micrometer.metrics;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
-import io.dazzleduck.sql.common.util.ConfigUtils;
+import io.dazzleduck.sql.common.ConfigConstants;
 import io.dazzleduck.sql.micrometer.MicrometerForwarder;
 import io.dazzleduck.sql.micrometer.config.MicrometerForwarderConfig;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -69,25 +69,25 @@ public final class MetricsRegistryFactory {
      * @return A configured MicrometerForwarderConfig
      */
     public static MicrometerForwarderConfig createConfig() {
-        Config http = config.getConfig(ConfigUtils.HTTP_PREFIX);
+        Config http = config.getConfig(ConfigConstants.HTTP_PREFIX);
 
         return MicrometerForwarderConfig.builder()
-                .baseUrl(http.getString(ConfigUtils.BASE_URL_KEY))
-                .username(http.getString(ConfigUtils.USERNAME_KEY))
-                .password(http.getString(ConfigUtils.PASSWORD_KEY))
-                .targetPath(http.getString(ConfigUtils.TARGET_PATH_KEY))
-                .httpClientTimeout(Duration.ofMillis(http.getLong(ConfigUtils.HTTP_CLIENT_TIMEOUT_MS_KEY)))
-                .stepInterval(Duration.ofMillis(config.getLong(ConfigUtils.STEP_INTERVAL_MS_KEY)))
-                .minBatchSize(config.getLong(ConfigUtils.MIN_BATCH_SIZE_KEY))
-                .maxBatchSize(config.getLong(ConfigUtils.MAX_BATCH_SIZE_KEY))
-                .maxSendInterval(Duration.ofMillis(config.getLong(ConfigUtils.MAX_SEND_INTERVAL_MS_KEY)))
-                .maxInMemorySize(config.getLong(ConfigUtils.MAX_IN_MEMORY_BYTES_KEY))
-                .maxOnDiskSize(config.getLong(ConfigUtils.MAX_ON_DISK_BYTES_KEY))
-                .retryCount(config.getInt(ConfigUtils.RETRY_COUNT_KEY))
-                .retryIntervalMillis(config.getLong(ConfigUtils.RETRY_INTERVAL_MS_KEY))
-                .projections(config.getStringList(ConfigUtils.PROJECTIONS_KEY))
-                .partitionBy(config.getStringList(ConfigUtils.PARTITION_BY_KEY))
-                .enabled(config.getBoolean(ConfigUtils.ENABLED_KEY))
+                .baseUrl(http.getString(ConfigConstants.BASE_URL_KEY))
+                .username(http.getString(ConfigConstants.USERNAME_KEY))
+                .password(http.getString(ConfigConstants.PASSWORD_KEY))
+                .targetPath(http.getString(ConfigConstants.TARGET_PATH_KEY))
+                .httpClientTimeout(Duration.ofMillis(http.getLong(ConfigConstants.HTTP_CLIENT_TIMEOUT_MS_KEY)))
+                .stepInterval(Duration.ofMillis(config.getLong(ConfigConstants.STEP_INTERVAL_MS_KEY)))
+                .minBatchSize(config.getLong(ConfigConstants.MIN_BATCH_SIZE_KEY))
+                .maxBatchSize(config.getLong(ConfigConstants.MAX_BATCH_SIZE_KEY))
+                .maxSendInterval(Duration.ofMillis(config.getLong(ConfigConstants.MAX_SEND_INTERVAL_MS_KEY)))
+                .maxInMemorySize(config.getLong(ConfigConstants.MAX_IN_MEMORY_BYTES_KEY))
+                .maxOnDiskSize(config.getLong(ConfigConstants.MAX_ON_DISK_BYTES_KEY))
+                .retryCount(config.getInt(ConfigConstants.RETRY_COUNT_KEY))
+                .retryIntervalMillis(config.getLong(ConfigConstants.RETRY_INTERVAL_MS_KEY))
+                .projections(config.getStringList(ConfigConstants.PROJECTIONS_KEY))
+                .partitionBy(config.getStringList(ConfigConstants.PARTITION_BY_KEY))
+                .enabled(config.getBoolean(ConfigConstants.ENABLED_KEY))
                 .build();
     }
 }

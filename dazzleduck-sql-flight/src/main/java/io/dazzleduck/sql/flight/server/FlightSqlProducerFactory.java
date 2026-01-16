@@ -1,8 +1,8 @@
 package io.dazzleduck.sql.flight.server;
 
 import com.typesafe.config.Config;
-import io.dazzleduck.sql.common.ConfigBasedProvider;
-import io.dazzleduck.sql.common.util.ConfigUtils;
+import io.dazzleduck.sql.commons.ConfigBasedProvider;
+import io.dazzleduck.sql.common.ConfigConstants;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactory;
 import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactoryProvider;
@@ -126,9 +126,9 @@ public final class FlightSqlProducerFactory {
             this.location = readLocationFromConfig();
 
             // Core settings
-            this.warehousePath = ConfigUtils.getWarehousePath(config);
-            this.secretKey = config.getString(ConfigUtils.SECRET_KEY_KEY);
-            this.producerId = config.getString(ConfigUtils.PRODUCER_ID_KEY);
+            this.warehousePath = ConfigConstants.getWarehousePath(config);
+            this.secretKey = config.getString(ConfigConstants.SECRET_KEY_KEY);
+            this.producerId = config.getString(ConfigConstants.PRODUCER_ID_KEY);
 
             // Access mode
             this.accessMode = DuckDBFlightSqlProducer.getAccessMode(config);
@@ -141,10 +141,10 @@ public final class FlightSqlProducerFactory {
             }
 
             // Query timeout (required)
-            if (!config.hasPath(ConfigUtils.QUERY_TIMEOUT_MS_KEY)) {
-                throw new IllegalArgumentException("Required configuration missing: " + ConfigUtils.QUERY_TIMEOUT_MS_KEY);
+            if (!config.hasPath(ConfigConstants.QUERY_TIMEOUT_MS_KEY)) {
+                throw new IllegalArgumentException("Required configuration missing: " + ConfigConstants.QUERY_TIMEOUT_MS_KEY);
             }
-            this.queryTimeout = Duration.ofMillis(config.getLong(ConfigUtils.QUERY_TIMEOUT_MS_KEY));
+            this.queryTimeout = Duration.ofMillis(config.getLong(ConfigConstants.QUERY_TIMEOUT_MS_KEY));
 
             // Ingestion config
             this.ingestionConfig = loadIngestionConfig(config);
@@ -446,12 +446,12 @@ public final class FlightSqlProducerFactory {
         }
 
         private Location readLocationFromConfig() {
-            String host = config.hasPath(ConfigUtils.FLIGHT_SQL_HOST_KEY)
-                ? config.getString(ConfigUtils.FLIGHT_SQL_HOST_KEY) : "0.0.0.0";
-            int port = config.hasPath(ConfigUtils.FLIGHT_SQL_PORT_KEY)
-                ? config.getInt(ConfigUtils.FLIGHT_SQL_PORT_KEY) : 32010;
-            boolean useEncryption = config.hasPath(ConfigUtils.FLIGHT_SQL_USE_ENCRYPTION_KEY)
-                && config.getBoolean(ConfigUtils.FLIGHT_SQL_USE_ENCRYPTION_KEY);
+            String host = config.hasPath(ConfigConstants.FLIGHT_SQL_HOST_KEY)
+                ? config.getString(ConfigConstants.FLIGHT_SQL_HOST_KEY) : "0.0.0.0";
+            int port = config.hasPath(ConfigConstants.FLIGHT_SQL_PORT_KEY)
+                ? config.getInt(ConfigConstants.FLIGHT_SQL_PORT_KEY) : 32010;
+            boolean useEncryption = config.hasPath(ConfigConstants.FLIGHT_SQL_USE_ENCRYPTION_KEY)
+                && config.getBoolean(ConfigConstants.FLIGHT_SQL_USE_ENCRYPTION_KEY);
 
             return useEncryption
                 ? Location.forGrpcTls(host, port)
@@ -477,7 +477,7 @@ public final class FlightSqlProducerFactory {
         }
 
         private static IngestionConfig loadIngestionConfig(Config config) {
-            return IngestionConfig.fromConfig(config.getConfig(ConfigUtils.INGESTION_KEY));
+            return IngestionConfig.fromConfig(config.getConfig(ConfigConstants.INGESTION_KEY));
         }
 
         private static io.dazzleduck.sql.flight.FlightRecorder buildRecorder(String producerId) {
