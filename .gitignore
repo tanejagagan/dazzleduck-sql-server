@@ -1,5 +1,6 @@
 # Maven build output
 **/target/
+dependency-reduced-pom.xml
 
 # IDE files
 .idea/
@@ -19,3 +20,11 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.swp
+
+# Data files
+*.arrow
+*.ducklake
+
+# Node.js
+package-lock.json
+node_modules/
