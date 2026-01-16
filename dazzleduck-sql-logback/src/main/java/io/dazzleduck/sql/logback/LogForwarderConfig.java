@@ -1,6 +1,8 @@
 package io.dazzleduck.sql.logback;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
@@ -8,33 +10,50 @@ import java.util.Objects;
  * Configuration for LogForwarder.
  * Use the builder pattern for flexible configuration.
  */
-public record LogForwarderConfig(
-        // HTTP settings
-        String baseUrl,
-        String username,
-        String password,
-        String targetPath,
-        Duration httpClientTimeout,
+public final class LogForwarderConfig {
+    // HTTP settings
+    private final String baseUrl;
+    private final String username;
+    private final String password;
+    private final String targetPath;
+    private final Duration httpClientTimeout;
 
-        // Buffer settings
-        int maxBufferSize,
-        Duration pollInterval,
+    // Buffer settings
+    private final int maxBufferSize;
+    private final Duration pollInterval;
 
-        // Sender settings
-        long minBatchSize,
-        long maxBatchSize,
-        Duration maxSendInterval,
-        long maxInMemorySize,
-        long maxOnDiskSize,
-        int retryCount,
-        long retryIntervalMillis,
-        List<String> projections,
-        List<String> partitionBy,
+    // Sender settings
+    private final long minBatchSize;
+    private final long maxBatchSize;
+    private final Duration maxSendInterval;
+    private final long maxInMemorySize;
+    private final long maxOnDiskSize;
+    private final int retryCount;
+    private final long retryIntervalMillis;
+    private final List<String> projections;
+    private final List<String> partitionBy;
 
-        // Feature flags
-        boolean enabled
-) {
-    public LogForwarderConfig {
+    // Feature flags
+    private final boolean enabled;
+
+    public LogForwarderConfig(
+            String baseUrl,
+            String username,
+            String password,
+            String targetPath,
+            Duration httpClientTimeout,
+            int maxBufferSize,
+            Duration pollInterval,
+            long minBatchSize,
+            long maxBatchSize,
+            Duration maxSendInterval,
+            long maxInMemorySize,
+            long maxOnDiskSize,
+            int retryCount,
+            long retryIntervalMillis,
+            List<String> projections,
+            List<String> partitionBy,
+            boolean enabled) {
         Objects.requireNonNull(baseUrl, "baseUrl must not be null");
         Objects.requireNonNull(username, "username must not be null");
         Objects.requireNonNull(password, "password must not be null");
@@ -42,8 +61,147 @@ public record LogForwarderConfig(
         Objects.requireNonNull(httpClientTimeout, "httpClientTimeout must not be null");
         Objects.requireNonNull(pollInterval, "pollInterval must not be null");
         Objects.requireNonNull(maxSendInterval, "maxSendInterval must not be null");
-        projections = List.copyOf(projections);
-        partitionBy = List.copyOf(partitionBy);
+
+        this.baseUrl = baseUrl;
+        this.username = username;
+        this.password = password;
+        this.targetPath = targetPath;
+        this.httpClientTimeout = httpClientTimeout;
+        this.maxBufferSize = maxBufferSize;
+        this.pollInterval = pollInterval;
+        this.minBatchSize = minBatchSize;
+        this.maxBatchSize = maxBatchSize;
+        this.maxSendInterval = maxSendInterval;
+        this.maxInMemorySize = maxInMemorySize;
+        this.maxOnDiskSize = maxOnDiskSize;
+        this.retryCount = retryCount;
+        this.retryIntervalMillis = retryIntervalMillis;
+        this.projections = Collections.unmodifiableList(new ArrayList<>(projections));
+        this.partitionBy = Collections.unmodifiableList(new ArrayList<>(partitionBy));
+        this.enabled = enabled;
+    }
+
+    public String baseUrl() {
+        return baseUrl;
+    }
+
+    public String username() {
+        return username;
+    }
+
+    public String password() {
+        return password;
+    }
+
+    public String targetPath() {
+        return targetPath;
+    }
+
+    public Duration httpClientTimeout() {
+        return httpClientTimeout;
+    }
+
+    public int maxBufferSize() {
+        return maxBufferSize;
+    }
+
+    public Duration pollInterval() {
+        return pollInterval;
+    }
+
+    public long minBatchSize() {
+        return minBatchSize;
+    }
+
+    public long maxBatchSize() {
+        return maxBatchSize;
+    }
+
+    public Duration maxSendInterval() {
+        return maxSendInterval;
+    }
+
+    public long maxInMemorySize() {
+        return maxInMemorySize;
+    }
+
+    public long maxOnDiskSize() {
+        return maxOnDiskSize;
+    }
+
+    public int retryCount() {
+        return retryCount;
+    }
+
+    public long retryIntervalMillis() {
+        return retryIntervalMillis;
+    }
+
+    public List<String> projections() {
+        return projections;
+    }
+
+    public List<String> partitionBy() {
+        return partitionBy;
+    }
+
+    public boolean enabled() {
+        return enabled;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        LogForwarderConfig that = (LogForwarderConfig) o;
+        return maxBufferSize == that.maxBufferSize &&
+               minBatchSize == that.minBatchSize &&
+               maxBatchSize == that.maxBatchSize &&
+               maxInMemorySize == that.maxInMemorySize &&
+               maxOnDiskSize == that.maxOnDiskSize &&
+               retryCount == that.retryCount &&
+               retryIntervalMillis == that.retryIntervalMillis &&
+               enabled == that.enabled &&
+               Objects.equals(baseUrl, that.baseUrl) &&
+               Objects.equals(username, that.username) &&
+               Objects.equals(password, that.password) &&
+               Objects.equals(targetPath, that.targetPath) &&
+               Objects.equals(httpClientTimeout, that.httpClientTimeout) &&
+               Objects.equals(pollInterval, that.pollInterval) &&
+               Objects.equals(maxSendInterval, that.maxSendInterval) &&
+               Objects.equals(projections, that.projections) &&
+               Objects.equals(partitionBy, that.partitionBy);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(baseUrl, username, password, targetPath, httpClientTimeout,
+                maxBufferSize, pollInterval, minBatchSize, maxBatchSize, maxSendInterval,
+                maxInMemorySize, maxOnDiskSize, retryCount, retryIntervalMillis,
+                projections, partitionBy, enabled);
+    }
+
+    @Override
+    public String toString() {
+        return "LogForwarderConfig[" +
+               "baseUrl=" + baseUrl +
+               ", username=" + username +
+               ", password=***" +
+               ", targetPath=" + targetPath +
+               ", httpClientTimeout=" + httpClientTimeout +
+               ", maxBufferSize=" + maxBufferSize +
+               ", pollInterval=" + pollInterval +
+               ", minBatchSize=" + minBatchSize +
+               ", maxBatchSize=" + maxBatchSize +
+               ", maxSendInterval=" + maxSendInterval +
+               ", maxInMemorySize=" + maxInMemorySize +
+               ", maxOnDiskSize=" + maxOnDiskSize +
+               ", retryCount=" + retryCount +
+               ", retryIntervalMillis=" + retryIntervalMillis +
+               ", projections=" + projections +
+               ", partitionBy=" + partitionBy +
+               ", enabled=" + enabled +
+               "]";
     }
 
     public static Builder builder() {
@@ -65,8 +223,8 @@ public record LogForwarderConfig(
         private long maxOnDiskSize = 1024 * 1024 * 1024L; // 1 GB
         private int retryCount = 3;
         private long retryIntervalMillis = 1000; // 1 second
-        private List<String> projections = List.of();
-        private List<String> partitionBy = List.of();
+        private List<String> projections = Collections.emptyList();
+        private List<String> partitionBy = Collections.emptyList();
         private boolean enabled = true;
 
         private Builder() {

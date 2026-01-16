@@ -1,7 +1,5 @@
 package io.dazzleduck.sql.common.types;
 
-
-
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.types.DateUnit;
 import org.apache.arrow.vector.types.pojo.ArrowType;
@@ -24,31 +22,33 @@ public class VectorSchemaRootWriter {
         this.schema = schema;
     }
 
-    public void writeToVector(JavaRow[] rows, VectorSchemaRoot root) {
+    public VectorSchemaRoot writeToVector(JavaRow[] rows, VectorSchemaRoot root) {
         root.allocateNew();
         for (int i = 0; i < rows.length; i++) {
             for (int j = 0; j < functions.length; j++) {
-                var function = functions[j];
-                var vector = root.getVector(j);
+                VectorWriter function = functions[j];
+                org.apache.arrow.vector.FieldVector vector = root.getVector(j);
                 //noinspection unchecked
                 function.write(vector, i, rows[i].get(j));
             }
         }
         root.setRowCount(rows.length);
+        return root;
     }
 
-    public static io.dazzleduck.sql.common.types.VectorSchemaRootWriter of(Schema schema) {
+    public static VectorSchemaRootWriter of(Schema schema) {
         List<VectorWriter<?>> listOfFunctions = new ArrayList<>();
-        for (var field : schema.getFields()) {
+        for (Field field : schema.getFields()) {
             listOfFunctions.add(createWriter(field));
         }
-        return new io.dazzleduck.sql.common.types.VectorSchemaRootWriter(schema, listOfFunctions.toArray(new VectorWriter[0]));
+        return new VectorSchemaRootWriter(schema, listOfFunctions.toArray(new VectorWriter[0]));
     }
 
     private static VectorWriter<?> createWriter(Field field) {
-        var type = field.getType();
+        ArrowType type = field.getType();
         // ---------- Primitive types ----------
-        if (type instanceof ArrowType.Int intType) {
+        if (type instanceof ArrowType.Int) {
+            ArrowType.Int intType = (ArrowType.Int) type;
             if (intType.getBitWidth() == 32) return new VectorWriter.IntVectorWriter();
             else if (intType.getBitWidth() == 64) return new VectorWriter.BigVectorWriter();
             else throw new UnsupportedOperationException("Unsupported int bit width: " + intType.getBitWidth());
@@ -58,22 +58,25 @@ public class VectorSchemaRootWriter {
             return new VectorWriter.VarCharVectorWriter();
         } else if (type instanceof ArrowType.Timestamp) {
             return new VectorWriter.TimeStampMilliTZVectorWriter();
-        } else if (type instanceof ArrowType.Date dateType) {
+        } else if (type instanceof ArrowType.Date) {
+            ArrowType.Date dateType = (ArrowType.Date) type;
             if (dateType.getUnit() == DateUnit.DAY) return new VectorWriter.DateDayVectorWriter();
             else return new VectorWriter.DateMilliVectorVectorWriter();
-        }  else if (type instanceof ArrowType.Decimal decimalType) {
+        } else if (type instanceof ArrowType.Decimal) {
+            ArrowType.Decimal decimalType = (ArrowType.Decimal) type;
             if (decimalType.getBitWidth() == 128) return new VectorWriter.DecimalVectorWriter();
             else if (decimalType.getBitWidth() == 256) return new VectorWriter.Decimal256VectorWriter();
             else throw new UnsupportedOperationException("Unsupported decimal bit width: " + decimalType.getBitWidth());
         }
         // ---------- List type ----------
         else if (type instanceof ArrowType.List) {
-            var elementField = field.getChildren().get(0);
-            var elementType = elementField.getType();
+            Field elementField = field.getChildren().get(0);
+            ArrowType elementType = elementField.getType();
 
             ElementWriteFunction elementFunc;
 
-            if (elementType instanceof ArrowType.Int intType) {
+            if (elementType instanceof ArrowType.Int) {
+                ArrowType.Int intType = (ArrowType.Int) elementType;
                 elementFunc = intType.getBitWidth() == 32 ? ElementWriteFunction.INT : ElementWriteFunction.BIGINT;
             } else if (elementType instanceof ArrowType.FloatingPoint) {
                 elementFunc = ElementWriteFunction.DOUBLE;
@@ -88,14 +91,15 @@ public class VectorSchemaRootWriter {
 
         // ---------- Map type ----------
         else if (type instanceof ArrowType.Map) {
-            var structField = field.getChildren().get(0); // Struct inside Map
-            var keyField = structField.getChildren().get(0);
-            var valueField = structField.getChildren().get(1);
+            Field structField = field.getChildren().get(0); // Struct inside Map
+            Field keyField = structField.getChildren().get(0);
+            Field valueField = structField.getChildren().get(1);
 
             // Key function
             ElementWriteFunction keyFunc;
-            var keyType = keyField.getType();
-            if (keyType instanceof ArrowType.Int intType) {
+            ArrowType keyType = keyField.getType();
+            if (keyType instanceof ArrowType.Int) {
+                ArrowType.Int intType = (ArrowType.Int) keyType;
                 keyFunc = intType.getBitWidth() == 32 ? ElementWriteFunction.INT : ElementWriteFunction.BIGINT;
             } else if (keyType instanceof ArrowType.Utf8) {
                 keyFunc = ElementWriteFunction.VARCHAR;
@@ -105,8 +109,9 @@ public class VectorSchemaRootWriter {
 
             // Value function
             ElementWriteFunction valueFunc;
-            var valueType = valueField.getType();
-            if (valueType instanceof ArrowType.Int intType) {
+            ArrowType valueType = valueField.getType();
+            if (valueType instanceof ArrowType.Int) {
+                ArrowType.Int intType = (ArrowType.Int) valueType;
                 valueFunc = intType.getBitWidth() == 32 ? ElementWriteFunction.INT : ElementWriteFunction.BIGINT;
             } else if (valueType instanceof ArrowType.FloatingPoint) {
                 valueFunc = ElementWriteFunction.DOUBLE;

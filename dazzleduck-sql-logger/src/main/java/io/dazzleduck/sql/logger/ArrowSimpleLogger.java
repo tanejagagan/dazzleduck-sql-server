@@ -4,7 +4,7 @@ import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.client.HttpArrowProducer;
 import io.dazzleduck.sql.client.ArrowProducer;
-import io.dazzleduck.sql.common.util.ConfigUtils;
+import io.dazzleduck.sql.common.ConfigConstants;
 import io.dazzleduck.sql.common.types.JavaRow;
 import org.apache.arrow.vector.types.pojo.*;
 import org.slf4j.MDC;
@@ -120,24 +120,24 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
         // Set flag to prevent recursion
         creatingProducer.set(Boolean.TRUE);
         try {
-            Config http = config.getConfig(ConfigUtils.HTTP_PREFIX);
-            String targetPath = http.getString(ConfigUtils.TARGET_PATH_KEY);
+            Config http = config.getConfig(ConfigConstants.HTTP_PREFIX);
+            String targetPath = http.getString(ConfigConstants.TARGET_PATH_KEY);
             return new HttpArrowProducer(
                     schema,
-                    http.getString(ConfigUtils.BASE_URL_KEY),
-                    http.getString(ConfigUtils.USERNAME_KEY),
-                    http.getString(ConfigUtils.PASSWORD_KEY),
+                    http.getString(ConfigConstants.BASE_URL_KEY),
+                    http.getString(ConfigConstants.USERNAME_KEY),
+                    http.getString(ConfigConstants.PASSWORD_KEY),
                     targetPath,
-                    Duration.ofMillis(http.getLong(ConfigUtils.HTTP_CLIENT_TIMEOUT_MS_KEY)),
-                    config.getLong(ConfigUtils.MIN_BATCH_SIZE_KEY),
-                    config.getLong(ConfigUtils.MAX_BATCH_SIZE_KEY),
-                    Duration.ofMillis(config.getLong(ConfigUtils.MAX_SEND_INTERVAL_MS_KEY)),
-                    config.getInt(ConfigUtils.RETRY_COUNT_KEY),
-                    config.getLong(ConfigUtils.RETRY_INTERVAL_MS_KEY),
-                    config.getStringList(ConfigUtils.PROJECTIONS_KEY),
-                    config.getStringList(ConfigUtils.PARTITION_BY_KEY),
-                    config.getLong(ConfigUtils.MAX_IN_MEMORY_BYTES_KEY),
-                    config.getLong(ConfigUtils.MAX_ON_DISK_BYTES_KEY)
+                    Duration.ofMillis(http.getLong(ConfigConstants.HTTP_CLIENT_TIMEOUT_MS_KEY)),
+                    config.getLong(ConfigConstants.MIN_BATCH_SIZE_KEY),
+                    config.getLong(ConfigConstants.MAX_BATCH_SIZE_KEY),
+                    Duration.ofMillis(config.getLong(ConfigConstants.MAX_SEND_INTERVAL_MS_KEY)),
+                    config.getInt(ConfigConstants.RETRY_COUNT_KEY),
+                    config.getLong(ConfigConstants.RETRY_INTERVAL_MS_KEY),
+                    config.getStringList(ConfigConstants.PROJECTIONS_KEY),
+                    config.getStringList(ConfigConstants.PARTITION_BY_KEY),
+                    config.getLong(ConfigConstants.MAX_IN_MEMORY_BYTES_KEY),
+                    config.getLong(ConfigConstants.MAX_ON_DISK_BYTES_KEY)
             );
         } catch (Exception ex) {
             System.err.println("[ArrowSimpleLogger] Failed to create HttpArrowProducer: " + ex.getMessage());
@@ -219,8 +219,8 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
     }
 
     public void close() {
-        if (flightProducer instanceof ArrowProducer.AbstractArrowProducer afs) {
-            afs.close();
+        if (flightProducer instanceof ArrowProducer.AbstractArrowProducer) {
+            ((ArrowProducer.AbstractArrowProducer) flightProducer).close();
         }
     }
 

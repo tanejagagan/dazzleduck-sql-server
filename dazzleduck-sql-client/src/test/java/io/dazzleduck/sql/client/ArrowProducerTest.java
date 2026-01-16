@@ -33,10 +33,6 @@ import static org.junit.jupiter.api.Assertions.*;
 @Execution(ExecutionMode.CONCURRENT)
 class ArrowProducerTest {
 
-    // Test record for add(Record) method tests
-    record TestPerson(String name, Integer age) {}
-    record TestMetric(String key, String value, Long timestamp) {}
-
     private static final long KB = 1024;
     private static final long MB = 1024 * KB;
 
@@ -324,136 +320,6 @@ class ArrowProducerTest {
         }
     }
 
-    @Test
-    void testAddRecordConvertsToJavaRow() throws Exception {
-        // Create a producer with schema matching TestPerson record
-        Schema schema = new Schema(List.of(
-                new Field("name", FieldType.nullable(new ArrowType.Utf8()), null),
-                new Field("age", FieldType.nullable(new ArrowType.Int(32, true)), null)
-        ));
-
-        CountDownLatch latch = new CountDownLatch(1);
-        var producer = new RecordCapturingProducer(schema, latch);
-
-        try {
-            // Add a record
-            TestPerson person = new TestPerson("Alice", 30);
-            producer.add(person);
-
-            // Verify the JavaRow was created with correct values
-            assertEquals(1, producer.capturedRows.size());
-            var row = producer.capturedRows.get(0);
-            assertEquals("Alice", row.get(0));
-            assertEquals(30, row.get(1));
-        } finally {
-            latch.countDown();
-            producer.close();
-        }
-    }
-
-    @Test
-    void testAddRecordWithMultipleFields() throws Exception {
-        Schema schema = new Schema(List.of(
-                new Field("key", FieldType.nullable(new ArrowType.Utf8()), null),
-                new Field("value", FieldType.nullable(new ArrowType.Utf8()), null),
-                new Field("timestamp", FieldType.nullable(new ArrowType.Int(64, true)), null)
-        ));
-
-        CountDownLatch latch = new CountDownLatch(1);
-        var producer = new RecordCapturingProducer(schema, latch);
-
-        try {
-            TestMetric metric = new TestMetric("cpu", "85%", 1234567890L);
-            producer.add(metric);
-
-            assertEquals(1, producer.capturedRows.size());
-            var row = producer.capturedRows.get(0);
-            assertEquals("cpu", row.get(0));
-            assertEquals("85%", row.get(1));
-            assertEquals(1234567890L, row.get(2));
-        } finally {
-            latch.countDown();
-            producer.close();
-        }
-    }
-
-    @Test
-    void testAddRecordWithNullThrowsException() throws Exception {
-        Schema schema = new Schema(List.of(
-                new Field("name", FieldType.nullable(new ArrowType.Utf8()), null)
-        ));
-
-        CountDownLatch latch = new CountDownLatch(1);
-        var producer = new RecordCapturingProducer(schema, latch);
-
-        try {
-            IllegalArgumentException ex = assertThrows(
-                    IllegalArgumentException.class,
-                    () -> producer.add(null)
-            );
-            assertEquals("Record cannot be null", ex.getMessage());
-        } finally {
-            latch.countDown();
-            producer.close();
-        }
-    }
-
-    @Test
-    void testAddMultipleRecords() throws Exception {
-        Schema schema = new Schema(List.of(
-                new Field("name", FieldType.nullable(new ArrowType.Utf8()), null),
-                new Field("age", FieldType.nullable(new ArrowType.Int(32, true)), null)
-        ));
-
-        CountDownLatch latch = new CountDownLatch(1);
-        var producer = new RecordCapturingProducer(schema, latch);
-
-        try {
-            producer.add(new TestPerson("Alice", 25));
-            producer.add(new TestPerson("Bob", 30));
-            producer.add(new TestPerson("Charlie", 35));
-
-            assertEquals(3, producer.capturedRows.size());
-
-            assertEquals("Alice", producer.capturedRows.get(0).get(0));
-            assertEquals(25, producer.capturedRows.get(0).get(1));
-
-            assertEquals("Bob", producer.capturedRows.get(1).get(0));
-            assertEquals(30, producer.capturedRows.get(1).get(1));
-
-            assertEquals("Charlie", producer.capturedRows.get(2).get(0));
-            assertEquals(35, producer.capturedRows.get(2).get(1));
-        } finally {
-            latch.countDown();
-            producer.close();
-        }
-    }
-
-    @Test
-    void testAddRecordWithNullFieldValues() throws Exception {
-        Schema schema = new Schema(List.of(
-                new Field("name", FieldType.nullable(new ArrowType.Utf8()), null),
-                new Field("age", FieldType.nullable(new ArrowType.Int(32, true)), null)
-        ));
-
-        CountDownLatch latch = new CountDownLatch(1);
-        var producer = new RecordCapturingProducer(schema, latch);
-
-        try {
-            // Record with null field values
-            TestPerson person = new TestPerson(null, null);
-            producer.add(person);
-
-            assertEquals(1, producer.capturedRows.size());
-            var row = producer.capturedRows.get(0);
-            assertNull(row.get(0));
-            assertNull(row.get(1));
-        } finally {
-            latch.countDown();
-            producer.close();
-        }
-    }
-
     /**
      * Helper method to create a SendElement with Arrow data
      */
@@ -598,39 +464,6 @@ class ArrowProducerTest {
 
         void release() {
             latch.countDown();
-        }
-    }
-
-    /**
-     * A producer that captures JavaRows for testing the add(Record) method
-     */
-    static class RecordCapturingProducer extends ArrowProducer.AbstractArrowProducer {
-        final List<io.dazzleduck.sql.common.types.JavaRow> capturedRows = new ArrayList<>();
-        private final CountDownLatch latch;
-
-        RecordCapturingProducer(Schema schema, CountDownLatch latch) {
-            super(1024 * 1024, 2048 * 1024, Duration.ofMillis(200), schema, Clock.systemUTC(), 0, 0, List.of(), List.of());
-            this.latch = latch;
-        }
-
-        @Override
-        public synchronized void addRow(io.dazzleduck.sql.common.types.JavaRow row) {
-            capturedRows.add(row);
-        }
-
-        @Override
-        public long getMaxInMemorySize() {
-            return 10 * 1024 * 1024;
-        }
-
-        @Override
-        public long getMaxOnDiskSize() {
-            return 10 * 1024 * 1024;
-        }
-
-        @Override
-        protected void doSend(ProducerElement element) throws InterruptedException {
-            latch.await();
         }
     }
 }
