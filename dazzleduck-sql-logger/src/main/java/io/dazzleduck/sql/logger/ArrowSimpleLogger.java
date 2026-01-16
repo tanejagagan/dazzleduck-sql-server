@@ -3,7 +3,7 @@ package io.dazzleduck.sql.logger;
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.client.HttpArrowProducer;
-import io.dazzleduck.sql.client.FlightProducer;
+import io.dazzleduck.sql.client.ArrowProducer;
 import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.common.types.JavaRow;
 import org.apache.arrow.vector.types.pojo.*;
@@ -64,7 +64,7 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
         CONFIG_LOG_LEVEL = logLevel;
 
         // Create schema - this may trigger SLF4J logging from Arrow's Field class
-        // Any loggers created during this will use NoOpFlightProducer
+        // Any loggers created during this will use NoOpArrowProducer
         schema = createSchema();
 
         // Now mark as fully initialized - subsequent loggers can use HttpArrowProducer
@@ -97,18 +97,18 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
     }
 
     private final String name;
-    private final FlightProducer flightProducer;
+    private final ArrowProducer flightProducer;
 
     public ArrowSimpleLogger(String name) {
         this(name, createSenderFromConfig());
     }
 
-    public ArrowSimpleLogger(String name, FlightProducer sender) {
+    public ArrowSimpleLogger(String name, ArrowProducer sender) {
         this.name = name;
         this.flightProducer = sender;
     }
 
-    private static FlightProducer createSenderFromConfig() {
+    private static ArrowProducer createSenderFromConfig() {
         // If not fully initialized, config is unavailable, or we're already creating a producer,
         // return null (no-op). This handles:
         // 1. Circular initialization when Arrow's Field class triggers SLF4J logging
@@ -209,7 +209,7 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
                     markerName
             });
 
-            // FlightProducer handles batching, serialization, and sending
+            // ArrowProducer handles batching, serialization, and sending
             flightProducer.addRow(row);
 
         } catch (Exception e) {
@@ -219,7 +219,7 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
     }
 
     public void close() {
-        if (flightProducer instanceof FlightProducer.AbstractFlightProducer afs) {
+        if (flightProducer instanceof ArrowProducer.AbstractArrowProducer afs) {
             afs.close();
         }
     }

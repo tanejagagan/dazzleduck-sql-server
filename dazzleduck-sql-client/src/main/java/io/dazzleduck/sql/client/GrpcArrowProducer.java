@@ -18,7 +18,7 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.Objects;
 
-public final class GrpcArrowProducer extends FlightProducer.AbstractFlightProducer implements AutoCloseable {
+public final class GrpcArrowProducer extends ArrowProducer.AbstractArrowProducer implements AutoCloseable {
 
     private static final Logger logger = LoggerFactory.getLogger(GrpcArrowProducer.class);
 

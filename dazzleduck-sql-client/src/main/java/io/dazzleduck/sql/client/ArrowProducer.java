@@ -24,7 +24,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.*;
 
-public interface FlightProducer extends Closeable {
+public interface ArrowProducer extends Closeable {
 
     void close();
 
@@ -134,7 +134,7 @@ public interface FlightProducer extends Closeable {
                 try {
                     writer.close();
                 } catch (Exception e) {
-                    AbstractFlightProducer.logger.warn("Failed to close ArrowStreamWriter", e);
+                    AbstractArrowProducer.logger.warn("Failed to close ArrowStreamWriter", e);
                 }
             }
             if (root != null) {
@@ -150,9 +150,9 @@ public interface FlightProducer extends Closeable {
 
     long getMaxOnDiskSize();
 
-    abstract class AbstractFlightProducer implements FlightProducer {
+    abstract class AbstractArrowProducer implements ArrowProducer {
 
-        private static final Logger logger  = LoggerFactory.getLogger(AbstractFlightProducer.class);
+        private static final Logger logger  = LoggerFactory.getLogger(AbstractArrowProducer.class);
         private final BlockingQueue<ProducerElement> queue = new ArrayBlockingQueue<>(1024 * 1024);
         protected final Clock clock;
         private volatile boolean shutdown = false;
@@ -193,10 +193,10 @@ public interface FlightProducer extends Closeable {
         private long currentBatchId = 0;
 
 
-        public AbstractFlightProducer(long minBatchSize, long maxBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock, int retryCount, long retryIntervalMillis, java.util.List<String> projections, java.util.List<String> partitionBy){
+        public AbstractArrowProducer(long minBatchSize, long maxBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock, int retryCount, long retryIntervalMillis, java.util.List<String> projections, java.util.List<String> partitionBy){
             this(minBatchSize, maxBatchSize, maxDataSendInterval, schema, clock, retryCount, retryIntervalMillis, projections, partitionBy, Executors.newSingleThreadScheduledExecutor());
         }
-        public AbstractFlightProducer(long minBatchSize, long maxBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock, int retryCount, long retryIntervalMillis, java.util.List<String> projections, java.util.List<String> partitionBy, ScheduledExecutorService scheduledExecutorService ){
+        public AbstractArrowProducer(long minBatchSize, long maxBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock, int retryCount, long retryIntervalMillis, java.util.List<String> projections, java.util.List<String> partitionBy, ScheduledExecutorService scheduledExecutorService ){
             // Validate parameters
             if (minBatchSize <= 0) {
                 throw new IllegalArgumentException("minBatchSize must be positive, got: " + minBatchSize);

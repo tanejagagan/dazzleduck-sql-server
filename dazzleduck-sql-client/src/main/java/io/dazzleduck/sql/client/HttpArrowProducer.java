@@ -21,7 +21,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
-public final class HttpArrowProducer extends FlightProducer.AbstractFlightProducer {
+public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer {
 
     private static final Logger logger = LoggerFactory.getLogger(HttpArrowProducer.class);
     private static final ObjectMapper mapper = new ObjectMapper();
