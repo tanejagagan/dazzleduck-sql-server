@@ -1,6 +1,6 @@
 package io.dazzleduck.sql.logback;
 
-import io.dazzleduck.sql.client.HttpFlightProducer;
+import io.dazzleduck.sql.client.HttpArrowProducer;
 import io.dazzleduck.sql.common.types.JavaRow;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,7 +23,7 @@ public final class LogForwarder implements Closeable {
 
     private final LogBuffer buffer;
     private final LogToArrowConverter converter;
-    private final HttpFlightProducer httpProducer;
+    private final HttpArrowProducer httpProducer;
     private final ScheduledExecutorService scheduler;
     private final LogForwarderConfig config;
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -54,8 +54,8 @@ public final class LogForwarder implements Closeable {
         // Configure the LogForwardingAppender to use our buffer
         LogForwardingAppender.configure(config.maxBufferSize(), config.enabled());
 
-        // Create HttpFlightProducer
-        this.httpProducer = new HttpFlightProducer(
+        // Create HttpArrowProducer
+        this.httpProducer = new HttpArrowProducer(
                 converter.getSchema(),
                 config.baseUrl(),
                 config.username(),
@@ -145,7 +145,7 @@ public final class LogForwarder implements Closeable {
                 logger.debug("Successfully added {} log entries", entries.size());
             } catch (IllegalStateException e) {
                 // Queue is full, return entries for retry
-                logger.warn("HttpFlightProducer queue is full, returning entries for retry: {}", e.getMessage());
+                logger.warn("HttpArrowProducer queue is full, returning entries for retry: {}", e.getMessage());
                 buffer.returnForRetry(entries);
             } catch (Exception e) {
                 logger.error("Failed to add log entries", e);
@@ -158,7 +158,7 @@ public final class LogForwarder implements Closeable {
     }
 
     /**
-     * Convert a LogEntry to a JavaRow for the HttpFlightProducer.
+     * Convert a LogEntry to a JavaRow for the HttpArrowProducer.
      * The field order must match the schema from LogToArrowConverter:
      * s_no, timestamp, level, logger, thread, message
      */
@@ -219,7 +219,7 @@ public final class LogForwarder implements Closeable {
             try {
                 httpProducer.close();
             } catch (Exception e) {
-                logger.error("Error closing HttpFlightProducer", e);
+                logger.error("Error closing HttpArrowProducer", e);
             }
 
             converter.close();

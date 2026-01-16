@@ -30,7 +30,7 @@ import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.*;
 
 @Execution(ExecutionMode.CONCURRENT)
-public class HttpFlightProducerTest {
+public class HttpArrowProducerTest {
 
     private static SharedTestServer server;
     private static String warehouse;
@@ -64,8 +64,8 @@ public class HttpFlightProducerTest {
         org.awaitility.Awaitility.reset();
     }
 
-    private HttpFlightProducer newSender(String file, Duration timeout) {
-        return new HttpFlightProducer(
+    private HttpArrowProducer newSender(String file, Duration timeout) {
+        return new HttpArrowProducer(
                 schema,
                 baseUrl,
                 "admin",
@@ -111,7 +111,7 @@ public class HttpFlightProducerTest {
     void testAsyncIngestionSingleBatch() throws Exception {
         String file = "async-single-" + System.nanoTime();
         Files.createDirectories(Path.of(warehouse, file));
-        try (HttpFlightProducer sender = newSender(file, Duration.ofSeconds(10))) {
+        try (HttpArrowProducer sender = newSender(file, Duration.ofSeconds(10))) {
             sender.enqueue(arrowBytes("select * from generate_series(4)"));
         }
 
@@ -124,7 +124,7 @@ public class HttpFlightProducerTest {
         String file = "overwrite-" + System.nanoTime();
         Files.createDirectories(Path.of(warehouse, file));
 
-        try (HttpFlightProducer overwriteSender = new HttpFlightProducer(
+        try (HttpArrowProducer overwriteSender = new HttpArrowProducer(
                 schema,
                 baseUrl,
                 "admin",
@@ -164,7 +164,7 @@ public class HttpFlightProducerTest {
         CountDownLatch latch = new CountDownLatch(5);
         AtomicInteger errors = new AtomicInteger(0);
 
-        try (HttpFlightProducer concurrentEnqueues = newSender(file, Duration.ofSeconds(5))) {
+        try (HttpArrowProducer concurrentEnqueues = newSender(file, Duration.ofSeconds(5))) {
             for (int i = 0; i < 5; i++) {
                 final int index = i;
                 new Thread(() -> {
@@ -195,7 +195,7 @@ public class HttpFlightProducerTest {
         Files.createDirectories(Path.of(warehouse, file));
 
         // Multiple requests should reuse the same token
-        try (HttpFlightProducer reuseSender = newSender(file, Duration.ofSeconds(5))) {
+        try (HttpArrowProducer reuseSender = newSender(file, Duration.ofSeconds(5))) {
             for (int i = 0; i < 5; i++) {
                 reuseSender.enqueue(arrowBytes("select " + i + " as val"));
             }
@@ -214,7 +214,7 @@ public class HttpFlightProducerTest {
         Files.createDirectories(Path.of(warehouse, file));
 
         // Rapid fire 5 small batches
-        try (HttpFlightProducer highThroughput = newSender(file, Duration.ofSeconds(5))) {
+        try (HttpArrowProducer highThroughput = newSender(file, Duration.ofSeconds(5))) {
             for (int i = 0; i < 5; i++) {
                 highThroughput.enqueue(arrowBytes("select " + i + " as val"));
             }
@@ -229,7 +229,7 @@ public class HttpFlightProducerTest {
     @Test
     void testQueueFullBehavior() throws Exception {
         String file = "full-" + System.nanoTime();
-        var limitedSender = new HttpFlightProducer(schema, baseUrl, "admin", "admin", file, Duration.ofSeconds(3), 100_000, 200_000,
+        var limitedSender = new HttpArrowProducer(schema, baseUrl, "admin", "admin", file, Duration.ofSeconds(3), 100_000, 200_000,
                 Duration.ofMillis(200), 3, 1000, java.util.List.of(), java.util.List.of(), 100, 200);
 
         byte[] largeData = arrowBytes("select * from generate_series(200)");
@@ -245,7 +245,7 @@ public class HttpFlightProducerTest {
     void testMemoryDiskSwitching() throws Exception {
         var path = "spill-" + System.nanoTime();
         Files.createDirectories(Path.of(warehouse, path));
-        var spillSender = new HttpFlightProducer(schema, baseUrl, "admin", "admin", path, Duration.ofSeconds(10), 100_000, 200_000,
+        var spillSender = new HttpArrowProducer(schema, baseUrl, "admin", "admin", path, Duration.ofSeconds(10), 100_000, 200_000,
                 Duration.ofMillis(200), 3, 1000, java.util.List.of(), java.util.List.of(), 50, 100_000);
 
         spillSender.enqueue(arrowBytes("select * from generate_series(30)"));
@@ -264,7 +264,7 @@ public class HttpFlightProducerTest {
         String path = "projections-test-" + System.nanoTime();
         Files.createDirectories(Path.of(warehouse, path));
 
-        try (HttpFlightProducer sender = new HttpFlightProducer(
+        try (HttpArrowProducer sender = new HttpArrowProducer(
                 schema,
                 baseUrl,
                 "admin",
@@ -294,7 +294,7 @@ public class HttpFlightProducerTest {
         String path = "both-headers-test-" + System.nanoTime();
         Files.createDirectories(Path.of(warehouse, path));
 
-        try (HttpFlightProducer sender = new HttpFlightProducer(
+        try (HttpArrowProducer sender = new HttpArrowProducer(
                 schema,
                 baseUrl,
                 "admin",
@@ -327,7 +327,7 @@ public class HttpFlightProducerTest {
         Files.createDirectories(Path.of(warehouse, path));
 
         // Empty lists should work fine and not send headers
-        try (HttpFlightProducer sender = new HttpFlightProducer(
+        try (HttpArrowProducer sender = new HttpArrowProducer(
                 schema,
                 baseUrl,
                 "admin",

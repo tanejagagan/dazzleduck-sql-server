@@ -20,7 +20,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-class GrpcFlightProducerTest {
+class GrpcArrowProducerTest {
 
     private static final String HOST = "localhost";
     private static final String USER = "admin";
@@ -85,7 +85,7 @@ class GrpcFlightProducerTest {
         String path =  "names";
         Files.createDirectories(Path.of(warehouse, path));
 
-        try (GrpcFlightProducer sender = new GrpcFlightProducer(
+        try (GrpcArrowProducer sender = new GrpcArrowProducer(
                 schema,
                 1024,
                 2048,
@@ -139,7 +139,7 @@ class GrpcFlightProducerTest {
         String path = "both-params-grpc-test";
         Files.createDirectories(Path.of(warehouse, path));
 
-        try (GrpcFlightProducer sender = new GrpcFlightProducer(
+        try (GrpcArrowProducer sender = new GrpcArrowProducer(
                 schema,
                 1024,
                 2048,
@@ -184,7 +184,7 @@ class GrpcFlightProducerTest {
         Files.createDirectories(Path.of(warehouse, path));
 
         // Empty lists should work fine and not send parameters
-        try (GrpcFlightProducer sender = new GrpcFlightProducer(
+        try (GrpcArrowProducer sender = new GrpcArrowProducer(
                 schema,
                 1024,
                 2048,

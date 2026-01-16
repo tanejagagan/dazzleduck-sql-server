@@ -18,9 +18,9 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.Objects;
 
-public final class GrpcFlightProducer extends FlightProducer.AbstractFlightProducer implements AutoCloseable {
+public final class GrpcArrowProducer extends FlightProducer.AbstractFlightProducer implements AutoCloseable {
 
-    private static final Logger logger = LoggerFactory.getLogger(GrpcFlightProducer.class);
+    private static final Logger logger = LoggerFactory.getLogger(GrpcArrowProducer.class);
 
     private final FlightSqlClient client;
     private final BufferAllocator allocator;
@@ -29,7 +29,7 @@ public final class GrpcFlightProducer extends FlightProducer.AbstractFlightProdu
     private final long maxDisk;
     private final Duration grpcTimeout;
 
-    public GrpcFlightProducer(
+    public GrpcArrowProducer(
             Schema schema,
             long minBatchSize,
             long maxBatchSize,

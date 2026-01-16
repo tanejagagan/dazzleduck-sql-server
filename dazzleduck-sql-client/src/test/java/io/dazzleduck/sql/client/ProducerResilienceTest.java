@@ -31,7 +31,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Resilience tests for GrpcFlightProducer and HttpFlightProducer.
+ * Resilience tests for GrpcArrowProducer and HttpArrowProducer.
  *
  * Test flow:
  * 1. Create producer on fixed port BEFORE server starts
@@ -78,7 +78,7 @@ public class ProducerResilienceTest {
     }
 
     @Test
-    void testGrpcFlightProducerResilience() throws Exception {
+    void testGrpcArrowProducerResilience() throws Exception {
         int fixedFlightPort = findAvailablePort();
         int fixedHttpPort = findAvailablePort();
         Path warehousePath = Files.createTempDirectory("grpc-resilience-test");
@@ -117,8 +117,8 @@ public class ProducerResilienceTest {
 
         try {
             // Create producer BEFORE server starts and send events
-            logger.info("Creating GrpcFlightProducer on port {} (server not yet started)", fixedFlightPort);
-            try (GrpcFlightProducer producer = new GrpcFlightProducer(
+            logger.info("Creating GrpcArrowProducer on port {} (server not yet started)", fixedFlightPort);
+            try (GrpcArrowProducer producer = new GrpcArrowProducer(
                     schema,
                     1024,
                     2048,
@@ -166,7 +166,7 @@ public class ProducerResilienceTest {
             var expectedQuery = "SELECT * FROM generate_series(0, %d) AS t(id) ORDER BY id".formatted(expectedEvents - 1);
             TestUtils.isEqual(expectedQuery, actualQuery);
 
-            logger.info("GrpcFlightProducer resilience test passed - all {} distinct events received", expectedEvents);
+            logger.info("GrpcArrowProducer resilience test passed - all {} distinct events received", expectedEvents);
 
         } finally {
             server.close();
@@ -175,7 +175,7 @@ public class ProducerResilienceTest {
     }
 
     @Test
-    void testHttpFlightProducerResilience() throws Exception {
+    void testHttpArrowProducerResilience() throws Exception {
         int fixedHttpPort = findAvailablePort();
         Path warehousePath = Files.createTempDirectory("http-resilience-test");
         String testPath = "http-data";
@@ -225,8 +225,8 @@ public class ProducerResilienceTest {
 
         try {
             // Create producer BEFORE server starts and send events
-            logger.info("Creating HttpFlightProducer on port {} (server not yet started)", fixedHttpPort);
-            try (HttpFlightProducer producer = new HttpFlightProducer(
+            logger.info("Creating HttpArrowProducer on port {} (server not yet started)", fixedHttpPort);
+            try (HttpArrowProducer producer = new HttpArrowProducer(
                     schema,
                     baseUrl,
                     USER,
@@ -273,7 +273,7 @@ public class ProducerResilienceTest {
             var expectedQuery = "SELECT * FROM generate_series(0, %d) AS t(id) ORDER BY id".formatted(expectedEvents - 1);
             TestUtils.isEqual(expectedQuery, actualQuery);
 
-            logger.info("HttpFlightProducer resilience test passed - all {} distinct events received", expectedEvents);
+            logger.info("HttpArrowProducer resilience test passed - all {} distinct events received", expectedEvents);
 
         } finally {
             server.close();

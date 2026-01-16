@@ -1,6 +1,6 @@
 package io.dazzleduck.sql.micrometer;
 
-import io.dazzleduck.sql.client.HttpFlightProducer;
+import io.dazzleduck.sql.client.HttpArrowProducer;
 import io.dazzleduck.sql.micrometer.config.MicrometerForwarderConfig;
 import io.dazzleduck.sql.micrometer.service.ArrowMicroMeterRegistry;
 import io.dazzleduck.sql.micrometer.util.ArrowMetricSchema;
@@ -47,7 +47,7 @@ public final class MicrometerForwarder implements Closeable {
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
     // Created lazily in start()
-    private HttpFlightProducer httpProducer;
+    private HttpArrowProducer httpProducer;
     private ArrowMicroMeterRegistry arrowRegistry;
 
     /**
@@ -92,8 +92,8 @@ public final class MicrometerForwarder implements Closeable {
         }
 
         if (started.compareAndSet(false, true)) {
-            // Create HttpFlightProducer
-            this.httpProducer = new HttpFlightProducer(
+            // Create HttpArrowProducer
+            this.httpProducer = new HttpArrowProducer(
                     ArrowMetricSchema.SCHEMA,
                     config.baseUrl(),
                     config.username(),
@@ -176,7 +176,7 @@ public final class MicrometerForwarder implements Closeable {
                 try {
                     httpProducer.close();
                 } catch (Exception e) {
-                    logger.error("Error closing HttpFlightProducer", e);
+                    logger.error("Error closing HttpArrowProducer", e);
                 }
             }
 

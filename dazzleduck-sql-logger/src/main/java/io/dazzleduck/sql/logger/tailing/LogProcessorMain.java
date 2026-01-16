@@ -2,7 +2,7 @@ package io.dazzleduck.sql.logger.tailing;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
-import io.dazzleduck.sql.client.HttpFlightProducer;
+import io.dazzleduck.sql.client.HttpArrowProducer;
 import io.dazzleduck.sql.common.util.ConfigUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,7 +44,7 @@ public final class LogProcessorMain {
         JsonToArrowConverter converter = new JsonToArrowConverter();
 
         // Create HttpSender with configuration
-        HttpFlightProducer httpSender = new HttpFlightProducer(
+        HttpArrowProducer httpSender = new HttpArrowProducer(
                 converter.getSchema(),
                 CONFIG_HTTP_BASE_URL,
                 CONFIG_HTTP_USERNAME,

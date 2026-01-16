@@ -1,6 +1,6 @@
 package io.dazzleduck.sql.micrometer;
 
-import io.dazzleduck.sql.client.HttpFlightProducer;
+import io.dazzleduck.sql.client.HttpArrowProducer;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.micrometer.service.ArrowMicroMeterRegistry;
 import io.dazzleduck.sql.micrometer.util.ArrowFileWriterUtil;
@@ -38,7 +38,7 @@ class ArrowMicroMeterRegistryTest {
 
         schema = new Schema(java.util.List.of(new Field("timestamp", FieldType.nullable(new ArrowType.Utf8()), null)));
         ConnectionPool.execute("load arrow");
-        HttpFlightProducer sender = new HttpFlightProducer(
+        HttpArrowProducer sender = new HttpArrowProducer(
                 schema,
                 "http://localhost:8080",
                 "admin",

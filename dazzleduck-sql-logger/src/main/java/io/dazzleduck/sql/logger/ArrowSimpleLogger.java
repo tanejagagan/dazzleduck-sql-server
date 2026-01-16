@@ -2,7 +2,7 @@ package io.dazzleduck.sql.logger;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
-import io.dazzleduck.sql.client.HttpFlightProducer;
+import io.dazzleduck.sql.client.HttpArrowProducer;
 import io.dazzleduck.sql.client.FlightProducer;
 import io.dazzleduck.sql.common.util.ConfigUtils;
 import io.dazzleduck.sql.common.types.JavaRow;
@@ -41,7 +41,7 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
     // Flag to track if we're in the middle of static initialization (including schema creation)
     private static final boolean fullyInitialized;
 
-    // Thread-local flag to prevent recursion when creating HttpFlightProducer (which uses SLF4J)
+    // Thread-local flag to prevent recursion when creating HttpArrowProducer (which uses SLF4J)
     private static final ThreadLocal<Boolean> creatingProducer = ThreadLocal.withInitial(() -> Boolean.FALSE);
 
     // Schema - must be declared before static block but initialized lazily
@@ -67,7 +67,7 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
         // Any loggers created during this will use NoOpFlightProducer
         schema = createSchema();
 
-        // Now mark as fully initialized - subsequent loggers can use HttpFlightProducer
+        // Now mark as fully initialized - subsequent loggers can use HttpArrowProducer
         fullyInitialized = true;
     }
 
@@ -112,7 +112,7 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
         // If not fully initialized, config is unavailable, or we're already creating a producer,
         // return null (no-op). This handles:
         // 1. Circular initialization when Arrow's Field class triggers SLF4J logging
-        // 2. Recursive calls when HttpFlightProducer's static initializer uses SLF4J logging
+        // 2. Recursive calls when HttpArrowProducer's static initializer uses SLF4J logging
         if (!fullyInitialized || config == null || creatingProducer.get()) {
             return null;
         }
@@ -122,7 +122,7 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
         try {
             Config http = config.getConfig(ConfigUtils.HTTP_PREFIX);
             String targetPath = http.getString(ConfigUtils.TARGET_PATH_KEY);
-            return new HttpFlightProducer(
+            return new HttpArrowProducer(
                     schema,
                     http.getString(ConfigUtils.BASE_URL_KEY),
                     http.getString(ConfigUtils.USERNAME_KEY),
@@ -140,7 +140,7 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
                     config.getLong(ConfigUtils.MAX_ON_DISK_BYTES_KEY)
             );
         } catch (Exception ex) {
-            System.err.println("[ArrowSimpleLogger] Failed to create HttpFlightProducer: " + ex.getMessage());
+            System.err.println("[ArrowSimpleLogger] Failed to create HttpArrowProducer: " + ex.getMessage());
             return null;
         } finally {
             creatingProducer.set(Boolean.FALSE);

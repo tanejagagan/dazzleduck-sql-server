@@ -266,8 +266,8 @@ class MockIngestionServerTest {
     }
 
     @Test
-    void testWithHttpFlightProducer() throws Exception {
-        // Test that HttpFlightProducer can work with MockIngestionServer
+    void testWithHttpArrowProducer() throws Exception {
+        // Test that HttpArrowProducer can work with MockIngestionServer
         Schema schema = new Schema(List.of(
                 new Field("id", FieldType.nullable(new ArrowType.Int(64, true)), null),
                 new Field("name", FieldType.nullable(new ArrowType.Utf8()), null)
@@ -275,7 +275,7 @@ class MockIngestionServerTest {
 
         String testPath = "producer_test";
 
-        try (HttpFlightProducer producer = new HttpFlightProducer(
+        try (HttpArrowProducer producer = new HttpArrowProducer(
                 schema,
                 server.getBaseUrl(),
                 "admin",
