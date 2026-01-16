@@ -29,7 +29,7 @@ public class Headers {
     public static final String HEADER_QUERY_ID = "query_id";
     public static final String HEADER_PRODUCER_BATCH_ID = "producer_batch_id";
     public static final String HEADER_SORT_ORDER = "sort_order";
-    public static final String HEADER_DATA_PROJECTIONS ="transformation";
+    public static final String HEADER_DATA_PROJECTIONS ="projection";
     public static final String HEADER_APP_DATA_TRANSFORMATION ="udf_transformation";
 
     public static final Set<String> SUPPORTED_HEADERS = Set.of(HEADER_FETCH_SIZE, HEADER_DATABASE, HEADER_SCHEMA, HEADER_SPLIT_SIZE,
