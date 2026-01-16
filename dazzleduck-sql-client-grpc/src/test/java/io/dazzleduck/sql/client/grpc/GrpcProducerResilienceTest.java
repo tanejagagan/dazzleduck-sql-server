@@ -1,8 +1,9 @@
-package io.dazzleduck.sql.client;
+package io.dazzleduck.sql.client.grpc;
 
 import io.dazzleduck.sql.common.types.JavaRow;
-import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.util.TestUtils;
+import io.dazzleduck.sql.runtime.SharedTestServer;
+import org.apache.arrow.flight.Location;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
@@ -26,23 +27,24 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 
 /**
- * Resilience tests for HttpArrowProducer.
+ * Resilience tests for GrpcArrowProducer.
  *
  * Test flow:
  * 1. Create producer on fixed port BEFORE server starts
  * 2. Producer sends events for 6 seconds (one event every 10ms = 600 events)
  * 3. Server starts in background after 0.5 seconds
- * 4. Server runs for 2 seconds, stops for 0.5 seconds, repeats until test ends
+ * 4. Server runs until test ends
  * 5. After producer closes, validate all distinct events are received
  */
 @Tag("slow")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @Execution(ExecutionMode.CONCURRENT)
-public class ProducerResilienceTest {
+public class GrpcProducerResilienceTest {
 
-    private static final Logger logger = LoggerFactory.getLogger(ProducerResilienceTest.class);
+    private static final Logger logger = LoggerFactory.getLogger(GrpcProducerResilienceTest.class);
     private static final String HOST = "localhost";
     private static final String USER = "admin";
     private static final String PASSWORD = "admin";
@@ -50,20 +52,12 @@ public class ProducerResilienceTest {
     private static final int TEST_DURATION_MS = 6_000;
     private static final int EVENT_INTERVAL_MS = 10;
     private static final int SERVER_START_DELAY_MS = 500;
-    private static final int SERVER_UP_DURATION_MS = 2_000;
 
     private RootAllocator allocator;
 
     @BeforeAll
     void setup() {
         allocator = new RootAllocator(Long.MAX_VALUE);
-        // Install arrow extension for reading Arrow IPC files
-        installArrowExtension();
-    }
-
-    private static void installArrowExtension() {
-        String[] sqls = {"INSTALL arrow FROM community", "LOAD arrow"};
-        ConnectionPool.executeBatch(sqls);
     }
 
     @AfterAll
@@ -74,10 +68,11 @@ public class ProducerResilienceTest {
     }
 
     @Test
-    void testHttpArrowProducerResilience() throws Exception {
+    void testGrpcArrowProducerResilience() throws Exception {
+        int fixedFlightPort = findAvailablePort();
         int fixedHttpPort = findAvailablePort();
-        Path warehousePath = Files.createTempDirectory("http-resilience-test");
-        String testPath = "http-data";
+        Path warehousePath = Files.createTempDirectory("grpc-resilience-test");
+        String testPath = "grpc-data";
         Files.createDirectories(warehousePath.resolve(testPath));
 
         Schema schema = new Schema(List.of(
@@ -86,62 +81,51 @@ public class ProducerResilienceTest {
 
         int expectedEvents = TEST_DURATION_MS / EVENT_INTERVAL_MS;
 
-        // Use MockIngestionServer instead of SharedTestServer
-        MockIngestionServer server = new MockIngestionServer(fixedHttpPort, warehousePath, USER, PASSWORD);
+        // Server starts late and stays up until end (no cycling to avoid port reuse issues)
+        SharedTestServer server = new SharedTestServer();
 
-        // Start server in background after delay, then cycle: up for SERVER_UP_DURATION_MS, down for 2 seconds
+        // Start server in background after delay
         Thread serverThread = new Thread(() -> {
             try {
                 logger.info("Server thread: waiting {}ms before start...", SERVER_START_DELAY_MS);
                 Thread.sleep(SERVER_START_DELAY_MS);
 
-                logger.info("Starting MockIngestionServer on port {}", fixedHttpPort);
-                server.start();
-                logger.info("MockIngestionServer started successfully");
-
-                // Run for SERVER_UP_DURATION_MS, then stop for 2 seconds
-                Thread.sleep(SERVER_UP_DURATION_MS);
-
-                logger.info("Stopping MockIngestionServer for 2 seconds...");
-                server.stop();
-
-                Thread.sleep(2000);
-
-                logger.info("Restarting MockIngestionServer...");
-                server.start();
-                logger.info("MockIngestionServer restarted successfully");
+                logger.info("Starting server on ports HTTP:{}, Flight:{}", fixedHttpPort, fixedFlightPort);
+                server.startWithPorts(fixedHttpPort, fixedFlightPort,
+                        "warehouse=" + warehousePath,
+                        "ingestion.max_delay_ms=0");
+                logger.info("Server started successfully");
 
             } catch (InterruptedException e) {
-                logger.info("Server thread interrupted");
+                logger.info("Server thread interrupted before start");
             } catch (Exception e) {
-                logger.error("Server operation failed", e);
+                logger.error("Server start failed", e);
             }
         });
         serverThread.setDaemon(true);
         serverThread.start();
 
-        String baseUrl = "http://" + HOST + ":" + fixedHttpPort;
-
         try {
             // Create producer BEFORE server starts and send events
-            logger.info("Creating HttpArrowProducer on port {} (server not yet started)", fixedHttpPort);
-            try (HttpArrowProducer producer = new HttpArrowProducer(
+            logger.info("Creating GrpcArrowProducer on port {} (server not yet started)", fixedFlightPort);
+            try (GrpcArrowProducer producer = new GrpcArrowProducer(
                     schema,
-                    baseUrl,
-                    USER,
-                    PASSWORD,
-                    testPath,
-                    Duration.ofSeconds(60),
                     1024,
                     2048,
                     Duration.ofMillis(100),
+                    Clock.systemUTC(),
                     2000, // retryCount - high for resilience during initial outage
                     100,  // retryIntervalMillis
                     List.of(),
                     List.of(),
                     10_000_000,  // larger buffer
                     50_000_000,  // larger disk buffer
-                    Clock.systemUTC()
+                    allocator,
+                    Location.forGrpcInsecure(HOST, fixedFlightPort),
+                    USER,
+                    PASSWORD,
+                    Map.of("path", testPath),
+                    Duration.ofSeconds(60)
             )) {
                 logger.info("Sending {} events over {}ms...", expectedEvents, TEST_DURATION_MS);
                 long startTime = System.currentTimeMillis();
@@ -166,13 +150,13 @@ public class ProducerResilienceTest {
             // Wait for server to finish writing
             Thread.sleep(2000);
 
-            // Verify all distinct events received using read_arrow for Arrow IPC files
+            // Verify all distinct events received
             logger.info("Verifying data...");
-            var actualQuery = "SELECT DISTINCT id FROM read_arrow('%s/%s/*.arrow') ORDER BY id".formatted(warehousePath, testPath);
+            var actualQuery = "SELECT DISTINCT id FROM read_parquet('%s/%s/*.parquet') ORDER BY id".formatted(warehousePath, testPath);
             var expectedQuery = "SELECT * FROM generate_series(0, %d) AS t(id) ORDER BY id".formatted(expectedEvents - 1);
             TestUtils.isEqual(expectedQuery, actualQuery);
 
-            logger.info("HttpArrowProducer resilience test passed - all {} distinct events received", expectedEvents);
+            logger.info("GrpcArrowProducer resilience test passed - all {} distinct events received", expectedEvents);
 
         } finally {
             server.close();

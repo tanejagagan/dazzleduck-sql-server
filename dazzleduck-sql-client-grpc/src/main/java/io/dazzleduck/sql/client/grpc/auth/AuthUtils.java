@@ -1,4 +1,4 @@
-package io.dazzleduck.sql.client.auth;
+package io.dazzleduck.sql.client.grpc.auth;
 
 
 import org.apache.arrow.flight.*;
@@ -63,4 +63,3 @@ public final class AuthUtils {
                 .encodeToString(token.getBytes(StandardCharsets.UTF_8));
     }
 }
-

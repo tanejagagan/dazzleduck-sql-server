@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: io.dazzleduck.sql.client.grpc.GrpcProducerResilienceTest
+-------------------------------------------------------------------------------
+Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 12.83 s -- in io.dazzleduck.sql.client.grpc.GrpcProducerResilienceTest

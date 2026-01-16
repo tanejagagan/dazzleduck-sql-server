@@ -1,9 +1,10 @@
-package io.dazzleduck.sql.client;
+package io.dazzleduck.sql.client.grpc;
 
 
 
 import io.dazzleduck.sql.common.Headers;
-import io.dazzleduck.sql.client.auth.AuthUtils;
+import io.dazzleduck.sql.client.ArrowProducer;
+import io.dazzleduck.sql.client.grpc.auth.AuthUtils;
 import org.apache.arrow.flight.FlightClient;
 import org.apache.arrow.flight.Location;
 import org.apache.arrow.flight.sql.FlightSqlClient;

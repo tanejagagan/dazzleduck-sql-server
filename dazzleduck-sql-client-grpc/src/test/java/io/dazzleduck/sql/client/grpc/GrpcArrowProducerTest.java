@@ -1,4 +1,4 @@
-package io.dazzleduck.sql.client;
+package io.dazzleduck.sql.client.grpc;
 
 import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.common.types.JavaRow;

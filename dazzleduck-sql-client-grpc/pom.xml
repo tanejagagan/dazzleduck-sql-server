@@ -9,8 +9,8 @@
         <version>0.0.14</version>
     </parent>
 
-    <artifactId>dazzleduck-sql-client</artifactId>
-    <name>DazzleDuck Project Client</name>
+    <artifactId>dazzleduck-sql-client-grpc</artifactId>
+    <name>DazzleDuck Project Client gRPC</name>
 
     <properties>
         <maven.compiler.source>21</maven.compiler.source>
@@ -26,20 +26,23 @@
         </dependency>
         <dependency>
             <groupId>io.dazzleduck.sql</groupId>
-            <artifactId>dazzleduck-sql-common</artifactId>
+            <artifactId>dazzleduck-sql-client</artifactId>
             <version>0.0.14</version>
         </dependency>
         <dependency>
             <groupId>io.dazzleduck.sql</groupId>
-            <artifactId>dazzleduck-sql-login</artifactId>
+            <artifactId>dazzleduck-sql-common</artifactId>
             <version>0.0.14</version>
-            <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
-            <version>2.15.3</version>
-            <scope>compile</scope>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>flight-core</artifactId>
+            <version>${arrow.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>flight-sql</artifactId>
+            <version>${arrow.version}</version>
         </dependency>
         <dependency>
             <groupId>org.awaitility</groupId>
@@ -58,6 +61,18 @@
             <artifactId>dazzleduck-sql-runtime</artifactId>
             <version>0.0.14</version>
             <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.dazzleduck.sql</groupId>
+            <artifactId>dazzleduck-sql-commons</artifactId>
+            <version>0.0.14</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.dazzleduck.sql</groupId>
+            <artifactId>dazzleduck-sql-flight</artifactId>
+            <version>0.0.14</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
