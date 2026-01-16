@@ -1,7 +1,7 @@
 package io.dazzleduck.sql.flight.server;
 
 import com.typesafe.config.Config;
-import io.dazzleduck.sql.commons.ConfigBasedProvider;
+import io.dazzleduck.sql.commons.config.ConfigBasedProvider;
 import io.dazzleduck.sql.common.ConfigConstants;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactory;

@@ -4,7 +4,7 @@ import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 
 import static io.dazzleduck.sql.common.ConfigConstants.CONFIG_PATH;
-import io.dazzleduck.sql.commons.ConfigBasedProvider;
+import io.dazzleduck.sql.commons.config.ConfigBasedProvider;
 import io.dazzleduck.sql.commons.util.CommandLineConfigUtil;
 import io.dazzleduck.sql.flight.ConfigBasedStartupScriptProvider;
 import io.dazzleduck.sql.flight.StartupScriptProvider;

@@ -2,7 +2,7 @@ package io.dazzleduck.sql.flight.server;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
-import io.dazzleduck.sql.commons.ConfigBasedProvider;
+import io.dazzleduck.sql.commons.config.ConfigBasedProvider;
 import io.dazzleduck.sql.flight.ConfigBasedStartupScriptProvider;
 import io.dazzleduck.sql.flight.StartupScriptProvider;
 import io.dazzleduck.sql.common.ConfigConstants;

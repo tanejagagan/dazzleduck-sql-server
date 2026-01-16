@@ -1,7 +1,7 @@
 package io.dazzleduck.sql.flight.optimizer;
 
 import com.typesafe.config.Config;
-import io.dazzleduck.sql.commons.ConfigBasedProvider;
+import io.dazzleduck.sql.commons.config.ConfigBasedProvider;
 
 /**
  * Interface to perform last step Query optimization such as reading from index before reading actual data

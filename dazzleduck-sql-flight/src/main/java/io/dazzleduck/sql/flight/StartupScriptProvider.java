@@ -1,7 +1,7 @@
 package io.dazzleduck.sql.flight;
 
 import com.typesafe.config.Config;
-import io.dazzleduck.sql.commons.ConfigBasedProvider;
+import io.dazzleduck.sql.commons.config.ConfigBasedProvider;
 
 import java.io.IOException;
 

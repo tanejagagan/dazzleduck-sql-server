@@ -1,17 +1,11 @@
 package io.dazzleduck.sql.flight.server;
 
 
-import io.dazzleduck.sql.commons.ConfigBasedProvider;
 import io.dazzleduck.sql.common.Headers;
-import io.dazzleduck.sql.flight.LocalStartupConfigProvider;
-import io.dazzleduck.sql.flight.StartupScriptProvider;
-import io.dazzleduck.sql.common.ConfigConstants;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.ConnectionPool;
-import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactory;
 import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactoryProvider;
 import io.dazzleduck.sql.commons.util.TestUtils;
-import io.dazzleduck.sql.flight.optimizer.QueryOptimizer;
 import io.dazzleduck.sql.flight.FlightRecorder;
 import io.dazzleduck.sql.flight.MicroMeterFlightRecorder;
 import io.dazzleduck.sql.flight.stream.FlightStreamReader;
@@ -43,10 +37,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
-import static io.dazzleduck.sql.flight.LocalStartupConfigProvider.SCRIPT_LOCATION_KEY;
 import static io.dazzleduck.sql.commons.util.TestConstants.*;
 import static org.junit.jupiter.api.Assertions.*;
 
