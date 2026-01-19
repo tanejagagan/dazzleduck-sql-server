@@ -195,8 +195,12 @@
                     <extraDirectories>
                         <paths>
                             <path>
-                                <from>${maven-parent.basedir}/example</from>
+                                <from>${maven-parent.basedir}/example/data</from>
                                 <into>/data</into>
+                            </path>
+                            <path>
+                                <from>${maven-parent.basedir}/example/startup</from>
+                                <into>startup</into>
                             </path>
                         </paths>
                     </extraDirectories>

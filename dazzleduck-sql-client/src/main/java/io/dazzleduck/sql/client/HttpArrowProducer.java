@@ -316,7 +316,7 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
         // Add projections and partitionBy headers if present (URL encoded)
         if (!getProjections().isEmpty()) {
             String projectionsValue = String.join(",", getProjections());
-            requestBuilder.header(io.dazzleduck.sql.common.Headers.HEADER_DATA_PROJECTIONS,
+            requestBuilder.header(io.dazzleduck.sql.common.Headers.HEADER_DATA_PROJECT,
                 java.net.URLEncoder.encode(projectionsValue, java.nio.charset.StandardCharsets.UTF_8));
         }
         if (!getPartitionBy().isEmpty()) {
