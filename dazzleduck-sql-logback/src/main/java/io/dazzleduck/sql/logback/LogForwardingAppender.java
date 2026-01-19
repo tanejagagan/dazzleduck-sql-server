@@ -35,9 +35,6 @@ public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
 
     // Static buffer shared across all instances
     private static volatile LogBuffer buffer;
-    private static volatile String applicationId;
-    private static volatile String applicationName;
-    private static volatile String applicationHost;
 
     /**
      * Enable or disable log forwarding.
@@ -98,13 +95,7 @@ public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
             return;
         }
 
-        LogEntry entry = LogEntry.from(
-                sequenceCounter.incrementAndGet(),
-                event,
-                applicationId,
-                applicationName,
-                applicationHost
-        );
+        LogEntry entry = LogEntry.from(sequenceCounter.incrementAndGet(), event);
 
         if (!buffer.offer(entry)) {
             // Buffer full - log to console only (avoid infinite loop)
@@ -122,21 +113,13 @@ public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
     }
 
     /**
-     * Configure the appender with application properties.
+     * Configure the appender with buffer settings.
      * This should be called before starting the LogForwarder.
      *
-     * @param appId Application ID
-     * @param appName Application name
-     * @param appHost Application host
      * @param bufferSize Maximum buffer size
      * @param isEnabled Whether forwarding is enabled
      */
-    public static void configure(String appId, String appName, String appHost, int bufferSize, boolean isEnabled) {
-        applicationId = appId;
-        applicationName = appName;
-        if (appHost != null && !appHost.isEmpty()) {
-            applicationHost = appHost;
-        }
+    public static void configure(int bufferSize, boolean isEnabled) {
         enabled = isEnabled;
         if (buffer == null || buffer.getSize() == 0) {
             buffer = new LogBuffer(bufferSize);
@@ -165,9 +148,6 @@ public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
     static void reset() {
         synchronized (LogForwardingAppender.class) {
             buffer = null;
-            applicationId = null;
-            applicationName = null;
-            applicationHost = null;
             enabled = true;
             sequenceCounter.set(0);
         }

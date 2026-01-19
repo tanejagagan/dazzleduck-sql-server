@@ -59,7 +59,7 @@ public class IngestionService implements HttpService, ParameterUtils, Controller
         var partitionString = urlDecode(
                 ParameterUtils.getParameterValue(HEADER_DATA_PARTITION, serverRequest, null, String.class));
         var tranformationString = urlDecode(
-                ParameterUtils.getParameterValue(HEADER_DATA_TRANSFORMATION, serverRequest, null, String.class));
+                ParameterUtils.getParameterValue(HEADER_DATA_PROJECTIONS, serverRequest, null, String.class));
         var producerId = ParameterUtils.getParameterValue(HEADER_PRODUCER_ID, serverRequest, null, String.class);
         var producerBatchId = ParameterUtils.getParameterValue(HEADER_PRODUCER_BATCH_ID, serverRequest, -1L, Long.class);
         var sortOrderString = urlDecode(

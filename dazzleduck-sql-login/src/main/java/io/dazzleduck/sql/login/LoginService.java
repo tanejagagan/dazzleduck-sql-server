@@ -2,7 +2,9 @@ package io.dazzleduck.sql.login;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.typesafe.config.Config;
-import io.dazzleduck.sql.common.auth.Validator;
+import io.dazzleduck.sql.common.auth.LoginRequest;
+import io.dazzleduck.sql.common.auth.LoginResponse;
+import io.dazzleduck.sql.commons.auth.Validator;
 import io.helidon.http.Status;
 import io.helidon.webserver.http.HttpRules;
 import io.helidon.webserver.http.HttpService;

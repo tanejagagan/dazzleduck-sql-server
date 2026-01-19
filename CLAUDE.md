@@ -16,7 +16,8 @@ DazzleDuck SQL Server is a high-performance remote DuckDB server that supports b
 ## Build & Development
 
 ### Requirements
-- JDK 21
+- JDK 21 (server modules)
+- JDK 11+ (client modules: client, client-grpc, common, logger, logback)
 - Maven (wrapper included: `./mvnw`)
 
 ### Build Commands
@@ -62,7 +63,8 @@ dazzleduck-sql-server/
 ├── dazzleduck-sql-http/        # HTTP REST API (Helidon-based)
 ├── dazzleduck-sql-common/      # Shared utilities, type handling, config
 ├── dazzleduck-sql-commons/     # DuckDB utilities, connection pool, transformations
-├── dazzleduck-sql-client/      # Client implementations (HTTP & gRPC)
+├── dazzleduck-sql-client/      # HTTP client implementation (JDK 11+)
+├── dazzleduck-sql-client-grpc/ # gRPC/Flight SQL client implementation (JDK 11+)
 ├── dazzleduck-sql-login/       # JWT authentication service
 ├── dazzleduck-sql-search/      # Full-text search indexing
 ├── dazzleduck-sql-micrometer/  # Micrometer metrics forwarding
@@ -159,13 +161,16 @@ dazzleduck-sql-server/
 - `StartupScriptProvider.java` - DuckDB initialization scripts
 
 ### dazzleduck-sql-client
-**Client implementations**
-- `FlightProducer.java` - Abstract client interface
+**HTTP client implementation (JDK 11+)**
+- `ArrowProducer.java` - Abstract client interface
   - Memory-first storage, spill to disk
   - Batching by size and time
   - Retry logic
-- `GrpcFlightProducer.java` - gRPC implementation
-- `HttpProducer.java` - HTTP implementation
+- `HttpArrowProducer.java` - HTTP implementation for Arrow data ingestion
+
+### dazzleduck-sql-client-grpc
+**gRPC/Flight SQL client implementation (JDK 11+)**
+- `GrpcArrowProducer.java` - gRPC/Flight SQL implementation for Arrow data ingestion
 
 ### dazzleduck-sql-login
 **Authentication service**
@@ -302,7 +307,7 @@ dazzleduck_server = {
 
 | Component | Technology | Version |
 |-----------|------------|---------|
-| Language | Java | 17 |
+| Language | Java | 21 (server), 11+ (client modules) |
 | Database | DuckDB | 1.4.3.0 |
 | Arrow | Apache Arrow | 18.3.0 |
 | HTTP Framework | Helidon | 4.2.3 |
@@ -524,7 +529,7 @@ Headers.HEADER_PRODUCER_ID        // "producer_id"
 Headers.HEADER_QUERY_ID           // "query_id"
 Headers.HEADER_PRODUCER_BATCH_ID  // "producer_batch_id"
 Headers.HEADER_SORT_ORDER         // "sort_order"
-Headers.HEADER_DATA_TRANSFORMATION    // "transformation"
+Headers.HEADER_DATA_PROJECTIONS       // "projection"
 Headers.HEADER_APP_DATA_TRANSFORMATION // "udf_transformation"
 
 // Type extractors for parsing header values
@@ -1032,7 +1037,7 @@ static void setup() {
 
 ## Version
 
-Current version: **0.0.14**
+Current version: **0.0.15**
 
 ## License
 

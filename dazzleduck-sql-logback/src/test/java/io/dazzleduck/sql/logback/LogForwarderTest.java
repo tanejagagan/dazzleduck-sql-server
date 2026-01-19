@@ -20,9 +20,6 @@ class LogForwarderTest {
         LogForwardingAppender.reset();
 
         config = LogForwarderConfig.builder()
-                .applicationId("test-app")
-                .applicationName("TestApplication")
-                .applicationHost("test-host")
                 .baseUrl("http://localhost:9999")  // Non-existent server for testing
                 .username("test")
                 .password("test")
@@ -154,10 +151,7 @@ class LogForwarderTest {
                 "INFO",
                 "TestLogger",
                 "main",
-                message,
-                "app-1",
-                "TestApp",
-                "localhost"
+                message
         );
     }
 }

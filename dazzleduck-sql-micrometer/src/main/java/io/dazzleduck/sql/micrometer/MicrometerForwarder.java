@@ -1,6 +1,6 @@
 package io.dazzleduck.sql.micrometer;
 
-import io.dazzleduck.sql.client.HttpProducer;
+import io.dazzleduck.sql.client.HttpArrowProducer;
 import io.dazzleduck.sql.micrometer.config.MicrometerForwarderConfig;
 import io.dazzleduck.sql.micrometer.service.ArrowMicroMeterRegistry;
 import io.dazzleduck.sql.micrometer.util.ArrowMetricSchema;
@@ -10,8 +10,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.Closeable;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -25,8 +23,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *     .username("admin")
  *     .password("admin")
  *     .targetPath("metrics")
- *     .applicationId("my-app")
- *     .applicationName("My Application")
  *     .build();
  *
  * MicrometerForwarder forwarder = MicrometerForwarder.createAndStart(config);
@@ -51,7 +47,7 @@ public final class MicrometerForwarder implements Closeable {
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
     // Created lazily in start()
-    private HttpProducer httpProducer;
+    private HttpArrowProducer httpProducer;
     private ArrowMicroMeterRegistry arrowRegistry;
 
     /**
@@ -96,14 +92,8 @@ public final class MicrometerForwarder implements Closeable {
         }
 
         if (started.compareAndSet(false, true)) {
-            // Create transformations for application metadata
-            List<String> transformations = new ArrayList<>(config.transformations());
-            transformations.add(String.format("'%s' AS application_id", config.applicationId()));
-            transformations.add(String.format("'%s' AS application_name", config.applicationName()));
-            transformations.add(String.format("'%s' AS application_host", config.applicationHost()));
-
-            // Create HttpProducer
-            this.httpProducer = new HttpProducer(
+            // Create HttpArrowProducer
+            this.httpProducer = new HttpArrowProducer(
                     ArrowMetricSchema.SCHEMA,
                     config.baseUrl(),
                     config.username(),
@@ -115,7 +105,7 @@ public final class MicrometerForwarder implements Closeable {
                     config.maxSendInterval(),
                     config.retryCount(),
                     config.retryIntervalMillis(),
-                    transformations,
+                    config.projections(),
                     config.partitionBy(),
                     config.maxInMemorySize(),
                     config.maxOnDiskSize()
@@ -125,10 +115,7 @@ public final class MicrometerForwarder implements Closeable {
             this.arrowRegistry = new ArrowMicroMeterRegistry(
                     httpProducer,
                     clock,
-                    config.stepInterval(),
-                    config.applicationId(),
-                    config.applicationName(),
-                    config.applicationHost()
+                    config.stepInterval()
             );
 
             // Add to composite registry
@@ -189,7 +176,7 @@ public final class MicrometerForwarder implements Closeable {
                 try {
                     httpProducer.close();
                 } catch (Exception e) {
-                    logger.error("Error closing HttpProducer", e);
+                    logger.error("Error closing HttpArrowProducer", e);
                 }
             }
 

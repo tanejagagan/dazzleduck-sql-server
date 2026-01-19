@@ -10,14 +10,14 @@ import java.util.Map;
 import java.util.function.Function;
 
 public record IngestionParameters(String path,
-                                  String format, String[] partitions, String[] transformations,
+                                  String format, String[] partitionBy, String[] projections,
                                   String[] sortOrder, String producerId, Long producerBatchId,
                                   Map<String, String> parameters) {
     public Batch<String> constructBatch(long size, String tempFile) {
         return new Batch<>(
                 sortOrder,
-                transformations,
-                partitions,
+                projections,
+                partitionBy,
                 tempFile,
                 producerId,
                 producerBatchId,
@@ -52,18 +52,18 @@ public record IngestionParameters(String path,
 
         String producerId = optionMap.get(Headers.HEADER_PRODUCER_ID);
         // Optional comma-separated lists
-        String[] partitions = splitCsv.apply(optionMap.get(Headers.HEADER_DATA_PARTITION));
-        String[] transformations = splitCsv.apply(optionMap.get(Headers.HEADER_DATA_TRANSFORMATION));
+        String[] partitionBy = splitCsv.apply(optionMap.get(Headers.HEADER_DATA_PARTITION));
+        String[] projections = splitCsv.apply(optionMap.get(Headers.HEADER_DATA_PROJECTIONS));
         String[] sortOrder = splitCsv.apply(optionMap.get(Headers.HEADER_SORT_ORDER));
-        return new IngestionParameters(path, format, partitions, transformations, sortOrder, producerId, 0L, Map.of());
+        return new IngestionParameters(path, format, partitionBy, projections, sortOrder, producerId, 0L, Map.of());
     }
 
     public FlightSql.CommandStatementIngest createCommand() {
         var options = Map.of(
                 Headers.HEADER_PATH, path(),
-                Headers.HEADER_DATA_PARTITION, String.join(",", partitions()),
+                Headers.HEADER_DATA_PARTITION, String.join(",", partitionBy()),
                 Headers.HEADER_DATA_FORMAT, format(),
-                Headers.HEADER_DATA_TRANSFORMATION, String.join(",", transformations()),
+                Headers.HEADER_DATA_PROJECTIONS, String.join(",", projections()),
                 Headers.HEADER_SORT_ORDER, String.join(",", sortOrder()));
         return FlightSql.CommandStatementIngest.newBuilder().putAllOptions(options).build();
     }

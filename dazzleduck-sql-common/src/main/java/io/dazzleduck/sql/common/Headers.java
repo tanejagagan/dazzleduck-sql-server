@@ -29,11 +29,11 @@ public class Headers {
     public static final String HEADER_QUERY_ID = "query_id";
     public static final String HEADER_PRODUCER_BATCH_ID = "producer_batch_id";
     public static final String HEADER_SORT_ORDER = "sort_order";
-    public static final String HEADER_DATA_TRANSFORMATION ="transformation";
+    public static final String HEADER_DATA_PROJECTIONS ="projection";
     public static final String HEADER_APP_DATA_TRANSFORMATION ="udf_transformation";
 
     public static final Set<String> SUPPORTED_HEADERS = Set.of(HEADER_FETCH_SIZE, HEADER_DATABASE, HEADER_SCHEMA, HEADER_SPLIT_SIZE,
             HEADER_DATA_PARTITION, HEADER_DATA_FORMAT, HEADER_PRODUCER_ID, HEADER_PRODUCER_BATCH_ID, HEADER_SORT_ORDER,
-            HEADER_DATA_TRANSFORMATION, HEADER_APP_DATA_TRANSFORMATION, HEADER_PATH, HEADER_TABLE, HEADER_FUNCTION, HEADER_FILTER, HEADER_ACCESS_TYPE);
+            HEADER_DATA_PROJECTIONS, HEADER_APP_DATA_TRANSFORMATION, HEADER_PATH, HEADER_TABLE, HEADER_FUNCTION, HEADER_FILTER, HEADER_ACCESS_TYPE);
 
 }

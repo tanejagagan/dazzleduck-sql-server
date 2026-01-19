@@ -9,11 +9,6 @@ import java.util.Objects;
  * Use the builder pattern for flexible configuration.
  */
 public record MicrometerForwarderConfig(
-        // Application metadata
-        String applicationId,
-        String applicationName,
-        String applicationHost,
-
         // HTTP settings
         String baseUrl,
         String username,
@@ -32,16 +27,13 @@ public record MicrometerForwarderConfig(
         long maxOnDiskSize,
         int retryCount,
         long retryIntervalMillis,
-        List<String> transformations,
+        List<String> projections,
         List<String> partitionBy,
 
         // Feature flags
         boolean enabled
 ) {
     public MicrometerForwarderConfig {
-        Objects.requireNonNull(applicationId, "applicationId must not be null");
-        Objects.requireNonNull(applicationName, "applicationName must not be null");
-        Objects.requireNonNull(applicationHost, "applicationHost must not be null");
         Objects.requireNonNull(baseUrl, "baseUrl must not be null");
         Objects.requireNonNull(username, "username must not be null");
         Objects.requireNonNull(password, "password must not be null");
@@ -49,7 +41,7 @@ public record MicrometerForwarderConfig(
         Objects.requireNonNull(httpClientTimeout, "httpClientTimeout must not be null");
         Objects.requireNonNull(stepInterval, "stepInterval must not be null");
         Objects.requireNonNull(maxSendInterval, "maxSendInterval must not be null");
-        transformations = List.copyOf(transformations);
+        projections = List.copyOf(projections);
         partitionBy = List.copyOf(partitionBy);
     }
 
@@ -58,9 +50,6 @@ public record MicrometerForwarderConfig(
     }
 
     public static final class Builder {
-        private String applicationId = "default-app";
-        private String applicationName = "DefaultApplication";
-        private String applicationHost = getDefaultHostname();
         private String baseUrl = "http://localhost:8081";
         private String username = "admin";
         private String password = "admin";
@@ -74,34 +63,11 @@ public record MicrometerForwarderConfig(
         private long maxOnDiskSize = 1024 * 1024 * 1024L; // 1 GB
         private int retryCount = 3;
         private long retryIntervalMillis = 1000; // 1 second
-        private List<String> transformations = List.of();
+        private List<String> projections = List.of();
         private List<String> partitionBy = List.of();
         private boolean enabled = true;
 
         private Builder() {
-        }
-
-        private static String getDefaultHostname() {
-            try {
-                return java.net.InetAddress.getLocalHost().getHostName();
-            } catch (java.net.UnknownHostException e) {
-                return "localhost";
-            }
-        }
-
-        public Builder applicationId(String applicationId) {
-            this.applicationId = Objects.requireNonNull(applicationId);
-            return this;
-        }
-
-        public Builder applicationName(String applicationName) {
-            this.applicationName = Objects.requireNonNull(applicationName);
-            return this;
-        }
-
-        public Builder applicationHost(String applicationHost) {
-            this.applicationHost = Objects.requireNonNull(applicationHost);
-            return this;
         }
 
         public Builder baseUrl(String baseUrl) {
@@ -175,8 +141,8 @@ public record MicrometerForwarderConfig(
             return this;
         }
 
-        public Builder transformations(List<String> transformations) {
-            this.transformations = Objects.requireNonNull(transformations);
+        public Builder projections(List<String> projections) {
+            this.projections = Objects.requireNonNull(projections);
             return this;
         }
 
@@ -192,9 +158,6 @@ public record MicrometerForwarderConfig(
 
         public MicrometerForwarderConfig build() {
             return new MicrometerForwarderConfig(
-                    applicationId,
-                    applicationName,
-                    applicationHost,
                     baseUrl,
                     username,
                     password,
@@ -208,7 +171,7 @@ public record MicrometerForwarderConfig(
                     maxOnDiskSize,
                     retryCount,
                     retryIntervalMillis,
-                    transformations,
+                    projections,
                     partitionBy,
                     enabled
             );

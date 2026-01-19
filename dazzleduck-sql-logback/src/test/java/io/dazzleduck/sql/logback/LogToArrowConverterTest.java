@@ -66,10 +66,7 @@ class LogToArrowConverterTest {
                 "INFO",
                 "com.example.Test",
                 "main",
-                "Test message",
-                "app-123",
-                "TestApp",
-                "host1"
+                "Test message"
         );
 
         byte[] arrowBytes = converter.convertToArrowBytes(List.of(entry));
@@ -105,10 +102,7 @@ class LogToArrowConverterTest {
                     i % 2 == 0 ? "INFO" : "ERROR",
                     "Logger" + i,
                     "thread-" + i,
-                    "Message " + i,
-                    "app-" + i,
-                    "App" + i,
-                    "host" + i
+                    "Message " + i
             ));
         }
 
@@ -140,10 +134,7 @@ class LogToArrowConverterTest {
                 "WARN",
                 null,  // null logger
                 "main",
-                "Test message",
-                "app-1",
-                "TestApp",
-                null   // null host
+                "Test message"
         );
 
         byte[] arrowBytes = converter.convertToArrowBytes(List.of(entry));
@@ -178,10 +169,7 @@ class LogToArrowConverterTest {
                 "DEBUG",
                 "TestLogger",
                 "main",
-                "Debug message",
-                "app-1",
-                "TestApp",
-                "localhost"
+                "Debug message"
         );
 
         try (VectorSchemaRoot root = converter.convertToVectorSchemaRoot(List.of(entry))) {
@@ -211,10 +199,7 @@ class LogToArrowConverterTest {
                 "INFO",
                 "TestLogger",
                 "main",
-                largeMessage.toString(),
-                "app-1",
-                "TestApp",
-                "localhost"
+                largeMessage.toString()
         );
 
         byte[] arrowBytes = converter.convertToArrowBytes(List.of(entry));

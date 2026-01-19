@@ -110,14 +110,8 @@ class LogForwardingAppenderTest {
     }
 
     @Test
-    void configure_shouldSetApplicationMetadata() {
-        LogForwardingAppender.configure(
-                "my-app-id",
-                "MyApplication",
-                "my-host",
-                5000,
-                true
-        );
+    void configure_shouldSetBufferSettings() {
+        LogForwardingAppender.configure(5000, true);
 
         assertTrue(LogForwardingAppender.isEnabled());
     }

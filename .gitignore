@@ -1,0 +1,30 @@
+# Maven build output
+**/target/
+dependency-reduced-pom.xml
+
+# IDE files
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Log files
+*.log
+
+# Temporary files
+*.tmp
+*.swp
+
+# Data files
+*.arrow
+*.ducklake
+
+# Node.js
+package-lock.json
+node_modules/

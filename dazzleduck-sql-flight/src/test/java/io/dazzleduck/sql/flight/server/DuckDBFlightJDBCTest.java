@@ -1,7 +1,7 @@
 package io.dazzleduck.sql.flight.server;
 
 
-import io.dazzleduck.sql.common.util.ConfigUtils;
+import io.dazzleduck.sql.common.ConfigConstants;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import org.apache.arrow.driver.jdbc.ArrowFlightConnection;
@@ -50,7 +50,7 @@ public class DuckDBFlightJDBCTest {
 
         String[] args = {"--conf", "dazzleduck_server.flight_sql.port=" + port, "--conf", "dazzleduck_server.use_encryption=false",
                 "--conf",
-                "dazzleduck_server.%s=\"%s\"".formatted(ConfigUtils.WAREHOUSE_CONFIG_KEY, warehouse.toAbsolutePath().toString())};
+                "dazzleduck_server.%s=\"%s\"".formatted(ConfigConstants.WAREHOUSE_CONFIG_KEY, warehouse.toAbsolutePath().toString())};
         serverClient = FlightTestUtils.setUpFlightServerAndClient(args, "admin", "admin", Map.of());
     }
 

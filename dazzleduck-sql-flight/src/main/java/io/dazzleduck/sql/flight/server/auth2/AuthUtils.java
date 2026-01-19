@@ -2,8 +2,8 @@ package io.dazzleduck.sql.flight.server.auth2;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.typesafe.config.Config;
-import io.dazzleduck.sql.common.auth.Validator;
-import io.dazzleduck.sql.common.util.ConfigUtils;
+import io.dazzleduck.sql.commons.auth.Validator;
+import io.dazzleduck.sql.common.ConfigConstants;
 import org.apache.arrow.flight.CallHeaders;
 import org.apache.arrow.flight.CallInfo;
 import org.apache.arrow.flight.CallStatus;
@@ -30,7 +30,7 @@ public class AuthUtils {
     public static AdvanceJWTTokenAuthenticator getAuthenticator(Config config) {
         var validator = createCredentialValidator(config);
         var authenticator = new AdvanceBasicCallHeaderAuthenticator(validator);
-        var base64Key = config.getString(ConfigUtils.SECRET_KEY_KEY);
+        var base64Key = config.getString(ConfigConstants.SECRET_KEY_KEY);
         var secretKey = Validator.fromBase64String(base64Key);
         return new AdvanceJWTTokenAuthenticator(authenticator, secretKey, config);
     }
@@ -83,7 +83,7 @@ public class AuthUtils {
     }
 
     public static AdvanceBasicCallHeaderAuthenticator.AdvanceCredentialValidator createCredentialValidator(Config config) {
-        return config.hasPath(ConfigUtils.LOGIN_URL_KEY) ?
+        return config.hasPath(ConfigConstants.LOGIN_URL_KEY) ?
                 new HttpCredentialValidator(config)
                 : new ConfBasedCredentialValidator(config);
     }

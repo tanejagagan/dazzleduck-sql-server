@@ -1,6 +1,6 @@
 package io.dazzleduck.sql.micrometer.service;
 
-import io.dazzleduck.sql.client.FlightProducer;
+import io.dazzleduck.sql.client.ArrowProducer;
 import io.dazzleduck.sql.common.types.JavaRow;
 import io.micrometer.core.instrument.*;
 import io.micrometer.core.instrument.distribution.DistributionStatisticConfig;
@@ -11,6 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -21,19 +22,13 @@ public final class ArrowMicroMeterRegistry extends StepMeterRegistry implements 
     private static final Logger log =
             LoggerFactory.getLogger(ArrowMicroMeterRegistry.class);
 
-    private final FlightProducer sender;
-    private final String application_id;
-    private final String application_name;
-    private final String application_host;
+    private final ArrowProducer sender;
     private final AtomicLong sequenceCounter = new AtomicLong(0);
 
     public ArrowMicroMeterRegistry(
-            FlightProducer sender,
+            ArrowProducer sender,
             Clock clock,
-            Duration step,
-            String applicationId,
-            String applicationName,
-            String applicationHost
+            Duration step
     ) {
         super(new StepRegistryConfig() {
             @Override public String prefix() { return "arrow"; }
@@ -42,9 +37,6 @@ public final class ArrowMicroMeterRegistry extends StepMeterRegistry implements 
         }, clock);
 
         this.sender = sender;
-        this.application_id = applicationId;
-        this.application_name = applicationName;
-        this.application_host = applicationHost;
     }
 
     @Override
@@ -121,6 +113,7 @@ public final class ArrowMicroMeterRegistry extends StepMeterRegistry implements 
 
         return new JavaRow(new Object[]{
                 sequenceCounter.incrementAndGet(),
+                Instant.now().toEpochMilli(),
                 id.getName(),
                 id.getType().name().toLowerCase(),
                 tags,

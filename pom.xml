@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>io.dazzleduck.sql</groupId>
     <artifactId>dazzleduck-parent</artifactId>
-    <version>0.0.14</version>
+    <version>0.0.15</version>
     <packaging>pom</packaging>
     <name>DazzleDuck Project Parent POM</name>
     <url>https://github.com/dazzleduck-web/dazzleduck-sql-server</url>
@@ -39,6 +39,7 @@
         <module>dazzleduck-sql-logger</module>
         <module>dazzleduck-sql-login</module>
         <module>dazzleduck-sql-client</module>
+        <module>dazzleduck-sql-client-grpc</module>
         <module>dazzleduck-sql-scrapper</module>
         <module>dazzleduck-sql-logback</module>
     </modules>
@@ -57,11 +58,6 @@
     </properties>
     <dependencies>
         <dependency>
-            <groupId>org.jcommander</groupId>
-            <artifactId>jcommander</artifactId>
-            <version>2.0</version>
-        </dependency>
-        <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
             <version>5.8.1</version>
@@ -77,12 +73,6 @@
             <groupId>com.typesafe</groupId>
             <artifactId>config</artifactId>
             <version>${typesafe-config.version}</version>
-        </dependency>
-        <!-- https://mvnrepository.com/artifact/io.jsonwebtoken/jjwt -->
-        <dependency>
-            <groupId>io.jsonwebtoken</groupId>
-            <artifactId>jjwt</artifactId>
-            <version>0.12.6</version>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>

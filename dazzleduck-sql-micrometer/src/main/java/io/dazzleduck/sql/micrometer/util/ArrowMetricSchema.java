@@ -2,6 +2,7 @@ package io.dazzleduck.sql.micrometer.util;
 
 
 import org.apache.arrow.vector.types.FloatingPointPrecision;
+import org.apache.arrow.vector.types.TimeUnit;
 import org.apache.arrow.vector.types.pojo.*;
 
 import java.util.List;
@@ -12,6 +13,7 @@ public final class ArrowMetricSchema {
 
     public static final Schema SCHEMA = new Schema(List.of(
             new Field("s_no", FieldType.notNullable(new ArrowType.Int(64, true)), null),
+            new Field("timestamp", FieldType.notNullable(new ArrowType.Timestamp(TimeUnit.MILLISECOND, "UTC")), null),
             new Field("name", FieldType.notNullable(new ArrowType.Utf8()), null),
             new Field("type", FieldType.notNullable(new ArrowType.Utf8()), null),
 

@@ -1,6 +1,7 @@
 package io.dazzleduck.sql.login;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.dazzleduck.sql.common.auth.LoginRequest;
 import io.helidon.http.HeaderValues;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;

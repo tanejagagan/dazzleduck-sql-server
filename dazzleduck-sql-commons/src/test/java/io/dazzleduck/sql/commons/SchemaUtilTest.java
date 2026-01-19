@@ -1,7 +1,7 @@
 package io.dazzleduck.sql.commons;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
-import io.dazzleduck.sql.commons.types.DataType;
+import io.dazzleduck.sql.common.types.DataType;
 import io.dazzleduck.sql.commons.util.SchemaUtils;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;

@@ -5,8 +5,8 @@ import java.nio.file.Path;
 import java.time.Instant;
 
 public record Batch<T>(String[] sortOrder,
-                       String[] transformations,
-                       String[] partitions,
+                       String[] projections,
+                       String[] partitionBy,
                        T record,
                        String producerId,
                        long producerBatchId,
