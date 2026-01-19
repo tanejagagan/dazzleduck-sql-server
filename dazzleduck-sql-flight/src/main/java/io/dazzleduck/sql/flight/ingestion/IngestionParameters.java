@@ -1,13 +1,19 @@
 package io.dazzleduck.sql.flight.ingestion;
 
+import de.siegmar.fastcsv.reader.CsvReader;
+import de.siegmar.fastcsv.reader.CsvRecord;
 import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.commons.ingestion.Batch;
 import org.apache.arrow.flight.sql.impl.FlightSql;
 
+import java.io.IOException;
+import java.io.StringReader;
+import java.io.UncheckedIOException;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
-import java.util.function.Function;
 
 public record IngestionParameters(String path,
                                   String format, String[] partitionBy, String[] projections,
@@ -45,17 +51,32 @@ public record IngestionParameters(String path,
 
         String format = optionMap.getOrDefault(Headers.HEADER_DATA_FORMAT, "parquet");
 
-        Function<String, String[]> splitCsv = value -> {
-            if (value == null || value.isBlank()) return new String[0];
-            return java.util.Arrays.stream(value.split(",")).map(String::trim).filter(s -> !s.isEmpty()).toArray(String[]::new);
-        };
-
         String producerId = optionMap.get(Headers.HEADER_PRODUCER_ID);
         // Optional comma-separated lists
-        String[] partitionBy = splitCsv.apply(optionMap.get(Headers.HEADER_DATA_PARTITION));
-        String[] projections = splitCsv.apply(optionMap.get(Headers.HEADER_DATA_PROJECTIONS));
-        String[] sortOrder = splitCsv.apply(optionMap.get(Headers.HEADER_SORT_ORDER));
+        String[] partitionBy = parseCsv(optionMap.get(Headers.HEADER_DATA_PARTITION));
+        String[] projections = parseCsv(optionMap.get(Headers.HEADER_DATA_PROJECT));
+        String[] sortOrder = parseCsv(optionMap.get(Headers.HEADER_SORT_ORDER));
         return new IngestionParameters(path, format, partitionBy, projections, sortOrder, producerId, 0L, Map.of());
+    }
+
+    static String[] parseCsv(String value) {
+        if (value == null || value.isBlank()) {
+            return new String[0];
+        }
+        List<String> result = new ArrayList<>();
+        try (CsvReader<CsvRecord> reader = CsvReader.builder().ofCsvRecord(new StringReader(value))) {
+            for (CsvRecord record : reader) {
+                for (int i = 0; i < record.getFieldCount(); i++) {
+                    String field = record.getField(i).trim();
+                    if (!field.isEmpty()) {
+                        result.add(field);
+                    }
+                }
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to parse CSV value: " + value, e);
+        }
+        return result.toArray(new String[0]);
     }
 
     public FlightSql.CommandStatementIngest createCommand() {
@@ -63,7 +84,7 @@ public record IngestionParameters(String path,
                 Headers.HEADER_PATH, path(),
                 Headers.HEADER_DATA_PARTITION, String.join(",", partitionBy()),
                 Headers.HEADER_DATA_FORMAT, format(),
-                Headers.HEADER_DATA_PROJECTIONS, String.join(",", projections()),
+                Headers.HEADER_DATA_PROJECT, String.join(",", projections()),
                 Headers.HEADER_SORT_ORDER, String.join(",", sortOrder()));
         return FlightSql.CommandStatementIngest.newBuilder().putAllOptions(options).build();
     }
