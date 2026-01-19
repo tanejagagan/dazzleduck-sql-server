@@ -1,6 +1,6 @@
 package io.dazzleduck.sql.commons.ingestion;
 
-public record PathToTableMapping(String basePath, String tableName, String schemaName) {
+public record PathToTableMapping(String basePath, String tableName, String schemaName, String catalogName) {
 
     public boolean matches(String queueName) {
         return normalize(queueName).equals(normalize(basePath));
