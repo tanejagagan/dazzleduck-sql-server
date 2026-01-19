@@ -45,7 +45,7 @@ public class JwtClaimBasedAuthorizerTest {
         SERVER_CLIENT = flightTestUtils.createRestrictedServerClient(SERVER_TEST_LOCATION,  Map.of(
                         Headers.HEADER_TABLE, TEST_TABLE,
                         Headers.HEADER_FILTER, "key = 'k2'",
-                        Headers.HEADER_PATH, "example/hive_table"));
+                        Headers.HEADER_PATH, "example/data/hive_table"));
         var setupSql = getSetupSql(tableName, unauthorizedTableName);
         ConnectionPool.executeBatch(setupSql);
     }
@@ -130,19 +130,19 @@ public class JwtClaimBasedAuthorizerTest {
         var authorizer = SqlAuthorizer.JWT_AUTHORIZER;
         var claims = Map.of(
                 Headers.HEADER_ACCESS_TYPE, AccessType.WRITE.name(),
-                Headers.HEADER_PATH, "example/hive_table"
+                Headers.HEADER_PATH, "example/data/hive_table"
         );
-        assertTrue(authorizer.hasWriteAccess(TEST_USER, "example/hive_table", claims));
-        assertTrue(authorizer.hasWriteAccess(TEST_USER, "example/hive_table/subpath", claims));
+        assertTrue(authorizer.hasWriteAccess(TEST_USER, "example/data/hive_table", claims));
+        assertTrue(authorizer.hasWriteAccess(TEST_USER, "example/data/hive_table/subpath", claims));
     }
 
     @Test
     public void testHasWriteAccessWithoutWriteAccessType() {
         var authorizer = SqlAuthorizer.JWT_AUTHORIZER;
         var claims = Map.of(
-                Headers.HEADER_PATH, "example/hive_table"
+                Headers.HEADER_PATH, "example/data/hive_table"
         );
-        assertFalse(authorizer.hasWriteAccess(TEST_USER, "example/hive_table", claims));
+        assertFalse(authorizer.hasWriteAccess(TEST_USER, "example/data/hive_table", claims));
     }
 
     @Test
@@ -150,9 +150,9 @@ public class JwtClaimBasedAuthorizerTest {
         var authorizer = SqlAuthorizer.JWT_AUTHORIZER;
         var claims = Map.of(
                 Headers.HEADER_ACCESS_TYPE, AccessType.READ.name(),
-                Headers.HEADER_PATH, "example/hive_table"
+                Headers.HEADER_PATH, "example/data/hive_table"
         );
-        assertFalse(authorizer.hasWriteAccess(TEST_USER, "example/hive_table", claims));
+        assertFalse(authorizer.hasWriteAccess(TEST_USER, "example/data/hive_table", claims));
     }
 
     @Test
@@ -160,7 +160,7 @@ public class JwtClaimBasedAuthorizerTest {
         var authorizer = SqlAuthorizer.JWT_AUTHORIZER;
         var claims = Map.of(
                 Headers.HEADER_ACCESS_TYPE, AccessType.WRITE.name(),
-                Headers.HEADER_PATH, "example/hive_table"
+                Headers.HEADER_PATH, "example/data/hive_table"
         );
         assertFalse(authorizer.hasWriteAccess(TEST_USER, "other/path", claims));
     }
@@ -171,6 +171,6 @@ public class JwtClaimBasedAuthorizerTest {
         var claims = Map.of(
                 Headers.HEADER_ACCESS_TYPE, AccessType.WRITE.name()
         );
-        assertFalse(authorizer.hasWriteAccess(TEST_USER, "example/hive_table", claims));
+        assertFalse(authorizer.hasWriteAccess(TEST_USER, "example/data/hive_table", claims));
     }
 }

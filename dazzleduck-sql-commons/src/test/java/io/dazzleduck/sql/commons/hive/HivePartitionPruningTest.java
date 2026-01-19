@@ -28,7 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 public class HivePartitionPruningTest {
 
-    static final String basePath = "example/hive_table";
+    static final String basePath = "example/data/hive_table";
     static final String[][] partition = {{"dt", "date"}, {"p", "string"}};
     public static final String CREATE_SECRET_SQL =  "CREATE SECRET %s ( %s )";
     public static final String INSERT_STATEMENT = "COPY " +
