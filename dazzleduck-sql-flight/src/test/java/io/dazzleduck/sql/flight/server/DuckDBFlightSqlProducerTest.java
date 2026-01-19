@@ -256,7 +256,7 @@ public class DuckDBFlightSqlProducerTest {
         // Use dynamic port allocation
         final Location serverLocation = FlightTestUtils.findNextLocation();
         try ( var serverClient = createRestrictedServerClient( serverLocation, "admin" )) {
-            try (var splittableClient = splittableAdminClientForPath(serverLocation, serverClient.clientAllocator(), "example/hive_table")) {
+            try (var splittableClient = splittableAdminClientForPath(serverLocation, serverClient.clientAllocator(), "example/data/hive_table")) {
                 var flightCallHeaders = new FlightCallHeaders();
                 flightCallHeaders.insert(Headers.HEADER_SPLIT_SIZE, "1");
                 var flightInfo = splittableClient.execute(SUPPORTED_HIVE_PATH_QUERY, new HeaderCallOption(flightCallHeaders));
@@ -280,7 +280,7 @@ public class DuckDBFlightSqlProducerTest {
         // Use dynamic port allocation
         var serverLocation = FlightTestUtils.findNextLocation();
         try(var clientServer = createRestrictedServerClient( serverLocation, "admin")) {
-            try (var splittableClient = splittableAdminClientForPath(serverLocation, clientServer.clientAllocator(),  "example/delta_table")) {
+            try (var splittableClient = splittableAdminClientForPath(serverLocation, clientServer.clientAllocator(),  "example/data/delta_table")) {
                 var flightCallHeaders = new FlightCallHeaders();
                 flightCallHeaders.insert(Headers.HEADER_SPLIT_SIZE, "1");
                 var flightInfo = splittableClient.execute(SUPPORTED_DELTA_PATH_QUERY, new HeaderCallOption(flightCallHeaders));
@@ -463,7 +463,7 @@ public class DuckDBFlightSqlProducerTest {
         try (var serverClient = createRestrictedServerClient(newServerLocation, restrictedUser)) {
             String expectedSql = "%s where p = '1'".formatted(SUPPORTED_HIVE_PATH_QUERY);
             var clientAllocator = serverClient.clientAllocator();
-            try (var client = splittableClientForPathAndFilter( newServerLocation, clientAllocator, restrictedUser, "example/hive_table", "p = '1'")) {
+            try (var client = splittableClientForPathAndFilter( newServerLocation, clientAllocator, restrictedUser, "example/data/hive_table", "p = '1'")) {
                 var newFlightInfo = client.execute(SUPPORTED_HIVE_PATH_QUERY);
                 try (final FlightStream stream =
                              client.getStream(newFlightInfo.getEndpoints().get(0).getTicket())) {

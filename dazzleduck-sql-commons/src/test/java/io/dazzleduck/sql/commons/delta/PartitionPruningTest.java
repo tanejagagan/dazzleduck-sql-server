@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 
 public class PartitionPruningTest {
-    static final String basePath = "example/delta_table";
+    static final String basePath = "example/data/delta_table";
     static final String[][] partition = {{"dt", "date"}, {"p", "string"}};
 
     private static void assertSize(int expectedSize, String basePath, String filter) throws IOException, SQLException {

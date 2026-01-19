@@ -157,7 +157,7 @@ public class HttpServerBasicTest extends HttpServerTestBase {
                             new ByteArrayInputStream(byteArrayOutputStream.toByteArray())))
                     .header("Content-Type", ContentTypes.APPLICATION_ARROW)
                     .header(HEADER_DATA_PARTITION, urlEncode("a"))
-                    .header(HEADER_DATA_PROJECTIONS, urlEncode("*, (a + 1) as b"))
+                    .header(HEADER_DATA_PROJECT, urlEncode("*, (a + 1) as b"))
                     .header(HEADER_SORT_ORDER, urlEncode("b desc"))
                     .build();
             var res = client.send(request, HttpResponse.BodyHandlers.ofString());
@@ -239,7 +239,7 @@ public class HttpServerBasicTest extends HttpServerTestBase {
                                         new ByteArrayInputStream(byteArrayOutputStream.toByteArray())))
                                 .header("Content-Type", ContentTypes.APPLICATION_ARROW)
                                 .header(HEADER_DATA_PARTITION, urlEncode("a"))
-                                .header(HEADER_DATA_PROJECTIONS, urlEncode("*, a + " + final1 + " as b"))
+                                .header(HEADER_DATA_PROJECT, urlEncode("*, a + " + final1 + " as b"))
                                 .header(HEADER_SORT_ORDER, urlEncode("b desc"))
                                 .build();
 
