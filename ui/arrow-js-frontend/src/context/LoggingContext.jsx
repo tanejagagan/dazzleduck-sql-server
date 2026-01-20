@@ -10,6 +10,7 @@ export const LoggingProvider = ({ children }) => {
 
     // Session state
     const [connectionInfo, setConnectionInfo] = useState(null);
+    const [jwtToken, setJwtToken] = useState(() => Cookies.get("jwtToken") || null);
 
     // Load connection info from cookies on mount
     useEffect(() => {
@@ -65,8 +66,16 @@ export const LoggingProvider = ({ children }) => {
             });
             const jwt = `${response.data.tokenType} ${response.data.accessToken}`;
 
-            // Save JWT with expiration
-            Cookies.set("jwtToken", jwt, { path: "/", secure: true });
+            // Save JWT in state (always works) and try cookie as backup
+            setJwtToken(jwt);
+
+            // Also try to save to cookie for persistence across refreshes
+            const isLocalhost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+            Cookies.set("jwtToken", jwt, {
+                path: "/",
+                secure: !isLocalhost,
+                sameSite: "lax"
+            });
 
             // Save connection info (without password for security in cookies)
             const connInfo = {
@@ -96,14 +105,16 @@ export const LoggingProvider = ({ children }) => {
     const logout = useCallback(() => {
         Cookies.remove("jwtToken", { path: "/" });
         Cookies.remove("connectionInfo", { path: "/" });
+        setJwtToken(null);
         setConnectionInfo(null);
     }, []);
 
 
     // --- Helper: Check jwt and logout ---
     const requireJwtOrLogout = (jwt) => {
-        const token = Cookies.get("jwtToken");
-        if (!token && !jwt) {
+        const cookieToken = Cookies.get("jwtToken");
+        const token = jwtToken || cookieToken || jwt;
+        if (!token) {
             logout();
             throw new Error("Session expired. Please login again.");
         }
