@@ -28,6 +28,24 @@ public interface ConfigBasedProvider {
         }
     }
 
+    static  <T extends  ConfigBasedProvider > T load(Config config, String prefixKey) throws Exception {
+        if (!config.hasPath(prefixKey)) {
+            throw new RuntimeException("No config found : " + prefixKey);
+        }
+        var innerConfig = config.getConfig(prefixKey);
+        var clazz = innerConfig.getString(CLASS_KEY);
+        var c =  Class.forName(clazz);
+        try {
+            var constructorWithConfig = c.getConstructor(constructorParameterTypes);
+            return (T) constructorWithConfig.newInstance(innerConfig);
+        }  catch (NoSuchMethodException e) {
+            var constructor = Class.forName(clazz).getConstructor();
+            var object = (T) constructor.newInstance();
+            object.setConfig(innerConfig);
+            return object;
+        }
+    }
+
     void setConfig(Config config);
 
     private static <T extends ConfigBasedProvider>  T returnDefault(T defaultObject,  Config config) {

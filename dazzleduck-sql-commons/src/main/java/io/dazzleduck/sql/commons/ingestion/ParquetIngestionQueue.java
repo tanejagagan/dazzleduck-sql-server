@@ -2,7 +2,6 @@ package io.dazzleduck.sql.commons.ingestion;
 
 import io.dazzleduck.sql.commons.ConnectionPool;
 
-import java.sql.SQLException;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.*;
@@ -12,7 +11,7 @@ import java.util.stream.Collectors;
 public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResult> {
 
     private final String path;
-    private final PostIngestionTaskFactory postIngestionTaskFactory;
+    private final IngestionTaskFactory postIngestionTaskFactory;
     private final String applicationId;
     private final String inputFormat;
 
@@ -36,7 +35,7 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
                                  String identifier,
                                  long minBucketSize,
                                  Duration maxDelay,
-                                 PostIngestionTaskFactory postIngestionTaskFactory,
+                                 IngestionTaskFactory postIngestionTaskFactory,
                                  ScheduledExecutorService executorService,
                                  Clock clock) {
         super(identifier, minBucketSize, maxDelay, executorService, clock);
@@ -50,7 +49,7 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
     public void write(WriteTask<String, IngestionResult> writeTask) {
         try {
             IngestionResult ingestionResult = tryWrite(writeTask);
-            var postIngestionTask = postIngestionTaskFactory.create(ingestionResult);
+            var postIngestionTask = postIngestionTaskFactory.createPostIngestionTask(ingestionResult);
             postIngestionTask.execute();
             writeTask.bucket().futures().forEach(action -> action.complete(ingestionResult));
         }  catch (Exception e) {

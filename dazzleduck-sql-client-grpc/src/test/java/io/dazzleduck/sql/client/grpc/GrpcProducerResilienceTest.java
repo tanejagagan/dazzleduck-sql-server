@@ -71,9 +71,10 @@ public class GrpcProducerResilienceTest {
     void testGrpcArrowProducerResilience() throws Exception {
         int fixedFlightPort = findAvailablePort();
         int fixedHttpPort = findAvailablePort();
-        Path warehousePath = Files.createTempDirectory("grpc-resilience-test");
+        Path warehousePath = Files.createTempDirectory("grpc-resilience-warehouse");
+        Path ingestionPath = Files.createTempDirectory("grpc-resilience-ingestion");
         String testPath = "grpc-data";
-        Files.createDirectories(warehousePath.resolve(testPath));
+        Files.createDirectories(ingestionPath.resolve(testPath));
 
         Schema schema = new Schema(List.of(
                 new Field("id", FieldType.nullable(new ArrowType.Int(64, true)), null)
@@ -93,6 +94,7 @@ public class GrpcProducerResilienceTest {
                 logger.info("Starting server on ports HTTP:{}, Flight:{}", fixedHttpPort, fixedFlightPort);
                 server.startWithPorts(fixedHttpPort, fixedFlightPort,
                         "warehouse=" + warehousePath,
+                        "ingestion_task_factory_provider.ingestion_path=" + ingestionPath,
                         "ingestion.max_delay_ms=0");
                 logger.info("Server started successfully");
 
@@ -124,7 +126,7 @@ public class GrpcProducerResilienceTest {
                     Location.forGrpcInsecure(HOST, fixedFlightPort),
                     USER,
                     PASSWORD,
-                    Map.of("path", testPath),
+                    Map.of("ingestion_queue", testPath),
                     Duration.ofSeconds(60)
             )) {
                 logger.info("Sending {} events over {}ms...", expectedEvents, TEST_DURATION_MS);
@@ -152,8 +154,8 @@ public class GrpcProducerResilienceTest {
 
             // Verify all distinct events received
             logger.info("Verifying data...");
-            var actualQuery = "SELECT DISTINCT id FROM read_parquet('%s/%s/*.parquet') ORDER BY id".formatted(warehousePath, testPath);
-            var expectedQuery = "SELECT * FROM generate_series(0, %d) AS t(id) ORDER BY id".formatted(expectedEvents - 1);
+            var actualQuery = String.format("SELECT DISTINCT id FROM read_parquet('%s/%s/*.parquet') ORDER BY id", ingestionPath, testPath);
+            var expectedQuery = String.format("SELECT * FROM generate_series(0, %d) AS t(id) ORDER BY id", expectedEvents - 1);
             TestUtils.isEqual(expectedQuery, actualQuery);
 
             logger.info("GrpcArrowProducer resilience test passed - all {} distinct events received", expectedEvents);
@@ -161,6 +163,7 @@ public class GrpcProducerResilienceTest {
         } finally {
             server.close();
             cleanupDirectory(warehousePath);
+            cleanupDirectory(ingestionPath);
         }
     }
 

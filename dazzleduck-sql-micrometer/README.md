@@ -75,7 +75,7 @@ public class MetricsExample {
         MeterRegistry registry = MetricsRegistryFactory.create();
 
         // Record metrics
-        Counter requestCounter = registry.counter("http.requests", "method", "GET", "path", "/api/users");
+        Counter requestCounter = registry.counter("http.requests", "method", "GET", "ingestionQueue", "/api/users");
         requestCounter.increment();
 
         // ... your application code ...
@@ -112,7 +112,7 @@ public class MetricsExample {
         // Get the registry and record metrics
         MeterRegistry registry = forwarder.getRegistry();
 
-        Counter requestCounter = registry.counter("http.requests", "method", "GET", "path", "/api/users");
+        Counter requestCounter = registry.counter("http.requests", "method", "GET", "ingestionQueue", "/api/users");
         requestCounter.increment();
 
         // Cleanup on shutdown
@@ -176,7 +176,7 @@ registry.config().commonTags("env", "production", "service", "order-service");
 // Add tags per metric
 Counter counter = Counter.builder("api.calls")
         .tag("method", "GET")
-        .tag("path", "/users")
+        .tag("ingestionQueue", "/users")
         .tag("status", "200")
         .register(registry);
 ```

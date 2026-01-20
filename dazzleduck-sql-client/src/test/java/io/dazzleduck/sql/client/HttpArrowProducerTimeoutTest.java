@@ -104,7 +104,7 @@ public class HttpArrowProducerTimeoutTest {
             timeoutSender.enqueue(arrowBytes("select * from generate_series(2000)"));
             await().atMost(5, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() ->
                     assertThrows(Exception.class, () ->
-                            ConnectionPool.collectFirst("select count(*) from read_parquet('%s/%s')".formatted(warehouse, file), Long.class)
+                            ConnectionPool.collectFirst(String.format("select count(*) from read_parquet('%s/%s')", warehouse, file), Long.class)
                     )
             );
         }

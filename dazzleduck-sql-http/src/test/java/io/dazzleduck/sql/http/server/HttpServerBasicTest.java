@@ -1,5 +1,6 @@
 package io.dazzleduck.sql.http.server;
 
+import com.typesafe.config.Config;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.helidon.http.HeaderValues;
@@ -109,7 +110,7 @@ public class HttpServerBasicTest extends HttpServerTestBase {
     @ValueSource(strings = {"parquet", "arrow"})
     public void testIngestionPostNoPartition(String format) throws IOException, InterruptedException, SQLException {
         var path = "abc";
-        Files.createDirectories(Path.of(warehousePath, "%s.%s".formatted(path, format)));
+        Files.createDirectories(Path.of(ingestionPath, "%s.%s".formatted(path, format)));
         String query = "select * from generate_series(10)";
         try (BufferAllocator allocator = new RootAllocator();
              DuckDBConnection connection = ConnectionPool.getConnection();
@@ -121,7 +122,7 @@ public class HttpServerBasicTest extends HttpServerTestBase {
                 streamWrite.writeBatch();
             }
             streamWrite.end();
-            var request = HttpRequest.newBuilder(URI.create(baseUrl + "/v1/ingest?path=%s.%s".formatted(path, format)))
+            var request = HttpRequest.newBuilder(URI.create(baseUrl + "/v1/ingest?ingestion_queue=%s.%s".formatted(path, format)))
                     .POST(HttpRequest.BodyPublishers.ofInputStream(() ->
                             new ByteArrayInputStream(byteArrayOutputStream.toByteArray())))
                     .header("Content-Type", ContentTypes.APPLICATION_ARROW)
@@ -130,7 +131,7 @@ public class HttpServerBasicTest extends HttpServerTestBase {
 
             var res = client.send(request, HttpResponse.BodyHandlers.ofString());
             assertEquals(200, res.statusCode());
-            var testSql = String.format("select count(*) from read_%s('%s/%s.%s/*.%s')", format, warehousePath, path, format, format);
+            var testSql = String.format("select count(*) from read_%s('%s/%s.%s/*.%s')", format, ingestionPath, path, format, format);
             var lines = ConnectionPool.collectFirst(testSql, Long.class);
             assertEquals(11, lines);
         }
@@ -151,8 +152,8 @@ public class HttpServerBasicTest extends HttpServerTestBase {
             streamWrite.end();
             var table = "table_single";
 
-            Files.createDirectories(Path.of(warehousePath, table));
-            var request = HttpRequest.newBuilder(URI.create(baseUrl + "/v1/ingest?path=%s".formatted(table)))
+            Files.createDirectories(Path.of(ingestionPath, table));
+            var request = HttpRequest.newBuilder(URI.create(baseUrl + "/v1/ingest?ingestion_queue=%s".formatted(table)))
                     .POST(HttpRequest.BodyPublishers.ofInputStream(() ->
                             new ByteArrayInputStream(byteArrayOutputStream.toByteArray())))
                     .header("Content-Type", ContentTypes.APPLICATION_ARROW)
@@ -162,7 +163,7 @@ public class HttpServerBasicTest extends HttpServerTestBase {
                     .build();
             var res = client.send(request, HttpResponse.BodyHandlers.ofString());
             assertEquals(200, res.statusCode());
-            var testSql = "select generate_series, a, b from read_parquet('%s/%s/*/*.parquet')".formatted(warehousePath, table);
+            var testSql = "select generate_series, a, b from read_parquet('%s/%s/*/*.parquet')".formatted(ingestionPath, table);
             var expected = "select generate_series, generate_series a, (a+1) as b from generate_series(10) order by b desc";
             System.out.println(testSql);
             TestUtils.isEqual(expected, testSql);
@@ -172,8 +173,8 @@ public class HttpServerBasicTest extends HttpServerTestBase {
     @Test
     public void testIngestionPostFromFile() throws SQLException, IOException, InterruptedException {
         var path = "file1";
-        Files.createDirectories(Path.of(warehousePath, path));
-        var request = HttpRequest.newBuilder(URI.create(baseUrl + "/v1/ingest?path=%s".formatted(path)))
+        Files.createDirectories(Path.of(ingestionPath, path));
+        var request = HttpRequest.newBuilder(URI.create(baseUrl + "/v1/ingest?ingestion_queue=%s".formatted(path)))
                 .POST(HttpRequest.BodyPublishers.ofInputStream(() -> {
                     try {
                         return new FileInputStream("example/arrow_ipc/file1.arrow");
@@ -183,7 +184,7 @@ public class HttpServerBasicTest extends HttpServerTestBase {
                 })).header("Content-Type", ContentTypes.APPLICATION_ARROW).build();
         var res = client.send(request, HttpResponse.BodyHandlers.ofString());
         assertEquals(200, res.statusCode());
-        var testSql = String.format("select count(*) from read_parquet('%s/%s/*.parquet')", warehousePath, path);
+        var testSql = String.format("select count(*) from read_parquet('%s/%s/*.parquet')", ingestionPath, path);
         var lines = ConnectionPool.collectFirst(testSql, Long.class);
         assertEquals(11, lines);
     }
@@ -215,8 +216,9 @@ public class HttpServerBasicTest extends HttpServerTestBase {
         final int totalRequests = 100;
         final int parallelism = 100;
         String query = "select generate_series, generate_series a from generate_series(10)";
+        var ingestionPath = getIngestionPath();
         var path = "table";
-        Files.createDirectories(Path.of(warehousePath, path));
+        Files.createDirectories(Path.of( ingestionPath, path));
         try (BufferAllocator allocator = new RootAllocator();
              DuckDBConnection connection = ConnectionPool.getConnection();
              var reader = ConnectionPool.getReader(connection, allocator, query, 1000);
@@ -234,7 +236,7 @@ public class HttpServerBasicTest extends HttpServerTestBase {
                 int final1 = i;
                 CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
                     try {
-                        var request = HttpRequest.newBuilder(URI.create(baseUrl + "/v1/ingest?path=%s".formatted(path)))
+                        var request = HttpRequest.newBuilder(URI.create(baseUrl + "/v1/ingest?ingestion_queue=%s".formatted(path)))
                                 .POST(HttpRequest.BodyPublishers.ofInputStream(() ->
                                         new ByteArrayInputStream(byteArrayOutputStream.toByteArray())))
                                 .header("Content-Type", ContentTypes.APPLICATION_ARROW)
@@ -254,6 +256,10 @@ public class HttpServerBasicTest extends HttpServerTestBase {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
             executor.shutdown();
         }
+    }
+
+    private String getIngestionPath() {
+        return "ingestion";
     }
 
     @Test

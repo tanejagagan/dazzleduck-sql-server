@@ -19,7 +19,7 @@ import java.util.Comparator;
 import java.util.concurrent.TimeUnit;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-public class HttpMetricIntegrationTest {
+public class HttpMetricDuckLakeIntegrationTest {
 
     @TempDir
     static Path warehouse;
@@ -32,7 +32,7 @@ public class HttpMetricIntegrationTest {
     private static final String TABLE_NAME = "test_metrics";
     private static final String SCHEMA_NAME = "main";
 
-    private static final String INGEST_PATH = "metrics";
+    private static final String INGESTION_QUEUE_ID = "metrics";
     private static final String DUCKLAKE_DATA_DIR = "ducklake_data";
 
     @BeforeAll
@@ -66,17 +66,20 @@ public class HttpMetricIntegrationTest {
                 "http.auth=none",
                 "warehouse=" + warehouse.toAbsolutePath(),
                 // DuckLake ingestion
-                "post_ingestion_task_factory_provider.class=io.dazzleduck.sql.commons.ingestion.DuckLakePostIngestionTaskFactoryProvider",
-                "post_ingestion_task_factory_provider.catalog_name=" + CATALOG_NAME,
+                "ingestion_task_factory_provider.class=io.dazzleduck.sql.commons.ingestion.DuckLakeIngestionTaskFactoryProvider",
+
                 // Mapping
-                "post_ingestion_task_factory_provider.path_to_table_mapping.0.table_name=" + TABLE_NAME,
-                "post_ingestion_task_factory_provider.path_to_table_mapping.0.schema_name=" + SCHEMA_NAME,
-                "post_ingestion_task_factory_provider.path_to_table_mapping.0.base_path=" + INGEST_PATH,
+                "ingestion_task_factory_provider.ingestion_queue_to_table_mapping.0.table_name=" + TABLE_NAME,
+                "ingestion_task_factory_provider.ingestion_queue_to_table_mapping.0.schema_name=" + SCHEMA_NAME,
+                "ingestion_task_factory_provider.ingestion_queue_to_table_mapping.0.catalog_name=" + CATALOG_NAME,
+                "ingestion_task_factory_provider.ingestion_queue_to_table_mapping.0.ingestion_queue_id=" + INGESTION_QUEUE_ID,
                 // Startup script
                 "startup_script_provider.class=io.dazzleduck.sql.flight.ConfigBasedStartupScriptProvider",
                 "startup_script_provider.content=" + STARTUP_SCRIPT
         );
-        Files.createDirectories(Path.of(server.getWarehousePath(), INGEST_PATH));
+        Files.createDirectories(Path.of(server.getWarehousePath(), DUCKLAKE_DATA_DIR));
+        Files.createDirectories(Path.of(server.getWarehousePath(), DUCKLAKE_DATA_DIR, SCHEMA_NAME));
+        Files.createDirectories(Path.of(server.getWarehousePath(), DUCKLAKE_DATA_DIR, SCHEMA_NAME, TABLE_NAME));
     }
 
     @Test
@@ -97,7 +100,8 @@ public class HttpMetricIntegrationTest {
             registry.close();
         }
 
-        Path metricDir = Path.of(server.getWarehousePath(), INGEST_PATH);
+        Path metricDir =
+        Path.of(server.getWarehousePath(), DUCKLAKE_DATA_DIR, SCHEMA_NAME, TABLE_NAME);
         Path metricFile = waitForMetricFile(metricDir.toString());
 
         TestUtils.isEqual("""

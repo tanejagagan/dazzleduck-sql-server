@@ -25,6 +25,8 @@ public abstract class HttpServerTestBase {
     protected static HttpClient client;
     protected static ObjectMapper objectMapper = new ObjectMapper();
     protected static String warehousePath;
+
+    protected static String ingestionPath;
     protected static int serverPort;
     protected static String baseUrl;
 
@@ -43,7 +45,9 @@ public abstract class HttpServerTestBase {
 
     protected static void initWarehouse() {
         warehousePath = "/tmp/" + UUID.randomUUID();
+        ingestionPath = warehousePath + "ingestion";
         new File(warehousePath).mkdir();
+        new File(ingestionPath).mkdir();
     }
 
     protected static void initClient() {
@@ -58,6 +62,8 @@ public abstract class HttpServerTestBase {
     protected static void startServer(String... extraArgs) throws Exception {
         String[] baseArgs = {"--conf", "dazzleduck_server.http.port=%s".formatted(serverPort),
                 "--conf", "dazzleduck_server.%s=%s".formatted(ConfigConstants.WAREHOUSE_CONFIG_KEY, warehousePath),
+                "--conf", "dazzleduck_server.ingestion_task_factory_provider.class=io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider",
+                "--conf", "dazzleduck_server.ingestion_task_factory_provider.ingestion_path=%s".formatted(ingestionPath),
                 "--conf", "dazzleduck_server.ingestion.max_delay_ms=500"};
         String[] args = new String[baseArgs.length + extraArgs.length];
         System.arraycopy(baseArgs, 0, args, 0, baseArgs.length);

@@ -19,6 +19,8 @@ public class Headers {
     public static final String HEADER_SCHEMA = "schema";
     public static final String HEADER_TABLE = "table";
     public static final String HEADER_PATH = "path";
+
+    public static final String HEADER_INGESTION_QUEUE = "ingestion_queue";
     public static final String HEADER_FUNCTION = "function";
     public static final String HEADER_FILTER = "filter";
     public static final String HEADER_ACCESS_TYPE = "access_type";

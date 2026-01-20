@@ -44,14 +44,14 @@ public class IngestionService implements HttpService, ParameterUtils, Controller
 
     protected IngestionParameters parseIngestionParameters(ServerRequest serverRequest) {
         UriQuery query = serverRequest.query();
-        var path = query.get("path");
+        var path = query.get(HEADER_INGESTION_QUEUE);
 
-        // Validate path to prevent path traversal attacks
+        // Validate ingestion_queue to prevent traversal attacks
         if (path == null || path.isEmpty()) {
-            throw new IllegalArgumentException("Path parameter is required");
+            throw new IllegalArgumentException("ingestion_queue parameter is required");
         }
         if (path.contains("..") || path.startsWith("/")) {
-            throw new IllegalArgumentException("Invalid path: path traversal not allowed");
+            throw new IllegalArgumentException("Invalid ingestion_queue: traversal not allowed");
         }
 
 

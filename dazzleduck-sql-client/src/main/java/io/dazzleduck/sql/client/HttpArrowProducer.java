@@ -307,7 +307,7 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
 
     private HttpResponse<String> post(byte[] payload) throws IOException, InterruptedException {
         HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
-                .uri(URI.create(baseUrl + "/v1/ingest?path=" + targetPath))
+                .uri(URI.create(baseUrl + "/v1/ingest?ingestion_queue=" + targetPath))
                 .timeout(httpClientTimeout)
                 .POST(HttpRequest.BodyPublishers.ofByteArray(payload))
                 .header("Authorization", getJwt())

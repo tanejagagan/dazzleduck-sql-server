@@ -15,7 +15,6 @@ import org.slf4j.helpers.LegacyAbstractLogger;
 import org.slf4j.helpers.MessageFormatter;
 
 import java.io.PrintWriter;
-import java.io.Serial;
 import java.io.StringWriter;
 import java.time.Duration;
 import java.time.Instant;
@@ -26,7 +25,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoCloseable {
 
-    @Serial
+
     private static final long serialVersionUID = 1L;
 
     // Global sequence number generator
@@ -134,7 +133,7 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
                     Duration.ofMillis(config.getLong(ConfigConstants.MAX_SEND_INTERVAL_MS_KEY)),
                     config.getInt(ConfigConstants.RETRY_COUNT_KEY),
                     config.getLong(ConfigConstants.RETRY_INTERVAL_MS_KEY),
-                    config.getStringList(ConfigConstants.PROJECTIONS_KEY),
+                    config.getStringList(ConfigConstants.PROJECT_KEY),
                     config.getStringList(ConfigConstants.PARTITION_BY_KEY),
                     config.getLong(ConfigConstants.MAX_IN_MEMORY_BYTES_KEY),
                     config.getLong(ConfigConstants.MAX_ON_DISK_BYTES_KEY)

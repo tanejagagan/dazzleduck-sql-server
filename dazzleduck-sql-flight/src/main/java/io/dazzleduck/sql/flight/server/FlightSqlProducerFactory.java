@@ -4,8 +4,8 @@ import com.typesafe.config.Config;
 import io.dazzleduck.sql.commons.config.ConfigBasedProvider;
 import io.dazzleduck.sql.common.ConfigConstants;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
-import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactory;
-import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactoryProvider;
+import io.dazzleduck.sql.commons.ingestion.IngestionTaskFactory;
+import io.dazzleduck.sql.commons.ingestion.IngestionTaskFactoryProvider;
 import io.dazzleduck.sql.flight.FlightRecorder;
 import io.dazzleduck.sql.flight.SimpleFlightRecorder;
 import io.dazzleduck.sql.flight.optimizer.QueryOptimizer;
@@ -104,7 +104,7 @@ public final class FlightSqlProducerFactory {
         private Path tempWriteDir;
         private AccessMode accessMode;
         private BufferAllocator allocator;
-        private PostIngestionTaskFactory postIngestionTaskFactory;
+        private IngestionTaskFactory ingestionTaskFactory;
         private QueryOptimizer queryOptimizer;
         private ScheduledExecutorService scheduledExecutorService;
         private Duration queryTimeout;
@@ -152,7 +152,7 @@ public final class FlightSqlProducerFactory {
             // Load providers (query optimizer, post-ingestion factory)
             try {
                 this.queryOptimizer = loadQueryOptimizer(config);
-                this.postIngestionTaskFactory = loadPostIngestionTaskFactory(config);
+                this.ingestionTaskFactory = loadIngestionTaskFactory(config);
             } catch (Exception e) {
                 throw new RuntimeException("Failed to load providers from config", e);
             }
@@ -218,8 +218,8 @@ public final class FlightSqlProducerFactory {
         /**
          * @return the configured post-ingestion task factory
          */
-        public PostIngestionTaskFactory getPostIngestionTaskFactory() {
-            return postIngestionTaskFactory;
+        public IngestionTaskFactory getIngestionTaskFactory() {
+            return ingestionTaskFactory;
         }
 
         /**
@@ -314,8 +314,8 @@ public final class FlightSqlProducerFactory {
          * @param factory the post-ingestion task factory
          * @return this builder
          */
-        public ProducerBuilder withPostIngestionTaskFactory(PostIngestionTaskFactory factory) {
-            this.postIngestionTaskFactory = factory;
+        public ProducerBuilder withPostIngestionTaskFactory(IngestionTaskFactory factory) {
+            this.ingestionTaskFactory = factory;
             return this;
         }
 
@@ -418,7 +418,7 @@ public final class FlightSqlProducerFactory {
                     finalAllocator,
                     warehousePath,
                     tempWriteDir,
-                    postIngestionTaskFactory,
+                        ingestionTaskFactory,
                     finalExecutorService,
                     queryTimeout,
                     clock,
@@ -435,7 +435,7 @@ public final class FlightSqlProducerFactory {
                     warehousePath,
                     accessMode,
                     tempWriteDir,
-                    postIngestionTaskFactory,
+                        ingestionTaskFactory,
                     finalExecutorService,
                     queryTimeout,
                     clock,
@@ -458,13 +458,12 @@ public final class FlightSqlProducerFactory {
                 : Location.forGrpcInsecure(host, port);
         }
 
-        private static PostIngestionTaskFactory loadPostIngestionTaskFactory(Config config) throws Exception {
-            PostIngestionTaskFactoryProvider provider = ConfigBasedProvider.load(
+        private static IngestionTaskFactory loadIngestionTaskFactory(Config config) throws Exception {
+            IngestionTaskFactoryProvider provider = ConfigBasedProvider.load(
                 config,
-                PostIngestionTaskFactoryProvider.POST_INGESTION_CONFIG_PREFIX,
-                PostIngestionTaskFactoryProvider.NO_OP
+                ConfigConstants.INGESTION_CONFIG_PREFIX
             );
-            return provider.getPostIngestionTaskFactory();
+            return provider.getIngestionTaskFactory();
         }
 
         private static QueryOptimizer loadQueryOptimizer(Config config) throws Exception {

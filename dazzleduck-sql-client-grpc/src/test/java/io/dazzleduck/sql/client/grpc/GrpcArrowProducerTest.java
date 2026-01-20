@@ -30,14 +30,14 @@ class GrpcArrowProducerTest {
     private RootAllocator allocator;
     private FlightSqlClient client;
     private int flightPort;
-    private String warehouse;
+    private String ingestionPath;
 
     @BeforeAll
     void setup() throws Exception {
         server = new SharedTestServer();
         server.start("ingestion.max_delay_ms=500");
         flightPort = server.getFlightPort();
-        warehouse = server.getWarehousePath();
+        ingestionPath = server.getIngestionPath();
 
         allocator = new RootAllocator(Long.MAX_VALUE);
 
@@ -83,7 +83,7 @@ class GrpcArrowProducerTest {
     void ingestAndVerifyValues() throws Exception {
         Schema schema = new Schema(List.of(new Field("name", FieldType.nullable(new ArrowType.Utf8()), null)));
         String path =  "names";
-        Files.createDirectories(Path.of(warehouse, path));
+        Files.createDirectories(Path.of(ingestionPath, path));
 
         try (GrpcArrowProducer sender = new GrpcArrowProducer(
                 schema,
@@ -101,7 +101,7 @@ class GrpcArrowProducerTest {
                 Location.forGrpcInsecure(HOST, flightPort),
                 USER,
                 PASSWORD,
-                Map.of("path", path),
+                Map.of("ingestion_queue", path),
                 Duration.ofSeconds(30)
         )) {
             sender.addRow(new JavaRow(new Object[]{"Aman"}));
@@ -109,7 +109,7 @@ class GrpcArrowProducerTest {
             sender.addRow(new JavaRow(new Object[]{"Sid"}));
         }
 
-        var query = "SELECT name FROM read_parquet('%s/%s/*.parquet')".formatted(warehouse, path) + " ORDER BY name";
+        var query = String.format("SELECT name FROM read_parquet('%s/%s/*.parquet')", ingestionPath, path) + " ORDER BY name";
 
         FlightInfo flightInfo = client.execute(query);
         List<String> values = new java.util.ArrayList<>();
@@ -137,7 +137,7 @@ class GrpcArrowProducerTest {
     void testProjectionsAndPartitionByParameters() throws Exception {
         Schema schema = new Schema(List.of(new Field("value", FieldType.nullable(new ArrowType.Int(32, true)), null)));
         String path = "both-params-grpc-test";
-        Files.createDirectories(Path.of(warehouse, path));
+        Files.createDirectories(Path.of(ingestionPath, path));
 
         try (GrpcArrowProducer sender = new GrpcArrowProducer(
                 schema,
@@ -155,7 +155,7 @@ class GrpcArrowProducerTest {
                 Location.forGrpcInsecure(HOST, flightPort),
                 USER,
                 PASSWORD,
-                Map.of("path", path),
+                Map.of("ingestion_queue", path),
                 Duration.ofSeconds(30)
         )) {
             sender.addRow(new JavaRow(new Object[]{1}));
@@ -163,7 +163,7 @@ class GrpcArrowProducerTest {
             sender.addRow(new JavaRow(new Object[]{3}));
         }
 
-        var query = "SELECT count(*) as cnt FROM read_parquet('%s/%s/*/*/*.parquet')".formatted(warehouse, path);
+        var query = String.format("SELECT count(*) as cnt FROM read_parquet('%s/%s/*/*/*.parquet')", ingestionPath, path);
         FlightInfo flightInfo = client.execute(query);
 
         try (FlightStream stream = client.getStream(flightInfo.getEndpoints().get(0).getTicket())) {
@@ -181,7 +181,7 @@ class GrpcArrowProducerTest {
     void testEmptyListsDoNotSendParameters() throws Exception {
         Schema schema = new Schema(List.of(new Field("value", FieldType.nullable(new ArrowType.Int(32, true)), null)));
         String path = "empty-lists-grpc-test";
-        Files.createDirectories(Path.of(warehouse, path));
+        Files.createDirectories(Path.of(ingestionPath, path));
 
         // Empty lists should work fine and not send parameters
         try (GrpcArrowProducer sender = new GrpcArrowProducer(
@@ -200,7 +200,7 @@ class GrpcArrowProducerTest {
                 Location.forGrpcInsecure(HOST, flightPort),
                 USER,
                 PASSWORD,
-                Map.of("path", path),
+                Map.of("ingestion_queue", path),
                 Duration.ofSeconds(30)
         )) {
             sender.addRow(new JavaRow(new Object[]{1}));
@@ -208,7 +208,7 @@ class GrpcArrowProducerTest {
             sender.addRow(new JavaRow(new Object[]{3}));
         }
 
-        var query = "SELECT count(*) as cnt FROM read_parquet('%s/%s/*.parquet')".formatted(warehouse, path);
+        var query = String.format("SELECT count(*) as cnt FROM read_parquet('%s/%s/*.parquet')", ingestionPath, path);
         FlightInfo flightInfo = client.execute(query);
 
         try (FlightStream stream = client.getStream(flightInfo.getEndpoints().get(0).getTicket())) {
