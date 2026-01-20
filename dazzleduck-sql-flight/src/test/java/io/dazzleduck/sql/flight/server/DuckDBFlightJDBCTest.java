@@ -46,7 +46,7 @@ public class DuckDBFlightJDBCTest {
         // Find available port dynamically
         port = FlightTestUtils.findFreePortInRange(50000, 60000);
         url = String.format("jdbc:arrow-flight-sql://localhost:%s/?database=memory&useEncryption=1&disableCertificateVerification=true&user=admin&password=admin", port);
-        urlWithS3Path = String.format("jdbc:arrow-flight-sql://localhost:%s/?database=memory&useEncryption=1&disableCertificateVerification=true&user=admin&password=admin&path=s3://bucket/my/folder", port);
+        urlWithS3Path = String.format("jdbc:arrow-flight-sql://localhost:%s/?database=memory&useEncryption=1&disableCertificateVerification=true&user=admin&password=admin&ingestion_queue=s3://bucket/my/folder", port);
 
         String[] args = {"--conf", "dazzleduck_server.flight_sql.port=" + port, "--conf", "dazzleduck_server.use_encryption=false",
                 "--conf",

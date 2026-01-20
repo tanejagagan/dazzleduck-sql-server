@@ -8,15 +8,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -217,10 +213,15 @@ public class ParquetIngestionQueueTest {
         var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
 
         AtomicInteger postTaskCount = new AtomicInteger(0);
-        var postTaskFactory = new PostIngestionTaskFactory() {
+        var postTaskFactory = new IngestionTaskFactory() {
             @Override
-            public PostIngestionTask create(IngestionResult ingestionResult) {
-                return () -> postTaskCount.incrementAndGet();
+            public PostIngestionTask createPostIngestionTask(IngestionResult ingestionResult) {
+                return postTaskCount::incrementAndGet;
+            }
+
+            @Override
+            public String getTargetPath(String queueId) {
+                return targetPath.toString();
             }
         };
 
@@ -438,11 +439,24 @@ public class ParquetIngestionQueueTest {
         );
     }
 
-    private PostIngestionTaskFactory createPostTaskFactory(AtomicBoolean executed, boolean shouldFail) {
-        return ingestionResult -> () -> {
-            executed.set(true);
-            if (shouldFail) {
-                throw new RuntimeException("Post-ingestion task failed");
+    private IngestionTaskFactory createPostTaskFactory(AtomicBoolean executed, boolean shouldFail) {
+        return new IngestionTaskFactory() {
+            @Override
+            public PostIngestionTask createPostIngestionTask(IngestionResult ingestionResult) {
+                return new PostIngestionTask() {
+                    @Override
+                    public void execute() {
+                        executed.set(true);
+                        if (shouldFail) {
+                            throw new RuntimeException("Post-ingestion task failed");
+                        }
+                    }
+                };
+            }
+
+            @Override
+            public String getTargetPath(String queueId) {
+                return null;
             }
         };
     }

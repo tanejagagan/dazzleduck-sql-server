@@ -33,7 +33,7 @@ import static org.junit.jupiter.api.Assertions.*;
 public class HttpArrowProducerTest {
 
     private static SharedTestServer server;
-    private static String warehouse;
+    private static String ingestionPath;
     private static String baseUrl;
     private static Schema schema;
 
@@ -41,7 +41,7 @@ public class HttpArrowProducerTest {
     static void setup() throws Exception {
         server = new SharedTestServer();
         server.start();
-        warehouse = server.getWarehousePath();
+        ingestionPath = server.getIngestionPath();
         baseUrl = server.getHttpBaseUrl();
         schema = new Schema(java.util.List.of(new Field("timestamp", FieldType.nullable(new ArrowType.Utf8()), null)));
     }
@@ -102,15 +102,15 @@ public class HttpArrowProducerTest {
     }
 
     private void verifyFile(String path, int maxValue) throws Exception {
-        var actualQuery = "SELECT generate_series FROM read_parquet('%s/%s/*.parquet') ORDER BY generate_series".formatted(warehouse, path);
-        var expectedQuery = "SELECT * FROM generate_series(%d) ORDER BY generate_series".formatted(maxValue);
+        var actualQuery = String.format("SELECT generate_series FROM read_parquet('%s/%s/*.parquet') ORDER BY generate_series", ingestionPath, path);
+        var expectedQuery = String.format("SELECT * FROM generate_series(%d) ORDER BY generate_series", maxValue);
         TestUtils.isEqual(expectedQuery, actualQuery);
     }
 
     @Test
     void testAsyncIngestionSingleBatch() throws Exception {
         String file = "async-single-" + System.nanoTime();
-        Files.createDirectories(Path.of(warehouse, file));
+        Files.createDirectories(Path.of(ingestionPath, file));
         try (HttpArrowProducer sender = newSender(file, Duration.ofSeconds(10))) {
             sender.enqueue(arrowBytes("select * from generate_series(4)"));
         }
@@ -122,7 +122,7 @@ public class HttpArrowProducerTest {
     @Test
     void testMultipleEnqueuesOverwriteBehavior() throws Exception {
         String file = "overwrite-" + System.nanoTime();
-        Files.createDirectories(Path.of(warehouse, file));
+        Files.createDirectories(Path.of(ingestionPath, file));
 
         try (HttpArrowProducer overwriteSender = new HttpArrowProducer(
                 schema,
@@ -151,7 +151,7 @@ public class HttpArrowProducerTest {
                 .atMost(3, TimeUnit.SECONDS)
                 .ignoreExceptions()
                 .untilAsserted(() -> {
-                    var actualQuery = "SELECT generate_series FROM read_parquet('%s/%s/*.parquet') ORDER BY generate_series".formatted(warehouse, file);
+                    var actualQuery = String.format("SELECT generate_series FROM read_parquet('%s/%s/*.parquet') ORDER BY generate_series", ingestionPath, file);
                     var expectedQuery = "SELECT * FROM (VALUES (0), (0), (1), (1), (2)) AS t(generate_series)";
                     TestUtils.isEqual(expectedQuery, actualQuery);
                 });
@@ -160,7 +160,7 @@ public class HttpArrowProducerTest {
     @Test
     void testConcurrentEnqueues() throws Exception {
         String file = "concurrent-" + System.nanoTime();
-        Files.createDirectories(Path.of(warehouse, file));
+        Files.createDirectories(Path.of(ingestionPath, file));
         CountDownLatch latch = new CountDownLatch(5);
         AtomicInteger errors = new AtomicInteger(0);
 
@@ -182,7 +182,7 @@ public class HttpArrowProducerTest {
             assertEquals(0, errors.get());
             // Verify that all concurrent enqueues completed - total rows = 1 + 11 + 21 + 31 + 41 = 105
             await().atMost(10, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {
-                var actualQuery = "SELECT generate_series FROM read_parquet('%s/%s/*.parquet') ORDER BY generate_series".formatted(warehouse, file);
+                var actualQuery = String.format("SELECT generate_series FROM read_parquet('%s/%s/*.parquet') ORDER BY generate_series", ingestionPath, file);
                 var expectedQuery = "SELECT * FROM (SELECT * FROM generate_series(0) UNION ALL SELECT * FROM generate_series(10) UNION ALL SELECT * FROM generate_series(20) UNION ALL SELECT * FROM generate_series(30) UNION ALL SELECT * FROM generate_series(40)) ORDER BY generate_series";
                 TestUtils.isEqual(expectedQuery, actualQuery);
             });
@@ -192,7 +192,7 @@ public class HttpArrowProducerTest {
     @Test
     void testJWTTokenReuse() throws Exception {
         String file = "jwt-reuse-" + System.nanoTime();
-        Files.createDirectories(Path.of(warehouse, file));
+        Files.createDirectories(Path.of(ingestionPath, file));
 
         // Multiple requests should reuse the same token
         try (HttpArrowProducer reuseSender = newSender(file, Duration.ofSeconds(5))) {
@@ -201,7 +201,7 @@ public class HttpArrowProducerTest {
             }
 
             await().atMost(5, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {
-                var actualQuery = "SELECT val FROM read_parquet('%s/%s/*.parquet') ORDER BY val".formatted(warehouse, file);
+                var actualQuery = String.format("SELECT val FROM read_parquet('%s/%s/*.parquet') ORDER BY val", ingestionPath, file);
                 var expectedQuery = "SELECT * FROM (VALUES (0), (1), (2), (3), (4)) AS t(val)";
                 TestUtils.isEqual(expectedQuery, actualQuery);
             });
@@ -211,7 +211,7 @@ public class HttpArrowProducerTest {
     @Test
     void testHighThroughput() throws Exception {
         String file = "high-throughput-" + System.nanoTime();
-        Files.createDirectories(Path.of(warehouse, file));
+        Files.createDirectories(Path.of(ingestionPath, file));
 
         // Rapid fire 5 small batches
         try (HttpArrowProducer highThroughput = newSender(file, Duration.ofSeconds(5))) {
@@ -219,7 +219,7 @@ public class HttpArrowProducerTest {
                 highThroughput.enqueue(arrowBytes("select " + i + " as val"));
             }
             await().atMost(2, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {
-                var actualQuery = "SELECT val FROM read_parquet('%s/%s/*.parquet') ORDER BY val".formatted(warehouse, file);
+                var actualQuery = String.format("SELECT val FROM read_parquet('%s/%s/*.parquet') ORDER BY val", ingestionPath, file);
                 var expectedQuery = "SELECT * FROM (VALUES (0), (1), (2), (3), (4)) AS t(val)";
                 TestUtils.isEqual(expectedQuery, actualQuery);
             });
@@ -244,14 +244,14 @@ public class HttpArrowProducerTest {
     @Test
     void testMemoryDiskSwitching() throws Exception {
         var path = "spill-" + System.nanoTime();
-        Files.createDirectories(Path.of(warehouse, path));
+        Files.createDirectories(Path.of(ingestionPath, path));
         var spillSender = new HttpArrowProducer(schema, baseUrl, "admin", "admin", path, Duration.ofSeconds(10), 100_000, 200_000,
                 Duration.ofMillis(200), 3, 1000, java.util.List.of(), java.util.List.of(), 50, 100_000);
 
         spillSender.enqueue(arrowBytes("select * from generate_series(30)"));
 
         await().atMost(10, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {
-            var actualQuery = "SELECT generate_series FROM read_parquet('%s/%s/*.parquet') ORDER BY generate_series".formatted(warehouse, path);
+            var actualQuery = String.format("SELECT generate_series FROM read_parquet('%s/%s/*.parquet') ORDER BY generate_series", ingestionPath, path);
             var expectedQuery = "SELECT * FROM generate_series(30) ORDER BY generate_series";
             TestUtils.isEqual(expectedQuery, actualQuery);
         });
@@ -262,7 +262,7 @@ public class HttpArrowProducerTest {
     @Test
     void testProjectionsHeader() throws Exception {
         String path = "projections-test-" + System.nanoTime();
-        Files.createDirectories(Path.of(warehouse, path));
+        Files.createDirectories(Path.of(ingestionPath, path));
 
         try (HttpArrowProducer sender = new HttpArrowProducer(
                 schema,
@@ -284,7 +284,7 @@ public class HttpArrowProducerTest {
             sender.enqueue(arrowBytes("select * from generate_series(5)"));
         }
 
-        var actualQuery = "SELECT generate_series, c1, c2 FROM read_parquet('%s/%s/*.parquet') WHERE c1 = 'c1' AND c2 = 'c2' ORDER BY generate_series".formatted(warehouse, path);
+        var actualQuery = String.format("SELECT generate_series, c1, c2 FROM read_parquet('%s/%s/*.parquet') WHERE c1 = 'c1' AND c2 = 'c2' ORDER BY generate_series", ingestionPath, path);
         var expectedQuery = "SELECT generate_series, 'c1' as c1, 'c2' as c2 FROM generate_series(5) ORDER BY generate_series";
         TestUtils.isEqual(expectedQuery, actualQuery);
     }
@@ -292,7 +292,7 @@ public class HttpArrowProducerTest {
     @Test
     void testProjectionsAndPartitionByHeaders() throws Exception {
         String path = "both-headers-test-" + System.nanoTime();
-        Files.createDirectories(Path.of(warehouse, path));
+        Files.createDirectories(Path.of(ingestionPath, path));
 
         try (HttpArrowProducer sender = new HttpArrowProducer(
                 schema,
@@ -315,7 +315,7 @@ public class HttpArrowProducerTest {
         }
 
         await().atMost(5, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {
-            var actualQuery = "SELECT generate_series, c1, c2 FROM read_parquet('%s/%s/*/*/*.parquet') ORDER BY generate_series".formatted(warehouse, path);
+            var actualQuery = String.format("SELECT generate_series, c1, c2 FROM read_parquet('%s/%s/*/*/*.parquet') ORDER BY generate_series", ingestionPath, path);
             var expectedQuery = "SELECT generate_series, 'c1' as c1, 'c2' as c2 FROM generate_series(5) ORDER BY generate_series";
             TestUtils.isEqual(expectedQuery, actualQuery);
         });
@@ -324,7 +324,7 @@ public class HttpArrowProducerTest {
     @Test
     void testEmptyListsDoNotSendHeaders() throws Exception {
         String path = "empty-lists-test-" + System.nanoTime();
-        Files.createDirectories(Path.of(warehouse, path));
+        Files.createDirectories(Path.of(ingestionPath, path));
 
         // Empty lists should work fine and not send headers
         try (HttpArrowProducer sender = new HttpArrowProducer(
@@ -348,7 +348,7 @@ public class HttpArrowProducerTest {
         }
 
         await().atMost(5, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {
-            var actualQuery = "SELECT generate_series FROM read_parquet('%s/%s/*.parquet') ORDER BY generate_series".formatted(warehouse, path);
+            var actualQuery = String.format("SELECT generate_series FROM read_parquet('%s/%s/*.parquet') ORDER BY generate_series", ingestionPath, path);
             var expectedQuery = "SELECT * FROM generate_series(5) ORDER BY generate_series";
             TestUtils.isEqual(expectedQuery, actualQuery);
         });

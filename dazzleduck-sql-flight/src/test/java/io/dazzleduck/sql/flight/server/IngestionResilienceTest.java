@@ -3,10 +3,9 @@ package io.dazzleduck.sql.flight.server;
 import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
-import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactoryProvider;
+import io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.dazzleduck.sql.flight.MicroMeterFlightRecorder;
-import io.dazzleduck.sql.flight.optimizer.QueryOptimizer;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
 import io.dazzleduck.sql.flight.stream.ArrowStreamReaderWrapper;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -17,7 +16,6 @@ import org.apache.arrow.flight.sql.FlightSqlClient;
 import org.apache.arrow.flight.sql.impl.FlightSql;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
-import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
@@ -25,8 +23,6 @@ import org.apache.arrow.vector.types.pojo.FieldType;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.duckdb.DuckDBConnection;
 import org.junit.jupiter.api.*;
-import org.junit.jupiter.api.parallel.Execution;
-import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -135,6 +131,7 @@ public class IngestionResilienceTest {
                 Thread.sleep(SERVER_START_DELAY_MS);
 
                 // First start
+                var serverClient = FlightTestUtils.setUpFlightServerAndClient(new String[0], "admin", "admin", Map.of());
                 server = createAndStartServer(serverLocation, warehousePath.toString());
 
                 serverRunning.set(true);
@@ -202,7 +199,7 @@ public class IngestionResilienceTest {
                             var streamReader = new ArrowStreamReaderWrapper(reader, allocator);
                             var ingestOptions = new FlightSqlClient.ExecuteIngestOptions("",
                                     FlightSql.CommandStatementIngest.TableDefinitionOptions.newBuilder().build(),
-                                    false, CATALOG, SCHEMA_NAME, Map.of("path", testPath));
+                                    false, CATALOG, SCHEMA_NAME, Map.of("ingestion_queue", testPath));
 
                             client.executeIngest(streamReader, ingestOptions);
                             sent = true;
@@ -274,7 +271,7 @@ public class IngestionResilienceTest {
                 warehousePath,
                 AccessMode.COMPLETE,
                 DuckDBFlightSqlProducer.newTempDir(),
-                PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(),
+                new NOOPIngestionTaskFactoryProvider(warehousePath + File.pathSeparator + "ingestion").getIngestionTaskFactory(),
                 Executors.newSingleThreadScheduledExecutor(),
                 Duration.ofMinutes(2),
                 Clock.systemDefaultZone(),

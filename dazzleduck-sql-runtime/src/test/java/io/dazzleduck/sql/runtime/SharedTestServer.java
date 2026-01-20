@@ -52,6 +52,7 @@ public final class SharedTestServer implements Closeable {
     private int httpPort;
     private int flightPort;
     private String warehousePath;
+    private String ingestionPath;
     private boolean started = false;
 
     public SharedTestServer() {
@@ -87,9 +88,10 @@ public final class SharedTestServer implements Closeable {
         httpPort = fixedHttpPort > 0 ? fixedHttpPort : findAvailablePort();
         flightPort = fixedFlightPort > 0 ? fixedFlightPort : findAvailablePort();
         warehousePath = Files.createTempDirectory("test-warehouse").toString();
+        ingestionPath = Files.createTempDirectory("test-ingestion").toString();
 
-        logger.info("Starting test server - HTTP port: {}, Flight port: {}, Warehouse: {}",
-                httpPort, flightPort, warehousePath);
+        logger.info("Starting test server - HTTP port: {}, Flight port: {}, Warehouse: {}, Ingestion: {}",
+                httpPort, flightPort, warehousePath, ingestionPath);
 
         Config baseConfig = ConfigFactory.load().getConfig(ConfigConstants.CONFIG_PATH);
 
@@ -101,7 +103,9 @@ public final class SharedTestServer implements Closeable {
                 .withValue("flight_sql.use_encryption", ConfigValueFactory.fromAnyRef(false))
                 .withValue("warehouse", ConfigValueFactory.fromAnyRef(warehousePath))
                 .withValue("http.auth", ConfigValueFactory.fromAnyRef("jwt"))
-                .withValue("ingestion.max_delay_ms", ConfigValueFactory.fromAnyRef(50));
+                .withValue("ingestion.max_delay_ms", ConfigValueFactory.fromAnyRef(50))
+                .withValue("ingestion_task_factory_provider.class", ConfigValueFactory.fromAnyRef("io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider"))
+                .withValue("ingestion_task_factory_provider.ingestion_path", ConfigValueFactory.fromAnyRef(ingestionPath));
 
         for (String override : configOverrides) {
             String[] parts = override.split("=", 2);
@@ -136,6 +140,7 @@ public final class SharedTestServer implements Closeable {
 
         httpPort = fixedHttpPort > 0 ? fixedHttpPort : findAvailablePort();
         flightPort = fixedFlightPort > 0 ? fixedFlightPort : findAvailablePort();
+        ingestionPath = Files.createTempDirectory("test-ingestion").toString();
         Config baseConfig = ConfigFactory.load().getConfig(ConfigConstants.CONFIG_PATH);
 
         config = baseConfig
@@ -145,7 +150,9 @@ public final class SharedTestServer implements Closeable {
                 .withValue("flight_sql.host", ConfigValueFactory.fromAnyRef("localhost"))
                 .withValue("flight_sql.use_encryption", ConfigValueFactory.fromAnyRef(false))
                 .withValue("http.auth", ConfigValueFactory.fromAnyRef("jwt"))
-                .withValue("ingestion.max_delay_ms", ConfigValueFactory.fromAnyRef(50));
+                .withValue("ingestion.max_delay_ms", ConfigValueFactory.fromAnyRef(50))
+                .withValue("ingestion_task_factory_provider.class", ConfigValueFactory.fromAnyRef("io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider"))
+                .withValue("ingestion_task_factory_provider.ingestion_path", ConfigValueFactory.fromAnyRef(ingestionPath));
 
         for (String override : configOverrides) {
             String[] parts = override.split("=", 2);
@@ -155,7 +162,7 @@ public final class SharedTestServer implements Closeable {
         }
         warehousePath = ConfigConstants.getWarehousePath(config);
 
-        logger.info("Starting test server with custom warehouse - HTTP port: {}, Flight port: {}, Warehouse: {}", httpPort, flightPort, warehousePath);
+        logger.info("Starting test server with custom warehouse - HTTP port: {}, Flight port: {}, Warehouse: {}, Ingestion: {}", httpPort, flightPort, warehousePath, ingestionPath);
 
         runtime = Runtime.start(config);
 
@@ -201,6 +208,24 @@ public final class SharedTestServer implements Closeable {
             }
         }
 
+        if (ingestionPath != null) {
+            try {
+                Path path = Path.of(ingestionPath);
+                if (Files.exists(path)) {
+                    Files.walk(path)
+                            .sorted(Comparator.reverseOrder())
+                            .forEach(p -> {
+                                try {
+                                    Files.deleteIfExists(p);
+                                } catch (IOException ignored) {
+                                }
+                            });
+                }
+            } catch (IOException e) {
+                logger.warn("Failed to cleanup ingestion directory: {}", ingestionPath, e);
+            }
+        }
+
         started = false;
     }
 
@@ -234,6 +259,14 @@ public final class SharedTestServer implements Closeable {
     public String getWarehousePath() {
         ensureStarted();
         return warehousePath;
+    }
+
+    /**
+     * @return The ingestion path used by the server for data ingestion
+     */
+    public String getIngestionPath() {
+        ensureStarted();
+        return ingestionPath;
     }
 
     /**

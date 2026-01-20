@@ -9,13 +9,12 @@ import org.apache.arrow.flight.sql.impl.FlightSql;
 import java.io.IOException;
 import java.io.StringReader;
 import java.io.UncheckedIOException;
-import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-public record IngestionParameters(String path,
+public record IngestionParameters(String ingestionQueue,
                                   String format, String[] partitionBy, String[] projections,
                                   String[] sortOrder, String producerId, Long producerBatchId,
                                   Map<String, String> parameters) {
@@ -33,20 +32,17 @@ public record IngestionParameters(String path,
         );
     }
 
-    public String completePath(String warehousePath) {
-        return Path.of(warehousePath).resolve(path).toString();
-    }
 
     public static IngestionParameters getIngestionParameters(FlightSql.CommandStatementIngest command) {
 
         Map<String, String> optionMap = command.getOptionsMap();
-        String path = optionMap.get(Headers.HEADER_PATH);
-        // Validate path to prevent path traversal attacks
-        if (path == null || path.isEmpty()) {
-            throw new IllegalArgumentException("Path parameter is required");
+        String ingestionQueue = optionMap.get(Headers.HEADER_INGESTION_QUEUE);
+        // Validate ingestion_queue to prevent traversal attacks
+        if (ingestionQueue == null || ingestionQueue.isEmpty()) {
+            throw new IllegalArgumentException("ingestion_queue parameter is required");
         }
-        if (path.contains("..") || path.startsWith("/")) {
-            throw new IllegalArgumentException("Invalid path: path traversal not allowed");
+        if (ingestionQueue.contains("..") || ingestionQueue.startsWith("/")) {
+            throw new IllegalArgumentException("Invalid ingestion_queue: traversal not allowed");
         }
 
         String format = optionMap.getOrDefault(Headers.HEADER_DATA_FORMAT, "parquet");
@@ -56,7 +52,7 @@ public record IngestionParameters(String path,
         String[] partitionBy = parseCsv(optionMap.get(Headers.HEADER_DATA_PARTITION));
         String[] projections = parseCsv(optionMap.get(Headers.HEADER_DATA_PROJECT));
         String[] sortOrder = parseCsv(optionMap.get(Headers.HEADER_SORT_ORDER));
-        return new IngestionParameters(path, format, partitionBy, projections, sortOrder, producerId, 0L, Map.of());
+        return new IngestionParameters(ingestionQueue, format, partitionBy, projections, sortOrder, producerId, 0L, Map.of());
     }
 
     static String[] parseCsv(String value) {
@@ -81,7 +77,7 @@ public record IngestionParameters(String path,
 
     public FlightSql.CommandStatementIngest createCommand() {
         var options = Map.of(
-                Headers.HEADER_PATH, path(),
+                Headers.HEADER_PATH, ingestionQueue(),
                 Headers.HEADER_DATA_PARTITION, String.join(",", partitionBy()),
                 Headers.HEADER_DATA_FORMAT, format(),
                 Headers.HEADER_DATA_PROJECT, String.join(",", projections()),

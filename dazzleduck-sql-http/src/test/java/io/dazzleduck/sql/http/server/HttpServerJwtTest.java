@@ -1,6 +1,7 @@
 package io.dazzleduck.sql.http.server;
 
 import io.dazzleduck.sql.common.ConfigConstants;
+import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.dazzleduck.sql.common.auth.LoginRequest;
@@ -28,6 +29,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.SQLException;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -180,7 +182,9 @@ public class HttpServerJwtTest extends HttpServerTestBase {
 
     @Test
     public void testIngestionWithJwt() throws Exception {
-        var jwt = login();
+        var path = "secure";
+        var jwt = login(serverPort, new LoginRequest("admin", "admin",
+                Map.of(HEADER_INGESTION_QUEUE, path)));
         String auth = jwt.tokenType() + " " + jwt.accessToken();
 
         String query = "select * from generate_series(9)";
@@ -199,10 +203,10 @@ public class HttpServerJwtTest extends HttpServerTestBase {
             arrowBytes = baos.toByteArray();
         }
 
-        var path = "secure";
-        Files.createDirectories(Path.of(warehousePath, path));
+
+        Files.createDirectories(Path.of(ingestionPath, path));
         var authorizedReq = HttpRequest.newBuilder(
-                        URI.create(baseUrl + "/v1/ingest?path=%s".formatted(path)))
+                        URI.create(baseUrl + "/v1/ingest?ingestion_queue=%s".formatted(path)))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(arrowBytes))
                 .header("Content-Type", ContentTypes.APPLICATION_ARROW)
                 .header(HeaderNames.AUTHORIZATION.defaultCase(), auth)
@@ -213,7 +217,7 @@ public class HttpServerJwtTest extends HttpServerTestBase {
                 "Valid JWT token should allow ingestion");
 
         long count = ConnectionPool.collectFirst(
-                "select count(*) from read_parquet('%s/%s/*.parquet')".formatted(warehousePath, path),
+                "select count(*) from read_parquet('%s/%s/*.parquet')".formatted(ingestionPath, path),
                 Long.class);
 
         assertEquals(10, count);

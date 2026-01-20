@@ -830,7 +830,7 @@ CompletableFuture<IngestionResult> future = queue.add(batch);
 Path tempFile = BulkIngestQueue.writeAndValidateTempArrowFile(tempDir, reader);
 
 // Post-ingestion tasks (e.g., DuckLake registration)
-// Configure via post_ingestion_task_factory_provider in application.conf
+// Configure via ingestion_task_factory_provider in application.conf
 ```
 
 ### ParameterUtils (`dazzleduck-sql-http`)

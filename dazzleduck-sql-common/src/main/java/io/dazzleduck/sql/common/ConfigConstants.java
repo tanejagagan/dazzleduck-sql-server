@@ -84,7 +84,7 @@ public class ConfigConstants {
     public static final String RETRY_INTERVAL_MS_KEY = "retry_interval_ms";
 
     // Projection keys
-    public static final String PROJECTIONS_KEY = "projections";
+    public static final String PROJECT_KEY = "project";
     public static final String PARTITION_BY_KEY = "partition_by";
 
     // Feature flags
@@ -92,6 +92,7 @@ public class ConfigConstants {
 
     // Metrics specific
     public static final String STEP_INTERVAL_MS_KEY = "step_interval_ms";
+    public static final String INGESTION_CONFIG_PREFIX = "ingestion_task_factory_provider";
 
     public static String getWarehousePath(Config config) {
         return config.getString(WAREHOUSE_CONFIG_KEY);

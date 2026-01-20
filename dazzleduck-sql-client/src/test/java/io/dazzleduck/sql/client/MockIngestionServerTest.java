@@ -139,7 +139,7 @@ class MockIngestionServerTest {
     @Test
     void testIngestWithoutToken() throws Exception {
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(server.getBaseUrl() + "/v1/ingest?path=test"))
+                .uri(URI.create(server.getBaseUrl() + "/v1/ingest?ingestion_queue=test"))
                 .header("Content-Type", "application/vnd.apache.arrow.stream")
                 .POST(HttpRequest.BodyPublishers.ofByteArray(new byte[0]))
                 .build();
@@ -153,7 +153,7 @@ class MockIngestionServerTest {
     @Test
     void testIngestWithInvalidToken() throws Exception {
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(server.getBaseUrl() + "/v1/ingest?path=test"))
+                .uri(URI.create(server.getBaseUrl() + "/v1/ingest?ingestion_queue=test"))
                 .header("Content-Type", "application/vnd.apache.arrow.stream")
                 .header("Authorization", "Bearer invalid-token-12345")
                 .POST(HttpRequest.BodyPublishers.ofByteArray(new byte[0]))
@@ -179,7 +179,7 @@ class MockIngestionServerTest {
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
         assertEquals(400, response.statusCode());
-        assertTrue(response.body().contains("path"));
+        assertTrue(response.body().contains("ingestion_queue"));
     }
 
     @Test
@@ -187,7 +187,7 @@ class MockIngestionServerTest {
         String token = login();
 
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(server.getBaseUrl() + "/v1/ingest?path=test"))
+                .uri(URI.create(server.getBaseUrl() + "/v1/ingest?ingestion_queue=test"))
                 .header("Content-Type", "application/json")
                 .header("Authorization", "Bearer " + token)
                 .POST(HttpRequest.BodyPublishers.ofByteArray(new byte[0]))
@@ -203,7 +203,7 @@ class MockIngestionServerTest {
         String token = login();
 
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(server.getBaseUrl() + "/v1/ingest?path=../evil"))
+                .uri(URI.create(server.getBaseUrl() + "/v1/ingest?ingestion_queue=../evil"))
                 .header("Content-Type", "application/vnd.apache.arrow.stream")
                 .header("Authorization", "Bearer " + token)
                 .POST(HttpRequest.BodyPublishers.ofByteArray(new byte[0]))
@@ -212,7 +212,7 @@ class MockIngestionServerTest {
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
         assertEquals(400, response.statusCode());
-        assertTrue(response.body().contains("Invalid path"));
+        assertTrue(response.body().contains("Invalid ingestion_queue"));
     }
 
     @Test
@@ -221,7 +221,7 @@ class MockIngestionServerTest {
         byte[] testData = "test arrow data".getBytes();
 
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(server.getBaseUrl() + "/v1/ingest?path=test_table"))
+                .uri(URI.create(server.getBaseUrl() + "/v1/ingest?ingestion_queue=test_table"))
                 .header("Content-Type", "application/vnd.apache.arrow.stream")
                 .header("Authorization", "Bearer " + token)
                 .POST(HttpRequest.BodyPublishers.ofByteArray(testData))
@@ -247,7 +247,7 @@ class MockIngestionServerTest {
             byte[] testData = ("batch " + i).getBytes();
 
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(server.getBaseUrl() + "/v1/ingest?path=multi_test"))
+                    .uri(URI.create(server.getBaseUrl() + "/v1/ingest?ingestion_queue=multi_test"))
                     .header("Content-Type", "application/vnd.apache.arrow.stream")
                     .header("Authorization", "Bearer " + token)
                     .POST(HttpRequest.BodyPublishers.ofByteArray(testData))
@@ -319,7 +319,7 @@ class MockIngestionServerTest {
         byte[] testData = "test data".getBytes();
 
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(server.getBaseUrl() + "/v1/ingest?path=stats_test"))
+                .uri(URI.create(server.getBaseUrl() + "/v1/ingest?ingestion_queue=stats_test"))
                 .header("Content-Type", "application/vnd.apache.arrow.stream")
                 .header("Authorization", "Bearer " + token)
                 .POST(HttpRequest.BodyPublishers.ofByteArray(testData))

@@ -4,7 +4,8 @@ package io.dazzleduck.sql.flight.server;
 import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.ConnectionPool;
-import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactoryProvider;
+import io.dazzleduck.sql.commons.ingestion.IngestionTaskFactoryProvider;
+import io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.dazzleduck.sql.flight.FlightRecorder;
 import io.dazzleduck.sql.flight.MicroMeterFlightRecorder;
@@ -28,6 +29,7 @@ import org.slf4j.LoggerFactory;
 import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.security.NoSuchAlgorithmException;
 import java.sql.*;
 import java.time.Clock;
@@ -182,6 +184,8 @@ public class DuckDBFlightSqlProducerTest {
         String producerId = UUID.randomUUID().toString();
         FlightRecorder recorder = new MicroMeterFlightRecorder(new SimpleMeterRegistry(), producerId);
 
+        var ingestionDir = getIngestionDir();
+        Files.createDirectories(Path.of(ingestionDir));
         producer = new DuckDBFlightSqlProducer(
                 serverLocation,
                 producerId,
@@ -190,7 +194,7 @@ public class DuckDBFlightSqlProducerTest {
                 warehousePath,
                 AccessMode.COMPLETE,
                 DuckDBFlightSqlProducer.newTempDir(),
-                PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(),
+                new NOOPIngestionTaskFactoryProvider(ingestionDir).getIngestionTaskFactory(),
                 Executors.newSingleThreadScheduledExecutor(),
                 Duration.ofMinutes(2),
                 Clock.systemDefaultZone(), recorder, DuckDBFlightSqlProducer.DEFAULT_INGESTION_CONFIG);
@@ -420,6 +424,7 @@ public class DuckDBFlightSqlProducerTest {
     @Test
     @Timeout(value = 30, unit = TimeUnit.SECONDS)
     public void putStream() throws Exception {
+        Files.createDirectories(Path.of(getIngestionDir()).resolve("test_123.parquet"));
         testPutStream("test_123.parquet");
         // Verify the file was created
         assertTrue(Files.exists(Path.of(warehousePath, "test_123.parquet")),
@@ -605,7 +610,7 @@ public class DuckDBFlightSqlProducerTest {
             var streamReader = new ArrowStreamReaderWrapper(reader, clientAllocator);
             var executeIngestOption = new FlightSqlClient.ExecuteIngestOptions("",
                     FlightSql.CommandStatementIngest.TableDefinitionOptions.newBuilder().build(),
-                    false, "", "", Map.of("path", filename));
+                    false, "", "", Map.of("ingestion_queue", filename));
             sqlClient.executeIngest(streamReader, executeIngestOption);
         }
     }
@@ -633,5 +638,9 @@ public class DuckDBFlightSqlProducerTest {
                                 Headers.HEADER_SCHEMA, TEST_SCHEMA,
                         Headers.HEADER_PATH, path, Headers.HEADER_FILTER, filter)))
                 .build());
+    }
+
+    static String getIngestionDir() {
+        return warehousePath + File.separator + "ingestion";
     }
 }

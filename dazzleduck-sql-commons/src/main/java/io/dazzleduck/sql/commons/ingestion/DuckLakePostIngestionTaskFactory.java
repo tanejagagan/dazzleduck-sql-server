@@ -1,41 +1,81 @@
 package io.dazzleduck.sql.commons.ingestion;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import io.dazzleduck.sql.commons.ConnectionPool;
 
+import java.sql.SQLException;
+import java.util.HashMap;
 import java.util.Map;
 
 /**
  * Factory for creating DuckLakePostIngestionTask instances.
  * Uses a map for fast lookup based on ingestion path.
  */
-public class DuckLakePostIngestionTaskFactory implements PostIngestionTaskFactory {
-    private final Map<String, PathToTableMapping> pathToTableMappings;
-    private final String metadataDatabase;
-    private final String defaultCatalogName;
+public class DuckLakePostIngestionTaskFactory implements IngestionTaskFactory {
 
-    public DuckLakePostIngestionTaskFactory(Map<String, PathToTableMapping> pathToTableMappings,
-                                            String metadataDatabase,
-                                            String defaultCatalogName
+    private static final String TABLE_PATH_QUERY =
+            """
+            SELECT CASE WHEN s.path_is_relative
+                        THEN concat(m."value", s.path, t.path)
+                        ELSE concat(s.path, t.path)
+                   END AS path
+            FROM %s.main.ducklake_schema s
+            JOIN %s.main.ducklake_table t ON (s.schema_id = t.schema_id)
+            CROSS JOIN %s.main.ducklake_metadata m
+            WHERE m.key = 'data_path'
+              AND s.schema_name = '%s'
+              AND t.table_name = '%s'
+              AND s.end_snapshot IS NULL
+              AND t.end_snapshot IS NULL
+            """;
+
+    private final Map<String, QueueIdToTableMapping> queueIdsToTableMappings;
+
+    private final Map<String, String> queueIdToPathMapping;
+
+
+
+    public DuckLakePostIngestionTaskFactory(Map<String, QueueIdToTableMapping> queueIdToTableMappingMap
     ) {
-        this.pathToTableMappings = pathToTableMappings;
-        this.metadataDatabase = metadataDatabase;
-        this.defaultCatalogName = defaultCatalogName;
+        this.queueIdsToTableMappings = queueIdToTableMappingMap;
+        var map  =  new HashMap<String, String>();
+        queueIdToTableMappingMap.values().forEach(m -> {
+            var queueId = m.queueId();
+            var path = getPathFromCatalog(m.catalogName(), m.schemaName(), m.tableName());
+            map.put(queueId, path);
+
+    });
+        this.queueIdToPathMapping = map;
+
+    }
+
+    private String getPathFromCatalog(String catalogName, String schema, String table) {
+        String metadataDatabase = "__ducklake_metadata_" + catalogName;
+        String query = TABLE_PATH_QUERY.formatted(metadataDatabase, metadataDatabase, metadataDatabase, schema, table);
+        try {
+            return ConnectionPool.collectFirst(query, String.class);
+        } catch (SQLException e) {
+            throw new RuntimeException("Failed to get path for table %s.%s.%s".formatted(catalogName, schema, table), e);
+        }
     }
 
     @Override
-    public PostIngestionTask create(IngestionResult result) {
-        PathToTableMapping mapping = pathToTableMappings.get(result.queueName());
+    public PostIngestionTask createPostIngestionTask(IngestionResult result) {
+        QueueIdToTableMapping mapping = queueIdsToTableMappings.get(result.queueName());
         // Fallback: try suffix (last path segment)
         if (mapping == null) {
-            mapping = pathToTableMappings.get(extractSuffix(result.queueName()));
+            mapping = queueIdsToTableMappings.get(extractSuffix(result.queueName()));
         }
 
         if (mapping == null) {
             return PostIngestionTask.NOOP;
         }
 
-        return new DuckLakePostIngestionTask(result, defaultCatalogName, mapping.tableName(), mapping.schemaName(), metadataDatabase);
+        return new DuckLakePostIngestionTask(result, mapping.catalogName(), mapping.tableName(), mapping.schemaName());
+    }
+
+    @Override
+    public String getTargetPath(String queueId) {
+        return queueIdToPathMapping.get(queueId);
     }
 
     // extracting last path segment of queueName (eg. log, metric)

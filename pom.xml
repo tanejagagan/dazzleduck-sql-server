@@ -200,7 +200,7 @@
                             </path>
                             <path>
                                 <from>${maven-parent.basedir}/example/startup</from>
-                                <into>startup</into>
+                                <into>/startup</into>
                             </path>
                         </paths>
                     </extraDirectories>

@@ -23,18 +23,15 @@ public class DuckLakePostIngestionTask implements PostIngestionTask {
     private final String catalogName;
     private final String tableName;
     private final String schemaName;
-    private final String metadataDatabase;
 
     public DuckLakePostIngestionTask(IngestionResult ingestionResult,
                                      String catalogName,
                                      String tableName,
-                                     String schemaName,
-                                     String metadataDatabase) {
+                                     String schemaName) {
         this.ingestionResult = ingestionResult;
         this.catalogName = catalogName;
         this.tableName = tableName;
         this.schemaName = schemaName;
-        this.metadataDatabase = metadataDatabase;
     }
 
     @Override

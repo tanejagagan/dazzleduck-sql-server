@@ -227,7 +227,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     private final ConcurrentHashMap<String, BulkIngestQueue<String, IngestionResult>> ingestionQueueMap =
             new ConcurrentHashMap<>();
 
-    private final PostIngestionTaskFactory postIngestionTaskFactory;
+    private final IngestionTaskFactory ingestionTaskFactory;
 
     private final Path tempDir;
 
@@ -269,15 +269,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         return dir;
     }
 
-    public DuckDBFlightSqlProducer(Location location){
-        this(location, UUID.randomUUID().toString());
-    }
-
-    public DuckDBFlightSqlProducer(Location location, String producerId) {
-        this(location, producerId, "change me", new RootAllocator(),  System.getProperty("user.dir") + "/warehouse", AccessMode.COMPLETE, newTempDir()
-        , PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(), Executors.newSingleThreadScheduledExecutor(), Duration.ofMinutes(2), DEFAULT_INGESTION_CONFIG);
-    }
-
     public DuckDBFlightSqlProducer(Location location,
                                    String producerId,
                                    String secretKey,
@@ -285,11 +276,11 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                    String warehousePath,
                                    AccessMode accessMode,
                                    Path tempDir,
-                                   PostIngestionTaskFactory postIngestionTaskFactory,
+                                   IngestionTaskFactory ingestionTaskFactory,
                                    ScheduledExecutorService scheduledExecutorService,
                                    Duration queryTimeout,
                                    IngestionConfig ingestionConfig) {
-        this(location, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionTaskFactory,
+        this(location, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, ingestionTaskFactory,
                 scheduledExecutorService, queryTimeout, Clock.systemDefaultZone(),
                 buildRecorder(producerId),  ingestionConfig);
 
@@ -301,7 +292,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
                                    String warehousePath,
                                    AccessMode accessMode,
                                    Path tempDir,
-                                   PostIngestionTaskFactory postIngestionTaskFactory,
+                                   IngestionTaskFactory ingestionTaskFactory,
                                    ScheduledExecutorService scheduledExecutorService,
                                    Duration queryTimeout,
                                    Clock clock,
@@ -323,7 +314,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             this.sqlAuthorizer = SqlAuthorizer.NOOP_AUTHORIZER;
         }
 
-        this.postIngestionTaskFactory = postIngestionTaskFactory;
+        this.ingestionTaskFactory = ingestionTaskFactory;
         this.bulkIngestionConfig = bulkIngestionConfig;
         preparedStatementLoadingCache =
                 CacheBuilder.newBuilder()
@@ -719,19 +710,19 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
 
     /**
-     * Gets an existing ParquetIngestionQueue for the given path, or creates a new one if absent.
+     * Gets an existing ParquetIngestionQueue for the given queue, or creates a new one if absent.
      * Uses computeIfAbsent to ensure thread-safe access to the ingestion queue map.
-     *
-     * @param relativePath the relative path for the ingestion queue
-     * @return the BulkIngestQueue for the specified path
+     * @param queueId queue id
+     * @param path the relative path for the ingestion queue
+     * @return the BulkIngestQueue for the specified queue
      */
-    protected BulkIngestQueue<String, IngestionResult> getOrCreateParquetIngestionQueue(String relativePath) {
-        return ingestionQueueMap.computeIfAbsent(relativePath, p -> {
-            String absolutePath = Path.of(warehousePath).resolve(p).toString();
-            var queue = new ParquetIngestionQueue(producerId, TEMP_WRITE_FORMAT, absolutePath, p,
+    protected BulkIngestQueue<String, IngestionResult> getOrCreateParquetIngestionQueue(String queueId, String path) {
+        return ingestionQueueMap.computeIfAbsent(queueId, p -> {
+
+            var queue = new ParquetIngestionQueue(producerId, TEMP_WRITE_FORMAT, path, p,
                     bulkIngestionConfig.minBucketSize(),
                     bulkIngestionConfig.maxDelay(),
-                    postIngestionTaskFactory,
+                    ingestionTaskFactory,
                     Executors.newSingleThreadScheduledExecutor(),
                     Clock.systemDefaultZone());
             recorder.registerWriteQueue(p, Map.of(
@@ -752,10 +743,10 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             StreamListener<PutResult> ackStream) {
         IngestionParameters ingestionParameters = IngestionParameters.getIngestionParameters(command);
         String user = context.peerIdentity();
-        String path = ingestionParameters.path();
+        String path = ingestionTaskFactory.getTargetPath(ingestionParameters.ingestionQueue());
         Map<String, String> verifiedClaims = getVerifiedClaims(context);
         if (!sqlAuthorizer.hasWriteAccess(user, path, verifiedClaims)) {
-            ErrorHandling.handleUnauthorized(ackStream, new UnauthorizedException("No write access to path: " + path));
+            ErrorHandling.handleUnauthorized(ackStream, new UnauthorizedException("No write access to ingestion_queue:" + path));
             return () -> {};
         }
         FlightStreamReader reader = FlightStreamReader.of(flightStream, allocator);
@@ -764,7 +755,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             try (reader) {
                 tempFile = BulkIngestQueue.writeAndValidateTempArrowFile(tempDir, reader);
                 var batch = ingestionParameters.constructBatch(Files.size(tempFile), tempFile.toAbsolutePath().toString());
-                var ingestionQueue = getOrCreateParquetIngestionQueue(path);
+                var ingestionQueue = getOrCreateParquetIngestionQueue(ingestionParameters.ingestionQueue(), path);
                 var result = ingestionQueue.add(batch);
                 result.get();
                 ackStream.onNext(PutResult.empty());
@@ -782,10 +773,10 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             InputStream inputStream,
             StreamListener<PutResult> ackStream) {
         String user = context.peerIdentity();
-        String path = ingestionParameters.path();
+        String path = ingestionTaskFactory.getTargetPath(ingestionParameters.ingestionQueue());
         Map<String, String> verifiedClaims = getVerifiedClaims(context);
         if (!sqlAuthorizer.hasWriteAccess(user, path, verifiedClaims)) {
-            ErrorHandling.handleUnauthorized(ackStream, new UnauthorizedException("No write access to path: " + path));
+            ErrorHandling.handleUnauthorized(ackStream, new UnauthorizedException("No write access to ingestion_queue:" + path));
             return () -> {};
         }
         return () -> {
@@ -793,7 +784,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
             try (ArrowReader inputReader = new ArrowStreamReader(inputStream, allocator)) {
                 tempFile = BulkIngestQueue.writeAndValidateTempArrowFile(tempDir, inputReader);
                 var batch = ingestionParameters.constructBatch(Files.size(tempFile), tempFile.toAbsolutePath().toString());
-                var ingestionQueue = getOrCreateParquetIngestionQueue(path);
+                var ingestionQueue = getOrCreateParquetIngestionQueue(ingestionParameters.ingestionQueue(),
+                        path);
                 var result = ingestionQueue.add(batch);
                 result.get();
                 ackStream.onNext(PutResult.empty());
@@ -1034,10 +1026,10 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
         for (var entry : ingestionQueueMap.entrySet()) {
             try {
-                logger.atDebug().log("Closing ingestion queue for path: {}", entry.getKey());
+                logger.atDebug().log("Closing ingestion queue for queue: {}", entry.getKey());
                 entry.getValue().close();
             } catch (Exception e) {
-                logger.atWarn().setCause(e).log("Failed to close ingestion queue for path: {}", entry.getKey());
+                logger.atWarn().setCause(e).log("Failed to close ingestion queue for queue: {}", entry.getKey());
             }
         }
         ingestionQueueMap.clear();

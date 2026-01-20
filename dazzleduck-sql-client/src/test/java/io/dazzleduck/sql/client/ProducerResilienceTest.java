@@ -168,8 +168,9 @@ public class ProducerResilienceTest {
 
             // Verify all distinct events received using read_arrow for Arrow IPC files
             logger.info("Verifying data...");
-            var actualQuery = "SELECT DISTINCT id FROM read_arrow('%s/%s/*.arrow') ORDER BY id".formatted(warehousePath, testPath);
-            var expectedQuery = "SELECT * FROM generate_series(0, %d) AS t(id) ORDER BY id".formatted(expectedEvents - 1);
+            var actualQuery =
+                    String.format("SELECT DISTINCT id FROM read_arrow('%s/%s/*.arrow') ORDER BY id", warehousePath, testPath);
+            var expectedQuery = String.format("SELECT * FROM generate_series(0, %d) AS t(id) ORDER BY id", expectedEvents - 1);
             TestUtils.isEqual(expectedQuery, actualQuery);
 
             logger.info("HttpArrowProducer resilience test passed - all {} distinct events received", expectedEvents);

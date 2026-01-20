@@ -64,11 +64,11 @@ public class PartitionPruningTest {
         assertSize(0, basePath, "dt=cast('2024-01-01' as date) AND value='v1' AND p='abc'");
 
        // TODO
-       // 1. assertSize(3, basePath, "value IN ('v1', 'v2')");
+       // 1. assertSize(3, queueId, "value IN ('v1', 'v2')");
        // java.lang.UnsupportedOperationException: No transformation supported{"class":"OPERATOR","type":"COMPARE_IN"
 
        // 2. Pruning files using partition column filters is a best-effort approach by the Delta kernel
        // and may not always achieve full optimization.
-       // assertSize(3, basePath, "value='v123'"); // expect to return 0
+       // assertSize(3, queueId, "value='v123'"); // expect to return 0
     }
 }

@@ -3,10 +3,10 @@ package io.dazzleduck.sql.flight.server;
 import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
-import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactoryProvider;
+import io.dazzleduck.sql.commons.ingestion.IngestionTaskFactoryProvider;
+import io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider;
 import io.dazzleduck.sql.commons.util.MutableClock;
 import io.dazzleduck.sql.flight.SimpleFlightRecorder;
-import io.dazzleduck.sql.flight.optimizer.QueryOptimizer;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
 import org.apache.arrow.flight.*;
 import org.apache.arrow.flight.sql.FlightSqlClient;
@@ -18,6 +18,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -170,7 +171,7 @@ public class DuckDBSqlProducerTimeoutTest {
                 "change me",
                 serverAllocator, warehousePath, AccessMode.COMPLETE,
                 DuckDBFlightSqlProducer.newTempDir(),
-                PostIngestionTaskFactoryProvider.NO_OP.getPostIngestionTaskFactory(),
+                new NOOPIngestionTaskFactoryProvider(warehousePath + File.pathSeparator + "ingestion").getIngestionTaskFactory(),
                 executor,
                 Duration.ofSeconds(5),
                 mutableClock,

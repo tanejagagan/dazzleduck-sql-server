@@ -28,7 +28,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * DazzleDuck server stack. It provides:
  *
  * - POST /v1/login - Returns a mock JWT token
- * - POST /v1/ingest?path=<path> - Stores Arrow stream data to the warehouse directory
+ * - POST /v1/ingest?ingestion_queue=<path> - Stores Arrow stream data to the warehouse directory
  *
  * Usage:
  * <pre>
@@ -226,7 +226,7 @@ public class MockIngestionServer implements AutoCloseable {
     }
 
     /**
-     * Handler for POST /v1/ingest?path=<path>
+     * Handler for POST /v1/ingest?ingestion_queue=<path>
      * Accepts Arrow stream data and stores it to the warehouse.
      */
     private class IngestHandler implements HttpHandler {
@@ -245,17 +245,17 @@ public class MockIngestionServer implements AutoCloseable {
                     return;
                 }
 
-                // Extract path parameter
+                // Extract ingestion_queue parameter
                 String query = exchange.getRequestURI().getQuery();
-                String path = extractPathParameter(query);
+                String path = extractIngestionQueueParameter(query);
                 if (path == null || path.isEmpty()) {
-                    sendError(exchange, 400, "Missing required parameter: path");
+                    sendError(exchange, 400, "Missing required parameter: ingestion_queue");
                     return;
                 }
 
-                // Validate path (security check)
+                // Validate ingestion_queue (security check)
                 if (path.contains("..") || path.startsWith("/")) {
-                    sendError(exchange, 400, "Invalid path: must not contain '..' or start with '/'");
+                    sendError(exchange, 400, "Invalid ingestion_queue: must not contain '..' or start with '/'");
                     return;
                 }
 
@@ -303,13 +303,13 @@ public class MockIngestionServer implements AutoCloseable {
             }
         }
 
-        private String extractPathParameter(String query) {
+        private String extractIngestionQueueParameter(String query) {
             if (query == null) {
                 return null;
             }
             for (String param : query.split("&")) {
                 String[] parts = param.split("=", 2);
-                if (parts.length == 2 && "path".equals(parts[0])) {
+                if (parts.length == 2 && "ingestion_queue".equals(parts[0])) {
                     return URLDecoder.decode(parts[1], StandardCharsets.UTF_8);
                 }
             }

@@ -6,7 +6,7 @@ import com.google.protobuf.ByteString;
 import io.dazzleduck.sql.commons.authorization.UnauthorizedException;
 import io.dazzleduck.sql.commons.Transformations;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
-import io.dazzleduck.sql.commons.ingestion.PostIngestionTaskFactory;
+import io.dazzleduck.sql.commons.ingestion.IngestionTaskFactory;
 import io.dazzleduck.sql.commons.planner.SplitPlanner;
 import io.dazzleduck.sql.flight.FlightRecorder;
 import io.dazzleduck.sql.flight.optimizer.QueryOptimizer;
@@ -27,7 +27,7 @@ import static com.google.protobuf.ByteString.copyFrom;
 public class RestrictedFlightSqlProducer extends DuckDBFlightSqlProducer {
 
     private final QueryOptimizer queryOptimizer;
-    public RestrictedFlightSqlProducer(Location location, String producerId, String secretKey, BufferAllocator allocator, String warehousePath, Path tempDir, PostIngestionTaskFactory postIngestionTaskFactory, ScheduledExecutorService scheduledExecutorService, Duration queryTimeout, Clock clock, FlightRecorder recorder, QueryOptimizer queryOptimizer, IngestionConfig ingestionConfig) {
+    public RestrictedFlightSqlProducer(Location location, String producerId, String secretKey, BufferAllocator allocator, String warehousePath, Path tempDir, IngestionTaskFactory postIngestionTaskFactory, ScheduledExecutorService scheduledExecutorService, Duration queryTimeout, Clock clock, FlightRecorder recorder, QueryOptimizer queryOptimizer, IngestionConfig ingestionConfig) {
         super(location, producerId, secretKey, allocator, warehousePath, AccessMode.RESTRICTED, tempDir, postIngestionTaskFactory, scheduledExecutorService, queryTimeout, clock, recorder, ingestionConfig);
         this.queryOptimizer = queryOptimizer;
     }
