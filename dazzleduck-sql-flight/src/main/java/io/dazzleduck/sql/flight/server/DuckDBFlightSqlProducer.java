@@ -269,18 +269,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
         return dir;
     }
 
-    /*
-    public DuckDBFlightSqlProducer(Location location){
-        this(location, UUID.randomUUID().toString());
-    }
-
-    public DuckDBFlightSqlProducer(Location location, String producerId) {
-        this(location, producerId, "change me", new RootAllocator(),  System.getProperty("user.dir") + "/warehouse", AccessMode.COMPLETE, newTempDir()
-        , IngestionTaskFactoryProvider.NO_OP.getIngestionTaskFactory(), Executors.newSingleThreadScheduledExecutor(), Duration.ofMinutes(2), DEFAULT_INGESTION_CONFIG);
-    }
-
-     */
-
     public DuckDBFlightSqlProducer(Location location,
                                    String producerId,
                                    String secretKey,

@@ -223,7 +223,7 @@ public final class LogForwarderConfig {
         private long maxOnDiskSize = 1024 * 1024 * 1024L; // 1 GB
         private int retryCount = 3;
         private long retryIntervalMillis = 1000; // 1 second
-        private List<String> projections = Collections.emptyList();
+        private List<String> project = Collections.emptyList();
         private List<String> partitionBy = Collections.emptyList();
         private boolean enabled = true;
 
@@ -307,8 +307,8 @@ public final class LogForwarderConfig {
             return this;
         }
 
-        public Builder projections(List<String> projections) {
-            this.projections = Objects.requireNonNull(projections);
+        public Builder project(List<String> projections) {
+            this.project = Objects.requireNonNull(projections);
             return this;
         }
 
@@ -338,7 +338,7 @@ public final class LogForwarderConfig {
                     maxOnDiskSize,
                     retryCount,
                     retryIntervalMillis,
-                    projections,
+                    project,
                     partitionBy,
                     enabled
             );
