@@ -106,9 +106,11 @@ public class Runtime implements Closeable {
         StartupScriptProvider startupScriptProvider = ConfigBasedProvider.load(config,
                 StartupScriptProvider.STARTUP_SCRIPT_CONFIG_PREFIX,
                 new ConfigBasedStartupScriptProvider());
-        if (startupScriptProvider.getStartupScript() != null) {
-            logger.info("Executing startup script");
-            ConnectionPool.execute(startupScriptProvider.getStartupScript());
+        String startupScript = startupScriptProvider.getStartupScript();
+        if (startupScript != null && !startupScript.isBlank()) {
+            logger.info("Executing startup script on singleton connection");
+            ConnectionPool.executeOnSingleton(startupScript);
+            logger.info("Startup script completed successfully");
         }
     }
 

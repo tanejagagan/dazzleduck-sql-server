@@ -486,6 +486,40 @@ public enum ConnectionPool {
         }
     }
 
+    /**
+     * Executes SQL directly on the singleton connection (not a duplicate).
+     * This is critical for ATTACH and LOAD commands that need to persist
+     * across all subsequent connections, since duplicate connections inherit
+     * attached databases from their parent singleton connection.
+     *
+     * Supports multi-statement scripts separated by semicolons.
+     *
+     * @param script SQL script to execute on the singleton connection
+     */
+    public static void executeOnSingleton(String script) {
+        String[] statements = splitStatements(script);
+        try (Statement statement = INSTANCE.connection.createStatement()) {
+            for (String sql : statements) {
+                if (!sql.isBlank()) {
+                    statement.execute(sql);
+                }
+            }
+        } catch (SQLException e) {
+            throw new RuntimeSqlException(e);
+        }
+    }
+
+    /**
+     * Splits a SQL script into individual statements by semicolons.
+     * Handles semicolons followed by newlines or end of string.
+     */
+    private static String[] splitStatements(String script) {
+        return Arrays.stream(script.split(";"))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .toArray(String[]::new);
+    }
+
     private static Properties loadProperties() {
         Properties properties = new Properties();
 
