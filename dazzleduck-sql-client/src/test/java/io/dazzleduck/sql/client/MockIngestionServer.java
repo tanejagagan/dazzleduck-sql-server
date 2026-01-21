@@ -1,6 +1,7 @@
 package io.dazzleduck.sql.client;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.dazzleduck.sql.common.Headers;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
@@ -309,7 +310,7 @@ public class MockIngestionServer implements AutoCloseable {
             }
             for (String param : query.split("&")) {
                 String[] parts = param.split("=", 2);
-                if (parts.length == 2 && "ingestion_queue".equals(parts[0])) {
+                if (parts.length == 2 && Headers.QUERY_PARAMETER_INGESTION_QUEUE.equals(parts[0])) {
                     return URLDecoder.decode(parts[1], StandardCharsets.UTF_8);
                 }
             }

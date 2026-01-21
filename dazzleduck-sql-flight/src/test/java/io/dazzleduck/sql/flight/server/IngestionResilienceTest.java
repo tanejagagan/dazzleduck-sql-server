@@ -199,7 +199,7 @@ public class IngestionResilienceTest {
                             var streamReader = new ArrowStreamReaderWrapper(reader, allocator);
                             var ingestOptions = new FlightSqlClient.ExecuteIngestOptions("",
                                     FlightSql.CommandStatementIngest.TableDefinitionOptions.newBuilder().build(),
-                                    false, CATALOG, SCHEMA_NAME, Map.of("ingestion_queue", testPath));
+                                    false, CATALOG, SCHEMA_NAME, Map.of(Headers.QUERY_PARAMETER_INGESTION_QUEUE, testPath));
 
                             client.executeIngest(streamReader, ingestOptions);
                             sent = true;

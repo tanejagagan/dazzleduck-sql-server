@@ -4,7 +4,6 @@ package io.dazzleduck.sql.flight.server;
 import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.ConnectionPool;
-import io.dazzleduck.sql.commons.ingestion.IngestionTaskFactoryProvider;
 import io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.dazzleduck.sql.flight.FlightRecorder;
@@ -29,7 +28,6 @@ import org.slf4j.LoggerFactory;
 import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.security.NoSuchAlgorithmException;
 import java.sql.*;
 import java.time.Clock;
@@ -610,7 +608,7 @@ public class DuckDBFlightSqlProducerTest {
             var streamReader = new ArrowStreamReaderWrapper(reader, clientAllocator);
             var executeIngestOption = new FlightSqlClient.ExecuteIngestOptions("",
                     FlightSql.CommandStatementIngest.TableDefinitionOptions.newBuilder().build(),
-                    false, "", "", Map.of("ingestion_queue", filename));
+                    false, "", "", Map.of(Headers.QUERY_PARAMETER_INGESTION_QUEUE, filename));
             sqlClient.executeIngest(streamReader, executeIngestOption);
         }
     }

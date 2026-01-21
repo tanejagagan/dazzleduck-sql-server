@@ -202,27 +202,27 @@ Bulk ingest data in Arrow format into tables.
 **Query Parameters**:
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| path | string | Yes | Target table path (cannot start with "/" or contain "..") |
+| ingestion_queue | string | Yes | Target table path (cannot start with "/" or contain "..") |
 
 **Headers**:
 | Header | Type | Required | Description |
 |--------|------|----------|-------------|
 | Content-Type | string | Yes | Must be `application/vnd.apache.arrow.stream` |
-| X-Data-Format | string | No | Data format (default: "parquet") |
-| X-Data-Partition | string | No | Partition spec (comma-separated, URL-encoded) |
-| X-Data-Transformation | string | No | Transformation spec (comma-separated, URL-encoded) |
-| X-Producer-Id | string | No | Producer identifier |
-| X-Producer-Batch-Id | long | No | Producer batch ID |
-| X-Sort-Order | string | No | Sort order spec (comma-separated, URL-encoded) |
+| x-dd-format | string | No | Data format (default: "parquet") |
+| x-dd-partition | string | No | Partition columns (CSV format, URL-encoded) |
+| x-dd-project | string | No | Projection expressions (CSV format, URL-encoded) |
+| x-dd-producer-id | string | No | Producer identifier |
+| x-dd-producer-batch-id | long | No | Producer batch ID |
+| x-dd-sort-order | string | No | Sort order columns (CSV format, URL-encoded) |
 
 **Request Body**: Binary Apache Arrow IPC stream
 
 **Example**:
 ```http
-POST /v1/ingest?path=my_table HTTP/1.1
+POST /v1/ingest?ingestion_queue=my_table HTTP/1.1
 Content-Type: application/vnd.apache.arrow.stream
-X-Data-Format: parquet
-X-Data-Partition: year,month
+x-dd-format: parquet
+x-dd-partition: year,month
 
 [binary Arrow stream data]
 ```
@@ -257,6 +257,77 @@ Web-based monitoring dashboard for real-time metrics and query management.
 - Open prepared statements
 - Running bulk ingestion status
 - Query cancellation support
+
+---
+
+## Header Value Parsing
+
+Several headers accept multiple values in CSV format. These headers are parsed using RFC 4180-compliant CSV parsing.
+
+### CSV-Parsed Headers
+
+| Header | Constant | Description |
+|--------|----------|-------------|
+| `x-dd-partition` | `HEADER_DATA_PARTITION` | Partition columns |
+| `x-dd-project` | `HEADER_DATA_PROJECT` | Projection expressions |
+| `x-dd-sort-order` | `HEADER_SORT_ORDER` | Sort order columns |
+
+### Parsing Rules
+
+1. **Simple comma-separated values**: Values are split by commas
+   ```
+   x-dd-partition: year,month,day
+   ```
+   Result: `["year", "month", "day"]`
+
+2. **Quoted values**: Use double quotes for values containing commas or spaces
+   ```
+   x-dd-project: "col1 + col2",col3,"CASE WHEN x > 1 THEN 'a' ELSE 'b' END"
+   ```
+   Result: `["col1 + col2", "col3", "CASE WHEN x > 1 THEN 'a' ELSE 'b' END"]`
+
+3. **Escaped quotes**: Use double quotes to escape quotes within quoted values
+   ```
+   x-dd-project: "concat(col1, "" - "", col2)"
+   ```
+   Result: `["concat(col1, \" - \", col2)"]`
+
+4. **Whitespace handling**: Leading and trailing whitespace is trimmed from each value
+   ```
+   x-dd-partition:  year , month , day
+   ```
+   Result: `["year", "month", "day"]`
+
+5. **Empty values**: Empty strings and blank values are ignored
+   ```
+   x-dd-partition: year,,month
+   ```
+   Result: `["year", "month"]`
+
+6. **Null or blank header**: Returns an empty array
+   ```
+   x-dd-partition:
+   ```
+   Result: `[]`
+
+### URL Encoding
+
+When passing header values in query parameters or HTTP headers, remember to URL-encode special characters:
+
+| Character | Encoded |
+|-----------|---------|
+| `,` | `%2C` |
+| `"` | `%22` |
+| ` ` (space) | `%20` or `+` |
+
+**Example**:
+```bash
+curl -X POST "http://localhost:8080/v1/ingest?ingestion_queue=my_table" \
+  -H "Content-Type: application/vnd.apache.arrow.stream" \
+  -H "x-dd-partition: year,month" \
+  -H "x-dd-project: col1,\"col2 + col3\",col4" \
+  --data-binary @data.arrow
+```
 
 ---
 
@@ -371,9 +442,9 @@ curl http://localhost:8080/health
 ### Ingest Data
 
 ```bash
-curl -X POST "http://localhost:8080/v1/ingest?path=my_table" \
+curl -X POST "http://localhost:8080/v1/ingest?ingestion_queue=my_table" \
   -H "Content-Type: application/vnd.apache.arrow.stream" \
-  -H "X-Data-Format: parquet" \
+  -H "x-dd-format: parquet" \
   --data-binary @data.arrow
 ```
 

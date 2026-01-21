@@ -2,6 +2,7 @@ package io.dazzleduck.sql.client;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.common.types.JavaRow;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
@@ -179,7 +180,7 @@ class MockIngestionServerTest {
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
         assertEquals(400, response.statusCode());
-        assertTrue(response.body().contains("ingestion_queue"));
+        assertTrue(response.body().contains(Headers.QUERY_PARAMETER_INGESTION_QUEUE));
     }
 
     @Test
@@ -212,7 +213,7 @@ class MockIngestionServerTest {
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
         assertEquals(400, response.statusCode());
-        assertTrue(response.body().contains("Invalid ingestion_queue"));
+        assertTrue(response.body().contains("Invalid " + Headers.QUERY_PARAMETER_INGESTION_QUEUE));
     }
 
     @Test

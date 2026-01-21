@@ -1,7 +1,6 @@
 package io.dazzleduck.sql.http.server;
 
 import io.dazzleduck.sql.common.ConfigConstants;
-import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.dazzleduck.sql.common.auth.LoginRequest;
@@ -184,7 +183,7 @@ public class HttpServerJwtTest extends HttpServerTestBase {
     public void testIngestionWithJwt() throws Exception {
         var path = "secure";
         var jwt = login(serverPort, new LoginRequest("admin", "admin",
-                Map.of(HEADER_INGESTION_QUEUE, path)));
+                Map.of(QUERY_PARAMETER_INGESTION_QUEUE, path)));
         String auth = jwt.tokenType() + " " + jwt.accessToken();
 
         String query = "select * from generate_series(9)";
