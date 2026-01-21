@@ -1,5 +1,6 @@
 package io.dazzleduck.sql.client.grpc;
 
+import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.common.types.JavaRow;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.dazzleduck.sql.runtime.SharedTestServer;
@@ -126,7 +127,7 @@ public class GrpcProducerResilienceTest {
                     Location.forGrpcInsecure(HOST, fixedFlightPort),
                     USER,
                     PASSWORD,
-                    Map.of("ingestion_queue", testPath),
+                    Map.of(Headers.QUERY_PARAMETER_INGESTION_QUEUE, testPath),
                     Duration.ofSeconds(60)
             )) {
                 logger.info("Sending {} events over {}ms...", expectedEvents, TEST_DURATION_MS);

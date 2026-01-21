@@ -1,17 +1,11 @@
 package io.dazzleduck.sql.flight.ingestion;
 
-import de.siegmar.fastcsv.reader.CsvReader;
-import de.siegmar.fastcsv.reader.CsvRecord;
 import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.commons.ingestion.Batch;
+import io.dazzleduck.sql.commons.util.HeaderUtils;
 import org.apache.arrow.flight.sql.impl.FlightSql;
 
-import java.io.IOException;
-import java.io.StringReader;
-import java.io.UncheckedIOException;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
 
 public record IngestionParameters(String ingestionQueue,
@@ -36,7 +30,7 @@ public record IngestionParameters(String ingestionQueue,
     public static IngestionParameters getIngestionParameters(FlightSql.CommandStatementIngest command) {
 
         Map<String, String> optionMap = command.getOptionsMap();
-        String ingestionQueue = optionMap.get(Headers.HEADER_INGESTION_QUEUE);
+        String ingestionQueue = optionMap.get(Headers.QUERY_PARAMETER_INGESTION_QUEUE);
         // Validate ingestion_queue to prevent traversal attacks
         if (ingestionQueue == null || ingestionQueue.isEmpty()) {
             throw new IllegalArgumentException("ingestion_queue parameter is required");
@@ -49,30 +43,10 @@ public record IngestionParameters(String ingestionQueue,
 
         String producerId = optionMap.get(Headers.HEADER_PRODUCER_ID);
         // Optional comma-separated lists
-        String[] partitionBy = parseCsv(optionMap.get(Headers.HEADER_DATA_PARTITION));
-        String[] projections = parseCsv(optionMap.get(Headers.HEADER_DATA_PROJECT));
-        String[] sortOrder = parseCsv(optionMap.get(Headers.HEADER_SORT_ORDER));
+        String[] partitionBy = HeaderUtils.parseCsv(optionMap.get(Headers.HEADER_DATA_PARTITION));
+        String[] projections = HeaderUtils.parseCsv(optionMap.get(Headers.HEADER_DATA_PROJECT));
+        String[] sortOrder = HeaderUtils.parseCsv(optionMap.get(Headers.HEADER_SORT_ORDER));
         return new IngestionParameters(ingestionQueue, format, partitionBy, projections, sortOrder, producerId, 0L, Map.of());
-    }
-
-    static String[] parseCsv(String value) {
-        if (value == null || value.isBlank()) {
-            return new String[0];
-        }
-        List<String> result = new ArrayList<>();
-        try (CsvReader<CsvRecord> reader = CsvReader.builder().ofCsvRecord(new StringReader(value))) {
-            for (CsvRecord record : reader) {
-                for (int i = 0; i < record.getFieldCount(); i++) {
-                    String field = record.getField(i).trim();
-                    if (!field.isEmpty()) {
-                        result.add(field);
-                    }
-                }
-            }
-        } catch (IOException e) {
-            throw new UncheckedIOException("Failed to parse CSV value: " + value, e);
-        }
-        return result.toArray(new String[0]);
     }
 
     public FlightSql.CommandStatementIngest createCommand() {

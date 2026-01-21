@@ -202,27 +202,27 @@ Bulk ingest data in Arrow format into tables.
 **Query Parameters**:
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| path | string | Yes | Target table path (cannot start with "/" or contain "..") |
+| ingestion_queue | string | Yes | Target table path (cannot start with "/" or contain "..") |
 
 **Headers**:
 | Header | Type | Required | Description |
 |--------|------|----------|-------------|
 | Content-Type | string | Yes | Must be `application/vnd.apache.arrow.stream` |
-| X-Data-Format | string | No | Data format (default: "parquet") |
-| X-Data-Partition | string | No | Partition spec (comma-separated, URL-encoded) |
-| X-Data-Transformation | string | No | Transformation spec (comma-separated, URL-encoded) |
-| X-Producer-Id | string | No | Producer identifier |
-| X-Producer-Batch-Id | long | No | Producer batch ID |
-| X-Sort-Order | string | No | Sort order spec (comma-separated, URL-encoded) |
+| x-dd-format | string | No | Data format (default: "parquet") |
+| x-dd-partition | string | No | Partition columns (CSV format, URL-encoded) |
+| x-dd-project | string | No | Projection expressions (CSV format, URL-encoded) |
+| x-dd-producer-id | string | No | Producer identifier |
+| x-dd-producer-batch-id | long | No | Producer batch ID |
+| x-dd-sort-order | string | No | Sort order columns (CSV format, URL-encoded) |
 
 **Request Body**: Binary Apache Arrow IPC stream
 
 **Example**:
 ```http
-POST /v1/ingest?path=my_table HTTP/1.1
+POST /v1/ingest?ingestion_queue=my_table HTTP/1.1
 Content-Type: application/vnd.apache.arrow.stream
-X-Data-Format: parquet
-X-Data-Partition: year,month
+x-dd-format: parquet
+x-dd-partition: year,month
 
 [binary Arrow stream data]
 ```
@@ -257,6 +257,151 @@ Web-based monitoring dashboard for real-time metrics and query management.
 - Open prepared statements
 - Running bulk ingestion status
 - Query cancellation support
+
+---
+
+## Header Value Parsing
+
+Several headers accept multiple values in CSV format. These headers are parsed using RFC 4180-compliant CSV parsing.
+
+### CSV-Parsed Headers
+
+| Header | Constant | Description |
+|--------|----------|-------------|
+| `x-dd-partition` | `HEADER_DATA_PARTITION` | Partition columns |
+| `x-dd-project` | `HEADER_DATA_PROJECT` | Projection expressions |
+| `x-dd-sort-order` | `HEADER_SORT_ORDER` | Sort order columns |
+
+### Partition Header Limitations
+
+The `x-dd-partition` header is treated as **column references only**. Values are automatically wrapped in double quotes for SQL safety.
+
+**Supported:**
+- Simple column names: `year`, `month`, `user_id`
+- Column names with underscores: `created_at`, `order_id`
+
+**Not Supported:**
+- Expressions: `year + 1`, `EXTRACT(year FROM date)`
+- Functions: `UPPER(name)`, `DATE_TRUNC('month', ts)`
+- Table-qualified names: `table.column`
+- Aliases: `column AS alias`
+
+**Examples:**
+
+```
+# Valid
+x-dd-partition: year,month,day
+
+# Invalid - these will be treated as literal column names (quoted as-is)
+x-dd-partition: YEAR(date)           # Becomes "YEAR(date)" - not a function call
+```
+
+For complex partitioning logic, use the `x-dd-project` header to create derived columns first, then reference those columns in the partition header.
+
+### Sort Order Header
+
+The `x-dd-sort-order` header accepts **column references with optional sort direction** (ASC or DESC). Column names are automatically wrapped in double quotes for SQL safety.
+
+**Supported:**
+- Simple column names: `created_at`, `id`
+- Column names with direction: `created_at DESC`, `id ASC`
+- Multiple columns: `created_at DESC,id ASC`
+- Mixed (with and without direction): `created_at DESC,id`
+
+**Not Supported:**
+- Expressions: `year + 1`, `EXTRACT(year FROM date)`
+- Functions: `UPPER(name)`, `DATE_TRUNC('month', ts)`
+- NULLS FIRST/LAST modifiers
+- Table-qualified names: `table.column`
+
+**Examples:**
+
+```
+# Valid
+x-dd-sort-order: created_at
+x-dd-sort-order: created_at DESC
+x-dd-sort-order: created_at DESC,id ASC
+x-dd-sort-order: year,month DESC,day
+
+# Invalid - these will be treated as literal column names
+x-dd-sort-order: created_at NULLS FIRST    # Becomes "created_at NULLS FIRST"
+```
+
+For complex sorting logic, use the `x-dd-project` header to create derived columns first, then reference those columns in the sort order header.
+
+### Projection Header
+
+The `x-dd-project` header supports **expressions** and is validated against SQL injection patterns.
+
+**Supported:**
+- Column references: `col1`, `col2`
+- Arithmetic expressions: `col1 + col2`, `price * quantity`
+- Function calls: `UPPER(name)`, `CONCAT(first, last)`
+- CASE expressions: `CASE WHEN x > 0 THEN 'positive' ELSE 'negative' END`
+- Aliases: `col1 + col2 AS total`
+- String literals: `'constant'`
+
+**Blocked (SQL Injection Protection):**
+- SQL keywords (surrounded by whitespace): `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `DROP`, `UNION`, `FROM`, `WHERE`, etc.
+- SQL comments: `--`, `/*`, `*/`
+- Statement separators: `;`
+
+### Parsing Rules
+
+1. **Simple comma-separated values**: Values are split by commas
+   ```
+   x-dd-partition: year,month,day
+   ```
+   Result: `["year", "month", "day"]`
+
+2. **Quoted values**: Use double quotes for values containing commas or spaces
+   ```
+   x-dd-project: "col1 + col2",col3,"CASE WHEN x > 1 THEN 'a' ELSE 'b' END"
+   ```
+   Result: `["col1 + col2", "col3", "CASE WHEN x > 1 THEN 'a' ELSE 'b' END"]`
+
+3. **Escaped quotes**: Use double quotes to escape quotes within quoted values
+   ```
+   x-dd-project: "concat(col1, "" - "", col2)"
+   ```
+   Result: `["concat(col1, \" - \", col2)"]`
+
+4. **Whitespace handling**: Leading and trailing whitespace is trimmed from each value
+   ```
+   x-dd-partition:  year , month , day
+   ```
+   Result: `["year", "month", "day"]`
+
+5. **Empty values**: Empty strings and blank values are ignored
+   ```
+   x-dd-partition: year,,month
+   ```
+   Result: `["year", "month"]`
+
+6. **Null or blank header**: Returns an empty array
+   ```
+   x-dd-partition:
+   ```
+   Result: `[]`
+
+### URL Encoding
+
+When passing header values in query parameters or HTTP headers, remember to URL-encode special characters:
+
+| Character | Encoded |
+|-----------|---------|
+| `,` | `%2C` |
+| `"` | `%22` |
+| ` ` (space) | `%20` or `+` |
+
+**Example**:
+```bash
+curl -X POST "http://localhost:8080/v1/ingest?ingestion_queue=my_table" \
+  -H "Content-Type: application/vnd.apache.arrow.stream" \
+  -H "x-dd-partition: year,month" \
+  -H "x-dd-project: col1,\"col2 + col3\",col4" \
+  --data-binary @data.arrow
+```
 
 ---
 
@@ -371,9 +516,9 @@ curl http://localhost:8080/health
 ### Ingest Data
 
 ```bash
-curl -X POST "http://localhost:8080/v1/ingest?path=my_table" \
+curl -X POST "http://localhost:8080/v1/ingest?ingestion_queue=my_table" \
   -H "Content-Type: application/vnd.apache.arrow.stream" \
-  -H "X-Data-Format: parquet" \
+  -H "x-dd-format: parquet" \
   --data-binary @data.arrow
 ```
 

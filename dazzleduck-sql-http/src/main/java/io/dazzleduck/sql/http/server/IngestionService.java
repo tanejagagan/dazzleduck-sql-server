@@ -44,7 +44,7 @@ public class IngestionService implements HttpService, ParameterUtils, Controller
 
     protected IngestionParameters parseIngestionParameters(ServerRequest serverRequest) {
         UriQuery query = serverRequest.query();
-        var path = query.get(HEADER_INGESTION_QUEUE);
+        var path = query.get(QUERY_PARAMETER_INGESTION_QUEUE);
 
         // Validate ingestion_queue to prevent traversal attacks
         if (path == null || path.isEmpty()) {

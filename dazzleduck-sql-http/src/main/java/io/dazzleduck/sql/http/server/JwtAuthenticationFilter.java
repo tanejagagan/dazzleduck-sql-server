@@ -92,7 +92,7 @@ public class JwtAuthenticationFilter implements Filter {
 
                 // Check write access for ingestion requests
                 if (req.path().path().startsWith(INGESTION_PATH)) {
-                    var path = req.query().get(Headers.HEADER_INGESTION_QUEUE);
+                    var path = req.query().get(Headers.QUERY_PARAMETER_INGESTION_QUEUE);
                     if (path == null || path.isEmpty()) {
                         res.status(Status.BAD_REQUEST_400);
                         res.send("ingestion_queue parameter is required".getBytes());

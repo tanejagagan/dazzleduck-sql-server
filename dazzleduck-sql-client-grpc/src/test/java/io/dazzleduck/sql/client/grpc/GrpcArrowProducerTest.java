@@ -101,7 +101,7 @@ class GrpcArrowProducerTest {
                 Location.forGrpcInsecure(HOST, flightPort),
                 USER,
                 PASSWORD,
-                Map.of("ingestion_queue", path),
+                Map.of(Headers.QUERY_PARAMETER_INGESTION_QUEUE, path),
                 Duration.ofSeconds(30)
         )) {
             sender.addRow(new JavaRow(new Object[]{"Aman"}));
@@ -155,7 +155,7 @@ class GrpcArrowProducerTest {
                 Location.forGrpcInsecure(HOST, flightPort),
                 USER,
                 PASSWORD,
-                Map.of("ingestion_queue", path),
+                Map.of(Headers.QUERY_PARAMETER_INGESTION_QUEUE, path),
                 Duration.ofSeconds(30)
         )) {
             sender.addRow(new JavaRow(new Object[]{1}));
@@ -200,7 +200,7 @@ class GrpcArrowProducerTest {
                 Location.forGrpcInsecure(HOST, flightPort),
                 USER,
                 PASSWORD,
-                Map.of("ingestion_queue", path),
+                Map.of(Headers.QUERY_PARAMETER_INGESTION_QUEUE, path),
                 Duration.ofSeconds(30)
         )) {
             sender.addRow(new JavaRow(new Object[]{1}));

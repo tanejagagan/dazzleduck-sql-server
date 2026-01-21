@@ -2,6 +2,7 @@ package io.dazzleduck.sql.client;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.common.types.JavaRow;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
@@ -13,7 +14,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
-import java.net.ServerSocket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -46,9 +46,10 @@ class MockIngestionServerTest {
 
     @BeforeEach
     void setUp() throws IOException {
-        port = findAvailablePort();
-        server = new MockIngestionServer(port, tempDir);
+        // Use port 0 to let OS assign an available port, avoiding race conditions
+        server = new MockIngestionServer(0, tempDir);
         server.start();
+        port = server.getActualPort();
         httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(5))
                 .build();
@@ -64,29 +65,19 @@ class MockIngestionServerTest {
     @Test
     void testStartStop() throws Exception {
         // Create a new server (don't use the one from setUp)
-        int newPort = findAvailablePort();
+        // Use port 0 to let OS assign an available port
         Path newDir = tempDir.resolve("start_stop_test");
         Files.createDirectories(newDir);
 
-        MockIngestionServer testServer = new MockIngestionServer(newPort, newDir);
+        MockIngestionServer testServer = new MockIngestionServer(0, newDir);
 
-        // Server should not be accepting connections before start
-        assertThrows(Exception.class, () -> {
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create("http://localhost:" + newPort + "/v1/login"))
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString("{\"username\":\"admin\",\"password\":\"admin\"}"))
-                    .timeout(Duration.ofMillis(500))
-                    .build();
-            httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-        });
-
-        // Start server
+        // Start server first to get the actual port
         testServer.start();
+        int actualPort = testServer.getActualPort();
 
         // Now it should accept connections
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create("http://localhost:" + newPort + "/v1/login"))
+                .uri(URI.create("http://localhost:" + actualPort + "/v1/login"))
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString("{\"username\":\"admin\",\"password\":\"admin\"}"))
                 .build();
@@ -99,7 +90,7 @@ class MockIngestionServerTest {
         // Server should not accept connections after stop
         assertThrows(Exception.class, () -> {
             HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create("http://localhost:" + newPort + "/v1/login"))
+                    .uri(URI.create("http://localhost:" + actualPort + "/v1/login"))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString("{\"username\":\"admin\",\"password\":\"admin\"}"))
                     .timeout(Duration.ofMillis(500))
@@ -179,7 +170,7 @@ class MockIngestionServerTest {
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
         assertEquals(400, response.statusCode());
-        assertTrue(response.body().contains("ingestion_queue"));
+        assertTrue(response.body().contains(Headers.QUERY_PARAMETER_INGESTION_QUEUE));
     }
 
     @Test
@@ -212,7 +203,7 @@ class MockIngestionServerTest {
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
         assertEquals(400, response.statusCode());
-        assertTrue(response.body().contains("Invalid ingestion_queue"));
+        assertTrue(response.body().contains("Invalid " + Headers.QUERY_PARAMETER_INGESTION_QUEUE));
     }
 
     @Test
@@ -353,10 +344,4 @@ class MockIngestionServerTest {
         return json.get("accessToken").asText();
     }
 
-    private static int findAvailablePort() throws IOException {
-        try (ServerSocket socket = new ServerSocket(0)) {
-            socket.setReuseAddress(true);
-            return socket.getLocalPort();
-        }
-    }
 }

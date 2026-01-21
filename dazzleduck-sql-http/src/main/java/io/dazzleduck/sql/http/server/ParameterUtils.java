@@ -18,12 +18,7 @@ public interface ParameterUtils {
         } else if (tClass.equals(Boolean.class)) {
             mapFunction = s -> (T) Boolean.valueOf(Boolean.parseBoolean(s));
         }
-        var fromParameter = request.query().first(parameter);
         var fromHeader = request.headers().value(HeaderNames.create(parameter));
-        if (fromParameter.isPresent()) {
-            return mapFunction.apply(fromParameter.get());
-        }
-
         if (fromHeader.isPresent()) {
             return mapFunction.apply(fromHeader.get());
         }
