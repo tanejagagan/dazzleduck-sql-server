@@ -78,32 +78,36 @@ public class JwtClaimBasedAuthorizer implements SqlAuthorizer {
         var catalogSchemaTables =
                 Transformations.getAllTablesOrPathsFromSelect(Transformations.getFirstStatementNode(query), database, schema);
 
-        if (catalogSchemaTables.size() != 1) {
-            throw new UnauthorizedException("%s TableOrPath/Path found: Only one table or path is supported".formatted(catalogSchemaTables.size()));
+        if (catalogSchemaTables.isEmpty()) {
+            throw new UnauthorizedException("No table or path found in query");
         }
 
         var updatedQuery = withUpdatedDatabaseSchema(query, database, schema );
-        var catalogSchemaTable = catalogSchemaTables.get(0);
         var path = verifiedClaims.get(Headers.HEADER_PATH);
         var functionName = verifiedClaims.get(Headers.HEADER_FUNCTION);
         var table = verifiedClaims.get(Headers.HEADER_TABLE);
         if (path == null && table == null) {
-            throw new UnauthorizedException("No access to %s".formatted(catalogSchemaTable));
+            throw new UnauthorizedException("No access to %s".formatted(catalogSchemaTables));
         }
 
-        // Check function access
-        if (catalogSchemaTable.type() == Transformations.TableType.TABLE_FUNCTION &&
-                (path == null || !SqlAuthorizer.hasAccessToPath(path, catalogSchemaTable.tableOrPath())) &&
-                !SqlAuthorizer.hasAccessToTableFunction(functionName, catalogSchemaTable.functionName())){
-            throw new UnauthorizedException("No access to %s".formatted(catalogSchemaTable));
+        // Authorize all tables/paths (handles list_value with multiple paths)
+        for (var catalogSchemaTable : catalogSchemaTables) {
+            // Check function access
+            if (catalogSchemaTable.type() == Transformations.TableType.TABLE_FUNCTION &&
+                    (path == null || !SqlAuthorizer.hasAccessToPath(path, catalogSchemaTable.tableOrPath())) &&
+                    !SqlAuthorizer.hasAccessToTableFunction(functionName, catalogSchemaTable.functionName())){
+                throw new UnauthorizedException("No access to %s".formatted(catalogSchemaTable));
+            }
+
+            // Check table access
+            if (catalogSchemaTable.type() == Transformations.TableType.BASE_TABLE &&
+                    (table == null || !SqlAuthorizer.hasAccessToTable(database, schema, table, catalogSchemaTable))){
+                throw new UnauthorizedException("No access to %s".formatted(catalogSchemaTable));
+            }
         }
 
-
-        // Check table access
-        if (catalogSchemaTable.type() == Transformations.TableType.BASE_TABLE &&
-                (table == null || !SqlAuthorizer.hasAccessToTable(database, schema, table, catalogSchemaTable))){
-            throw new UnauthorizedException("No access to %s".formatted(catalogSchemaTable));
-        }
+        // Use first entry for type determination (all entries should have same type for single table function)
+        var catalogSchemaTable = catalogSchemaTables.get(0);
         var filter = verifiedClaims.get(Headers.HEADER_FILTER);
         if (filter == null) {
             return updatedQuery;
