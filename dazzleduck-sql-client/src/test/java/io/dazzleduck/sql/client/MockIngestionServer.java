@@ -105,6 +105,17 @@ public class MockIngestionServer implements AutoCloseable {
     }
 
     /**
+     * Returns the actual port the server is bound to.
+     * This may differ from the configured port if port 0 was used (OS-assigned port).
+     */
+    public int getActualPort() {
+        if (server != null) {
+            return server.getAddress().getPort();
+        }
+        return port;
+    }
+
+    /**
      * Starts the server. Can be called after stop() to restart.
      */
     public void start() {
@@ -142,9 +153,10 @@ public class MockIngestionServer implements AutoCloseable {
 
     /**
      * Returns the base URL of the server.
+     * Uses the actual bound port, which may differ from configured port if port 0 was used.
      */
     public String getBaseUrl() {
-        return "http://localhost:" + port;
+        return "http://localhost:" + getActualPort();
     }
 
     /**

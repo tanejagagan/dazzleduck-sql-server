@@ -272,6 +272,80 @@ Several headers accept multiple values in CSV format. These headers are parsed u
 | `x-dd-project` | `HEADER_DATA_PROJECT` | Projection expressions |
 | `x-dd-sort-order` | `HEADER_SORT_ORDER` | Sort order columns |
 
+### Partition Header Limitations
+
+The `x-dd-partition` header is treated as **column references only**. Values are automatically wrapped in double quotes for SQL safety.
+
+**Supported:**
+- Simple column names: `year`, `month`, `user_id`
+- Column names with underscores: `created_at`, `order_id`
+
+**Not Supported:**
+- Expressions: `year + 1`, `EXTRACT(year FROM date)`
+- Functions: `UPPER(name)`, `DATE_TRUNC('month', ts)`
+- Table-qualified names: `table.column`
+- Aliases: `column AS alias`
+
+**Examples:**
+
+```
+# Valid
+x-dd-partition: year,month,day
+
+# Invalid - these will be treated as literal column names (quoted as-is)
+x-dd-partition: YEAR(date)           # Becomes "YEAR(date)" - not a function call
+```
+
+For complex partitioning logic, use the `x-dd-project` header to create derived columns first, then reference those columns in the partition header.
+
+### Sort Order Header
+
+The `x-dd-sort-order` header accepts **column references with optional sort direction** (ASC or DESC). Column names are automatically wrapped in double quotes for SQL safety.
+
+**Supported:**
+- Simple column names: `created_at`, `id`
+- Column names with direction: `created_at DESC`, `id ASC`
+- Multiple columns: `created_at DESC,id ASC`
+- Mixed (with and without direction): `created_at DESC,id`
+
+**Not Supported:**
+- Expressions: `year + 1`, `EXTRACT(year FROM date)`
+- Functions: `UPPER(name)`, `DATE_TRUNC('month', ts)`
+- NULLS FIRST/LAST modifiers
+- Table-qualified names: `table.column`
+
+**Examples:**
+
+```
+# Valid
+x-dd-sort-order: created_at
+x-dd-sort-order: created_at DESC
+x-dd-sort-order: created_at DESC,id ASC
+x-dd-sort-order: year,month DESC,day
+
+# Invalid - these will be treated as literal column names
+x-dd-sort-order: created_at NULLS FIRST    # Becomes "created_at NULLS FIRST"
+```
+
+For complex sorting logic, use the `x-dd-project` header to create derived columns first, then reference those columns in the sort order header.
+
+### Projection Header
+
+The `x-dd-project` header supports **expressions** and is validated against SQL injection patterns.
+
+**Supported:**
+- Column references: `col1`, `col2`
+- Arithmetic expressions: `col1 + col2`, `price * quantity`
+- Function calls: `UPPER(name)`, `CONCAT(first, last)`
+- CASE expressions: `CASE WHEN x > 0 THEN 'positive' ELSE 'negative' END`
+- Aliases: `col1 + col2 AS total`
+- String literals: `'constant'`
+
+**Blocked (SQL Injection Protection):**
+- SQL keywords (surrounded by whitespace): `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `DROP`, `UNION`, `FROM`, `WHERE`, etc.
+- SQL comments: `--`, `/*`, `*/`
+- Statement separators: `;`
+
 ### Parsing Rules
 
 1. **Simple comma-separated values**: Values are split by commas
