@@ -20,6 +20,7 @@ import java.io.IOException;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -43,6 +44,7 @@ class ArrowMicroMeterRegistryTest {
                 "http://localhost:8080",
                 "admin",
                 "admin",
+                Map.of(),
                 "arrow.outputFile",
                 Duration.ofSeconds(6),
                 1024,                          // minBatchSize (test)

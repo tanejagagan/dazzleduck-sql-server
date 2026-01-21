@@ -1,10 +1,7 @@
 package io.dazzleduck.sql.logback;
 
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Objects;
+import java.util.*;
 
 /**
  * Configuration for LogForwarder.
@@ -15,6 +12,7 @@ public final class LogForwarderConfig {
     private final String baseUrl;
     private final String username;
     private final String password;
+    private final Map<String, String> claims;
     private final String targetPath;
     private final Duration httpClientTimeout;
 
@@ -40,6 +38,7 @@ public final class LogForwarderConfig {
             String baseUrl,
             String username,
             String password,
+            Map<String, String> claims,
             String targetPath,
             Duration httpClientTimeout,
             int maxBufferSize,
@@ -65,6 +64,7 @@ public final class LogForwarderConfig {
         this.baseUrl = baseUrl;
         this.username = username;
         this.password = password;
+        this.claims = claims;
         this.targetPath = targetPath;
         this.httpClientTimeout = httpClientTimeout;
         this.maxBufferSize = maxBufferSize;
@@ -91,6 +91,10 @@ public final class LogForwarderConfig {
 
     public String password() {
         return password;
+    }
+
+    public Map<String, String> claims() {
+        return claims;
     }
 
     public String targetPath() {
@@ -187,6 +191,7 @@ public final class LogForwarderConfig {
                "baseUrl=" + baseUrl +
                ", username=" + username +
                ", password=***" +
+               ", claims=" + claims +
                ", targetPath=" + targetPath +
                ", httpClientTimeout=" + httpClientTimeout +
                ", maxBufferSize=" + maxBufferSize +
@@ -212,6 +217,7 @@ public final class LogForwarderConfig {
         private String baseUrl = "http://localhost:8081";
         private String username = "admin";
         private String password = "admin";
+        private Map<String, String> claims = Map.of();
         private String targetPath = "logs";
         private Duration httpClientTimeout = Duration.ofSeconds(3);
         private int maxBufferSize = 10000;
@@ -322,11 +328,17 @@ public final class LogForwarderConfig {
             return this;
         }
 
+        public Builder claims(Map<String, String> claims) {
+            this.claims = Objects.requireNonNull(claims);
+            return this;
+        }
+
         public LogForwarderConfig build() {
             return new LogForwarderConfig(
                     baseUrl,
                     username,
                     password,
+                    claims,
                     targetPath,
                     httpClientTimeout,
                     maxBufferSize,

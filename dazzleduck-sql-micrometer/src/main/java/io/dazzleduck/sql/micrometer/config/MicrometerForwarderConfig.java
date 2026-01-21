@@ -1,7 +1,9 @@
 package io.dazzleduck.sql.micrometer.config;
 
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -13,6 +15,7 @@ public record MicrometerForwarderConfig(
         String baseUrl,
         String username,
         String password,
+        Map<String,String> claims,
         String targetPath,
         Duration httpClientTimeout,
 
@@ -53,6 +56,7 @@ public record MicrometerForwarderConfig(
         private String baseUrl = "http://localhost:8081";
         private String username = "admin";
         private String password = "admin";
+        private Map<String,String> claims = Map.of();
         private String targetPath = "metrics";
         private Duration httpClientTimeout = Duration.ofSeconds(3);
         private Duration stepInterval = Duration.ofSeconds(10);
@@ -82,6 +86,11 @@ public record MicrometerForwarderConfig(
 
         public Builder password(String password) {
             this.password = Objects.requireNonNull(password);
+            return this;
+        }
+
+        public Builder claims(Map<String, String> claims) {
+            this.claims = Objects.requireNonNull(claims);
             return this;
         }
 
@@ -161,6 +170,7 @@ public record MicrometerForwarderConfig(
                     baseUrl,
                     username,
                     password,
+                    claims,
                     targetPath,
                     httpClientTimeout,
                     stepInterval,

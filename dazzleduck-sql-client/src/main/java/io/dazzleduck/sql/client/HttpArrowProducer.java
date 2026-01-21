@@ -16,6 +16,7 @@ import java.net.http.HttpTimeoutException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -34,6 +35,7 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
     private final String baseUrl;
     private final String username;
     private final String password;
+    private final Map<String, String> claims;
     private final String targetPath;
     private final Duration httpClientTimeout;
     private final long maxMem;
@@ -59,13 +61,14 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
             long maxInMemorySize,
             long maxOnDiskSize
     ) {
-        this(schema, baseUrl, username, password, targetPath, httpClientTimeout, minBatchSize, maxBatchSize, maxSendInterval, retryCount, retryIntervalMillis, projections, partitionBy, maxInMemorySize, maxOnDiskSize, Clock.systemUTC());
+        this(schema, baseUrl, username, password, Map.of(),targetPath, httpClientTimeout, minBatchSize, maxBatchSize, maxSendInterval, retryCount, retryIntervalMillis, projections, partitionBy, maxInMemorySize, maxOnDiskSize, Clock.systemUTC());
     }
     public HttpArrowProducer(
             Schema schema,
             String baseUrl,
             String username,
             String password,
+            Map<String, String> claims,
             String targetPath,
             Duration httpClientTimeout,
             long minBatchSize,
@@ -85,6 +88,7 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
         Objects.requireNonNull(baseUrl, "baseUrl must not be null");
         Objects.requireNonNull(username, "username must not be null");
         Objects.requireNonNull(password, "password must not be null");
+        Objects.requireNonNull(claims, "claims must not be null");
         Objects.requireNonNull(targetPath, "targetPath must not be null");
         Objects.requireNonNull(httpClientTimeout, "httpClientTimeout must not be null");
 
@@ -104,6 +108,7 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
         this.baseUrl = baseUrl;
         this.username = username;
         this.password = password;
+        this.claims = claims;
         this.targetPath = targetPath;
         this.httpClientTimeout = httpClientTimeout;
         this.maxMem = maxInMemorySize;
@@ -141,7 +146,7 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
 
         final byte[] body;
         try {
-            body = mapper.writeValueAsBytes(new LoginRequest(username, password));
+            body = mapper.writeValueAsBytes(new LoginRequest(username, password, claims));
         } catch (IOException e) {
             logger.error("Failed to serialize login request", e);
             throw new IOException("Failed to serialize login request", e);
