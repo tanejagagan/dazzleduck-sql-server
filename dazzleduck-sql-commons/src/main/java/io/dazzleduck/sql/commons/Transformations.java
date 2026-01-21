@@ -828,7 +828,7 @@ public class Transformations {
                     throw new IllegalStateException("TABLE_FUNCTION node has no children. Function: " + functionName);
                 }
                 var firstChild = functionChildren.get(0);
-                collector.add(new CatalogSchemaTable(null, null, firstChild.get(FIELD_VALUE).get(FIELD_VALUE).asText(), TableType.TABLE_FUNCTION, functionName));
+                extractPathsFromTableFunctionChild(firstChild, functionName, collector);
             }
             case NODE_TYPE_SUBQUERY -> {
                 var node = fromNode.get(FIELD_SUBQUERY).get(FIELD_NODE);
@@ -849,6 +849,50 @@ public class Transformations {
     private static void getAllTablesOrPathsFromSetOperationNode(JsonNode setOperation, String catalogName, String schemaName, List<CatalogSchemaTable> collector) {
         getAllTablesOrPathsFromSelect(setOperation.get(FIELD_LEFT), catalogName, schemaName, collector);
         getAllTablesOrPathsFromSelect(setOperation.get(FIELD_RIGHT), catalogName, schemaName, collector);
+    }
+
+    /**
+     * Extracts paths from a table function child node.
+     * Handles both direct constant values and nested list_value functions.
+     */
+    private static void extractPathsFromTableFunctionChild(JsonNode child, String functionName, List<CatalogSchemaTable> collector) {
+        JsonNode classNode = child.get(FIELD_CLASS);
+        if (classNode != null && FUNCTION_CLASS.equals(classNode.asText())) {
+            // Child is a function (e.g., list_value)
+            JsonNode functionNameNode = child.get(FIELD_FUNCTION_NAME);
+            if (functionNameNode != null && "list_value".equals(functionNameNode.asText())) {
+                // Extract all paths from list_value children
+                JsonNode listChildren = child.get(FIELD_CHILDREN);
+                if (listChildren != null && listChildren.isArray()) {
+                    for (JsonNode listChild : listChildren) {
+                        String path = extractConstantValue(listChild);
+                        if (path != null) {
+                            collector.add(new CatalogSchemaTable(null, null, path, TableType.TABLE_FUNCTION, functionName));
+                        }
+                    }
+                }
+            }
+        } else {
+            // Direct constant value
+            String path = extractConstantValue(child);
+            if (path != null) {
+                collector.add(new CatalogSchemaTable(null, null, path, TableType.TABLE_FUNCTION, functionName));
+            }
+        }
+    }
+
+    /**
+     * Extracts the string value from a constant node.
+     */
+    private static String extractConstantValue(JsonNode node) {
+        JsonNode valueNode = node.get(FIELD_VALUE);
+        if (valueNode != null) {
+            JsonNode innerValue = valueNode.get(FIELD_VALUE);
+            if (innerValue != null) {
+                return innerValue.asText();
+            }
+        }
+        return null;
     }
 
     private static boolean isHivePartition(JsonNode node) {
