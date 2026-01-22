@@ -47,7 +47,7 @@ public class HttpMetricDuckLakeIntegrationTest {
                 USE %s;
                 CREATE TABLE IF NOT EXISTS %s (
                     s_no BIGINT,
-                    timestamp TIMESTAMP,
+                    timestamp TIMESTAMPTZ,
                     name VARCHAR,
                     type VARCHAR,
                     tags MAP(VARCHAR, VARCHAR),
@@ -100,9 +100,8 @@ public class HttpMetricDuckLakeIntegrationTest {
             registry.close();
         }
 
-        Path metricDir =
-        Path.of(server.getWarehousePath(), DUCKLAKE_DATA_DIR, SCHEMA_NAME, TABLE_NAME);
-        Path metricFile = waitForMetricFile(metricDir.toString());
+        // Wait for server-side ingestion processing to complete
+        Thread.sleep(500);
 
         TestUtils.isEqual("""
                         select 'records.processed' as name,
@@ -112,9 +111,9 @@ public class HttpMetricDuckLakeIntegrationTest {
                         """,
                 """
                         select name, type, value, application_host
-                        from read_parquet('%s')
+                        from %s.%s.%s
                         where name = 'records.processed'
-                        """.formatted(metricFile.toAbsolutePath())
+                        """.formatted(CATALOG_NAME, SCHEMA_NAME, TABLE_NAME)
         );
     }
 

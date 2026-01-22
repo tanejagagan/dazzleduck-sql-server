@@ -1,6 +1,8 @@
 package io.dazzleduck.sql.commons.ingestion;
 
 import io.dazzleduck.sql.commons.ConnectionPool;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.sql.SQLException;
 import java.util.HashMap;
@@ -10,7 +12,9 @@ import java.util.Map;
  * Factory for creating DuckLakePostIngestionTask instances.
  * Uses a map for fast lookup based on ingestion path.
  */
-public class DuckLakePostIngestionTaskFactory implements IngestionTaskFactory {
+public class DuckLakeIngestionTaskFactory implements IngestionTaskFactory {
+
+    private static final Logger logger = LoggerFactory.getLogger(DuckLakeIngestionTaskFactory.class);
 
     private static final String TABLE_PATH_QUERY =
             """
@@ -34,7 +38,7 @@ public class DuckLakePostIngestionTaskFactory implements IngestionTaskFactory {
 
 
 
-    public DuckLakePostIngestionTaskFactory(Map<String, QueueIdToTableMapping> queueIdToTableMappingMap
+    public DuckLakeIngestionTaskFactory(Map<String, QueueIdToTableMapping> queueIdToTableMappingMap
     ) {
         this.queueIdsToTableMappings = queueIdToTableMappingMap;
         var map  =  new HashMap<String, String>();
@@ -67,7 +71,8 @@ public class DuckLakePostIngestionTaskFactory implements IngestionTaskFactory {
         }
 
         if (mapping == null) {
-            return PostIngestionTask.NOOP;
+            throw new IllegalArgumentException("No mapping found for ingestion queue: " + result.queueName() +
+                    ". Available mappings: " + queueIdsToTableMappings.keySet());
         }
 
         return new DuckLakePostIngestionTask(result, mapping.catalogName(), mapping.tableName(), mapping.schemaName());

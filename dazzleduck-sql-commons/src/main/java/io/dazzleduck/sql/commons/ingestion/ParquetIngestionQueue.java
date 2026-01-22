@@ -11,6 +11,7 @@ import java.util.stream.Collectors;
 public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResult> {
 
     private final String path;
+    private final String queueId;
     private final IngestionTaskFactory postIngestionTaskFactory;
     private final String applicationId;
     private final String inputFormat;
@@ -22,7 +23,7 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
      * @param applicationId
      * @param inputFormat
      * @param path
-     * @param identifier      identify the queue. Generally this will the path of the bucket
+     * @param ingestionQueue  the ingestion queue identifier used for mapping to target tables
      * @param minBucketSize   size of the bucket. Write will be performed as soon as bucket is reached to this size  or more
      * @param maxDelay        write will be performed just after this delay.
      * @param postIngestionTaskFactory
@@ -32,14 +33,15 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
     public ParquetIngestionQueue(String applicationId,
                                  String inputFormat,
                                  String path,
-                                 String identifier,
+                                 String ingestionQueue,
                                  long minBucketSize,
                                  Duration maxDelay,
                                  IngestionTaskFactory postIngestionTaskFactory,
                                  ScheduledExecutorService executorService,
                                  Clock clock) {
-        super(identifier, minBucketSize, maxDelay, executorService, clock);
+        super(ingestionQueue, minBucketSize, maxDelay, executorService, clock);
         this.path = path;
+        this.queueId = ingestionQueue;
         this.postIngestionTaskFactory = postIngestionTaskFactory;
         this.applicationId = applicationId;
         this.inputFormat = inputFormat;
@@ -130,7 +132,7 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
                 }
             }
         }
-        return new IngestionResult(this.path, writeTask.taskId(), this.applicationId,
+        return new IngestionResult(this.queueId, writeTask.taskId(), this.applicationId,
                 writeTask.bucket().getProducerMaxBatchId(),
                 count,
                 files);

@@ -74,7 +74,7 @@ public class ParquetIngestionQueueTest {
             service.tick(1, TimeUnit.MILLISECONDS);
             var result = future.get(2, SECONDS);
 
-            assertEquals(targetPath.toString(), result.queueName());
+            assertEquals("test-queue", result.queueName());
             assertEquals(TEST_APP_ID, result.applicationId());
             assertEquals(100, result.rowCount());
             assertFalse(result.filesCreated().isEmpty());
