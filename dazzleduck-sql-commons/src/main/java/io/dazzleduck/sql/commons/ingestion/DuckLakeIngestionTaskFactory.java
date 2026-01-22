@@ -43,8 +43,8 @@ public class DuckLakeIngestionTaskFactory implements IngestionTaskFactory {
         this.queueIdsToTableMappings = queueIdToTableMappingMap;
         var map  =  new HashMap<String, String>();
         queueIdToTableMappingMap.values().forEach(m -> {
-            var queueId = m.queueId();
-            var path = getPathFromCatalog(m.catalogName(), m.schemaName(), m.tableName());
+            var queueId = m.ingestionQueue();
+            var path = getPathFromCatalog(m.catalog(), m.schema(), m.table());
             map.put(queueId, path);
 
     });
@@ -75,7 +75,7 @@ public class DuckLakeIngestionTaskFactory implements IngestionTaskFactory {
                     ". Available mappings: " + queueIdsToTableMappings.keySet());
         }
 
-        return new DuckLakePostIngestionTask(result, mapping.catalogName(), mapping.tableName(), mapping.schemaName());
+        return new DuckLakePostIngestionTask(result, mapping.catalog(), mapping.table(), mapping.schema());
     }
 
     @Override

@@ -1,5 +1,5 @@
 package io.dazzleduck.sql.commons.ingestion;
 
-public record QueueIdToTableMapping(String queueId, String tableName, String schemaName, String catalogName) {
+public record QueueIdToTableMapping(String ingestionQueue, String catalog, String schema, String table) {
 
 }
