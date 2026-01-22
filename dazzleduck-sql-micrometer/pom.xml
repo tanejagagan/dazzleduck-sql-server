@@ -7,7 +7,7 @@
     <parent>
         <groupId>io.dazzleduck.sql</groupId>
         <artifactId>dazzleduck-parent</artifactId>
-        <version>0.0.15</version>
+        <version>0.0.16</version>
     </parent>
 
     <artifactId>dazzleduck-sql-micrometer</artifactId>
@@ -61,24 +61,19 @@
         <!-- DazzleDuck modules -->
         <dependency>
             <groupId>io.dazzleduck.sql</groupId>
-            <artifactId>dazzleduck-sql-common</artifactId>
-            <version>0.0.15</version>
-        </dependency>
-        <dependency>
-            <groupId>io.dazzleduck.sql</groupId>
             <artifactId>dazzleduck-sql-client</artifactId>
-            <version>0.0.15</version>
+            <version>0.0.16</version>
         </dependency>
         <dependency>
             <groupId>io.dazzleduck.sql</groupId>
             <artifactId>dazzleduck-sql-runtime</artifactId>
-            <version>0.0.15</version>
+            <version>0.0.16</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>io.dazzleduck.sql</groupId>
             <artifactId>dazzleduck-sql-runtime</artifactId>
-            <version>0.0.15</version>
+            <version>0.0.16</version>
             <type>test-jar</type>
             <scope>test</scope>
         </dependency>

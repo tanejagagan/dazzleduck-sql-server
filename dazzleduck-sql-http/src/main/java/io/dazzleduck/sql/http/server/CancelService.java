@@ -1,6 +1,7 @@
 package io.dazzleduck.sql.http.server;
 
 import io.dazzleduck.sql.flight.server.HttpFlightAdaptor;
+import io.dazzleduck.sql.http.server.model.QueryRequest;
 import io.helidon.http.Status;
 import io.helidon.webserver.http.ServerRequest;
 import io.helidon.webserver.http.ServerResponse;

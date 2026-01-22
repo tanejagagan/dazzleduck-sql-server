@@ -69,10 +69,10 @@ public class HttpMetricDuckLakeIntegrationTest {
                 "ingestion_task_factory_provider.class=io.dazzleduck.sql.commons.ingestion.DuckLakeIngestionTaskFactoryProvider",
 
                 // Mapping
-                "ingestion_task_factory_provider.ingestion_queue_to_table_mapping.0.table_name=" + TABLE_NAME,
-                "ingestion_task_factory_provider.ingestion_queue_to_table_mapping.0.schema_name=" + SCHEMA_NAME,
-                "ingestion_task_factory_provider.ingestion_queue_to_table_mapping.0.catalog_name=" + CATALOG_NAME,
-                "ingestion_task_factory_provider.ingestion_queue_to_table_mapping.0.ingestion_queue_id=" + INGESTION_QUEUE_ID,
+                "ingestion_task_factory_provider.ingestion_queue_table_mapping.0.table=" + TABLE_NAME,
+                "ingestion_task_factory_provider.ingestion_queue_table_mapping.0.schema=" + SCHEMA_NAME,
+                "ingestion_task_factory_provider.ingestion_queue_table_mapping.0.catalog=" + CATALOG_NAME,
+                "ingestion_task_factory_provider.ingestion_queue_table_mapping.0.ingestion_queue=" + INGESTION_QUEUE_ID,
                 // Startup script
                 "startup_script_provider.class=io.dazzleduck.sql.flight.ConfigBasedStartupScriptProvider",
                 "startup_script_provider.content=" + STARTUP_SCRIPT

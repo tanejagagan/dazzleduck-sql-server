@@ -8,6 +8,7 @@ import io.dazzleduck.sql.commons.authorization.SqlAuthorizer;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.dazzleduck.sql.common.auth.LoginRequest;
 import io.dazzleduck.sql.common.auth.LoginResponse;
+import io.dazzleduck.sql.http.server.model.QueryRequest;
 import io.helidon.http.HeaderNames;
 import io.helidon.http.HeaderValues;
 import org.apache.arrow.memory.RootAllocator;

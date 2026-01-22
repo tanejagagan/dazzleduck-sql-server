@@ -6,6 +6,8 @@ import com.google.protobuf.ByteString;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.flight.server.HttpFlightAdaptor;
 import io.dazzleduck.sql.flight.server.StatementHandle;
+import io.dazzleduck.sql.http.server.model.HttpConfig;
+import io.dazzleduck.sql.http.server.model.QueryRequest;
 import io.helidon.http.Status;
 import io.helidon.webserver.http.ServerRequest;
 import io.helidon.webserver.http.ServerResponse;

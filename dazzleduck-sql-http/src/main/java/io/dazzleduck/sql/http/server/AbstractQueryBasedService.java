@@ -3,6 +3,7 @@ package io.dazzleduck.sql.http.server;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.authorization.SqlAuthorizer;
+import io.dazzleduck.sql.http.server.model.QueryRequest;
 import io.helidon.http.HeaderNames;
 import io.helidon.http.HeaderValues;
 import io.helidon.http.Status;

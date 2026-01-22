@@ -1,4 +1,4 @@
-package io.dazzleduck.sql.http.server;
+package io.dazzleduck.sql.http.server.model;
 
 import io.dazzleduck.sql.flight.server.StatementHandle;
 

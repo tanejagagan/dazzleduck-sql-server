@@ -51,7 +51,7 @@ public record IngestionParameters(String ingestionQueue,
 
     public FlightSql.CommandStatementIngest createCommand() {
         var options = Map.of(
-                Headers.HEADER_PATH, ingestionQueue(),
+                Headers.QUERY_PARAMETER_INGESTION_QUEUE, ingestionQueue(),
                 Headers.HEADER_DATA_PARTITION, String.join(",", partitionBy()),
                 Headers.HEADER_DATA_FORMAT, format(),
                 Headers.HEADER_DATA_PROJECT, String.join(",", projections()),

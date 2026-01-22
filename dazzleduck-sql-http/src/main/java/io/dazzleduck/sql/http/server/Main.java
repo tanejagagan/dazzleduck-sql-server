@@ -312,7 +312,7 @@ public class Main {
                             .register(ENDPOINT_HEALTH, new HealthCheckService(producer))
                             .register(ENDPOINT_QUERY, new QueryService(producer))
                             .register(ENDPOINT_LOGIN, loginService)
-                            .register(ENDPOINT_PLAN, new PlanningService(producer, location))
+                            .register(ENDPOINT_PLAN, new PlanningService(producer, FlightToHttpEndpointMapper.fixed(location)))
                             .register(ENDPOINT_CANCEL, new CancelService(producer))
                             .register(ENDPOINT_INGEST, new IngestionService(producer))
                             .register(ENDPOINT_UI, new UIService(producer));
