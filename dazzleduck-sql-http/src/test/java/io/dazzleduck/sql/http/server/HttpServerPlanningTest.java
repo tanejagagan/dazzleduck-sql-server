@@ -2,8 +2,9 @@ package io.dazzleduck.sql.http.server;
 
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.util.TestConstants;
-import io.dazzleduck.sql.flight.server.StatementHandle;
 import io.dazzleduck.sql.common.auth.LoginRequest;
+import io.dazzleduck.sql.http.server.model.PlanResponse;
+import io.dazzleduck.sql.http.server.model.QueryRequest;
 import io.helidon.http.HeaderNames;
 import io.helidon.http.HeaderValues;
 import org.apache.arrow.memory.RootAllocator;
@@ -62,8 +63,10 @@ public class HttpServerPlanningTest extends HttpServerTestBase {
         var inputStreamResponse = client.send(request, HttpResponse.BodyHandlers.ofString());
         System.out.println(inputStreamResponse.body());
         System.out.println(inputStreamResponse);
-        var res = objectMapper.readValue(inputStreamResponse.body(), StatementHandle[].class);
+        var res = objectMapper.readValue(inputStreamResponse.body(), PlanResponse[].class);
         assertEquals(1, res.length);
+        assertNotNull(res[0].descriptor());
+        assertNotNull(res[0].descriptor().statementHandle());
     }
 
     @Test
@@ -80,9 +83,9 @@ public class HttpServerPlanningTest extends HttpServerTestBase {
             ConnectionPool.execute(connection, secretQuery);
             var query = "%s where p='1'".formatted(TestConstants.SUPPORTED_HIVE_PATH_QUERY);
             var request = baseUrl + "/v1/plan?%s=1&q=".formatted(HEADER_SPLIT_SIZE);
-            var toExecute = "SELECT splitSize FROM read_json(concat('%s', url_encode('%s')))".formatted(request, query.replaceAll("'", "''"));
+            var toExecute = "SELECT descriptor.statementHandle.splitSize as splitSize FROM read_json(concat('%s', url_encode('%s')))".formatted(request, query.replaceAll("'", "''"));
             ConnectionPool.printResult(connection, allocator, toExecute);
-            assertEquals(254, ConnectionPool.collectFirst(toExecute, Long.class));
+            assertEquals(254L, ConnectionPool.collectFirst(toExecute, Long.class));
             ConnectionPool.execute(connection, "DROP SECRET jwt_secret");
         }
     }
@@ -100,7 +103,7 @@ public class HttpServerPlanningTest extends HttpServerTestBase {
                 .header(HeaderNames.AUTHORIZATION.defaultCase(), auth)
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
         var inputStreamResponse = client.send(request, HttpResponse.BodyHandlers.ofString());
-        var res = objectMapper.readValue(inputStreamResponse.body(), StatementHandle[].class);
+        var res = objectMapper.readValue(inputStreamResponse.body(), PlanResponse[].class);
         assertEquals(3, res.length);
     }
 
@@ -117,7 +120,7 @@ public class HttpServerPlanningTest extends HttpServerTestBase {
                 .header(HeaderNames.AUTHORIZATION.defaultCase(), auth)
                 .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values()).build();
         var inputStreamResponse = client.send(request, HttpResponse.BodyHandlers.ofString());
-        var res = objectMapper.readValue(inputStreamResponse.body(), StatementHandle[].class);
+        var res = objectMapper.readValue(inputStreamResponse.body(), PlanResponse[].class);
         assertEquals(2, res.length);
     }
 
@@ -152,12 +155,12 @@ public class HttpServerPlanningTest extends HttpServerTestBase {
                 .build();
         var planResp = client.send(planReq, HttpResponse.BodyHandlers.ofString());
         assertEquals(200, planResp.statusCode());
-        var handles = objectMapper.readValue(planResp.body(), StatementHandle[].class);
+        var handles = objectMapper.readValue(planResp.body(), PlanResponse[].class);
         assertNotNull(handles);
         assertTrue(handles.length > 0);
 
-        String plannedQuery = handles[0].query();
-        long id = handles[0].queryId();
+        String plannedQuery = handles[0].descriptor().statementHandle().query();
+        long id = handles[0].descriptor().statementHandle().queryId();
 
         String qEnc = URLEncoder.encode(plannedQuery, StandardCharsets.UTF_8);
         var queryReq = HttpRequest.newBuilder(URI.create(baseUrl + "/v1/query?q=%s&id=%s".formatted(qEnc, id)))

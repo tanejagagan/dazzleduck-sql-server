@@ -3,6 +3,9 @@ package io.dazzleduck.sql.http.server;
 import com.google.protobuf.Any;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.flight.server.StatementHandle;
+import io.dazzleduck.sql.http.server.model.Descriptor;
+import io.dazzleduck.sql.http.server.model.PlanResponse;
+import io.dazzleduck.sql.http.server.model.QueryRequest;
 import io.helidon.webserver.http.ServerRequest;
 import io.helidon.webserver.http.ServerResponse;
 import org.apache.arrow.flight.FlightDescriptor;
@@ -17,9 +20,11 @@ import java.util.ArrayList;
 public class PlanningService extends AbstractQueryBasedService implements ParameterUtils {
 
     private final FlightProducer flightProducer;
+    private final FlightToHttpEndpointMapper endpointMapper;
 
-    public PlanningService(FlightProducer flightProducer, String location) {
+    public PlanningService(FlightProducer flightProducer, FlightToHttpEndpointMapper endpointMapper) {
         this.flightProducer = flightProducer;
+        this.endpointMapper = endpointMapper;
     }
 
     @Override
@@ -33,12 +38,16 @@ public class PlanningService extends AbstractQueryBasedService implements Parame
             var info = flightProducer.getFlightInfo(context,
                     FlightDescriptor.command(Any.pack(command).toByteArray()));
 
-            var result = new ArrayList<StatementHandle>();
+            var result = new ArrayList<PlanResponse>();
             for (var endpoint : info.getEndpoints()) {
                 var any = FlightSqlUtils.parseOrThrow(endpoint.getTicket().getBytes());
                 var statementQuery = FlightSqlUtils.unpackOrThrow(any, FlightSql.TicketStatementQuery.class);
                 var statementHandle = MAPPER.readValue(statementQuery.getStatementHandle().toByteArray(), StatementHandle.class);
-                result.add(statementHandle);
+                var locations = endpoint.getLocations().stream()
+                        .map(loc -> endpointMapper.getHttpEndpoint(loc.getUri().toString()))
+                        .toList();
+                var descriptor = new Descriptor(statementHandle);
+                result.add(new PlanResponse(locations, descriptor));
             }
 
             // Proper resource management with try-with-resources

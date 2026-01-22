@@ -2,6 +2,7 @@ package io.dazzleduck.sql.http.server;
 
 import io.dazzleduck.sql.flight.ingestion.IngestionParameters;
 import io.dazzleduck.sql.flight.server.HttpFlightAdaptor;
+import io.dazzleduck.sql.http.server.model.ContentTypes;
 import io.helidon.common.uri.UriQuery;
 import io.helidon.http.HeaderNames;
 import io.helidon.http.Status;

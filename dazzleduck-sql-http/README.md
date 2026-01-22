@@ -124,7 +124,7 @@ Execute SQL queries and return results in Apache Arrow format.
 
 **Endpoint**: `GET|POST /v1/plan`
 
-Get query execution plan information.
+Get query execution plan with endpoint locations and statement handles for distributed query execution.
 
 #### GET Request
 | Parameter | Type | Required | Description |
@@ -140,6 +140,11 @@ Get query execution plan information.
 }
 ```
 
+**Headers**:
+| Header | Type | Required | Description |
+|--------|------|----------|-------------|
+| split_size | long | No | Target split size in bytes for partitioning (default: 1GB) |
+
 **Response**:
 | Status | Description |
 |--------|-------------|
@@ -147,13 +152,72 @@ Get query execution plan information.
 | 500 Internal Server Error | Planning error |
 
 **Response Body**:
+
+Returns an array of `PlanResponse` objects, one per query split/partition:
+
 ```json
 [
   {
-    "id": "handle_id",
-    "query": "SELECT * FROM users",
-    "producerId": "producer_id",
-    "statementHandle": -1
+    "endpoints": ["http://0.0.0.0:8081"],
+    "descriptor": {
+      "statementHandle": {
+        "query": "SELECT * FROM users",
+        "queryId": 123,
+        "producerId": "uuid-string",
+        "splitSize": 1073741824,
+        "queryChecksum": "base64-checksum"
+      }
+    }
+  }
+]
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| endpoints | string[] | HTTP endpoint URLs where this split can be executed |
+| descriptor.statementHandle.query | string | The SQL query (potentially modified for this split) |
+| descriptor.statementHandle.queryId | long | Unique identifier for the query |
+| descriptor.statementHandle.producerId | string | UUID of the producer that created this plan |
+| descriptor.statementHandle.splitSize | long | Size of this split in bytes (-1 if not split) |
+| descriptor.statementHandle.queryChecksum | string | Base64-encoded checksum for query validation |
+
+**Example - Multiple Splits**:
+
+When using `split_size` header to partition large queries:
+
+```bash
+curl -X POST http://localhost:8081/v1/plan \
+  -H "Content-Type: application/json" \
+  -H "split_size: 1" \
+  -d '{"query": "SELECT * FROM read_parquet(...)"}'
+```
+
+Response with multiple partitions:
+```json
+[
+  {
+    "endpoints": ["http://0.0.0.0:8081"],
+    "descriptor": {
+      "statementHandle": {
+        "query": "SELECT * FROM read_parquet(['file1.parquet'])",
+        "queryId": 1,
+        "producerId": "abc-123",
+        "splitSize": 254,
+        "queryChecksum": "..."
+      }
+    }
+  },
+  {
+    "endpoints": ["http://0.0.0.0:8081"],
+    "descriptor": {
+      "statementHandle": {
+        "query": "SELECT * FROM read_parquet(['file2.parquet'])",
+        "queryId": 2,
+        "producerId": "abc-123",
+        "splitSize": 312,
+        "queryChecksum": "..."
+      }
+    }
   }
 ]
 ```
