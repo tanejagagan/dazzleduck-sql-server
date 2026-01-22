@@ -23,7 +23,7 @@ Add the dependency to your `pom.xml`:
 <dependency>
     <groupId>io.dazzleduck.sql</groupId>
     <artifactId>dazzleduck-sql-micrometer</artifactId>
-    <version>0.0.13-SNAPSHOT</version>
+    <version>0.0.16</version>
 </dependency>
 ```
 

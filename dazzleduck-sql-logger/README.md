@@ -70,7 +70,7 @@ If you see `logback-classic`, `log4j-slf4j-impl`, or `slf4j-simple`, use **dazzl
 <dependency>
     <groupId>io.dazzleduck.sql</groupId>
     <artifactId>dazzleduck-sql-logger</artifactId>
-    <version>0.0.14</version>
+    <version>0.0.16</version>
 </dependency>
 ```
 
