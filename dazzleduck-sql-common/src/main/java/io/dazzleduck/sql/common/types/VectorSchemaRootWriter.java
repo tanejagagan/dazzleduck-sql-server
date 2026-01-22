@@ -57,7 +57,12 @@ public class VectorSchemaRootWriter {
         } else if (type instanceof ArrowType.Utf8) {
             return new VectorWriter.VarCharVectorWriter();
         } else if (type instanceof ArrowType.Timestamp) {
-            return new VectorWriter.TimeStampMilliTZVectorWriter();
+            ArrowType.Timestamp tsType = (ArrowType.Timestamp) type;
+            if (tsType.getTimezone() != null) {
+                return new VectorWriter.TimeStampMilliTZVectorWriter();
+            } else {
+                return new VectorWriter.TimeStampMilliVectorWriter();
+            }
         } else if (type instanceof ArrowType.Date) {
             ArrowType.Date dateType = (ArrowType.Date) type;
             if (dateType.getUnit() == DateUnit.DAY) return new VectorWriter.DateDayVectorWriter();

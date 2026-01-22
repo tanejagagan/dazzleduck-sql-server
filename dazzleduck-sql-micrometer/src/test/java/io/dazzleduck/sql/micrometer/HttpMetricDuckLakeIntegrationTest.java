@@ -47,7 +47,7 @@ public class HttpMetricDuckLakeIntegrationTest {
                 USE %s;
                 CREATE TABLE IF NOT EXISTS %s (
                     s_no BIGINT,
-                    timestamp TIMESTAMPTZ,
+                    timestamp TIMESTAMP,
                     name VARCHAR,
                     type VARCHAR,
                     tags MAP(VARCHAR, VARCHAR),

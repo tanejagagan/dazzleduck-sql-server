@@ -174,7 +174,7 @@ public final class ArrowFileWriterUtil {
         List<Field> fields = new ArrayList<>();
 
         fields.add(new Field("s_no", FieldType.notNullable(new ArrowType.Int(64, true)), null));
-        fields.add(new Field("timestamp", FieldType.notNullable(new ArrowType.Timestamp(org.apache.arrow.vector.types.TimeUnit.MILLISECOND, "UTC")), null));
+        fields.add(new Field("timestamp", FieldType.notNullable(new ArrowType.Timestamp(org.apache.arrow.vector.types.TimeUnit.MILLISECOND, null)), null));
         fields.add(new Field("name", FieldType.notNullable(new ArrowType.Utf8()), null));
         fields.add(new Field("type", FieldType.notNullable(new ArrowType.Utf8()), null));
         // tags: Map<String, String>
