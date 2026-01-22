@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Post-ingestion task that adds newly ingested files to a DuckLake table.
@@ -27,7 +28,8 @@ public class DuckLakePostIngestionTask implements PostIngestionTask {
     public DuckLakePostIngestionTask(IngestionResult ingestionResult,
                                      String catalogName,
                                      String tableName,
-                                     String schemaName) {
+                                     String schemaName,
+                                     Map<String, String> additionalParameters) {
         this.ingestionResult = ingestionResult;
         this.catalogName = catalogName;
         this.tableName = tableName;

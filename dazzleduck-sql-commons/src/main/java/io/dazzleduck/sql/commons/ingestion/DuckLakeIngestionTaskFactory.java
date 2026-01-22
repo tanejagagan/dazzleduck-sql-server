@@ -75,7 +75,7 @@ public class DuckLakeIngestionTaskFactory implements IngestionTaskFactory {
                     ". Available mappings: " + queueIdsToTableMappings.keySet());
         }
 
-        return new DuckLakePostIngestionTask(result, mapping.catalog(), mapping.table(), mapping.schema());
+        return new DuckLakePostIngestionTask(result, mapping.catalog(), mapping.table(), mapping.schema(), mapping.additionalParameters());
     }
 
     @Override
