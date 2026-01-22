@@ -33,7 +33,17 @@ public class DuckLakeIngestionTaskFactoryProvider implements IngestionTaskFactor
         if (!config.hasPath("ingestion_queue_table_mapping")) return Map.of();
         Map<String, QueueIdToTableMapping> mappings = new LinkedHashMap<>();
         config.getConfigList("ingestion_queue_table_mapping").forEach(c -> {
-            QueueIdToTableMapping mapping = new QueueIdToTableMapping(c.getString("ingestion_queue"), c.getString("catalog"), c.getString("schema"), c.getString("table"));
+            Map<String, String> additionalParameters = new LinkedHashMap<>();
+            if (c.hasPath("additional_parameters")) {
+                c.getConfig("additional_parameters").entrySet().forEach(e ->
+                    additionalParameters.put(e.getKey(), e.getValue().unwrapped().toString()));
+            }
+            QueueIdToTableMapping mapping = new QueueIdToTableMapping(
+                    c.getString("ingestion_queue"),
+                    c.getString("catalog"),
+                    c.getString("schema"),
+                    c.getString("table"),
+                    additionalParameters);
             mappings.put(mapping.ingestionQueue(), mapping);
         });
         return mappings;

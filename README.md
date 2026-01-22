@@ -50,7 +50,7 @@ The project includes JDK 11 compatible client libraries:
   This will print the following on the console:
   ```
   ============================================================
-  DazzleDuck SQL Server v0.0.15
+  DazzleDuck SQL Server 0.0.16
   ============================================================
   Warehouse Path: /data
   HTTP Server started successfully
