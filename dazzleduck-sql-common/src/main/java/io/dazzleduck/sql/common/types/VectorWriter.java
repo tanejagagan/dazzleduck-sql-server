@@ -76,6 +76,18 @@ public interface VectorWriter<V> {
         }
     }
 
+    class TimeStampMilliVectorWriter implements VectorWriter<TimeStampMilliVector> {
+        @Override
+        public void write(TimeStampMilliVector timeStampMilliVector, int index, Object value) {
+            if (value == null) {
+                timeStampMilliVector.setNull(index);
+                return;
+            }
+            var v = (Long) value;
+            timeStampMilliVector.set(index, v);
+        }
+    }
+
     class DecimalVectorWriter implements VectorWriter<DecimalVector> {
         @Override
         public void write(DecimalVector decimalVector, int index, Object value) {

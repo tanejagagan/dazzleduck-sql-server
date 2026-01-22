@@ -8,7 +8,7 @@ import java.util.Map;
 import java.util.LinkedHashMap;
 
 /**
- * Provider for DuckLakePostIngestionTaskFactory.
+ * Provider for DuckLakeIngestionTaskFactory.
  * Reads configuration and creates factory instances for DuckLake table ingestion.
  */
 public class DuckLakeIngestionTaskFactoryProvider implements IngestionTaskFactoryProvider {
@@ -25,7 +25,7 @@ public class DuckLakeIngestionTaskFactoryProvider implements IngestionTaskFactor
     @Override
     public IngestionTaskFactory getIngestionTaskFactory() {
         Map<String, QueueIdToTableMapping> pathToTableMappings = loadMappings(config);
-        return new DuckLakePostIngestionTaskFactory(pathToTableMappings);
+        return new DuckLakeIngestionTaskFactory(pathToTableMappings);
     }
 
 
