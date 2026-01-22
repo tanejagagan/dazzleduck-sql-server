@@ -19,6 +19,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -70,6 +71,7 @@ public class HttpArrowProducerTest {
                 baseUrl,
                 "admin",
                 "admin",
+                Map.of(),
                 file,
                 timeout,
                 100_000,

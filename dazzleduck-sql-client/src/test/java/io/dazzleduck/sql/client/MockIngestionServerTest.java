@@ -23,6 +23,7 @@ import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
@@ -271,6 +272,7 @@ class MockIngestionServerTest {
                 server.getBaseUrl(),
                 "admin",
                 "admin",
+                Map.of(),
                 testPath,
                 Duration.ofSeconds(10),
                 100,   // minBatchSize

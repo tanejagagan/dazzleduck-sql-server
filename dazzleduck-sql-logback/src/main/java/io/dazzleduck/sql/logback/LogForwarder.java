@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.Closeable;
+import java.time.Clock;
 import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -60,6 +61,7 @@ public final class LogForwarder implements Closeable {
                 config.baseUrl(),
                 config.username(),
                 config.password(),
+                config.claims(),
                 config.targetPath(),
                 config.httpClientTimeout(),
                 config.minBatchSize(),
@@ -70,7 +72,8 @@ public final class LogForwarder implements Closeable {
                 config.projections(),
                 config.partitionBy(),
                 config.maxInMemorySize(),
-                config.maxOnDiskSize()
+                config.maxOnDiskSize(),
+                Clock.systemUTC()
         );
 
         this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {

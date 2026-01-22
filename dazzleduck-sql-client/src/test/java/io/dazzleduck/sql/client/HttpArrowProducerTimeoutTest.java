@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import java.io.ByteArrayOutputStream;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import static org.awaitility.Awaitility.await;
@@ -64,6 +65,7 @@ public class HttpArrowProducerTimeoutTest {
                 baseUrl,
                 "admin",
                 "admin",
+                Map.of(),
                 file,
                 timeout,
                 100_000,

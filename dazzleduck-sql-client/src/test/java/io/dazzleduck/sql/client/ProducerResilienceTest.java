@@ -26,6 +26,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Resilience tests for HttpArrowProducer.
@@ -130,6 +131,7 @@ public class ProducerResilienceTest {
                     baseUrl,
                     USER,
                     PASSWORD,
+                    Map.of(),
                     testPath,
                     Duration.ofSeconds(60),
                     1024,
