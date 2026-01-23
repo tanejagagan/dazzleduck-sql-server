@@ -45,7 +45,7 @@ public class UIService implements HttpService {
                     <meta charset="UTF-8">
                     <meta name="viewport" content="width=device-width, initial-scale=1.0">
                     <title>DazzleDuck Metrics Dashboard</title>
-                    <link rel="stylesheet" href="/ui/styles.css">
+                    <link rel="stylesheet" href="/v1/ui/styles.css">
                 </head>
                 <body>
                     <div class="container">
@@ -54,7 +54,7 @@ public class UIService implements HttpService {
                         <button class="refresh-btn" onclick="refreshMetrics()">Refresh Metrics</button>
                         <div id="metricsContainer"></div>
                     </div>
-                    <script src="/ui/script.js"></script>
+                    <script src="/v1/ui/script.js"></script>
                 </body>
                 </html>
                 """);
@@ -85,7 +85,7 @@ public class UIService implements HttpService {
                     const API_BASE_URL = '';
 
                     async function fetchMetrics() {
-                        const r = await fetch('/ui/api/metrics');
+                        const r = await fetch('/v1/ui/api/metrics');
                         return await r.text();
                     }
 
