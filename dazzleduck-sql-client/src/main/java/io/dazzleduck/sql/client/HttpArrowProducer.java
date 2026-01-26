@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.dazzleduck.sql.common.auth.LoginRequest;
 import io.dazzleduck.sql.common.auth.LoginResponse;
+import org.apache.arrow.vector.compression.CompressionUtil;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -61,8 +62,30 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
             long maxInMemorySize,
             long maxOnDiskSize
     ) {
-        this(schema, baseUrl, username, password, Map.of(),targetPath, httpClientTimeout, minBatchSize, maxBatchSize, maxSendInterval, retryCount, retryIntervalMillis, projections, partitionBy, maxInMemorySize, maxOnDiskSize, Clock.systemUTC());
+        this(schema, baseUrl, username, password, Map.of(), targetPath, httpClientTimeout, minBatchSize, maxBatchSize, maxSendInterval, retryCount, retryIntervalMillis, projections, partitionBy, maxInMemorySize, maxOnDiskSize, CompressionUtil.CodecType.ZSTD, Clock.systemUTC());
     }
+
+    public HttpArrowProducer(
+            Schema schema,
+            String baseUrl,
+            String username,
+            String password,
+            String targetPath,
+            Duration httpClientTimeout,
+            long minBatchSize,
+            long maxBatchSize,
+            Duration maxSendInterval,
+            int retryCount,
+            long retryIntervalMillis,
+            java.util.List<String> projections,
+            java.util.List<String> partitionBy,
+            long maxInMemorySize,
+            long maxOnDiskSize,
+            CompressionUtil.CodecType compressionType
+    ) {
+        this(schema, baseUrl, username, password, Map.of(), targetPath, httpClientTimeout, minBatchSize, maxBatchSize, maxSendInterval, retryCount, retryIntervalMillis, projections, partitionBy, maxInMemorySize, maxOnDiskSize, compressionType, Clock.systemUTC());
+    }
+
     public HttpArrowProducer(
             Schema schema,
             String baseUrl,
@@ -82,7 +105,30 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
             long maxOnDiskSize,
             Clock clock
     ) {
-        super(minBatchSize, maxBatchSize, maxSendInterval, schema, clock, retryCount, retryIntervalMillis, projections, partitionBy);
+        this(schema, baseUrl, username, password, claims, targetPath, httpClientTimeout, minBatchSize, maxBatchSize, maxSendInterval, retryCount, retryIntervalMillis, projections, partitionBy, maxInMemorySize, maxOnDiskSize, CompressionUtil.CodecType.ZSTD, clock);
+    }
+
+    public HttpArrowProducer(
+            Schema schema,
+            String baseUrl,
+            String username,
+            String password,
+            Map<String, String> claims,
+            String targetPath,
+            Duration httpClientTimeout,
+            long minBatchSize,
+            long maxBatchSize,
+            Duration maxSendInterval,
+            int retryCount,
+            long retryIntervalMillis,
+            java.util.List<String> projections,
+            java.util.List<String> partitionBy,
+            long maxInMemorySize,
+            long maxOnDiskSize,
+            CompressionUtil.CodecType compressionType,
+            Clock clock
+    ) {
+        super(minBatchSize, maxBatchSize, maxSendInterval, schema, clock, retryCount, retryIntervalMillis, projections, partitionBy, compressionType);
 
         // Issue #3: Parameter validation
         Objects.requireNonNull(baseUrl, "baseUrl must not be null");
