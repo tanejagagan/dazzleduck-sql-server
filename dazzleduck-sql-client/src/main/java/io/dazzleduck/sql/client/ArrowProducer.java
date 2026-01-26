@@ -48,24 +48,6 @@ public interface ArrowProducer extends Closeable {
      * @param elements List of SendElements to combine
      * @param schema The Arrow schema for the data (used only if elements list is empty)
      * @param allocator Buffer allocator for Arrow operations
-     * @return byte array containing the combined Arrow stream
-     * @throws IOException if reading or writing Arrow data fails
-     */
-    static ProducerElement createCombinedReader(
-            List<ProducerElement> elements,
-            Schema schema,
-            BufferAllocator allocator) throws IOException {
-        return createCombinedReader(elements, schema, allocator, CompressionUtil.CodecType.NO_COMPRESSION);
-    }
-
-    /**
-     * Creates combined Arrow stream bytes from a list of SendElements with optional compression.
-     * This utility method reads all Arrow batches from the input elements and combines them
-     * into a single Arrow stream byte array.
-     *
-     * @param elements List of SendElements to combine
-     * @param schema The Arrow schema for the data (used only if elements list is empty)
-     * @param allocator Buffer allocator for Arrow operations
      * @param compressionType The compression type to use for the output stream
      * @return byte array containing the combined Arrow stream
      * @throws IOException if reading or writing Arrow data fails

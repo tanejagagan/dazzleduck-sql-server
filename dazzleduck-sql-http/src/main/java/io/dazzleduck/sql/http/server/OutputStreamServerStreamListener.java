@@ -2,11 +2,13 @@ package io.dazzleduck.sql.http.server;
 
 import io.helidon.http.Status;
 import io.helidon.webserver.http.ServerResponse;
+import org.apache.arrow.compression.CommonsCompressionFactory;
 import org.apache.arrow.flight.FlightProducer;
 import org.apache.arrow.flight.FlightRuntimeException;
 import org.apache.arrow.flight.FlightStatusCode;
 import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.arrow.vector.compression.CompressionUtil;
 import org.apache.arrow.vector.dictionary.DictionaryProvider;
 import org.apache.arrow.vector.ipc.ArrowStreamWriter;
 import org.apache.arrow.vector.ipc.message.IpcOption;
@@ -28,18 +30,28 @@ public class OutputStreamServerStreamListener implements FlightProducer.ServerSt
     private ArrowStreamWriter writer;
     private boolean isReady;
     private final Clock clock;
+    private final CompressionUtil.CodecType compressionType;
 
     public OutputStreamServerStreamListener(ServerResponse response) {
-        this(response, Clock.systemDefaultZone());
+        this(response, Clock.systemDefaultZone(), CompressionUtil.CodecType.ZSTD);
     }
 
     public OutputStreamServerStreamListener(ServerResponse response, Clock clock) {
+        this(response, clock, CompressionUtil.CodecType.ZSTD);
+    }
+
+    public OutputStreamServerStreamListener(ServerResponse response, CompressionUtil.CodecType compressionType) {
+        this(response, Clock.systemDefaultZone(), compressionType);
+    }
+
+    public OutputStreamServerStreamListener(ServerResponse response, Clock clock, CompressionUtil.CodecType compressionType) {
         this.response = response;
         this.end = false;
         this.completed = false;
         this.isReady = false;
         this.outputStream = response.outputStream();
         this.clock = clock;
+        this.compressionType = compressionType;
     }
 
     @Override
@@ -60,7 +72,17 @@ public class OutputStreamServerStreamListener implements FlightProducer.ServerSt
     @Override
     public synchronized void start(VectorSchemaRoot root, DictionaryProvider dictionaries, IpcOption option) {
         this.isReady = true;
-        this.writer = new ArrowStreamWriter(root, dictionaries, Channels.newChannel(outputStream));
+        if (compressionType == CompressionUtil.CodecType.NO_COMPRESSION) {
+            this.writer = new ArrowStreamWriter(root, dictionaries, Channels.newChannel(outputStream));
+        } else {
+            this.writer = new ArrowStreamWriter(
+                    root,
+                    dictionaries,
+                    Channels.newChannel(outputStream),
+                    option != null ? option : IpcOption.DEFAULT,
+                    CommonsCompressionFactory.INSTANCE,
+                    compressionType);
+        }
         try {
             writer.start();
         } catch (IOException e) {
