@@ -8,12 +8,21 @@ import org.slf4j.MarkerFactory;
 
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.function.LongSupplier;
 
 public class MicroMeterFlightRecorder implements FlightRecorder {
 
     private final MeterRegistry registry;
     private static final Auditor auditor = new Auditor(MarkerFactory.getMarker("flight"));
+
+    // ==================== INTERNAL REAL-TIME COUNTERS ====================
+    // These LongAdders provide immediate, accurate counts for UI display
+    private final LongAdder internalCancelStatementCount = new LongAdder();
+    private final LongAdder internalCancelPreparedStatementCount = new LongAdder();
+    private final LongAdder internalCompletedStatementCount = new LongAdder();
+    private final LongAdder internalCompletedPreparedStatementCount = new LongAdder();
+    private final LongAdder internalBytesOut = new LongAdder();
 
     // -------------------- Counters -------------------------
     private final Counter streamStatementCounter;
@@ -94,12 +103,14 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
 
     @Override
     public void recordStatementCancel(CacheKey key, StatementContext<?> ctx) {
+        internalCancelStatementCount.increment();
         cancelStatementCounter.increment();
         auditor.audit(buildAudit(key, ctx, "CANCEL", null));
     }
 
     @Override
     public void recordPreparedStatementCancel(CacheKey key, StatementContext<?> ctx) {
+        internalCancelPreparedStatementCount.increment();
         cancelPreparedStatementCounter.increment();
         auditor.audit(buildAudit(key, ctx, "CANCEL", null));
     }
@@ -142,6 +153,7 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
 
     @Override
     public void endStreamStatement() {
+        internalCompletedStatementCount.increment();
         streamStatementCompletedCounter.increment();
     }
 
@@ -164,6 +176,7 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
 
     @Override
     public void endStreamPreparedStatement() {
+        internalCompletedPreparedStatementCount.increment();
         streamPreparedStatementCompletedCounter.increment();
     }
 
@@ -177,11 +190,17 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
 
     @Override
     public void recordGetStreamPreparedStatement(long size) {
+        if (size > 0) {
+            internalBytesOut.add(size);
+        }
         stremPreparedStatementBytesOutCounter.increment(size);
     }
 
     @Override
     public void recordGetStreamStatement(long size) {
+        if (size > 0) {
+            internalBytesOut.add(size);
+        }
         stremStatementBytesOutCounter.increment(size);
     }
 
@@ -197,7 +216,7 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
 
     @Override
     public double getBytesOut() {
-        return stremStatementBytesOutCounter.count() + stremPreparedStatementBytesOutCounter.count();
+        return internalBytesOut.sum();
     }
 
     @Override
@@ -207,20 +226,20 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
 
     @Override
     public long getCompletedStatements() {
-        return (long) streamStatementCompletedCounter.count();
+        return internalCompletedStatementCount.sum();
     }
     @Override
     public long getCompletedPreparedStatements() {
-        return (long) streamPreparedStatementCompletedCounter.count();
+        return internalCompletedPreparedStatementCount.sum();
     }
 
     @Override
     public long getCancelledStatements() {
-        return (long) cancelStatementCounter.count();
+        return internalCancelStatementCount.sum();
     }
     @Override
     public long getCancelledPreparedStatements() {
-        return (long) cancelPreparedStatementCounter.count();
+        return internalCancelPreparedStatementCount.sum();
     }
 
     // ==========================================================
