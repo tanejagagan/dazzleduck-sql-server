@@ -41,6 +41,7 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
     };
     private final long minBucketSize;
     private final int maxBatches;
+    private final long maxPendingWrite;
     private final String identifier;
     private final ScheduledExecutorService executorService;
     private final Duration maxDelay;
@@ -57,6 +58,7 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
     private final LongAccumulator totalWriteBatches = new LongAccumulator(Long::sum, 0L);
     private final LongAccumulator totalWriteBuckets = new LongAccumulator(Long::sum, 0L);
     private final LongAccumulator acceptedBatches = new LongAccumulator(Long::sum, 0L);
+    private final LongAccumulator acceptedBytes = new LongAccumulator(Long::sum, 0L);
     private final LongAccumulator bucketsCreated = new LongAccumulator(Long::sum, 0L);
     private final LongAccumulator totalWrite = new LongAccumulator(Long::sum, 0L);
     private final LongAccumulator timeSpentWriting = new LongAccumulator(Long::sum, 0L);
@@ -64,11 +66,13 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
     public BulkIngestQueue(String identifier,
                            long minBucketSize,
                            int maxBatches,
+                           long maxPendingWrite,
                            Duration maxDelay,
                            ScheduledExecutorService executorService,
                            Clock clock) {
         this.minBucketSize = minBucketSize;
         this.maxBatches = maxBatches;
+        this.maxPendingWrite = maxPendingWrite;
         this.identifier = identifier;
         this.executorService = executorService;
         this.maxDelay = maxDelay;
@@ -144,9 +148,47 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
         return identifier;
     }
 
+    @Override
+    public long pendingWrite() {
+        return acceptedBytes.get() - totalWrite.get();
+    }
+
+    /**
+     * Calculates an estimated retry time based on the current ingestion rate.
+     * Returns the time in seconds it would take to drain the current pending bytes.
+     *
+     * @param currentPending the current pending bytes
+     * @return estimated retry time in seconds, bounded between 1 and 60 seconds
+     */
+    private int calculateRetryAfterSeconds(long currentPending) {
+        long writtenBytes = totalWrite.get();
+        long writingTimeMs = timeSpentWriting.get();
+
+        // If no data has been written yet, use default
+        if (writtenBytes == 0 || writingTimeMs == 0) {
+            return 5; // Default 5 seconds
+        }
+
+        // Calculate write rate in bytes per millisecond
+        double bytesPerMs = (double) writtenBytes / writingTimeMs;
+
+        // Calculate estimated time to drain pending bytes (in seconds)
+        double estimatedDrainSeconds = currentPending / bytesPerMs / 1000.0;
+
+        // Bound between 1 and 60 seconds
+        int retryAfterSeconds = (int) Math.ceil(estimatedDrainSeconds);
+        return Math.max(1, Math.min(60, retryAfterSeconds));
+    }
+
     public synchronized CompletableFuture<R> add(Batch<T> batch) {
         if (terminating) {
             throw new IllegalStateException("The queue is closed");
+        }
+        long currentPending = pendingWrite();
+        if (currentPending + batch.totalSize() > maxPendingWrite) {
+            int retryAfterSeconds = calculateRetryAfterSeconds(currentPending);
+            return CompletableFuture.failedFuture(
+                    new PendingWriteExceededException(currentPending, maxPendingWrite, retryAfterSeconds));
         }
         if (batch.producerId() != null) {
             var progressBatch = inProgressBatchIds.get(batch.producerId());
@@ -158,6 +200,7 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
         var result = new CompletableFuture<R>();
         currentBucket.add(batch, result);
         acceptedBatches.accumulate(1);
+        acceptedBytes.accumulate(batch.totalSize());
         if (batch.producerId() != null) {
             inProgressBatchIds.put(batch.producerId(), batch.producerBatchId());
         }

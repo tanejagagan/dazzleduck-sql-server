@@ -311,6 +311,27 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
                 }
             }
 
+            if (resp.statusCode() == 429) {
+                // Server is under back pressure - parse Retry-After header if present
+                long waitMillis = resp.headers()
+                        .firstValue("Retry-After")
+                        .map(value -> {
+                            try {
+                                return Long.parseLong(value) * 1000; // Convert seconds to millis
+                            } catch (NumberFormatException e) {
+                                return 5000L; // Default if header is not a number
+                            }
+                        })
+                        .orElse(5000L); // Default 5 second wait
+
+                logger.warn("Server returned 429 Too Many Requests to {}{}, suggested wait: {} ms",
+                        baseUrl, targetPath, waitMillis);
+                throw new BackPressureException(
+                        "Server returned 429 Too Many Requests: " + resp.body(),
+                        waitMillis
+                );
+            }
+
             if (resp.statusCode() != 200) {
                 logger.error("Ingestion failed with status {} to {}{}", resp.statusCode(), baseUrl, targetPath);
                 throw new RuntimeException("Ingestion failed with status " + resp.statusCode() + ": " + resp.body());

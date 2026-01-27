@@ -132,7 +132,7 @@ public class BulkIngestQueueTest {
     }
 
     private MockBulkIngestQueue createMockQueue(ScheduledExecutorService executorService, Clock clock) {
-        return new MockBulkIngestQueue("", DEFAULT_MIN_BATCH_SIZE, Integer.MAX_VALUE, DEFAULT_MAX_DELAY,
+        return new MockBulkIngestQueue("", DEFAULT_MIN_BATCH_SIZE, Integer.MAX_VALUE, Long.MAX_VALUE, DEFAULT_MAX_DELAY,
                 executorService,
                 clock);
     }

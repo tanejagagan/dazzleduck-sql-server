@@ -8,10 +8,11 @@ public class MockBulkIngestQueue extends BulkIngestQueue<String, MockWriteResult
     public MockBulkIngestQueue(String identifier,
                                long minBatchSize,
                                int maxBatches,
+                               long maxPendingWrite,
                                Duration maxDelay,
                                ScheduledExecutorService executorService,
                                Clock clock) {
-        super(identifier, minBatchSize, maxBatches, maxDelay, executorService, clock);
+        super(identifier, minBatchSize, maxBatches, maxPendingWrite, maxDelay, executorService, clock);
     }
 
     @Override

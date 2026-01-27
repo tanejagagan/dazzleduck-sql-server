@@ -4,8 +4,11 @@ package io.dazzleduck.sql.client.grpc;
 
 import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.client.ArrowProducer;
+import io.dazzleduck.sql.client.BackPressureException;
 import io.dazzleduck.sql.client.grpc.auth.AuthUtils;
 import org.apache.arrow.flight.FlightClient;
+import org.apache.arrow.flight.FlightRuntimeException;
+import org.apache.arrow.flight.FlightStatusCode;
 import org.apache.arrow.flight.Location;
 import org.apache.arrow.flight.sql.FlightSqlClient;
 import org.apache.arrow.flight.sql.impl.FlightSql;
@@ -135,6 +138,22 @@ public final class GrpcArrowProducer extends ArrowProducer.AbstractArrowProducer
                 client.executeIngest(reader, ingestOptions);
                 logger.info("Successfully sent element via gRPC");
             }
+        } catch (FlightRuntimeException e) {
+            // Check for back pressure (RESOURCE_EXHAUSTED)
+            if (e.status().code() == FlightStatusCode.RESOURCE_EXHAUSTED) {
+                logger.warn("Server returned RESOURCE_EXHAUSTED: {}", e.getMessage());
+                throw new BackPressureException(
+                        "Server returned RESOURCE_EXHAUSTED: " + e.getMessage(),
+                        e,
+                        5000L  // Default 5 second wait
+                );
+            }
+            // If interrupted during operation, throw InterruptedException instead
+            if (Thread.currentThread().isInterrupted()) {
+                throw new InterruptedException("Thread interrupted during gRPC send");
+            }
+            logger.error("gRPC ingestion failed for element", e);
+            throw new RuntimeException("gRPC ingestion failed", e);
         } catch (Exception e) {
             // If interrupted during operation, throw InterruptedException instead
             if (Thread.currentThread().isInterrupted()) {

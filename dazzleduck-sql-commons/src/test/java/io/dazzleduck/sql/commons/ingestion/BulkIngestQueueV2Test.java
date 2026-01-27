@@ -96,7 +96,7 @@ public class BulkIngestQueueV2Test {
         var service = new DeterministicScheduler();
         var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
         var queue = new MockBulkIngestQueueWithException("test", DEFAULT_MIN_BATCH_SIZE, Integer.MAX_VALUE,
-                DEFAULT_MAX_DELAY, service, clock);
+                Long.MAX_VALUE, DEFAULT_MAX_DELAY, service, clock);
 
         var batch = queue.add(mockBatch("producer1", 0, DEFAULT_MIN_BATCH_SIZE + 1));
 
@@ -135,7 +135,7 @@ public class BulkIngestQueueV2Test {
         var service = new DeterministicScheduler();
         var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
         var queue = new MockBulkIngestQueue("test-queue", DEFAULT_MIN_BATCH_SIZE, Integer.MAX_VALUE,
-                DEFAULT_MAX_DELAY, service, clock);
+                Long.MAX_VALUE, DEFAULT_MAX_DELAY, service, clock);
 
         // Give the thread a moment to start
         Thread.sleep(10);
@@ -214,11 +214,43 @@ public class BulkIngestQueueV2Test {
     }
 
     @Test
+    public void testPendingWrite() throws Exception {
+        withServiceAndQueue((service, queue, clock) -> {
+            // Initially no pending writes
+            assertEquals(0, queue.pendingWrite());
+
+            // Add a batch smaller than bucket size - should be in current bucket
+            queue.add(mockBatch("producer1", 0, DEFAULT_SMALL_BATCH_SIZE));
+            assertEquals(DEFAULT_SMALL_BATCH_SIZE, queue.pendingWrite());
+
+            // Add more batches - pending should accumulate
+            queue.add(mockBatch("producer1", 1, DEFAULT_SMALL_BATCH_SIZE));
+            queue.add(mockBatch("producer1", 2, DEFAULT_SMALL_BATCH_SIZE));
+            assertEquals(3 * DEFAULT_SMALL_BATCH_SIZE, queue.pendingWrite());
+        });
+    }
+
+    @Test
+    public void testPendingWriteDecreasesAfterWrite() throws Exception {
+        withServiceAndQueue((service, queue, clock) -> {
+            // Add a batch larger than bucket size to trigger immediate write
+            queue.add(mockBatch("producer1", 0, DEFAULT_MIN_BATCH_SIZE + DEFAULT_SMALL_BATCH_SIZE));
+
+            // Trigger write processing and wait for write thread to complete
+            service.tick(1, TimeUnit.MILLISECONDS);
+            Thread.sleep(100);
+
+            // After write, pending should be 0
+            assertEquals(0, queue.pendingWrite());
+        });
+    }
+
+    @Test
     public void testExceptionDoesNotCompleteAlreadyCompletedFutures() throws Exception {
         var service = new DeterministicScheduler();
         var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
         var queue = new MockBulkIngestQueueWithPartialException("test", DEFAULT_MIN_BATCH_SIZE, Integer.MAX_VALUE,
-                DEFAULT_MAX_DELAY, service, clock);
+                Long.MAX_VALUE, DEFAULT_MAX_DELAY, service, clock);
 
         var batch = queue.add(mockBatch("producer1", 0, DEFAULT_MIN_BATCH_SIZE + 1));
 
@@ -261,13 +293,13 @@ public class BulkIngestQueueV2Test {
         assertTrue(res.isCompletedExceptionally());
     }
     private MockBulkIngestQueue createMockQueue(ScheduledExecutorService executorService, Clock clock) {
-        return new MockBulkIngestQueue("test", DEFAULT_MIN_BATCH_SIZE, Integer.MAX_VALUE, DEFAULT_MAX_DELAY,
+        return new MockBulkIngestQueue("test", DEFAULT_MIN_BATCH_SIZE, Integer.MAX_VALUE, Long.MAX_VALUE, DEFAULT_MAX_DELAY,
                 executorService, clock);
     }
 
     private BulkIngestQueue<String, MockWriteResult> createMockQueueWithLongRunningDuckDBWrite(ScheduledExecutorService executorService, Clock clock) {
 
-        return new BulkIngestQueue<String, MockWriteResult>("test", DEFAULT_MIN_BATCH_SIZE, Integer.MAX_VALUE, DEFAULT_MAX_DELAY,
+        return new BulkIngestQueue<String, MockWriteResult>("test", DEFAULT_MIN_BATCH_SIZE, Integer.MAX_VALUE, Long.MAX_VALUE, DEFAULT_MAX_DELAY,
                 executorService, clock) {
             @Override
             public void write(WriteTask<String, MockWriteResult> writeTask) {
@@ -336,10 +368,11 @@ public class BulkIngestQueueV2Test {
         public MockBulkIngestQueueWithException(String identifier,
                                                long minBatchSize,
                                                int maxBatches,
+                                               long maxPendingWrite,
                                                Duration maxDelay,
                                                ScheduledExecutorService executorService,
                                                Clock clock) {
-            super(identifier, minBatchSize, maxBatches, maxDelay, executorService, clock);
+            super(identifier, minBatchSize, maxBatches, maxPendingWrite, maxDelay, executorService, clock);
         }
 
         @Override
@@ -353,10 +386,11 @@ public class BulkIngestQueueV2Test {
         public MockBulkIngestQueueWithPartialException(String identifier,
                                                        long minBatchSize,
                                                        int maxBatches,
+                                                       long maxPendingWrite,
                                                        Duration maxDelay,
                                                        ScheduledExecutorService executorService,
                                                        Clock clock) {
-            super(identifier, minBatchSize, maxBatches, maxDelay, executorService, clock);
+            super(identifier, minBatchSize, maxBatches, maxPendingWrite, maxDelay, executorService, clock);
         }
 
         @Override

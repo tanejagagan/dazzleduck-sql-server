@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.google.protobuf.InvalidProtocolBufferException;
 import io.dazzleduck.sql.commons.authorization.UnauthorizedException;
+import io.dazzleduck.sql.commons.ingestion.PendingWriteExceededException;
 import org.apache.arrow.flight.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,12 +13,46 @@ import java.io.IOException;
 import java.net.URISyntaxException;
 import java.sql.SQLException;
 import java.sql.SQLSyntaxErrorException;
+import java.util.concurrent.ExecutionException;
 
 public class ErrorHandling {
 
     private final static Logger logger = LoggerFactory.getLogger(ErrorHandling.class);
+
+    /**
+     * Unwraps ExecutionException to get the root cause for proper error handling.
+     */
+    private static Throwable unwrapExecutionException(Throwable t) {
+        if (t instanceof ExecutionException && t.getCause() != null) {
+            return t.getCause();
+        }
+        return t;
+    }
+
+    /**
+     * Checks if the throwable or any of its causes is a PendingWriteExceededException.
+     */
+    private static PendingWriteExceededException findPendingWriteException(Throwable t) {
+        Throwable current = t;
+        while (current != null) {
+            if (current instanceof PendingWriteExceededException e) {
+                return e;
+            }
+            current = current.getCause();
+        }
+        return null;
+    }
+
     public static void handleThrowable(Throwable t) {
-        if (t instanceof NoSuchCatalogSchemaError e) {
+        // Unwrap ExecutionException to get the real cause
+        t = unwrapExecutionException(t);
+        // Check for PendingWriteExceededException in cause chain
+        var pendingWriteEx = findPendingWriteException(t);
+        if (pendingWriteEx != null) {
+            throw CallStatus.RESOURCE_EXHAUSTED
+                    .withDescription(pendingWriteEx.getMessage())
+                    .toRuntimeException();
+        } else if (t instanceof NoSuchCatalogSchemaError e) {
             handleNoSuchDBSchema(e);
         } else if (t instanceof SQLSyntaxErrorException e) {
             handleSQLSyntaxErrorException(e);
@@ -41,7 +76,16 @@ public class ErrorHandling {
     }
 
     public static void handleThrowable(FlightProducer.ServerStreamListener listener, Throwable t) {
-        if (t instanceof NoRegisterExecutorException e) {
+        // Unwrap ExecutionException to get the real cause
+        t = unwrapExecutionException(t);
+        // Check for PendingWriteExceededException in cause chain
+        var pendingWriteEx = findPendingWriteException(t);
+        if (pendingWriteEx != null) {
+            listener.error(CallStatus.RESOURCE_EXHAUSTED
+                    .withDescription(pendingWriteEx.getMessage())
+                    .toRuntimeException());
+            return;
+        } else if (t instanceof NoRegisterExecutorException e) {
             handleNoRegisterExecutor(listener, e);
         } else if (t instanceof NotImplemented e) {
             handleUnimplemented(listener, e);
@@ -74,7 +118,16 @@ public class ErrorHandling {
     }
 
     public static  <T> void handleThrowable(FlightProducer.StreamListener<T> listener, Throwable t) {
-        if (t instanceof NoRegisterExecutorException e) {
+        // Unwrap ExecutionException to get the real cause
+        t = unwrapExecutionException(t);
+        // Check for PendingWriteExceededException in cause chain
+        var pendingWriteEx = findPendingWriteException(t);
+        if (pendingWriteEx != null) {
+            listener.onError(CallStatus.RESOURCE_EXHAUSTED
+                    .withDescription(pendingWriteEx.getMessage())
+                    .toRuntimeException());
+            return;
+        } else if (t instanceof NoRegisterExecutorException e) {
             handleNoRegisterExecutor(listener, e);
         } else if (t instanceof NotImplemented e) {
             handleUnimplemented(listener, e);

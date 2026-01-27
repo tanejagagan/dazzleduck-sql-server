@@ -12,7 +12,5 @@ public interface BulkIngestQueueInterface<T, R> extends AutoCloseable, Ingestion
     /**
      * @return bytes which are pending to be written
      */
-    default long pendingWrite(){
-        return 0;
-    }
+    long pendingWrite();
 }

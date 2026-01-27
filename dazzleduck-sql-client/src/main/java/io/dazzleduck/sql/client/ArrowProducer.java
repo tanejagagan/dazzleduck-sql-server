@@ -8,7 +8,6 @@ import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.VectorLoader;
 import org.apache.arrow.vector.VectorUnloader;
 import org.apache.arrow.compression.CommonsCompressionFactory;
-import org.apache.arrow.vector.compression.CompressionCodec;
 import org.apache.arrow.vector.compression.CompressionUtil;
 import org.apache.arrow.vector.ipc.ArrowStreamReader;
 import org.apache.arrow.vector.ipc.ArrowStreamWriter;
@@ -176,6 +175,7 @@ public interface ArrowProducer extends Closeable {
         private final java.util.concurrent.atomic.AtomicLong totalRetryCount = new java.util.concurrent.atomic.AtomicLong(0);
         private final java.util.concurrent.atomic.AtomicLong droppedElementCount = new java.util.concurrent.atomic.AtomicLong(0);
         private final java.util.concurrent.atomic.AtomicLong sentElementCount = new java.util.concurrent.atomic.AtomicLong(0);
+        private final java.util.concurrent.atomic.AtomicLong backPressureCount = new java.util.concurrent.atomic.AtomicLong(0);
 
         private final long minBatchSize;
 
@@ -451,9 +451,18 @@ public interface ArrowProducer extends Closeable {
             }
         }
 
+        // Retry handling constants
+        private static final double BACKOFF_MULTIPLIER = 2.0;
+        private static final long MAX_BACKOFF_MILLIS = 60_000; // 1 minute max
+
         private void doSendWithRetry(List<ProducerElement> elements) throws InterruptedException, IOException {
             ProducerElement elementToSend = null;
             boolean shouldCloseCombinedElement = false;
+
+            // Track retry state
+            int attempt = 0;
+            long currentBackoffMillis = retryIntervalMillis;
+            Exception lastException = null;
 
             try {
                 // Determine what element to send
@@ -461,7 +470,7 @@ public interface ArrowProducer extends Closeable {
                     // Single element - send it directly without combining
                     elementToSend = elements.get(0);
                 } else {
-                    // Multiple elements or compression needed - combine/compress them first
+                    // Multiple elements - combine them first
                     try (org.apache.arrow.memory.BufferAllocator childAllocator =
                             bufferAllocator.newChildAllocator("combine-batch", 0, Long.MAX_VALUE)) {
                         elementToSend = createCombinedReader(elements, schema, childAllocator, compressionType);
@@ -469,10 +478,7 @@ public interface ArrowProducer extends Closeable {
                     }
                 }
 
-                // Retry logic for sending
-                int attempt = 0;
-                Exception lastException = null;
-
+                // Retry loop
                 while (attempt <= retryCount) {
                     try {
                         doSend(elementToSend);
@@ -480,42 +486,41 @@ public interface ArrowProducer extends Closeable {
                         if (attempt > 0) {
                             logger.info("Successfully sent element after {} retries", attempt);
                         }
-                        return; // Success, exit the retry loop
+                        return; // Success
                     } catch (InterruptedException e) {
                         // Don't retry on interruption, propagate immediately
                         droppedElementCount.incrementAndGet();
                         throw e;
                     } catch (Exception e) {
                         lastException = e;
-                        attempt++;
-                        totalRetryCount.incrementAndGet();
+                        boolean isBackPressure = e instanceof BackPressureException;
 
-                        // Don't retry if we're force shutting down (only skip retries on forced shutdown, not graceful)
-                        if (forceShutdown) {
-                            logger.warn("Sender is force shutting down, skipping retry for failed send: {}", e.getMessage());
-                            droppedElementCount.incrementAndGet();
+                        if (isBackPressure) {
+                            backPressureCount.incrementAndGet();
+                        }
+
+                        // Handle retry with common logic
+                        long waitMillis = handleRetryableException(e, attempt, currentBackoffMillis, isBackPressure);
+                        if (waitMillis < 0) {
+                            // Should not retry (force shutdown or max retries exceeded)
                             return;
                         }
 
-                        if (attempt <= retryCount) {
-                            logger.warn("Failed to send element (attempt {}/{}): {}", attempt, retryCount + 1, e.getMessage());
-                            try {
-                                Thread.sleep(retryIntervalMillis);
-                            } catch (InterruptedException ie) {
-                                Thread.currentThread().interrupt();
-                                droppedElementCount.incrementAndGet();
-                                throw ie;
-                            }
-                        } else {
-                            logger.error("Failed to send element after {} attempts", attempt, e);
-                            droppedElementCount.incrementAndGet();
-                        }
+                        attempt++;
+                        totalRetryCount.incrementAndGet();
+
+                        // Apply exponential backoff
+                        currentBackoffMillis = (long) Math.min(
+                                currentBackoffMillis * BACKOFF_MULTIPLIER,
+                                MAX_BACKOFF_MILLIS
+                        );
                     }
                 }
 
-                // If we exhausted all retries, log the final failure
+                // Exhausted all retries
                 if (lastException != null) {
-                    logger.error("Exhausted all {} retry attempts, element will be dropped", retryCount + 1, lastException);
+                    logger.error("Exhausted all {} retry attempts, element dropped", retryCount + 1, lastException);
+                    droppedElementCount.incrementAndGet();
                 }
             } finally {
                 // Only close the combined element if we created one
@@ -523,6 +528,60 @@ public interface ArrowProducer extends Closeable {
                     elementToSend.close();
                 }
             }
+        }
+
+        /**
+         * Handles a retryable exception by checking shutdown state, logging, and sleeping.
+         *
+         * @param e the exception that occurred
+         * @param attempt current attempt number (0-based)
+         * @param currentBackoffMillis current backoff interval
+         * @param isBackPressure true if this is a back pressure exception
+         * @return wait time in millis if should retry, -1 if should not retry
+         * @throws InterruptedException if interrupted during sleep
+         */
+        private long handleRetryableException(Exception e, int attempt, long currentBackoffMillis, boolean isBackPressure)
+                throws InterruptedException {
+
+            // Don't retry if force shutting down
+            if (forceShutdown) {
+                logger.warn("Force shutdown, skipping retry: {}", e.getMessage());
+                droppedElementCount.incrementAndGet();
+                return -1;
+            }
+
+            // Check if max retries exceeded
+            if (attempt >= retryCount) {
+                String errorType = isBackPressure ? "back pressure" : "send";
+                logger.error("Max retries ({}) exceeded for {}, element dropped", retryCount, errorType, e);
+                droppedElementCount.incrementAndGet();
+                return -1;
+            }
+
+            // Calculate wait time
+            long waitMillis;
+            if (isBackPressure) {
+                BackPressureException bpe = (BackPressureException) e;
+                waitMillis = Math.max(bpe.getSuggestedWaitMillis(), currentBackoffMillis);
+                waitMillis = Math.min(waitMillis, MAX_BACKOFF_MILLIS);
+                logger.warn("Back pressure (attempt {}/{}), waiting {} ms: {}",
+                        attempt + 1, retryCount + 1, waitMillis, e.getMessage());
+            } else {
+                waitMillis = currentBackoffMillis;
+                logger.warn("Send failed (attempt {}/{}), waiting {} ms: {}",
+                        attempt + 1, retryCount + 1, waitMillis, e.getMessage());
+            }
+
+            // Sleep before retry
+            try {
+                Thread.sleep(waitMillis);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                droppedElementCount.incrementAndGet();
+                throw ie;
+            }
+
+            return waitMillis;
         }
 
         abstract protected void doSend(ProducerElement element) throws InterruptedException;
@@ -574,6 +633,13 @@ public interface ArrowProducer extends Closeable {
          */
         protected long getSentElementCount() {
             return sentElementCount.get();
+        }
+
+        /**
+         * Returns the number of back pressure events (HTTP 429 / RESOURCE_EXHAUSTED responses).
+         */
+        protected long getBackPressureCount() {
+            return backPressureCount.get();
         }
 
         @Override
@@ -637,13 +703,14 @@ public interface ArrowProducer extends Closeable {
             long sent = sentElementCount.get();
             long dropped = droppedElementCount.get();
             long retries = totalRetryCount.get();
+            long backPressure = backPressureCount.get();
 
             if (dropped > 0) {
-                logger.error("Producer closed with {} unsent/dropped elements. Stats: sent={}, retries={}",
-                        dropped, sent, retries);
+                logger.error("Producer closed with {} unsent/dropped elements. Stats: sent={}, retries={}, backPressure={}",
+                        dropped, sent, retries, backPressure);
             } else {
-                logger.info("Producer closed. Stats: sent={}, dropped={}, retries={}",
-                        sent, dropped, retries);
+                logger.info("Producer closed. Stats: sent={}, dropped={}, retries={}, backPressure={}",
+                        sent, dropped, retries, backPressure);
             }
         }
 
