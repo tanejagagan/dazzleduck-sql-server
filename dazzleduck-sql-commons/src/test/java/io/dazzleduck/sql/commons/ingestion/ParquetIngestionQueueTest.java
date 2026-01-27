@@ -63,6 +63,9 @@ public class ParquetIngestionQueueTest {
                 targetPath.toString(),
                 "test-queue",
                 DEFAULT_MIN_BATCH_SIZE,
+                Long.MAX_VALUE,  // maxBucketSize
+                Integer.MAX_VALUE,
+                Long.MAX_VALUE,
                 DEFAULT_MAX_DELAY,
                 postTaskFactory,
                 service,
@@ -95,6 +98,9 @@ public class ParquetIngestionQueueTest {
                 targetPath.toString(),
                 "test-queue",
                 DEFAULT_MIN_BATCH_SIZE,
+                Long.MAX_VALUE,  // maxBucketSize
+                Integer.MAX_VALUE,
+                Long.MAX_VALUE,
                 DEFAULT_MAX_DELAY,
                 postTaskFactory,
                 service,
@@ -142,6 +148,9 @@ public class ParquetIngestionQueueTest {
                 targetPath.toString(),
                 "test-queue",
                 DEFAULT_MIN_BATCH_SIZE,
+                Long.MAX_VALUE,  // maxBucketSize
+                Integer.MAX_VALUE,
+                Long.MAX_VALUE,
                 DEFAULT_MAX_DELAY,
                 postTaskFactory,
                 service,
@@ -180,6 +189,9 @@ public class ParquetIngestionQueueTest {
                 targetPath.toString(),
                 "test-queue",
                 DEFAULT_MIN_BATCH_SIZE,
+                Long.MAX_VALUE,  // maxBucketSize
+                Integer.MAX_VALUE,
+                Long.MAX_VALUE,
                 DEFAULT_MAX_DELAY,
                 postTaskFactory,
                 service,
@@ -231,6 +243,9 @@ public class ParquetIngestionQueueTest {
                 targetPath.toString(),
                 "test-queue",
                 DEFAULT_SMALL_BATCH_SIZE,  // Small batch size to trigger multiple writes
+                Long.MAX_VALUE,  // maxBucketSize
+                Integer.MAX_VALUE,
+                Long.MAX_VALUE,
                 DEFAULT_MAX_DELAY,
                 postTaskFactory,
                 service,
@@ -264,6 +279,9 @@ public class ParquetIngestionQueueTest {
                 targetPath.toString(),
                 "test-queue",
                 DEFAULT_MIN_BATCH_SIZE,
+                Long.MAX_VALUE,  // maxBucketSize
+                Integer.MAX_VALUE,
+                Long.MAX_VALUE,
                 DEFAULT_MAX_DELAY,
                 postTaskFactory,
                 service,
@@ -293,6 +311,9 @@ public class ParquetIngestionQueueTest {
                 targetPath.toString(),
                 "test-queue",
                 DEFAULT_MIN_BATCH_SIZE,
+                Long.MAX_VALUE,  // maxBucketSize
+                Integer.MAX_VALUE,
+                Long.MAX_VALUE,
                 DEFAULT_MAX_DELAY,
                 postTaskFactory,
                 service,
@@ -329,6 +350,9 @@ public class ParquetIngestionQueueTest {
                 targetPath.toString(),
                 "test-queue",
                 DEFAULT_MIN_BATCH_SIZE,
+                Long.MAX_VALUE,  // maxBucketSize
+                Integer.MAX_VALUE,
+                Long.MAX_VALUE,
                 DEFAULT_MAX_DELAY,
                 postTaskFactory,
                 service,
@@ -362,6 +386,9 @@ public class ParquetIngestionQueueTest {
                 targetPath.toString(),
                 "test-queue",
                 DEFAULT_MIN_BATCH_SIZE,
+                Long.MAX_VALUE,  // maxBucketSize
+                Integer.MAX_VALUE,
+                Long.MAX_VALUE,
                 DEFAULT_MAX_DELAY,
                 postTaskFactory,
                 service,
@@ -391,6 +418,9 @@ public class ParquetIngestionQueueTest {
                 targetPath.toString(),
                 "test-queue",
                 DEFAULT_SMALL_BATCH_SIZE,
+                Long.MAX_VALUE,  // maxBucketSize
+                Integer.MAX_VALUE,
+                Long.MAX_VALUE,
                 DEFAULT_MAX_DELAY,
                 postTaskFactory,
                 service,

@@ -7,12 +7,17 @@ import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.VectorLoader;
 import org.apache.arrow.vector.VectorUnloader;
+import org.apache.arrow.compression.CommonsCompressionFactory;
+import org.apache.arrow.vector.compression.CompressionUtil;
 import org.apache.arrow.vector.ipc.ArrowStreamReader;
 import org.apache.arrow.vector.ipc.ArrowStreamWriter;
 import org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
-import org.apache.arrow.vector.types.pojo.Schema;  // FIXED: Use Arrow Schema
+import org.apache.arrow.vector.ipc.message.IpcOption;
+import org.apache.arrow.vector.types.pojo.Schema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.nio.channels.Channels;
 
 import java.io.*;
 import java.nio.file.Files;
@@ -42,13 +47,15 @@ public interface ArrowProducer extends Closeable {
      * @param elements List of SendElements to combine
      * @param schema The Arrow schema for the data (used only if elements list is empty)
      * @param allocator Buffer allocator for Arrow operations
+     * @param compressionType The compression type to use for the output stream
      * @return byte array containing the combined Arrow stream
      * @throws IOException if reading or writing Arrow data fails
      */
     static ProducerElement createCombinedReader(
             List<ProducerElement> elements,
             Schema schema,
-            BufferAllocator allocator) throws IOException {
+            BufferAllocator allocator,
+            CompressionUtil.CodecType compressionType) throws IOException {
 
         if (elements.isEmpty()) {
             throw new IllegalArgumentException("Cannot create combined reader from empty list");
@@ -83,7 +90,7 @@ public interface ArrowProducer extends Closeable {
                         // First element - get schema and initialize writer
                         actualSchema = reader.getVectorSchemaRoot().getSchema();
                         root = VectorSchemaRoot.create(actualSchema, allocator);
-                        writer = new ArrowStreamWriter(root, null, combinedOutput);
+                        writer = createArrowStreamWriter(root, combinedOutput, compressionType);
                         writer.start();
                     }
 
@@ -122,6 +129,30 @@ public interface ArrowProducer extends Closeable {
         return new MemoryElement(combinedOutput.toByteArray(), minBatchId, maxBatchId);
     }
 
+    /**
+     * Creates an ArrowStreamWriter with optional compression.
+     *
+     * @param root The VectorSchemaRoot to write
+     * @param outputStream The output stream to write to
+     * @param compressionType The compression type to use
+     * @return A configured ArrowStreamWriter
+     */
+    static ArrowStreamWriter createArrowStreamWriter(
+            VectorSchemaRoot root,
+            OutputStream outputStream,
+            CompressionUtil.CodecType compressionType) {
+        if (compressionType == CompressionUtil.CodecType.NO_COMPRESSION) {
+            return new ArrowStreamWriter(root, null, outputStream);
+        }
+        return new ArrowStreamWriter(
+                root,
+                null,
+                Channels.newChannel(outputStream),
+                IpcOption.DEFAULT,
+                CommonsCompressionFactory.INSTANCE,
+                compressionType);
+    }
+
     void addRow(JavaRow row);
     long getMaxInMemorySize();
 
@@ -144,6 +175,7 @@ public interface ArrowProducer extends Closeable {
         private final java.util.concurrent.atomic.AtomicLong totalRetryCount = new java.util.concurrent.atomic.AtomicLong(0);
         private final java.util.concurrent.atomic.AtomicLong droppedElementCount = new java.util.concurrent.atomic.AtomicLong(0);
         private final java.util.concurrent.atomic.AtomicLong sentElementCount = new java.util.concurrent.atomic.AtomicLong(0);
+        private final java.util.concurrent.atomic.AtomicLong backPressureCount = new java.util.concurrent.atomic.AtomicLong(0);
 
         private final long minBatchSize;
 
@@ -159,6 +191,8 @@ public interface ArrowProducer extends Closeable {
 
         private final java.util.List<String> partitionBy;
 
+        private final CompressionUtil.CodecType compressionType;
+
         private Instant lastSent;
         private Bucket currentBucket;
         final Schema schema;
@@ -171,9 +205,18 @@ public interface ArrowProducer extends Closeable {
 
 
         public AbstractArrowProducer(long minBatchSize, long maxBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock, int retryCount, long retryIntervalMillis, java.util.List<String> projections, java.util.List<String> partitionBy){
-            this(minBatchSize, maxBatchSize, maxDataSendInterval, schema, clock, retryCount, retryIntervalMillis, projections, partitionBy, Executors.newSingleThreadScheduledExecutor());
+            this(minBatchSize, maxBatchSize, maxDataSendInterval, schema, clock, retryCount, retryIntervalMillis, projections, partitionBy, CompressionUtil.CodecType.ZSTD, Executors.newSingleThreadScheduledExecutor());
         }
-        public AbstractArrowProducer(long minBatchSize, long maxBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock, int retryCount, long retryIntervalMillis, java.util.List<String> projections, java.util.List<String> partitionBy, ScheduledExecutorService scheduledExecutorService ){
+
+        public AbstractArrowProducer(long minBatchSize, long maxBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock, int retryCount, long retryIntervalMillis, java.util.List<String> projections, java.util.List<String> partitionBy, CompressionUtil.CodecType compressionType){
+            this(minBatchSize, maxBatchSize, maxDataSendInterval, schema, clock, retryCount, retryIntervalMillis, projections, partitionBy, compressionType, Executors.newSingleThreadScheduledExecutor());
+        }
+
+        public AbstractArrowProducer(long minBatchSize, long maxBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock, int retryCount, long retryIntervalMillis, java.util.List<String> projections, java.util.List<String> partitionBy, ScheduledExecutorService scheduledExecutorService){
+            this(minBatchSize, maxBatchSize, maxDataSendInterval, schema, clock, retryCount, retryIntervalMillis, projections, partitionBy, CompressionUtil.CodecType.ZSTD, scheduledExecutorService);
+        }
+
+        public AbstractArrowProducer(long minBatchSize, long maxBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock, int retryCount, long retryIntervalMillis, java.util.List<String> projections, java.util.List<String> partitionBy, CompressionUtil.CodecType compressionType, ScheduledExecutorService scheduledExecutorService ){
             // Validate parameters
             if (minBatchSize <= 0) {
                 throw new IllegalArgumentException("minBatchSize must be positive, got: " + minBatchSize);
@@ -205,11 +248,14 @@ public interface ArrowProducer extends Closeable {
             if (partitionBy == null) {
                 throw new IllegalArgumentException("partitionBy must not be null");
             }
+            if (compressionType == null) {
+                throw new IllegalArgumentException("compressionType must not be null");
+            }
             if (scheduledExecutorService == null) {
                 throw new IllegalArgumentException("scheduledExecutorService must not be null");
             }
 
-            logger.info("FlightSender started at {} with send interval {}, retryCount {}, retryIntervalMillis {}, projections {}, partitionBy {}", clock.instant(), maxDataSendInterval, retryCount, retryIntervalMillis, projections, partitionBy);
+            logger.info("FlightSender started at {} with send interval {}, retryCount {}, retryIntervalMillis {}, projections {}, partitionBy {}, compression {}", clock.instant(), maxDataSendInterval, retryCount, retryIntervalMillis, projections, partitionBy, compressionType);
             this.minBatchSize = minBatchSize;
             this.maxBatchSize = maxBatchSize;
             this.maxDataSendInterval = maxDataSendInterval;
@@ -217,6 +263,7 @@ public interface ArrowProducer extends Closeable {
             this.retryIntervalMillis = retryIntervalMillis;
             this.projections = List.copyOf(projections);
             this.partitionBy = List.copyOf(partitionBy);
+            this.compressionType = compressionType;
             this.clock = clock;
             this.schema = schema;
             this.lastSent = clock.instant();
@@ -317,7 +364,7 @@ public interface ArrowProducer extends Closeable {
         private synchronized void enqueueCurrentBucket(){
             if (this.currentBucket.size() > 0) {
                 try (var c = bufferAllocator.newChildAllocator("child", minBatchSize, Long.MAX_VALUE)) {
-                    var bytes = this.currentBucket.getArrowBytes(schema, c);
+                    var bytes = this.currentBucket.getArrowBytes(schema, c, compressionType);
                     if (bytes != null && bytes.length > 0) {
                         enqueue(bytes);
                         lastSent = clock.instant();
@@ -356,7 +403,7 @@ public interface ArrowProducer extends Closeable {
             var currentSize = currentBucket.add(row);
             if (currentSize > minBatchSize) {
                 try(var c = bufferAllocator.newChildAllocator("child",  minBatchSize, Long.MAX_VALUE)) {
-                    var arrowBytes = currentBucket.getArrowBytes(schema, c);
+                    var arrowBytes = currentBucket.getArrowBytes(schema, c, compressionType);
                     enqueue(arrowBytes);
                     this.lastSent = clock.instant();
                     currentBucket = new Bucket();
@@ -404,9 +451,18 @@ public interface ArrowProducer extends Closeable {
             }
         }
 
+        // Retry handling constants
+        private static final double BACKOFF_MULTIPLIER = 2.0;
+        private static final long MAX_BACKOFF_MILLIS = 60_000; // 1 minute max
+
         private void doSendWithRetry(List<ProducerElement> elements) throws InterruptedException, IOException {
             ProducerElement elementToSend = null;
             boolean shouldCloseCombinedElement = false;
+
+            // Track retry state
+            int attempt = 0;
+            long currentBackoffMillis = retryIntervalMillis;
+            Exception lastException = null;
 
             try {
                 // Determine what element to send
@@ -417,15 +473,12 @@ public interface ArrowProducer extends Closeable {
                     // Multiple elements - combine them first
                     try (org.apache.arrow.memory.BufferAllocator childAllocator =
                             bufferAllocator.newChildAllocator("combine-batch", 0, Long.MAX_VALUE)) {
-                        elementToSend = createCombinedReader(elements, schema, childAllocator);
+                        elementToSend = createCombinedReader(elements, schema, childAllocator, compressionType);
                         shouldCloseCombinedElement = true;
                     }
                 }
 
-                // Retry logic for sending
-                int attempt = 0;
-                Exception lastException = null;
-
+                // Retry loop
                 while (attempt <= retryCount) {
                     try {
                         doSend(elementToSend);
@@ -433,42 +486,41 @@ public interface ArrowProducer extends Closeable {
                         if (attempt > 0) {
                             logger.info("Successfully sent element after {} retries", attempt);
                         }
-                        return; // Success, exit the retry loop
+                        return; // Success
                     } catch (InterruptedException e) {
                         // Don't retry on interruption, propagate immediately
                         droppedElementCount.incrementAndGet();
                         throw e;
                     } catch (Exception e) {
                         lastException = e;
-                        attempt++;
-                        totalRetryCount.incrementAndGet();
+                        boolean isBackPressure = e instanceof BackPressureException;
 
-                        // Don't retry if we're force shutting down (only skip retries on forced shutdown, not graceful)
-                        if (forceShutdown) {
-                            logger.warn("Sender is force shutting down, skipping retry for failed send: {}", e.getMessage());
-                            droppedElementCount.incrementAndGet();
+                        if (isBackPressure) {
+                            backPressureCount.incrementAndGet();
+                        }
+
+                        // Handle retry with common logic
+                        long waitMillis = handleRetryableException(e, attempt, currentBackoffMillis, isBackPressure);
+                        if (waitMillis < 0) {
+                            // Should not retry (force shutdown or max retries exceeded)
                             return;
                         }
 
-                        if (attempt <= retryCount) {
-                            logger.warn("Failed to send element (attempt {}/{}): {}", attempt, retryCount + 1, e.getMessage());
-                            try {
-                                Thread.sleep(retryIntervalMillis);
-                            } catch (InterruptedException ie) {
-                                Thread.currentThread().interrupt();
-                                droppedElementCount.incrementAndGet();
-                                throw ie;
-                            }
-                        } else {
-                            logger.error("Failed to send element after {} attempts", attempt, e);
-                            droppedElementCount.incrementAndGet();
-                        }
+                        attempt++;
+                        totalRetryCount.incrementAndGet();
+
+                        // Apply exponential backoff
+                        currentBackoffMillis = (long) Math.min(
+                                currentBackoffMillis * BACKOFF_MULTIPLIER,
+                                MAX_BACKOFF_MILLIS
+                        );
                     }
                 }
 
-                // If we exhausted all retries, log the final failure
+                // Exhausted all retries
                 if (lastException != null) {
-                    logger.error("Exhausted all {} retry attempts, element will be dropped", retryCount + 1, lastException);
+                    logger.error("Exhausted all {} retry attempts, element dropped", retryCount + 1, lastException);
+                    droppedElementCount.incrementAndGet();
                 }
             } finally {
                 // Only close the combined element if we created one
@@ -476,6 +528,60 @@ public interface ArrowProducer extends Closeable {
                     elementToSend.close();
                 }
             }
+        }
+
+        /**
+         * Handles a retryable exception by checking shutdown state, logging, and sleeping.
+         *
+         * @param e the exception that occurred
+         * @param attempt current attempt number (0-based)
+         * @param currentBackoffMillis current backoff interval
+         * @param isBackPressure true if this is a back pressure exception
+         * @return wait time in millis if should retry, -1 if should not retry
+         * @throws InterruptedException if interrupted during sleep
+         */
+        private long handleRetryableException(Exception e, int attempt, long currentBackoffMillis, boolean isBackPressure)
+                throws InterruptedException {
+
+            // Don't retry if force shutting down
+            if (forceShutdown) {
+                logger.warn("Force shutdown, skipping retry: {}", e.getMessage());
+                droppedElementCount.incrementAndGet();
+                return -1;
+            }
+
+            // Check if max retries exceeded
+            if (attempt >= retryCount) {
+                String errorType = isBackPressure ? "back pressure" : "send";
+                logger.error("Max retries ({}) exceeded for {}, element dropped", retryCount, errorType, e);
+                droppedElementCount.incrementAndGet();
+                return -1;
+            }
+
+            // Calculate wait time
+            long waitMillis;
+            if (isBackPressure) {
+                BackPressureException bpe = (BackPressureException) e;
+                waitMillis = Math.max(bpe.getSuggestedWaitMillis(), currentBackoffMillis);
+                waitMillis = Math.min(waitMillis, MAX_BACKOFF_MILLIS);
+                logger.warn("Back pressure (attempt {}/{}), waiting {} ms: {}",
+                        attempt + 1, retryCount + 1, waitMillis, e.getMessage());
+            } else {
+                waitMillis = currentBackoffMillis;
+                logger.warn("Send failed (attempt {}/{}), waiting {} ms: {}",
+                        attempt + 1, retryCount + 1, waitMillis, e.getMessage());
+            }
+
+            // Sleep before retry
+            try {
+                Thread.sleep(waitMillis);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                droppedElementCount.incrementAndGet();
+                throw ie;
+            }
+
+            return waitMillis;
         }
 
         abstract protected void doSend(ProducerElement element) throws InterruptedException;
@@ -494,6 +600,10 @@ public interface ArrowProducer extends Closeable {
 
         protected java.util.List<String> getPartitionBy() {
             return partitionBy;
+        }
+
+        protected CompressionUtil.CodecType getCompressionType() {
+            return compressionType;
         }
 
         protected Schema getSchema() {
@@ -523,6 +633,13 @@ public interface ArrowProducer extends Closeable {
          */
         protected long getSentElementCount() {
             return sentElementCount.get();
+        }
+
+        /**
+         * Returns the number of back pressure events (HTTP 429 / RESOURCE_EXHAUSTED responses).
+         */
+        protected long getBackPressureCount() {
+            return backPressureCount.get();
         }
 
         @Override
@@ -586,13 +703,14 @@ public interface ArrowProducer extends Closeable {
             long sent = sentElementCount.get();
             long dropped = droppedElementCount.get();
             long retries = totalRetryCount.get();
+            long backPressure = backPressureCount.get();
 
             if (dropped > 0) {
-                logger.error("Producer closed with {} unsent/dropped elements. Stats: sent={}, retries={}",
-                        dropped, sent, retries);
+                logger.error("Producer closed with {} unsent/dropped elements. Stats: sent={}, retries={}, backPressure={}",
+                        dropped, sent, retries, backPressure);
             } else {
-                logger.info("Producer closed. Stats: sent={}, dropped={}, retries={}",
-                        sent, dropped, retries);
+                logger.info("Producer closed. Stats: sent={}, dropped={}, retries={}, backPressure={}",
+                        sent, dropped, retries, backPressure);
             }
         }
 
@@ -762,6 +880,10 @@ public interface ArrowProducer extends Closeable {
         }
 
         public byte[] getArrowBytes(Schema schema, BufferAllocator allocator) {
+            return getArrowBytes(schema, allocator, CompressionUtil.CodecType.ZSTD);
+        }
+
+        public byte[] getArrowBytes(Schema schema, BufferAllocator allocator, CompressionUtil.CodecType compressionType) {
             if (serialized || buffer.isEmpty()) {
                 return null;
             }
@@ -769,7 +891,7 @@ public interface ArrowProducer extends Closeable {
 
             try (VectorSchemaRoot root = VectorSchemaRoot.create(schema, allocator);
                  ByteArrayOutputStream out = new ByteArrayOutputStream();
-                 ArrowStreamWriter writer = new ArrowStreamWriter(root, null, out)) {
+                 ArrowStreamWriter writer = createArrowStreamWriter(root, out, compressionType)) {
                 JavaRow[] rows = buffer.toArray(JavaRow[]::new);
                 VectorSchemaRootWriter.of(schema).writeToVector(rows, root);
                 root.setRowCount(rows.length);

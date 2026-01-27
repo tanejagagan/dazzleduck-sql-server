@@ -1,5 +1,6 @@
 package io.dazzleduck.sql.http.server;
 
+import io.dazzleduck.sql.commons.ingestion.PendingWriteExceededException;
 import io.dazzleduck.sql.flight.ingestion.IngestionParameters;
 import io.dazzleduck.sql.flight.server.HttpFlightAdaptor;
 import io.dazzleduck.sql.http.server.model.ContentTypes;
@@ -11,6 +12,8 @@ import io.helidon.webserver.http.HttpService;
 import io.helidon.webserver.http.ServerRequest;
 import io.helidon.webserver.http.ServerResponse;
 import org.apache.arrow.flight.FlightClient;
+import org.apache.arrow.flight.FlightRuntimeException;
+import org.apache.arrow.flight.FlightStatusCode;
 import org.apache.arrow.flight.PutResult;
 
 import java.io.InputStream;
@@ -21,6 +24,8 @@ import java.util.Map;
 import static io.dazzleduck.sql.common.Headers.*;
 
 public class IngestionService implements HttpService, ParameterUtils, ControllerService {
+
+    private static final Status TOO_MANY_REQUESTS_429 = Status.create(429, "Too Many Requests");
 
     private final HttpFlightAdaptor httpFlightAdaptor;
 
@@ -113,7 +118,14 @@ public class IngestionService implements HttpService, ParameterUtils, Controller
                             if (!responseSent[0]) {
                                 responseSent[0] = true;
                                 String errorMsg = t.getMessage() != null ? t.getMessage() : t.getClass().getName();
-                                serverResponse.status(Status.BAD_REQUEST_400);
+                                Status status = getErrorStatus(t);
+                                // Set Retry-After header for back pressure responses
+                                PendingWriteExceededException pendingWriteEx = findPendingWriteException(t);
+                                if (pendingWriteEx != null) {
+                                    serverResponse.header(HeaderNames.create("Retry-After"),
+                                            String.valueOf(pendingWriteEx.getRetryAfterSeconds()));
+                                }
+                                serverResponse.status(status);
                                 serverResponse.send(errorMsg.getBytes());
                             }
                         }
@@ -140,5 +152,40 @@ public class IngestionService implements HttpService, ParameterUtils, Controller
             serverResponse.status(Status.INTERNAL_SERVER_ERROR_500);
             serverResponse.send(errorMsg);
         }
+    }
+
+    /**
+     * Determines the appropriate HTTP status code based on the exception type.
+     * Checks the exception and its cause chain for known exception types.
+     * Also handles FlightRuntimeException with RESOURCE_EXHAUSTED status.
+     */
+    private Status getErrorStatus(Throwable t) {
+        Throwable current = t;
+        while (current != null) {
+            if (current instanceof PendingWriteExceededException) {
+                return TOO_MANY_REQUESTS_429;
+            }
+            if (current instanceof FlightRuntimeException flightEx) {
+                if (flightEx.status().code() == FlightStatusCode.RESOURCE_EXHAUSTED) {
+                    return TOO_MANY_REQUESTS_429;
+                }
+            }
+            current = current.getCause();
+        }
+        return Status.BAD_REQUEST_400;
+    }
+
+    /**
+     * Finds PendingWriteExceededException in the exception cause chain.
+     */
+    private PendingWriteExceededException findPendingWriteException(Throwable t) {
+        Throwable current = t;
+        while (current != null) {
+            if (current instanceof PendingWriteExceededException e) {
+                return e;
+            }
+            current = current.getCause();
+        }
+        return null;
     }
 }

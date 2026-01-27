@@ -10,6 +10,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -132,7 +135,7 @@ public class BulkIngestQueueTest {
     }
 
     private MockBulkIngestQueue createMockQueue(ScheduledExecutorService executorService, Clock clock) {
-        return new MockBulkIngestQueue("", DEFAULT_MIN_BATCH_SIZE, DEFAULT_MAX_DELAY,
+        return new MockBulkIngestQueue("", DEFAULT_MIN_BATCH_SIZE, Long.MAX_VALUE, Integer.MAX_VALUE, Long.MAX_VALUE, DEFAULT_MAX_DELAY,
                 executorService,
                 clock);
     }
@@ -150,5 +153,105 @@ public class BulkIngestQueueTest {
 
     interface ServiceAndQueue {
         void apply(DeterministicScheduler service, MockBulkIngestQueue queue, MutableClock clock) throws Exception;
+    }
+
+    // Tests for combineBuckets static method
+
+    @Test
+    public void testCombineBucketsWithMultipleBuckets() {
+        // Create three buckets with different batches
+        var bucket1 = new Bucket<String, MockWriteResult>(DEFAULT_MIN_BATCH_SIZE, Integer.MAX_VALUE, DEFAULT_MAX_DELAY);
+        var bucket2 = new Bucket<String, MockWriteResult>(DEFAULT_MIN_BATCH_SIZE, Integer.MAX_VALUE, DEFAULT_MAX_DELAY);
+        var bucket3 = new Bucket<String, MockWriteResult>(DEFAULT_MIN_BATCH_SIZE, Integer.MAX_VALUE, DEFAULT_MAX_DELAY);
+
+        var future1 = new CompletableFuture<MockWriteResult>();
+        var future2 = new CompletableFuture<MockWriteResult>();
+        var future3 = new CompletableFuture<MockWriteResult>();
+
+        bucket1.add(mockBatch("p1", 0, 100), future1);
+        bucket2.add(mockBatch("p2", 0, 200), future2);
+        bucket3.add(mockBatch("p3", 0, 300), future3);
+
+        var buckets = List.of(bucket1, bucket2, bucket3);
+        var combined = BulkIngestQueue.combineBuckets(buckets, DEFAULT_MIN_BATCH_SIZE, Integer.MAX_VALUE, DEFAULT_MAX_DELAY);
+
+        assertEquals(600, combined.size());
+        assertEquals(3, combined.batchCount());
+        assertEquals(3, combined.futures().size());
+        assertTrue(combined.futures().contains(future1));
+        assertTrue(combined.futures().contains(future2));
+        assertTrue(combined.futures().contains(future3));
+    }
+
+    @Test
+    public void testCombineBucketsWithSingleBucket() {
+        var bucket = new Bucket<String, MockWriteResult>(DEFAULT_MIN_BATCH_SIZE, Integer.MAX_VALUE, DEFAULT_MAX_DELAY);
+        var future = new CompletableFuture<MockWriteResult>();
+        bucket.add(mockBatch("p1", 0, 500), future);
+
+        var buckets = List.of(bucket);
+        var combined = BulkIngestQueue.combineBuckets(buckets, DEFAULT_MIN_BATCH_SIZE, Integer.MAX_VALUE, DEFAULT_MAX_DELAY);
+
+        assertEquals(500, combined.size());
+        assertEquals(1, combined.batchCount());
+        assertEquals(1, combined.futures().size());
+        assertSame(future, combined.futures().get(0));
+    }
+
+    @Test
+    public void testCombineBucketsWithEmptyList() {
+        List<Bucket<String, MockWriteResult>> buckets = Collections.emptyList();
+        var combined = BulkIngestQueue.combineBuckets(buckets, DEFAULT_MIN_BATCH_SIZE, Integer.MAX_VALUE, DEFAULT_MAX_DELAY);
+
+        assertEquals(0, combined.size());
+        assertEquals(0, combined.batchCount());
+        assertTrue(combined.futures().isEmpty());
+    }
+
+    @Test
+    public void testCombineBucketsPreservesBatchOrder() {
+        var bucket1 = new Bucket<String, MockWriteResult>(DEFAULT_MIN_BATCH_SIZE, Integer.MAX_VALUE, DEFAULT_MAX_DELAY);
+        var bucket2 = new Bucket<String, MockWriteResult>(DEFAULT_MIN_BATCH_SIZE, Integer.MAX_VALUE, DEFAULT_MAX_DELAY);
+
+        var future1 = new CompletableFuture<MockWriteResult>();
+        var future2 = new CompletableFuture<MockWriteResult>();
+        var future3 = new CompletableFuture<MockWriteResult>();
+
+        var batch1 = mockBatch("p1", 0, 100);
+        var batch2 = mockBatch("p1", 1, 200);
+        var batch3 = mockBatch("p2", 0, 300);
+
+        bucket1.add(batch1, future1);
+        bucket1.add(batch2, future2);
+        bucket2.add(batch3, future3);
+
+        var buckets = List.of(bucket1, bucket2);
+        var combined = BulkIngestQueue.combineBuckets(buckets, DEFAULT_MIN_BATCH_SIZE, Integer.MAX_VALUE, DEFAULT_MAX_DELAY);
+
+        assertEquals(3, combined.batchCount());
+        assertSame(batch1, combined.batches().get(0));
+        assertSame(batch2, combined.batches().get(1));
+        assertSame(batch3, combined.batches().get(2));
+    }
+
+    @Test
+    public void testCombineBucketsWithMultipleBatchesPerBucket() {
+        var bucket1 = new Bucket<String, MockWriteResult>(DEFAULT_MIN_BATCH_SIZE, Integer.MAX_VALUE, DEFAULT_MAX_DELAY);
+        var bucket2 = new Bucket<String, MockWriteResult>(DEFAULT_MIN_BATCH_SIZE, Integer.MAX_VALUE, DEFAULT_MAX_DELAY);
+
+        // Add multiple batches to each bucket
+        for (int i = 0; i < 5; i++) {
+            bucket1.add(mockBatch("p1", i, 100), new CompletableFuture<>());
+        }
+        for (int i = 0; i < 3; i++) {
+            bucket2.add(mockBatch("p2", i, 200), new CompletableFuture<>());
+        }
+
+        var buckets = List.of(bucket1, bucket2);
+        var combined = BulkIngestQueue.combineBuckets(buckets, DEFAULT_MIN_BATCH_SIZE, Integer.MAX_VALUE, DEFAULT_MAX_DELAY);
+
+        assertEquals(500 + 600, combined.size()); // 5*100 + 3*200
+        assertEquals(8, combined.batchCount()); // 5 + 3
+        assertEquals(8, combined.futures().size());
     }
 }

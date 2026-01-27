@@ -7,6 +7,7 @@ import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.ipc.ArrowStreamReader;
 import org.apache.arrow.vector.ipc.ArrowStreamWriter;
+import org.apache.arrow.vector.compression.CompressionUtil;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.FieldType;
@@ -193,7 +194,7 @@ class ArrowProducerTest {
             elements.add(createSendElement(schema, allocator, new int[]{6, 7}, new String[]{"Frank", "Grace"}));
 
             // Combine all elements
-            ArrowProducer.ProducerElement combinedElement = ArrowProducer.createCombinedReader(elements, schema, allocator);
+            ArrowProducer.ProducerElement combinedElement = ArrowProducer.createCombinedReader(elements, schema, allocator, CompressionUtil.CodecType.ZSTD);
             try (java.io.InputStream in = combinedElement.read();
                  ArrowStreamReader combinedReader = new ArrowStreamReader(in, allocator)) {
 
@@ -237,7 +238,7 @@ class ArrowProducerTest {
             ArrowProducer.ProducerElement originalElement = createSendElement(schema, allocator, new int[]{10, 20, 30}, new String[]{});
             elements.add(originalElement);
 
-            ArrowProducer.ProducerElement combinedElement = ArrowProducer.createCombinedReader(elements, schema, allocator);
+            ArrowProducer.ProducerElement combinedElement = ArrowProducer.createCombinedReader(elements, schema, allocator, CompressionUtil.CodecType.ZSTD);
 
             // Verify it returns the same element instance
             assertSame(originalElement, combinedElement, "Should return the same element for single-element list");
@@ -273,7 +274,7 @@ class ArrowProducerTest {
 
             IllegalArgumentException exception = assertThrows(
                     IllegalArgumentException.class,
-                    () -> ArrowProducer.createCombinedReader(elements, schema, allocator)
+                    () -> ArrowProducer.createCombinedReader(elements, schema, allocator, CompressionUtil.CodecType.ZSTD)
             );
             assertEquals("Cannot create combined reader from empty list", exception.getMessage());
         }
@@ -294,7 +295,7 @@ class ArrowProducerTest {
                 elements.add(createSendElement(schema, allocator, values, new String[]{}));
             }
 
-            ArrowProducer.ProducerElement combinedElement = ArrowProducer.createCombinedReader(elements, schema, allocator);
+            ArrowProducer.ProducerElement combinedElement = ArrowProducer.createCombinedReader(elements, schema, allocator, CompressionUtil.CodecType.ZSTD);
             try (java.io.InputStream in = combinedElement.read();
                  ArrowStreamReader combinedReader = new ArrowStreamReader(in, allocator)) {
 

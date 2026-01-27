@@ -5,10 +5,13 @@ import io.dazzleduck.sql.common.ConfigConstants;
 
 import java.time.Duration;
 
-public record IngestionConfig(long minBucketSize, Duration maxDelay) {
+public record IngestionConfig(long minBucketSize, long maxBucketSize, int maxBatches, long maxPendingWrite, Duration maxDelay) {
 
     public static IngestionConfig fromConfig(Config config){
         return new IngestionConfig(config.getLong(ConfigConstants.MIN_BUCKET_SIZE_KEY),
+                config.getLong(ConfigConstants.MAX_BUCKET_SIZE_KEY),
+                config.getInt(ConfigConstants.MAX_BATCHES_KEY),
+                config.getLong(ConfigConstants.MAX_PENDING_WRITE_KEY),
                 Duration.ofMillis(config.getLong(ConfigConstants.MAX_DELAY_MS_KEY)));
     }
 }

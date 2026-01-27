@@ -10,11 +10,13 @@ import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAccumulator;
 
 public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<T, R> {
 
@@ -32,6 +34,36 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
         }
         return tempFilePath;
     }
+
+    /**
+     * Creates a new combined bucket from multiple buckets.
+     * The combined bucket contains all batches and futures from the source buckets.
+     *
+     * @param buckets the list of buckets to combine
+     * @param minBucketSize minimum bucket size for the new bucket
+     * @param maxBatches maximum batches for the new bucket
+     * @param maxDelay maximum delay for the new bucket
+     * @return a new bucket containing all content from the source buckets
+     */
+    static <T, R> Bucket<T, R> combineBuckets(List<Bucket<T, R>> buckets, long minBucketSize, int maxBatches, Duration maxDelay) {
+        var combined = new Bucket<T, R>(minBucketSize, maxBatches, maxDelay);
+        for (var bucket : buckets) {
+            for (int i = 0; i < bucket.batches().size(); i++) {
+                combined.add(bucket.batches().get(i), bucket.futures().get(i));
+            }
+        }
+        combined.markFinalized();
+        return combined;
+    }
+
+    /**
+     * Checks if a bucket can be added to a combined bucket without exceeding limits.
+     */
+    private static <T, R> boolean canCombine(long currentSize, int currentBatchCount,
+                                              Bucket<T, R> candidate, long maxSize, int maxBatchCount) {
+        return (currentSize + candidate.size() <= maxSize) &&
+               (currentBatchCount + candidate.batchCount() <= maxBatchCount);
+    }
     private static final int MAX_PRODUCER_IDS = 10000;
     private final Map<String, Long> inProgressBatchIds = new LinkedHashMap<>(16, 0.75f, true) {
         @Override
@@ -40,6 +72,9 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
         }
     };
     private final long minBucketSize;
+    private final long maxBucketSize;
+    private final int maxBatches;
+    private final long maxPendingWrite;
     private final String identifier;
     private final ScheduledExecutorService executorService;
     private final Duration maxDelay;
@@ -53,20 +88,26 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
 
     private final BlockingQueue<WriteTask<T, R>> writeQueue = new LinkedBlockingQueue<>();
     private final Thread writeThread;
-    private final AtomicLong totalWriteBatches = new AtomicLong();
-    private final AtomicLong totalWriteBuckets = new AtomicLong();
-    private final AtomicLong acceptedBatches = new AtomicLong();
-    private final AtomicLong bucketsCreated =  new AtomicLong();
-    private final AtomicLong totalWrite = new AtomicLong();
-
-    private final AtomicLong timeSpentWriting = new AtomicLong();
+    private final LongAccumulator totalWriteBatches = new LongAccumulator(Long::sum, 0L);
+    private final LongAccumulator totalWriteBuckets = new LongAccumulator(Long::sum, 0L);
+    private final LongAccumulator acceptedBatches = new LongAccumulator(Long::sum, 0L);
+    private final LongAccumulator acceptedBytes = new LongAccumulator(Long::sum, 0L);
+    private final LongAccumulator bucketsCreated = new LongAccumulator(Long::sum, 0L);
+    private final LongAccumulator totalWrite = new LongAccumulator(Long::sum, 0L);
+    private final LongAccumulator timeSpentWriting = new LongAccumulator(Long::sum, 0L);
 
     public BulkIngestQueue(String identifier,
                            long minBucketSize,
+                           long maxBucketSize,
+                           int maxBatches,
+                           long maxPendingWrite,
                            Duration maxDelay,
                            ScheduledExecutorService executorService,
                            Clock clock) {
         this.minBucketSize = minBucketSize;
+        this.maxBucketSize = maxBucketSize;
+        this.maxBatches = maxBatches;
+        this.maxPendingWrite = maxPendingWrite;
         this.identifier = identifier;
         this.executorService = executorService;
         this.maxDelay = maxDelay;
@@ -79,8 +120,8 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
     }
 
     private void createNewBucket(){
-        this.currentBucket = new Bucket<>(minBucketSize, maxDelay);
-        bucketsCreated.incrementAndGet();
+        this.currentBucket = new Bucket<>(minBucketSize, maxBatches, maxDelay);
+        bucketsCreated.accumulate(1);
     }
 
 
@@ -88,19 +129,49 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
         while (!terminating) {
             try {
                 var task = writeQueue.take();
-                runningWrite = task;
+
+                // Try to combine with additional buckets from the queue
+                var bucketsToCombine = new ArrayList<Bucket<T, R>>();
+                bucketsToCombine.add(task.bucket());
+                long combinedSize = task.bucket().size();
+                int combinedBatchCount = task.bucket().batchCount();
+
+                // Poll additional tasks while they can be combined
+                WriteTask<T, R> nextTask;
+                while ((nextTask = writeQueue.peek()) != null) {
+                    var nextBucket = nextTask.bucket();
+                    if (canCombine(combinedSize, combinedBatchCount, nextBucket, maxBucketSize, maxBatches)) {
+                        writeQueue.poll(); // Remove from queue
+                        bucketsToCombine.add(nextBucket);
+                        combinedSize += nextBucket.size();
+                        combinedBatchCount += nextBucket.batchCount();
+                    } else {
+                        break; // Can't combine more
+                    }
+                }
+
+                // Create combined bucket if we have multiple, otherwise use original
+                Bucket<T, R> bucketToWrite;
+                if (bucketsToCombine.size() > 1) {
+                    bucketToWrite = combineBuckets(bucketsToCombine, minBucketSize, maxBatches, maxDelay);
+                } else {
+                    bucketToWrite = task.bucket();
+                }
+
+                var combinedTask = new WriteTask<>(task.taskId(), task.startTime(), bucketToWrite);
+                runningWrite = combinedTask;
+
                 try {
                     var start = clock.instant();
-                    write(task);
+                    write(combinedTask);
                     var end = clock.instant();
-                    var bucket = task.bucket();
-                    totalWriteBatches.addAndGet(bucket.batches().size());
-                    totalWrite.addAndGet(bucket.size());
-                    totalWriteBuckets.incrementAndGet();
-                    timeSpentWriting.addAndGet(Duration.between(start, end).toMillis());
+                    totalWriteBatches.accumulate(bucketToWrite.batches().size());
+                    totalWrite.accumulate(bucketToWrite.size());
+                    totalWriteBuckets.accumulate(bucketsToCombine.size());
+                    timeSpentWriting.accumulate(Duration.between(start, end).toMillis());
                 } catch (Exception e) {
                     // Complete futures with exception but continue processing remaining tasks
-                    for (var future : task.bucket().futures()) {
+                    for (var future : bucketToWrite.futures()) {
                         if (!future.isDone()) {
                             future.completeExceptionally(e);
                         }
@@ -142,9 +213,47 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
         return identifier;
     }
 
+    @Override
+    public long pendingWrite() {
+        return acceptedBytes.get() - totalWrite.get();
+    }
+
+    /**
+     * Calculates an estimated retry time based on the current ingestion rate.
+     * Returns the time in seconds it would take to drain the current pending bytes.
+     *
+     * @param currentPending the current pending bytes
+     * @return estimated retry time in seconds, bounded between 1 and 60 seconds
+     */
+    private int calculateRetryAfterSeconds(long currentPending) {
+        long writtenBytes = totalWrite.get();
+        long writingTimeMs = timeSpentWriting.get();
+
+        // If no data has been written yet, use default
+        if (writtenBytes == 0 || writingTimeMs == 0) {
+            return 5; // Default 5 seconds
+        }
+
+        // Calculate write rate in bytes per millisecond
+        double bytesPerMs = (double) writtenBytes / writingTimeMs;
+
+        // Calculate estimated time to drain pending bytes (in seconds)
+        double estimatedDrainSeconds = currentPending / bytesPerMs / 1000.0;
+
+        // Bound between 1 and 60 seconds
+        int retryAfterSeconds = (int) Math.ceil(estimatedDrainSeconds);
+        return Math.max(1, Math.min(60, retryAfterSeconds));
+    }
+
     public synchronized CompletableFuture<R> add(Batch<T> batch) {
         if (terminating) {
             throw new IllegalStateException("The queue is closed");
+        }
+        long currentPending = pendingWrite();
+        if (currentPending + batch.totalSize() > maxPendingWrite) {
+            int retryAfterSeconds = calculateRetryAfterSeconds(currentPending);
+            return CompletableFuture.failedFuture(
+                    new PendingWriteExceededException(currentPending, maxPendingWrite, retryAfterSeconds));
         }
         if (batch.producerId() != null) {
             var progressBatch = inProgressBatchIds.get(batch.producerId());
@@ -155,7 +264,8 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
         }
         var result = new CompletableFuture<R>();
         currentBucket.add(batch, result);
-        acceptedBatches.incrementAndGet();
+        acceptedBatches.accumulate(1);
+        acceptedBytes.accumulate(batch.totalSize());
         if (batch.producerId() != null) {
             inProgressBatchIds.put(batch.producerId(), batch.producerBatchId());
         }
