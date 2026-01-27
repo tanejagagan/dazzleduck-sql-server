@@ -74,6 +74,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
     public static final String TEMP_WRITE_FORMAT = "arrow";
     public static final IngestionConfig DEFAULT_INGESTION_CONFIG = new IngestionConfig(1024 * 1024,
+            1024 * 1024 * 1024L,
             2048,
             256 * 1024 * 1024L,
             Duration.ofSeconds(2));
@@ -723,6 +724,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
 
             var queue = new ParquetIngestionQueue(producerId, TEMP_WRITE_FORMAT, path, p,
                     bulkIngestionConfig.minBucketSize(),
+                    bulkIngestionConfig.maxBucketSize(),
                     bulkIngestionConfig.maxBatches(),
                     bulkIngestionConfig.maxPendingWrite(),
                     bulkIngestionConfig.maxDelay(),

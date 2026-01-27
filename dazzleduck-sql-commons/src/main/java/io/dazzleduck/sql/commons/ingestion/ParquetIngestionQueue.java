@@ -31,6 +31,7 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
      * @param outputPath
      * @param ingestionQueue  the ingestion queue identifier used for mapping to target tables
      * @param minBucketSize   size of the bucket. Write will be performed as soon as bucket is reached to this size or more
+     * @param maxBucketSize   maximum size of the bucket. Bucket will be flushed before exceeding this size
      * @param maxBatches      maximum number of batches in a bucket. Write will be performed when this limit is reached
      * @param maxPendingWrite maximum pending bytes allowed before rejecting new batches
      * @param maxDelay        write will be performed just after this delay.
@@ -43,13 +44,14 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
                                  String outputPath,
                                  String ingestionQueue,
                                  long minBucketSize,
+                                 long maxBucketSize,
                                  int maxBatches,
                                  long maxPendingWrite,
                                  Duration maxDelay,
                                  IngestionTaskFactory postIngestionTaskFactory,
                                  ScheduledExecutorService executorService,
                                  Clock clock) {
-        super(ingestionQueue, minBucketSize, maxBatches, maxPendingWrite, maxDelay, executorService, clock);
+        super(ingestionQueue, minBucketSize, maxBucketSize, maxBatches, maxPendingWrite, maxDelay, executorService, clock);
         this.outputPath = outputPath;
         this.queueId = ingestionQueue;
         this.postIngestionTaskFactory = postIngestionTaskFactory;

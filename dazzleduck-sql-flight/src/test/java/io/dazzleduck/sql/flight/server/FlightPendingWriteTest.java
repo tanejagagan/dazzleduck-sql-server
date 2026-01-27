@@ -62,9 +62,10 @@ public class FlightPendingWriteTest {
         // Create server with max_pending_write set to 1 byte
         // This ensures any ingestion will exceed the limit
         IngestionConfig lowLimitConfig = new IngestionConfig(
-                1024 * 1024,  // minBucketSize
-                2048,         // maxBatches
-                1L,           // maxPendingWrite - set to 1 byte to trigger limit
+                1024 * 1024,           // minBucketSize
+                1024 * 1024 * 1024L,   // maxBucketSize
+                2048,                  // maxBatches
+                1L,                    // maxPendingWrite - set to 1 byte to trigger limit
                 Duration.ofSeconds(2)
         );
 

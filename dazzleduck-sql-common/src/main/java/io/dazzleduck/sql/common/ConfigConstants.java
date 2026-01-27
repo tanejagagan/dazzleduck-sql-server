@@ -38,6 +38,7 @@ public class ConfigConstants {
     // Ingestion configuration keys
     public static final String INGESTION_KEY = "ingestion";
     public static final String MIN_BUCKET_SIZE_KEY = "min_bucket_size";
+    public static final String MAX_BUCKET_SIZE_KEY = "max_bucket_size";
     public static final String MAX_BATCHES_KEY = "max_batches";
     public static final String MAX_PENDING_WRITE_KEY = "max_pending_write";
     public static final String MAX_DELAY_MS_KEY = "max_delay_ms";

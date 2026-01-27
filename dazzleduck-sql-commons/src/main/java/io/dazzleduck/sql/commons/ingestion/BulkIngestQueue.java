@@ -40,6 +40,7 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
         }
     };
     private final long minBucketSize;
+    private final long maxBucketSize;
     private final int maxBatches;
     private final long maxPendingWrite;
     private final String identifier;
@@ -65,12 +66,14 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
 
     public BulkIngestQueue(String identifier,
                            long minBucketSize,
+                           long maxBucketSize,
                            int maxBatches,
                            long maxPendingWrite,
                            Duration maxDelay,
                            ScheduledExecutorService executorService,
                            Clock clock) {
         this.minBucketSize = minBucketSize;
+        this.maxBucketSize = maxBucketSize;
         this.maxBatches = maxBatches;
         this.maxPendingWrite = maxPendingWrite;
         this.identifier = identifier;
