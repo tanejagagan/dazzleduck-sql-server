@@ -8,4 +8,11 @@ public interface BulkIngestQueueInterface<T, R> extends AutoCloseable, Ingestion
     Future<R> add(Batch<T> batch);
 
     void write(WriteTask<T, R> writeTask);
+
+    /**
+     * @return bytes which are pending to be written
+     */
+    default long pendingWrite(){
+        return 0;
+    }
 }

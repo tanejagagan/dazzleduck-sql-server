@@ -1,7 +1,11 @@
 package io.dazzleduck.sql.commons.ingestion;
 
 import io.dazzleduck.sql.commons.ConnectionPool;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.*;
@@ -10,7 +14,9 @@ import java.util.stream.Collectors;
 
 public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResult> {
 
-    private final String path;
+    private static final Logger logger = LoggerFactory.getLogger(ParquetIngestionQueue.class);
+
+    private final String outputPath;
     private final String queueId;
     private final IngestionTaskFactory postIngestionTaskFactory;
     private final String applicationId;
@@ -22,9 +28,10 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
      * Thw write will be performed as soon as bucket is full or after the maxDelay is exported since the first batch is inserted
      * @param applicationId
      * @param inputFormat
-     * @param path
+     * @param outputPath
      * @param ingestionQueue  the ingestion queue identifier used for mapping to target tables
-     * @param minBucketSize   size of the bucket. Write will be performed as soon as bucket is reached to this size  or more
+     * @param minBucketSize   size of the bucket. Write will be performed as soon as bucket is reached to this size or more
+     * @param maxBatches      maximum number of batches in a bucket. Write will be performed when this limit is reached
      * @param maxDelay        write will be performed just after this delay.
      * @param postIngestionTaskFactory
      * @param executorService Executor service.
@@ -32,15 +39,16 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
      */
     public ParquetIngestionQueue(String applicationId,
                                  String inputFormat,
-                                 String path,
+                                 String outputPath,
                                  String ingestionQueue,
                                  long minBucketSize,
+                                 int maxBatches,
                                  Duration maxDelay,
                                  IngestionTaskFactory postIngestionTaskFactory,
                                  ScheduledExecutorService executorService,
                                  Clock clock) {
-        super(ingestionQueue, minBucketSize, maxDelay, executorService, clock);
-        this.path = path;
+        super(ingestionQueue, minBucketSize, maxBatches, maxDelay, executorService, clock);
+        this.outputPath = outputPath;
         this.queueId = ingestionQueue;
         this.postIngestionTaskFactory = postIngestionTaskFactory;
         this.applicationId = applicationId;
@@ -54,8 +62,21 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
             var postIngestionTask = postIngestionTaskFactory.createPostIngestionTask(ingestionResult);
             postIngestionTask.execute();
             writeTask.bucket().futures().forEach(action -> action.complete(ingestionResult));
-        }  catch (Exception e) {
+        } catch (Exception e) {
             writeTask.bucket().futures().forEach(action -> action.completeExceptionally(e));
+        } finally {
+            cleanupInputFiles(writeTask);
+        }
+    }
+
+    private void cleanupInputFiles(WriteTask<String, IngestionResult> writeTask) {
+        for (var batch : writeTask.bucket().batches()) {
+            try {
+                var inputFile = Path.of(batch.record());
+                Files.deleteIfExists(inputFile);
+            } catch (Exception e) {
+                logger.warn("Failed to delete temporary input file: {}", batch.record(), e);
+            }
         }
     }
 
@@ -83,9 +104,9 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
         String fullFilePath;
         if (partitionByClause.isEmpty()) {
             String uniqueFileName = "dd_" + UUID.randomUUID() + "." + outputFormat;
-            fullFilePath = this.path + "/" + uniqueFileName;
+            fullFilePath = this.outputPath + "/" + uniqueFileName;
         } else {
-            fullFilePath = this.path;
+            fullFilePath = this.outputPath;
         }
 
         // Build SQL

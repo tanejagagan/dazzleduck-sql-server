@@ -14,7 +14,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAccumulator;
 
 public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<T, R> {
 
@@ -40,6 +40,7 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
         }
     };
     private final long minBucketSize;
+    private final int maxBatches;
     private final String identifier;
     private final ScheduledExecutorService executorService;
     private final Duration maxDelay;
@@ -53,20 +54,21 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
 
     private final BlockingQueue<WriteTask<T, R>> writeQueue = new LinkedBlockingQueue<>();
     private final Thread writeThread;
-    private final AtomicLong totalWriteBatches = new AtomicLong();
-    private final AtomicLong totalWriteBuckets = new AtomicLong();
-    private final AtomicLong acceptedBatches = new AtomicLong();
-    private final AtomicLong bucketsCreated =  new AtomicLong();
-    private final AtomicLong totalWrite = new AtomicLong();
-
-    private final AtomicLong timeSpentWriting = new AtomicLong();
+    private final LongAccumulator totalWriteBatches = new LongAccumulator(Long::sum, 0L);
+    private final LongAccumulator totalWriteBuckets = new LongAccumulator(Long::sum, 0L);
+    private final LongAccumulator acceptedBatches = new LongAccumulator(Long::sum, 0L);
+    private final LongAccumulator bucketsCreated = new LongAccumulator(Long::sum, 0L);
+    private final LongAccumulator totalWrite = new LongAccumulator(Long::sum, 0L);
+    private final LongAccumulator timeSpentWriting = new LongAccumulator(Long::sum, 0L);
 
     public BulkIngestQueue(String identifier,
                            long minBucketSize,
+                           int maxBatches,
                            Duration maxDelay,
                            ScheduledExecutorService executorService,
                            Clock clock) {
         this.minBucketSize = minBucketSize;
+        this.maxBatches = maxBatches;
         this.identifier = identifier;
         this.executorService = executorService;
         this.maxDelay = maxDelay;
@@ -79,8 +81,8 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
     }
 
     private void createNewBucket(){
-        this.currentBucket = new Bucket<>(minBucketSize, maxDelay);
-        bucketsCreated.incrementAndGet();
+        this.currentBucket = new Bucket<>(minBucketSize, maxBatches, maxDelay);
+        bucketsCreated.accumulate(1);
     }
 
 
@@ -94,10 +96,10 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
                     write(task);
                     var end = clock.instant();
                     var bucket = task.bucket();
-                    totalWriteBatches.addAndGet(bucket.batches().size());
-                    totalWrite.addAndGet(bucket.size());
-                    totalWriteBuckets.incrementAndGet();
-                    timeSpentWriting.addAndGet(Duration.between(start, end).toMillis());
+                    totalWriteBatches.accumulate(bucket.batches().size());
+                    totalWrite.accumulate(bucket.size());
+                    totalWriteBuckets.accumulate(1);
+                    timeSpentWriting.accumulate(Duration.between(start, end).toMillis());
                 } catch (Exception e) {
                     // Complete futures with exception but continue processing remaining tasks
                     for (var future : task.bucket().futures()) {
@@ -155,7 +157,7 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
         }
         var result = new CompletableFuture<R>();
         currentBucket.add(batch, result);
-        acceptedBatches.incrementAndGet();
+        acceptedBatches.accumulate(1);
         if (batch.producerId() != null) {
             inProgressBatchIds.put(batch.producerId(), batch.producerBatchId());
         }

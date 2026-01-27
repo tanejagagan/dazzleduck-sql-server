@@ -95,7 +95,7 @@ public class BulkIngestQueueV2Test {
     public void testExceptionHandlingInWrite() throws Exception {
         var service = new DeterministicScheduler();
         var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
-        var queue = new MockBulkIngestQueueWithException("test", DEFAULT_MIN_BATCH_SIZE,
+        var queue = new MockBulkIngestQueueWithException("test", DEFAULT_MIN_BATCH_SIZE, Integer.MAX_VALUE,
                 DEFAULT_MAX_DELAY, service, clock);
 
         var batch = queue.add(mockBatch("producer1", 0, DEFAULT_MIN_BATCH_SIZE + 1));
@@ -134,7 +134,7 @@ public class BulkIngestQueueV2Test {
     public void testWriteThreadNameAndDaemonStatus() throws Exception {
         var service = new DeterministicScheduler();
         var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
-        var queue = new MockBulkIngestQueue("test-queue", DEFAULT_MIN_BATCH_SIZE,
+        var queue = new MockBulkIngestQueue("test-queue", DEFAULT_MIN_BATCH_SIZE, Integer.MAX_VALUE,
                 DEFAULT_MAX_DELAY, service, clock);
 
         // Give the thread a moment to start
@@ -217,7 +217,7 @@ public class BulkIngestQueueV2Test {
     public void testExceptionDoesNotCompleteAlreadyCompletedFutures() throws Exception {
         var service = new DeterministicScheduler();
         var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
-        var queue = new MockBulkIngestQueueWithPartialException("test", DEFAULT_MIN_BATCH_SIZE,
+        var queue = new MockBulkIngestQueueWithPartialException("test", DEFAULT_MIN_BATCH_SIZE, Integer.MAX_VALUE,
                 DEFAULT_MAX_DELAY, service, clock);
 
         var batch = queue.add(mockBatch("producer1", 0, DEFAULT_MIN_BATCH_SIZE + 1));
@@ -261,13 +261,13 @@ public class BulkIngestQueueV2Test {
         assertTrue(res.isCompletedExceptionally());
     }
     private MockBulkIngestQueue createMockQueue(ScheduledExecutorService executorService, Clock clock) {
-        return new MockBulkIngestQueue("test", DEFAULT_MIN_BATCH_SIZE, DEFAULT_MAX_DELAY,
+        return new MockBulkIngestQueue("test", DEFAULT_MIN_BATCH_SIZE, Integer.MAX_VALUE, DEFAULT_MAX_DELAY,
                 executorService, clock);
     }
 
     private BulkIngestQueue<String, MockWriteResult> createMockQueueWithLongRunningDuckDBWrite(ScheduledExecutorService executorService, Clock clock) {
 
-        return new BulkIngestQueue<String, MockWriteResult>("test", DEFAULT_MIN_BATCH_SIZE, DEFAULT_MAX_DELAY,
+        return new BulkIngestQueue<String, MockWriteResult>("test", DEFAULT_MIN_BATCH_SIZE, Integer.MAX_VALUE, DEFAULT_MAX_DELAY,
                 executorService, clock) {
             @Override
             public void write(WriteTask<String, MockWriteResult> writeTask) {
@@ -335,10 +335,11 @@ public class BulkIngestQueueV2Test {
     static class MockBulkIngestQueueWithException extends BulkIngestQueue<String, MockWriteResult> {
         public MockBulkIngestQueueWithException(String identifier,
                                                long minBatchSize,
+                                               int maxBatches,
                                                Duration maxDelay,
                                                ScheduledExecutorService executorService,
                                                Clock clock) {
-            super(identifier, minBatchSize, maxDelay, executorService, clock);
+            super(identifier, minBatchSize, maxBatches, maxDelay, executorService, clock);
         }
 
         @Override
@@ -351,10 +352,11 @@ public class BulkIngestQueueV2Test {
     static class MockBulkIngestQueueWithPartialException extends BulkIngestQueue<String, MockWriteResult> {
         public MockBulkIngestQueueWithPartialException(String identifier,
                                                        long minBatchSize,
+                                                       int maxBatches,
                                                        Duration maxDelay,
                                                        ScheduledExecutorService executorService,
                                                        Clock clock) {
-            super(identifier, minBatchSize, maxDelay, executorService, clock);
+            super(identifier, minBatchSize, maxBatches, maxDelay, executorService, clock);
         }
 
         @Override

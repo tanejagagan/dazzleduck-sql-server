@@ -7,10 +7,11 @@ import java.util.concurrent.ScheduledExecutorService;
 public class MockBulkIngestQueue extends BulkIngestQueue<String, MockWriteResult> {
     public MockBulkIngestQueue(String identifier,
                                long minBatchSize,
+                               int maxBatches,
                                Duration maxDelay,
                                ScheduledExecutorService executorService,
                                Clock clock) {
-        super(identifier, minBatchSize, maxDelay, executorService, clock);
+        super(identifier, minBatchSize, maxBatches, maxDelay, executorService, clock);
     }
 
     @Override

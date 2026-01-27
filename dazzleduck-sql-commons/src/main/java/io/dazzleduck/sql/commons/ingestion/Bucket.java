@@ -14,6 +14,7 @@ import java.util.concurrent.CompletableFuture;
  */
 public class Bucket<T, R> {
     private final long capacity;
+    private final int maxBatches;
     private final List<Batch<T>> batches = new ArrayList<>();
     private final List<CompletableFuture<R>> futures = new ArrayList<>();
     private final Duration maxWriteDelay;
@@ -24,8 +25,9 @@ public class Bucket<T, R> {
 
     private boolean finalized = false;
 
-    public Bucket(long capacity, Duration maxWriteDelay) {
+    public Bucket(long capacity, int maxBatches, Duration maxWriteDelay) {
         this.capacity = capacity;
+        this.maxBatches = maxBatches;
         this.maxWriteDelay = maxWriteDelay;
     }
     void add(Batch<T> batch, CompletableFuture<R> future) {
@@ -56,7 +58,7 @@ public class Bucket<T, R> {
     }
 
     boolean isFull() {
-        return size >= capacity;
+        return size >= capacity || batches.size() >= maxBatches;
     }
 
     boolean isEmpty() {return size == 0;}
