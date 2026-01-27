@@ -10,7 +10,9 @@ import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.*;
@@ -31,6 +33,36 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
             writer.end();
         }
         return tempFilePath;
+    }
+
+    /**
+     * Creates a new combined bucket from multiple buckets.
+     * The combined bucket contains all batches and futures from the source buckets.
+     *
+     * @param buckets the list of buckets to combine
+     * @param minBucketSize minimum bucket size for the new bucket
+     * @param maxBatches maximum batches for the new bucket
+     * @param maxDelay maximum delay for the new bucket
+     * @return a new bucket containing all content from the source buckets
+     */
+    static <T, R> Bucket<T, R> combineBuckets(List<Bucket<T, R>> buckets, long minBucketSize, int maxBatches, Duration maxDelay) {
+        var combined = new Bucket<T, R>(minBucketSize, maxBatches, maxDelay);
+        for (var bucket : buckets) {
+            for (int i = 0; i < bucket.batches().size(); i++) {
+                combined.add(bucket.batches().get(i), bucket.futures().get(i));
+            }
+        }
+        combined.markFinalized();
+        return combined;
+    }
+
+    /**
+     * Checks if a bucket can be added to a combined bucket without exceeding limits.
+     */
+    private static <T, R> boolean canCombine(long currentSize, int currentBatchCount,
+                                              Bucket<T, R> candidate, long maxSize, int maxBatchCount) {
+        return (currentSize + candidate.size() <= maxSize) &&
+               (currentBatchCount + candidate.batchCount() <= maxBatchCount);
     }
     private static final int MAX_PRODUCER_IDS = 10000;
     private final Map<String, Long> inProgressBatchIds = new LinkedHashMap<>(16, 0.75f, true) {
@@ -97,19 +129,49 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
         while (!terminating) {
             try {
                 var task = writeQueue.take();
-                runningWrite = task;
+
+                // Try to combine with additional buckets from the queue
+                var bucketsToCombine = new ArrayList<Bucket<T, R>>();
+                bucketsToCombine.add(task.bucket());
+                long combinedSize = task.bucket().size();
+                int combinedBatchCount = task.bucket().batchCount();
+
+                // Poll additional tasks while they can be combined
+                WriteTask<T, R> nextTask;
+                while ((nextTask = writeQueue.peek()) != null) {
+                    var nextBucket = nextTask.bucket();
+                    if (canCombine(combinedSize, combinedBatchCount, nextBucket, maxBucketSize, maxBatches)) {
+                        writeQueue.poll(); // Remove from queue
+                        bucketsToCombine.add(nextBucket);
+                        combinedSize += nextBucket.size();
+                        combinedBatchCount += nextBucket.batchCount();
+                    } else {
+                        break; // Can't combine more
+                    }
+                }
+
+                // Create combined bucket if we have multiple, otherwise use original
+                Bucket<T, R> bucketToWrite;
+                if (bucketsToCombine.size() > 1) {
+                    bucketToWrite = combineBuckets(bucketsToCombine, minBucketSize, maxBatches, maxDelay);
+                } else {
+                    bucketToWrite = task.bucket();
+                }
+
+                var combinedTask = new WriteTask<>(task.taskId(), task.startTime(), bucketToWrite);
+                runningWrite = combinedTask;
+
                 try {
                     var start = clock.instant();
-                    write(task);
+                    write(combinedTask);
                     var end = clock.instant();
-                    var bucket = task.bucket();
-                    totalWriteBatches.accumulate(bucket.batches().size());
-                    totalWrite.accumulate(bucket.size());
-                    totalWriteBuckets.accumulate(1);
+                    totalWriteBatches.accumulate(bucketToWrite.batches().size());
+                    totalWrite.accumulate(bucketToWrite.size());
+                    totalWriteBuckets.accumulate(bucketsToCombine.size());
                     timeSpentWriting.accumulate(Duration.between(start, end).toMillis());
                 } catch (Exception e) {
                     // Complete futures with exception but continue processing remaining tasks
-                    for (var future : task.bucket().futures()) {
+                    for (var future : bucketToWrite.futures()) {
                         if (!future.isDone()) {
                             future.completeExceptionally(e);
                         }

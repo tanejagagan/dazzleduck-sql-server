@@ -87,4 +87,8 @@ public class Bucket<T, R> {
     public void markFinalized(){
         this.finalized =  true;
     }
+
+    public int batchCount() {
+        return batches.size();
+    }
 }
