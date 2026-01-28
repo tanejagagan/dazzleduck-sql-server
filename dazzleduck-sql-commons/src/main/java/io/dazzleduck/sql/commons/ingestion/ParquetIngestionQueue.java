@@ -9,12 +9,21 @@ import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.stream.Collectors;
 
 public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResult> {
 
     private static final Logger logger = LoggerFactory.getLogger(ParquetIngestionQueue.class);
+
+    /**
+     * Virtual thread executor for async file cleanup.
+     * Virtual threads are ideal for I/O-bound tasks like file deletion.
+     * This is a shared executor - virtual threads are lightweight so no pooling needed.
+     */
+    private static final ExecutorService CLEANUP_EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
 
     private final String outputPath;
     private final String queueId;
@@ -73,14 +82,21 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
         }
     }
 
+    /**
+     * Asynchronously cleans up input files using virtual threads.
+     * This is fire-and-forget - we don't wait for deletion to complete
+     * since it doesn't affect the write result.
+     */
     private void cleanupInputFiles(WriteTask<String, IngestionResult> writeTask) {
         for (var batch : writeTask.bucket().batches()) {
-            try {
-                var inputFile = Path.of(batch.record());
-                Files.deleteIfExists(inputFile);
-            } catch (Exception e) {
-                logger.warn("Failed to delete temporary input file: {}", batch.record(), e);
-            }
+            final String filePath = batch.record();
+            CLEANUP_EXECUTOR.execute(() -> {
+                try {
+                    Files.deleteIfExists(Path.of(filePath));
+                } catch (Exception e) {
+                    logger.warn("Failed to delete temporary input file: {}", filePath, e);
+                }
+            });
         }
     }
 
