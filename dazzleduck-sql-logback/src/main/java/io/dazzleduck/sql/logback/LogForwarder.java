@@ -62,7 +62,7 @@ public final class LogForwarder implements Closeable {
                 config.username(),
                 config.password(),
                 config.claims(),
-                config.targetPath(),
+                config.ingestionQueue(),
                 config.httpClientTimeout(),
                 config.minBatchSize(),
                 config.maxBatchSize(),
@@ -82,8 +82,8 @@ public final class LogForwarder implements Closeable {
             return t;
         });
 
-        logger.info("LogForwarder initialized with baseUrl={}, targetPath={}, pollInterval={}",
-                config.baseUrl(), config.targetPath(), config.pollInterval());
+        logger.info("LogForwarder initialized with baseUrl={}, ingestionQueue={}, pollInterval={}",
+                config.baseUrl(), config.ingestionQueue(), config.pollInterval());
     }
 
     /**

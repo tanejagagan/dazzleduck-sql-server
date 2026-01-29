@@ -21,7 +21,7 @@ import java.time.Duration;
  *     base_url = "http://localhost:8081"
  *     username = "admin"
  *     password = "admin"
- *     target_path = "logs"
+ *     ingestion_queue = "logs"
  *     http_client_timeout_ms = 3000
  *   }
  *
@@ -65,7 +65,7 @@ public final class LogForwarderConfigFactory {
                 .baseUrl(http.getString(ConfigConstants.BASE_URL_KEY))
                 .username(http.getString(ConfigConstants.USERNAME_KEY))
                 .password(http.getString(ConfigConstants.PASSWORD_KEY))
-                .targetPath(http.getString(ConfigConstants.TARGET_PATH_KEY))
+                .ingestionQueue(http.getString(ConfigConstants.INGESTION_QUEUE_KEY))
                 .httpClientTimeout(Duration.ofMillis(http.getLong(ConfigConstants.HTTP_CLIENT_TIMEOUT_MS_KEY)))
                 .maxBufferSize(config.getInt(ConfigConstants.MAX_BUFFER_SIZE_KEY))
                 .pollInterval(Duration.ofMillis(config.getLong(ConfigConstants.POLL_INTERVAL_MS_KEY)))

@@ -68,7 +68,7 @@ public class ConfigConstants {
 
     // HTTP client keys (for http sub-config)
     public static final String BASE_URL_KEY = "base_url";
-    public static final String TARGET_PATH_KEY = "target_path";
+    public static final String INGESTION_QUEUE_KEY = "ingestion_queue";
     public static final String HTTP_CLIENT_TIMEOUT_MS_KEY = "http_client_timeout_ms";
 
     // Batching keys

@@ -21,7 +21,7 @@ import java.time.Duration;
  *     base_url = "http://localhost:8081"
  *     username = "admin"
  *     password = "admin"
- *     target_path = "metrics"
+ *     ingestion_queue = "metrics"
  *     http_client_timeout_ms = 3000
  *   }
  *
@@ -75,7 +75,7 @@ public final class MetricsRegistryFactory {
                 .baseUrl(http.getString(ConfigConstants.BASE_URL_KEY))
                 .username(http.getString(ConfigConstants.USERNAME_KEY))
                 .password(http.getString(ConfigConstants.PASSWORD_KEY))
-                .targetPath(http.getString(ConfigConstants.TARGET_PATH_KEY))
+                .ingestionQueue(http.getString(ConfigConstants.INGESTION_QUEUE_KEY))
                 .httpClientTimeout(Duration.ofMillis(http.getLong(ConfigConstants.HTTP_CLIENT_TIMEOUT_MS_KEY)))
                 .stepInterval(Duration.ofMillis(config.getLong(ConfigConstants.STEP_INTERVAL_MS_KEY)))
                 .minBatchSize(config.getLong(ConfigConstants.MIN_BATCH_SIZE_KEY))
