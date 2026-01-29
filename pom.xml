@@ -174,7 +174,6 @@
                 <artifactId>jib-maven-plugin</artifactId>
                 <version>3.4.4</version>
                 <configuration>
-                    <containerizingMode>packaged</containerizingMode>
                     <from>
                         <image>eclipse-temurin:21-jre-jammy</image>
                     </from>

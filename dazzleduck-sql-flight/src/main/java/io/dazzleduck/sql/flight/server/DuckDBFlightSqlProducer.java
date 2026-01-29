@@ -552,7 +552,30 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     @Override
     public SchemaResult getSchemaStatement(FlightSql.CommandStatementQuery command, CallContext context,
                                            FlightDescriptor descriptor) {
-        return null;
+        String query = command.getQuery();
+        try (Connection connection = getConnection(context, accessMode);
+             PreparedStatement preparedStatement = connection.prepareStatement(
+                     query, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)) {
+
+            DuckDBResultSetMetaData metaData = (DuckDBResultSetMetaData) preparedStatement.getMetaData();
+            Schema schema;
+            if (isNull(metaData) || metaData.getReturnType() == StatementReturnType.NOTHING) {
+                schema = new Schema(List.of());
+            } else {
+                schema = JdbcToArrowUtils.jdbcToArrowSchema(metaData, DEFAULT_CALENDAR);
+            }
+            return new SchemaResult(schema);
+        } catch (SQLException e) {
+            throw CallStatus.INVALID_ARGUMENT
+                    .withDescription("Failed to get schema for query: " + e.getMessage())
+                    .withCause(e)
+                    .toRuntimeException();
+        } catch (Exception e) {
+            throw CallStatus.INTERNAL
+                    .withDescription("Error getting schema: " + e.getMessage())
+                    .withCause(e)
+                    .toRuntimeException();
+        }
     }
 
 

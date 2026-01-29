@@ -594,6 +594,53 @@ public class DuckDBFlightSqlProducerTest {
         assertTrue(bytesOut > 0, "Should have sent data (bytesOut > 0)");
     }
 
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testGetSchemaStatement() throws Exception {
+        String query = "SELECT * FROM generate_series(10)";
+        var schemaResult = sqlClient.getExecuteSchema(query);
+        var schema = schemaResult.getSchema();
+
+        assertNotNull(schema, "Schema should not be null");
+        assertEquals(1, schema.getFields().size(), "Should have one field");
+        assertEquals("generate_series", schema.getFields().get(0).getName(), "Field name should be 'generate_series'");
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testGetSchemaStatementMultipleColumns() throws Exception {
+        String query = "SELECT 1 as id, 'hello' as name, 3.14 as value";
+        var schemaResult = sqlClient.getExecuteSchema(query);
+        var schema = schemaResult.getSchema();
+
+        assertNotNull(schema, "Schema should not be null");
+        assertEquals(3, schema.getFields().size(), "Should have three fields");
+        assertEquals("id", schema.getFields().get(0).getName());
+        assertEquals("name", schema.getFields().get(1).getName());
+        assertEquals("value", schema.getFields().get(2).getName());
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testGetSchemaStatementFromTable() throws Exception {
+        String query = "SELECT * FROM " + TEST_CATALOG + "." + TEST_SCHEMA + "." + TEST_TABLE;
+        var schemaResult = sqlClient.getExecuteSchema(query);
+        var schema = schemaResult.getSchema();
+
+        assertNotNull(schema, "Schema should not be null");
+        assertEquals(2, schema.getFields().size(), "Should have two fields (key and value)");
+        assertEquals("key", schema.getFields().get(0).getName());
+        assertEquals("value", schema.getFields().get(1).getName());
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testGetSchemaStatementBadQuery() {
+        String badQuery = "SELECT nonexistent_column FROM nonexistent_table";
+        assertThrows(FlightRuntimeException.class, () -> sqlClient.getExecuteSchema(badQuery),
+                "Bad query should throw FlightRuntimeException");
+    }
+
     private ServerClient createRestrictedServerClient(Location serverLocation,
                                                       String user) throws IOException, NoSuchAlgorithmException {
         var testUtil = FlightTestUtils.createForDatabaseSchema(user, "",  TEST_CATALOG, TEST_SCHEMA);
