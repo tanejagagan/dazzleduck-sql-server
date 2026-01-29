@@ -16,7 +16,7 @@ public record MicrometerForwarderConfig(
         String username,
         String password,
         Map<String,String> claims,
-        String targetPath,
+        String ingestionQueue,
         Duration httpClientTimeout,
 
         // Micrometer step interval
@@ -40,7 +40,7 @@ public record MicrometerForwarderConfig(
         Objects.requireNonNull(baseUrl, "baseUrl must not be null");
         Objects.requireNonNull(username, "username must not be null");
         Objects.requireNonNull(password, "password must not be null");
-        Objects.requireNonNull(targetPath, "targetPath must not be null");
+        Objects.requireNonNull(ingestionQueue, "ingestionQueue must not be null");
         Objects.requireNonNull(httpClientTimeout, "httpClientTimeout must not be null");
         Objects.requireNonNull(stepInterval, "stepInterval must not be null");
         Objects.requireNonNull(maxSendInterval, "maxSendInterval must not be null");
@@ -57,7 +57,7 @@ public record MicrometerForwarderConfig(
         private String username = "admin";
         private String password = "admin";
         private Map<String,String> claims = Map.of();
-        private String targetPath = "metrics";
+        private String ingestionQueue = "metrics";
         private Duration httpClientTimeout = Duration.ofSeconds(3);
         private Duration stepInterval = Duration.ofSeconds(10);
         private long minBatchSize = 1024 * 1024; // 1 MB
@@ -94,8 +94,8 @@ public record MicrometerForwarderConfig(
             return this;
         }
 
-        public Builder targetPath(String targetPath) {
-            this.targetPath = Objects.requireNonNull(targetPath);
+        public Builder ingestionQueue(String ingestionQueue) {
+            this.ingestionQueue = Objects.requireNonNull(ingestionQueue);
             return this;
         }
 
@@ -171,7 +171,7 @@ public record MicrometerForwarderConfig(
                     username,
                     password,
                     claims,
-                    targetPath,
+                    ingestionQueue,
                     httpClientTimeout,
                     stepInterval,
                     minBatchSize,

@@ -37,7 +37,7 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
     private final String username;
     private final String password;
     private final Map<String, String> claims;
-    private final String targetPath;
+    private final String ingestionQueue;
     private final Duration httpClientTimeout;
     private final long maxMem;
     private final long maxDisk;
@@ -50,7 +50,7 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
             String baseUrl,
             String username,
             String password,
-            String targetPath,
+            String ingestionQueue,
             Duration httpClientTimeout,
             long minBatchSize,
             long maxBatchSize,
@@ -62,7 +62,7 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
             long maxInMemorySize,
             long maxOnDiskSize
     ) {
-        this(schema, baseUrl, username, password, Map.of(), targetPath, httpClientTimeout, minBatchSize, maxBatchSize, maxSendInterval, retryCount, retryIntervalMillis, projections, partitionBy, maxInMemorySize, maxOnDiskSize, CompressionUtil.CodecType.ZSTD, Clock.systemUTC());
+        this(schema, baseUrl, username, password, Map.of(), ingestionQueue, httpClientTimeout, minBatchSize, maxBatchSize, maxSendInterval, retryCount, retryIntervalMillis, projections, partitionBy, maxInMemorySize, maxOnDiskSize, CompressionUtil.CodecType.ZSTD, Clock.systemUTC());
     }
 
     public HttpArrowProducer(
@@ -70,7 +70,7 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
             String baseUrl,
             String username,
             String password,
-            String targetPath,
+            String ingestionQueue,
             Duration httpClientTimeout,
             long minBatchSize,
             long maxBatchSize,
@@ -83,7 +83,7 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
             long maxOnDiskSize,
             CompressionUtil.CodecType compressionType
     ) {
-        this(schema, baseUrl, username, password, Map.of(), targetPath, httpClientTimeout, minBatchSize, maxBatchSize, maxSendInterval, retryCount, retryIntervalMillis, projections, partitionBy, maxInMemorySize, maxOnDiskSize, compressionType, Clock.systemUTC());
+        this(schema, baseUrl, username, password, Map.of(), ingestionQueue, httpClientTimeout, minBatchSize, maxBatchSize, maxSendInterval, retryCount, retryIntervalMillis, projections, partitionBy, maxInMemorySize, maxOnDiskSize, compressionType, Clock.systemUTC());
     }
 
     public HttpArrowProducer(
@@ -92,7 +92,7 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
             String username,
             String password,
             Map<String, String> claims,
-            String targetPath,
+            String ingestionQueue,
             Duration httpClientTimeout,
             long minBatchSize,
             long maxBatchSize,
@@ -105,7 +105,7 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
             long maxOnDiskSize,
             Clock clock
     ) {
-        this(schema, baseUrl, username, password, claims, targetPath, httpClientTimeout, minBatchSize, maxBatchSize, maxSendInterval, retryCount, retryIntervalMillis, projections, partitionBy, maxInMemorySize, maxOnDiskSize, CompressionUtil.CodecType.ZSTD, clock);
+        this(schema, baseUrl, username, password, claims, ingestionQueue, httpClientTimeout, minBatchSize, maxBatchSize, maxSendInterval, retryCount, retryIntervalMillis, projections, partitionBy, maxInMemorySize, maxOnDiskSize, CompressionUtil.CodecType.ZSTD, clock);
     }
 
     public HttpArrowProducer(
@@ -114,7 +114,7 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
             String username,
             String password,
             Map<String, String> claims,
-            String targetPath,
+            String ingestionQueue,
             Duration httpClientTimeout,
             long minBatchSize,
             long maxBatchSize,
@@ -135,7 +135,7 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
         Objects.requireNonNull(username, "username must not be null");
         Objects.requireNonNull(password, "password must not be null");
         Objects.requireNonNull(claims, "claims must not be null");
-        Objects.requireNonNull(targetPath, "targetPath must not be null");
+        Objects.requireNonNull(ingestionQueue, "ingestionQueue must not be null");
         Objects.requireNonNull(httpClientTimeout, "httpClientTimeout must not be null");
 
         if (baseUrl.trim().isEmpty()) {
@@ -144,8 +144,8 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
         if (username.trim().isEmpty()) {
             throw new IllegalArgumentException("username must not be empty");
         }
-        if (targetPath.trim().isEmpty()) {
-            throw new IllegalArgumentException("targetPath must not be empty");
+        if (ingestionQueue.trim().isEmpty()) {
+            throw new IllegalArgumentException("ingestionQueue must not be empty");
         }
         if (httpClientTimeout.isNegative() || httpClientTimeout.isZero()) {
             throw new IllegalArgumentException("httpClientTimeout must be positive");
@@ -155,7 +155,7 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
         this.username = username;
         this.password = password;
         this.claims = claims;
-        this.targetPath = targetPath;
+        this.ingestionQueue = ingestionQueue;
         this.httpClientTimeout = httpClientTimeout;
         this.maxMem = maxInMemorySize;
         this.maxDisk = maxOnDiskSize;
@@ -172,8 +172,8 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
                 .connectTimeout(httpClientTimeout)
                 .build();
 
-        logger.info("Initializing HttpSender with baseUrl={}, targetPath={}, httpClientTimeout={}",
-                    baseUrl, targetPath, httpClientTimeout);
+        logger.info("Initializing HttpSender with baseUrl={}, ingestionQueue={}, httpClientTimeout={}",
+                    baseUrl, ingestionQueue, httpClientTimeout);
     }
 
     @Override
@@ -295,7 +295,7 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
 
                 if (resp.statusCode() == 401 || resp.statusCode() == 403) {
                     if (authRetries >= MAX_AUTH_RETRIES) {
-                        logger.error("Max auth retries ({}) exceeded for {}{}", MAX_AUTH_RETRIES, baseUrl, targetPath);
+                        logger.error("Max auth retries ({}) exceeded for {}{}", MAX_AUTH_RETRIES, baseUrl, ingestionQueue);
                         break;
                     }
                     logger.warn("Received auth failure ({}) on attempt {}, invalidating JWT and retrying",
@@ -325,7 +325,7 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
                         .orElse(5000L); // Default 5 second wait
 
                 logger.warn("Server returned 429 Too Many Requests to {}{}, suggested wait: {} ms",
-                        baseUrl, targetPath, waitMillis);
+                        baseUrl, ingestionQueue, waitMillis);
                 throw new BackPressureException(
                         "Server returned 429 Too Many Requests: " + resp.body(),
                         waitMillis
@@ -333,29 +333,29 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
             }
 
             if (resp.statusCode() != 200) {
-                logger.error("Ingestion failed with status {} to {}{}", resp.statusCode(), baseUrl, targetPath);
+                logger.error("Ingestion failed with status {} to {}{}", resp.statusCode(), baseUrl, ingestionQueue);
                 throw new RuntimeException("Ingestion failed with status " + resp.statusCode() + ": " + resp.body());
             }
 
-            logger.debug("Successfully sent element to {}{}", baseUrl, targetPath);
+            logger.debug("Successfully sent element to {}{}", baseUrl, ingestionQueue);
 
         } catch (HttpTimeoutException e) {
-            logger.error("HTTP request timed out after {} to {}{}", httpClientTimeout, baseUrl, targetPath, e);
+            logger.error("HTTP request timed out after {} to {}{}", httpClientTimeout, baseUrl, ingestionQueue, e);
             // Invalidate JWT on timeout - server may have restarted
             invalidateJwt();
-            throw new RuntimeException("HTTP request timed out to " + baseUrl + targetPath, e);
+            throw new RuntimeException("HTTP request timed out to " + baseUrl + ingestionQueue, e);
         } catch (IOException e) {
             // Check if interrupted during IO
             if (Thread.currentThread().isInterrupted()) {
                 throw new InterruptedException("Thread interrupted during HTTP send");
             }
-            logger.error("Network error sending data to {}{}", baseUrl, targetPath, e);
+            logger.error("Network error sending data to {}{}", baseUrl, ingestionQueue, e);
             // Invalidate JWT on network error - server may have restarted
             invalidateJwt();
-            throw new RuntimeException("Network error sending data to " + baseUrl + targetPath, e);
+            throw new RuntimeException("Network error sending data to " + baseUrl + ingestionQueue, e);
         } catch (SecurityException e) {
-            logger.error("Authentication failed for {}{}", baseUrl, targetPath, e);
-            throw new RuntimeException("Authentication failed for " + baseUrl + targetPath, e);
+            logger.error("Authentication failed for {}{}", baseUrl, ingestionQueue, e);
+            throw new RuntimeException("Authentication failed for " + baseUrl + ingestionQueue, e);
         }
     }
 
@@ -379,7 +379,7 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
 
     private HttpResponse<String> post(byte[] payload) throws IOException, InterruptedException {
         HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
-                .uri(URI.create(baseUrl + "/v1/ingest?ingestion_queue=" + targetPath))
+                .uri(URI.create(baseUrl + "/v1/ingest?ingestion_queue=" + ingestionQueue))
                 .timeout(httpClientTimeout)
                 .POST(HttpRequest.BodyPublishers.ofByteArray(payload))
                 .header("Authorization", getJwt())

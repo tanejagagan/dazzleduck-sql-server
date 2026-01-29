@@ -23,7 +23,7 @@ class LogForwarderTest {
                 .baseUrl("http://localhost:9999")  // Non-existent server for testing
                 .username("test")
                 .password("test")
-                .targetPath("test-logs")
+                .ingestionQueue("test-logs")
                 .httpClientTimeout(Duration.ofMillis(100))
                 .maxBufferSize(1000)
                 .pollInterval(Duration.ofMillis(100))

@@ -30,7 +30,7 @@ public final class LogProcessorMain {
     private static final String CONFIG_HTTP_BASE_URL = httpConfig.getString(ConfigConstants.BASE_URL_KEY);
     private static final String CONFIG_HTTP_USERNAME = httpConfig.getString(ConfigConstants.USERNAME_KEY);
     private static final String CONFIG_HTTP_PASSWORD = httpConfig.getString(ConfigConstants.PASSWORD_KEY);
-    private static final String CONFIG_HTTP_TARGET_PATH = httpConfig.getString(ConfigConstants.TARGET_PATH_KEY);
+    private static final String CONFIG_HTTP_INGESTION_QUEUE = httpConfig.getString(ConfigConstants.INGESTION_QUEUE_KEY);
     private static final long CONFIG_HTTP_TIMEOUT_MS = httpConfig.getLong(ConfigConstants.HTTP_CLIENT_TIMEOUT_MS_KEY);
     // Batch and memory config
     private static final long CONFIG_MIN_BATCH_SIZE = config.getLong(ConfigConstants.MIN_BATCH_SIZE_KEY);
@@ -49,7 +49,7 @@ public final class LogProcessorMain {
                 CONFIG_HTTP_BASE_URL,
                 CONFIG_HTTP_USERNAME,
                 CONFIG_HTTP_PASSWORD,
-                CONFIG_HTTP_TARGET_PATH,
+                CONFIG_HTTP_INGESTION_QUEUE,
                 Duration.ofMillis(CONFIG_HTTP_TIMEOUT_MS),
                 CONFIG_MIN_BATCH_SIZE,
                 CONFIG_MAX_BATCH_SIZE,

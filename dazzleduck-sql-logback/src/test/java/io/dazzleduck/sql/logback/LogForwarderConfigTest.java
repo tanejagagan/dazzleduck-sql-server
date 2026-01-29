@@ -15,7 +15,7 @@ class LogForwarderConfigTest {
         assertEquals("http://localhost:8081", config.baseUrl());
         assertEquals("admin", config.username());
         assertEquals("admin", config.password());
-        assertEquals("logs", config.targetPath());
+        assertEquals("logs", config.ingestionQueue());
         assertEquals(Duration.ofSeconds(3), config.httpClientTimeout());
         assertEquals(10000, config.maxBufferSize());
         assertEquals(Duration.ofSeconds(5), config.pollInterval());
@@ -32,7 +32,7 @@ class LogForwarderConfigTest {
                 .baseUrl("http://custom:9000")
                 .username("user")
                 .password("pass")
-                .targetPath("custom-logs")
+                .ingestionQueue("custom-logs")
                 .httpClientTimeout(Duration.ofSeconds(10))
                 .maxBufferSize(5000)
                 .pollInterval(Duration.ofSeconds(30))
@@ -46,7 +46,7 @@ class LogForwarderConfigTest {
         assertEquals("http://custom:9000", config.baseUrl());
         assertEquals("user", config.username());
         assertEquals("pass", config.password());
-        assertEquals("custom-logs", config.targetPath());
+        assertEquals("custom-logs", config.ingestionQueue());
         assertEquals(Duration.ofSeconds(10), config.httpClientTimeout());
         assertEquals(5000, config.maxBufferSize());
         assertEquals(Duration.ofSeconds(30), config.pollInterval());
@@ -106,7 +106,7 @@ class LogForwarderConfigTest {
                 .baseUrl("http://test:8080")
                 .username("u")
                 .password("p")
-                .targetPath("path")
+                .ingestionQueue("path")
                 .build();
 
         assertNotNull(config);
