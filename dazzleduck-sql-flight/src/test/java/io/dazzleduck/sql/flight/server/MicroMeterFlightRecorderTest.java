@@ -26,17 +26,17 @@ public class MicroMeterFlightRecorderTest {
         recorder = new MicroMeterFlightRecorder(registry, "producer1");
     }
 
-    private Counter counter(String metric) {
+    private FunctionCounter functionCounter(String metric) {
         return registry.find("dazzleduck.flight." + metric + ".count")
                 .tag("producer", "producer1")
-                .counter();
+                .functionCounter();
     }
 
     @Test
     void testRecordStatementCancel() {
         recorder.recordStatementCancel(dummyKey(), dummyContext(false, "SELECT 1"));
 
-        Counter c = counter("cancel_statement");
+        FunctionCounter c = functionCounter("cancel_statement");
         assertNotNull(c);
         assertEquals(1.0, c.count());
     }
@@ -45,7 +45,7 @@ public class MicroMeterFlightRecorderTest {
     void testRecordPreparedStatementCancel() {
         recorder.recordPreparedStatementCancel(dummyKey(), dummyContext(true, "SELECT 1"));
 
-        Counter c = counter("cancel_prepared_statement");
+        FunctionCounter c = functionCounter("cancel_prepared_statement");
         assertNotNull(c);
         assertEquals(1.0, c.count());
     }
@@ -55,8 +55,8 @@ public class MicroMeterFlightRecorderTest {
         recorder.startStreamStatement();
         recorder.endStreamStatement();
 
-        assertEquals(1.0, counter("stream_statement").count());
-        assertEquals(1.0, counter("stream_statement_completed").count());
+        assertEquals(1.0, functionCounter("stream_statement").count());
+        assertEquals(1.0, functionCounter("stream_statement_completed").count());
     }
 
     @Test
@@ -64,8 +64,8 @@ public class MicroMeterFlightRecorderTest {
         recorder.startStreamPreparedStatement();
         recorder.endStreamPreparedStatement();
 
-        assertEquals(1.0, counter("stream_prepared_statement").count());
-        assertEquals(1.0, counter("stream_prepared_statement_completed").count());
+        assertEquals(1.0, functionCounter("stream_prepared_statement").count());
+        assertEquals(1.0, functionCounter("stream_prepared_statement_completed").count());
     }
 
 

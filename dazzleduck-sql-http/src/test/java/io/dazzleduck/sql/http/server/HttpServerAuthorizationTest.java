@@ -80,7 +80,7 @@ public class HttpServerAuthorizationTest extends HttpServerTestBase {
         assertEquals(200, jwtResponse.statusCode());
         var jwt = objectMapper.readValue(jwtResponse.body(), LoginResponse.class);
         var inputStreamResponse = query("select * from auth_test", jwt);
-        assertEquals(500, inputStreamResponse.statusCode());
+        assertEquals(403, inputStreamResponse.statusCode());
     }
 
     @Test
