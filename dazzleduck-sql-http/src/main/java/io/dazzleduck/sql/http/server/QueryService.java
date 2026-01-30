@@ -1,9 +1,7 @@
 package io.dazzleduck.sql.http.server;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.google.protobuf.Any;
 import com.google.protobuf.ByteString;
-import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.flight.server.HttpFlightAdaptor;
 import io.dazzleduck.sql.flight.server.StatementHandle;
 import io.dazzleduck.sql.http.server.model.HttpConfig;
@@ -11,14 +9,18 @@ import io.dazzleduck.sql.http.server.model.QueryRequest;
 import io.helidon.http.Status;
 import io.helidon.webserver.http.ServerRequest;
 import io.helidon.webserver.http.ServerResponse;
-import org.apache.arrow.flight.FlightProducer;
-import org.apache.arrow.flight.Ticket;
+import org.apache.arrow.flight.FlightRuntimeException;
+import org.apache.arrow.flight.FlightStatusCode;
 import org.apache.arrow.flight.sql.impl.FlightSql;
+
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 
 public class QueryService extends AbstractQueryBasedService {
 
-    private final FlightProducer flightProducer;
+    private final HttpFlightAdaptor httpFlightAdaptor;
     private final String producerId;
     private final HttpConfig httpConfig;
 
@@ -27,7 +29,7 @@ public class QueryService extends AbstractQueryBasedService {
     }
 
     public QueryService(HttpFlightAdaptor httpFlightAdaptor, HttpConfig httpConfig) {
-        this.flightProducer = httpFlightAdaptor;
+        this.httpFlightAdaptor = httpFlightAdaptor;
         this.producerId = httpFlightAdaptor.getProducerId();
         this.httpConfig = httpConfig;
     }
@@ -37,37 +39,79 @@ public class QueryService extends AbstractQueryBasedService {
                                   ServerResponse response,
                                   QueryRequest query) {
         var context = ControllerService.createContext(request);
-        OutputStreamServerStreamListener listener = null;
         try {
             var id = query.id() == null ? StatementHandle.nextStatementId() : query.id();
             var statementHandle = StatementHandle.newStatementHandle(id, query.query(), producerId, -1);
             var ticket = createTicket(statementHandle);
-            listener = new OutputStreamServerStreamListener(response);
-            flightProducer.getStream(context, ticket, listener);
-            listener.waitForEnd(httpConfig.getQueryTimeoutMs());
+
+            logger.atDebug().log("Calling getStreamStatementDirect for query: {}", query.query());
+            var future = httpFlightAdaptor.getStreamStatementDirect(ticket, context, () -> response.outputStream());
+
+            logger.atDebug().log("Waiting for future.get() with timeout {}ms", httpConfig.getQueryTimeoutMs());
+            future.get(httpConfig.getQueryTimeoutMs(), TimeUnit.MILLISECONDS);
+            logger.atDebug().log("future.get() completed successfully");
+
+        } catch (TimeoutException e) {
+            logger.atError().log("Query execution timeout after {}ms", httpConfig.getQueryTimeoutMs());
+            if (!response.isSent()) {
+                response.status(Status.GATEWAY_TIMEOUT_504);
+                response.send("Query execution timeout");
+            }
         } catch (InterruptedException e) {
-            Thread.currentThread().interrupt(); // Restore interrupt status
+            Thread.currentThread().interrupt();
             logger.atError().setCause(e).log("Query execution interrupted");
-            String errorMsg = "Query execution interrupted";
-            response.status(Status.INTERNAL_SERVER_ERROR_500);
-            response.send(errorMsg);
+            if (!response.isSent()) {
+                response.status(Status.INTERNAL_SERVER_ERROR_500);
+                response.send("Query execution interrupted");
+            }
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            logger.atError().setCause(cause).log("Error executing query");
+            if (!response.isSent()) {
+                handleError(response, cause);
+            }
         } catch (Exception e) {
             logger.atError().setCause(e).log("Error sending query result");
-            String errorMsg = e.getMessage() != null ? e.getMessage() : "Internal server error";
-            response.status(Status.INTERNAL_SERVER_ERROR_500);
-            response.send(errorMsg);
-        } finally {
-            // Ensure listener is properly completed even on exception
-            if (listener != null && !listener.isCompleted()) {
-                listener.forceComplete();
+            if (!response.isSent()) {
+                handleError(response, e);
             }
         }
     }
 
-    private Ticket createTicket(StatementHandle statementHandle) throws JsonProcessingException {
+    private void handleError(ServerResponse response, Throwable cause) {
+        String errorMsg = cause.getMessage() != null ? cause.getMessage() : "Internal server error";
+        Status httpStatus = Status.INTERNAL_SERVER_ERROR_500;
+
+        if (cause instanceof FlightRuntimeException flightEx) {
+            FlightStatusCode statusCode = flightEx.status().code();
+            errorMsg = flightEx.status().description() != null
+                    ? flightEx.status().description()
+                    : errorMsg;
+            httpStatus = mapFlightStatusToHttp(statusCode);
+        }
+
+        response.status(httpStatus);
+        response.send(errorMsg);
+    }
+
+    private Status mapFlightStatusToHttp(FlightStatusCode statusCode) {
+        return switch (statusCode) {
+            case OK -> Status.OK_200;
+            case INVALID_ARGUMENT -> Status.BAD_REQUEST_400;
+            case UNAUTHENTICATED -> Status.UNAUTHORIZED_401;
+            case UNAUTHORIZED -> Status.FORBIDDEN_403;
+            case NOT_FOUND -> Status.NOT_FOUND_404;
+            case TIMED_OUT -> Status.GATEWAY_TIMEOUT_504;
+            case ALREADY_EXISTS -> Status.CONFLICT_409;
+            case UNIMPLEMENTED -> Status.NOT_IMPLEMENTED_501;
+            case UNAVAILABLE -> Status.SERVICE_UNAVAILABLE_503;
+            default -> Status.INTERNAL_SERVER_ERROR_500;
+        };
+    }
+
+    private FlightSql.TicketStatementQuery createTicket(StatementHandle statementHandle) throws JsonProcessingException {
         var builder = FlightSql.TicketStatementQuery.newBuilder();
         builder.setStatementHandle(ByteString.copyFrom(MAPPER.writeValueAsBytes(statementHandle)));
-        var request = builder.build();
-        return new Ticket(Any.pack(request).toByteArray());
+        return builder.build();
     }
 }
