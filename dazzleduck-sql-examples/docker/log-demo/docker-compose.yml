@@ -7,7 +7,7 @@ services:
       - "59307:59307"
     working_dir: /workspace
     volumes:
-      - ./warehouse:/workspace/warehouse
+      - ../../../warehouse:/workspace/warehouse
     networks:
       - dazzleduck-net
     healthcheck:
