@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   dazzleduck-server:
     image: dazzleduck/dazzleduck:latest
@@ -10,7 +8,6 @@ services:
     working_dir: /workspace
     volumes:
       - ./warehouse:/workspace/warehouse
-      - ./loglake_data:/workspace/loglake_data  # Add this volume mapping
     networks:
       - dazzleduck-net
     healthcheck:
