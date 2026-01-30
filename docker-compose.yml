@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  dazzleduck-server:
+    image: dazzleduck/dazzleduck:latest
+    container_name: dazzleduck-server
+    ports:
+      - "8081:8081"
+      - "59307:59307"
+    working_dir: /workspace
+    volumes:
+      - ./warehouse:/workspace/warehouse
+      - ./loglake_data:/workspace/loglake_data  # Add this volume mapping
+    networks:
+      - dazzleduck-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://dazzleduck-server:8081/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  dazzleduck-logger:
+    image: dazzleduck/dazzleduck:latest
+    container_name: dazzleduck-logger
+    command:
+      - "io.dazzleduck.sql.examples.logger.Main"
+    environment:
+      - dazzleduck.server.url=http://dazzleduck-server:8081
+    depends_on:
+      dazzleduck-server:
+        condition: service_healthy
+    networks:
+      - dazzleduck-net
+    restart: on-failure
+
+  dazzleduck-metric:
+    image: dazzleduck/dazzleduck:latest
+    container_name: dazzleduck-metric
+    command:
+      - "io.dazzleduck.sql.examples.metric.Main"
+    environment:
+      - dazzleduck.server.url=http://dazzleduck-server:8081
+    depends_on:
+      dazzleduck-server:
+        condition: service_healthy
+    networks:
+      - dazzleduck-net
+    restart: on-failure
+
+networks:
+  dazzleduck-net:
+    driver: bridge
+    name: dazzleduck-network
