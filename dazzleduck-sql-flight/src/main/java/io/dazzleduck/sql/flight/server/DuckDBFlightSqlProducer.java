@@ -70,7 +70,7 @@ import static org.duckdb.DuckDBConnection.DEFAULT_SCHEMA;
  * and available in the header. More options will be supported in the future version.
  * Future implementation note for statement we check if its SET or RESET statement and based on that use cookies to set unset the values
  */
-public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable, HttpFlightAdaptor, SqlProducerMBean {
+public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProducerMBean {
 
     public static final String TEMP_WRITE_FORMAT = "arrow";
     public static final IngestionConfig DEFAULT_INGESTION_CONFIG = new IngestionConfig(1024 * 1024,

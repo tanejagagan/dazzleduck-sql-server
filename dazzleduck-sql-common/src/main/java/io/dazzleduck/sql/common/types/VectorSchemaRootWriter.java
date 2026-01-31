@@ -50,10 +50,10 @@ public class VectorSchemaRootWriter {
         if (type instanceof ArrowType.Int) {
             ArrowType.Int intType = (ArrowType.Int) type;
             if (intType.getBitWidth() == 32) return new VectorWriter.IntVectorWriter();
-            else if (intType.getBitWidth() == 64) return new VectorWriter.BigVectorWriter();
+            else if (intType.getBitWidth() == 64) return new VectorWriter.BigIntVectorWriter();
             else throw new UnsupportedOperationException("Unsupported int bit width: " + intType.getBitWidth());
         } else if (type instanceof ArrowType.FloatingPoint) {
-            return new VectorWriter.FloatVectorWriter();
+            return new VectorWriter.Float8VectorWriter();
         } else if (type instanceof ArrowType.Utf8) {
             return new VectorWriter.VarCharVectorWriter();
         } else if (type instanceof ArrowType.Timestamp) {
@@ -66,7 +66,7 @@ public class VectorSchemaRootWriter {
         } else if (type instanceof ArrowType.Date) {
             ArrowType.Date dateType = (ArrowType.Date) type;
             if (dateType.getUnit() == DateUnit.DAY) return new VectorWriter.DateDayVectorWriter();
-            else return new VectorWriter.DateMilliVectorVectorWriter();
+            else return new VectorWriter.DateMilliVectorWriter();
         } else if (type instanceof ArrowType.Decimal) {
             ArrowType.Decimal decimalType = (ArrowType.Decimal) type;
             if (decimalType.getBitWidth() == 128) return new VectorWriter.DecimalVectorWriter();
