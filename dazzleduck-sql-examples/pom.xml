@@ -10,6 +10,10 @@
     </parent>
 
     <artifactId>dazzleduck-sql-examples</artifactId>
+    <packaging>jar</packaging>
+
+    <name>DazzleDuck SQL Examples</name>
+    <description>Example applications for DazzleDuck SQL</description>
 
     <properties>
         <maven.compiler.source>21</maven.compiler.source>
@@ -18,17 +22,11 @@
     </properties>
 
     <dependencies>
-        <!--  DazzleDuck Runtime  -->
+        <!-- DazzleDuck Runtime - EXCLUDE slf4j-simple -->
         <dependency>
             <groupId>io.dazzleduck.sql</groupId>
             <artifactId>dazzleduck-sql-runtime</artifactId>
-            <version>0.0.17</version>
-        </dependency>
-        <!--  DazzleDuck Logger  -->
-        <dependency>
-            <groupId>io.dazzleduck.sql</groupId>
-            <artifactId>dazzleduck-sql-logger</artifactId>
-            <version>0.0.17</version>
+            <version>${project.version}</version>
             <exclusions>
                 <exclusion>
                     <groupId>org.slf4j</groupId>
@@ -36,12 +34,97 @@
                 </exclusion>
             </exclusions>
         </dependency>
-        <!-- DazzleDuck Micrometer -->
+
+        <!-- DazzleDuck Logback Appender - EXCLUDE slf4j-simple -->
+        <dependency>
+            <groupId>io.dazzleduck.sql</groupId>
+            <artifactId>dazzleduck-sql-logback</artifactId>
+            <version>${project.version}</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>slf4j-simple</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
+        <!-- Logback Classic (SLF4J implementation) - This is what we want! -->
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <version>1.5.16</version>
+        </dependency>
+
+        <!-- DazzleDuck Micrometer - EXCLUDE slf4j-simple -->
         <dependency>
             <groupId>io.dazzleduck.sql</groupId>
             <artifactId>dazzleduck-sql-micrometer</artifactId>
-            <version>0.0.17</version>
+            <version>${project.version}</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>slf4j-simple</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
+        <!-- Also exclude the old dazzleduck logger provider -->
+        <dependency>
+            <groupId>io.dazzleduck.sql</groupId>
+            <artifactId>dazzleduck-sql-client</artifactId>
+            <version>${project.version}</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>slf4j-simple</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>io.dazzleduck.sql</groupId>
+                    <artifactId>dazzleduck-sql-logger</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
     </dependencies>
 
+    <build>
+        <plugins>
+            <!-- Copy dependencies to target/lib folder -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <version>3.6.1</version>
+                <executions>
+                    <execution>
+                        <id>copy-dependencies</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>copy-dependencies</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.directory}/lib</outputDirectory>
+                            <includeScope>compile</includeScope>
+                            <!-- Exclude conflicting SLF4J providers -->
+                            <excludeArtifactIds>slf4j-simple,dazzleduck-sql-logger</excludeArtifactIds>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Create JAR with classpath manifest -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.3.0</version>
+                <configuration>
+                    <archive>
+                        <manifest>
+                            <addClasspath>true</addClasspath>
+                            <classpathPrefix>lib/</classpathPrefix>
+                            <mainClass>io.dazzleduck.sql.examples.logger.Main</mainClass>
+                        </manifest>
+                    </archive>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>

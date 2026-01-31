@@ -1,5 +1,9 @@
 package io.dazzleduck.sql.examples.logger;
 
+import io.dazzleduck.sql.logback.LogBuffer;
+import io.dazzleduck.sql.logback.LogForwarder;
+import io.dazzleduck.sql.logback.LogForwarderConfig;
+import io.dazzleduck.sql.logback.LogForwardingAppender;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -10,6 +14,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.Executors;
@@ -20,27 +26,23 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Professional continuous logging demo application for DazzleDuck Logger.
- *
- * <p>This application generates realistic log messages at configurable intervals
- * using the standard SLF4J API. The dazzleduck-sql-logger library acts as the
- * SLF4J provider and automatically sends logs to the DazzleDuck server.</p>
- *
- * <p>Features:</p>
- * <ul>
- *   <li>Continuous log generation at 1-second intervals</li>
- *   <li>Multiple log levels (TRACE, DEBUG, INFO, WARN, ERROR)</li>
- *   <li>MDC context support for request tracing</li>
- *   <li>Marker-based log categorization</li>
- *   <li>Simulated real-world scenarios</li>
- *   <li>Graceful shutdown handling</li>
- *   <li>Statistics tracking</li>
- * </ul>
- *
- * @author DazzleDuck Team
- * @version 1.0.0
  */
 public class Main {
 
+    // ============================================================================
+    // CRITICAL: Configure LogForwardingAppender BEFORE any loggers are created!
+    // This static initializer block runs before the Logger fields are initialized.
+    // ============================================================================
+    private static final int MAX_BUFFER_SIZE = 10000;
+    private static final boolean FORWARDING_ENABLED = true;
+
+    static {
+        System.out.println("[INIT] Configuring LogForwardingAppender in static initializer...");
+        LogForwardingAppender.configure(MAX_BUFFER_SIZE, FORWARDING_ENABLED);
+        System.out.println("[INIT] LogForwardingAppender configured. Buffer ready for use.");
+    }
+
+    // Now it's safe to create loggers - they will use the configured appender
     private static final Logger log = LoggerFactory.getLogger(Main.class);
     private static final Logger auditLog = LoggerFactory.getLogger("AUDIT");
     private static final Logger performanceLog = LoggerFactory.getLogger("PERFORMANCE");
@@ -54,9 +56,17 @@ public class Main {
     private static final Marker API = MarkerFactory.getMarker("API");
     private static final Marker BUSINESS = MarkerFactory.getMarker("BUSINESS");
 
-    // Configuration
-    private static final long LOG_INTERVAL_MS = 1000; // 1 second
-    private static final String DEFAULT_SERVER_URL = "http://dazzleduck-server:8081";
+    // Configuration - can be overridden via environment variables
+    private static final long LOG_INTERVAL_MS = 1000;
+
+    // Default configuration values
+    private static final String DEFAULT_BASE_URL = getEnv("DAZZLEDUCK_BASE_URL", "http://dazzleduck-server:8081");
+    private static final String DEFAULT_USERNAME = getEnv("DAZZLEDUCK_USERNAME", "admin");
+    private static final String DEFAULT_PASSWORD = getEnv("DAZZLEDUCK_PASSWORD", "admin");
+    private static final String DEFAULT_TARGET_PATH = getEnv("DAZZLEDUCK_TARGET_PATH", "log");
+    private static final String DEFAULT_APPLICATION_ID = getEnv("APPLICATION_ID", "logger01");
+    private static final String DEFAULT_APPLICATION_NAME = getEnv("APPLICATION_NAME", "example-dazzleduck-logger");
+    private static final String DEFAULT_APPLICATION_HOST = getEnv("APPLICATION_HOST", "dazzleduck-server");
 
     // State management
     private static final AtomicBoolean running = new AtomicBoolean(true);
@@ -64,6 +74,10 @@ public class Main {
     private static final AtomicLong errorCount = new AtomicLong(0);
     private static final Random random = new Random();
     private static Instant startTime;
+
+    // LogForwarder instance
+    private static LogForwarder logForwarder;
+    private static LogBuffer sharedBuffer;
 
     // Simulated data
     private static final String[] USERS = {
@@ -93,6 +107,31 @@ public class Main {
 
     public static void main(String[] args) {
         printBanner();
+
+        // Step 1: Get the shared buffer (already configured in static initializer)
+        System.out.println("[MAIN] Getting shared buffer from LogForwardingAppender...");
+        sharedBuffer = LogForwardingAppender.getBuffer();
+        System.out.println("[MAIN] Shared buffer obtained: " + sharedBuffer);
+        System.out.println("[MAIN] Buffer size at start: " + sharedBuffer.getSize());
+
+        // Step 2: Create a test log to verify buffer is working
+        log.info("Test log entry - verifying buffer capture");
+        System.out.println("[MAIN] Buffer size after test log: " + sharedBuffer.getSize());
+
+        // Step 3: Initialize LogForwarder with the shared buffer
+        try {
+            initializeLogForwarder();
+        } catch (Exception e) {
+            System.err.println("[MAIN] Failed to create LogForwarder: " + e.getMessage());
+            e.printStackTrace();
+            return;
+        }
+
+        // Verify buffer sharing
+        System.out.println("[MAIN] Verifying buffer sharing...");
+        System.out.println("[MAIN] LogForwarder buffer: " + logForwarder.getBuffer());
+        System.out.println("[MAIN] Same buffer instance: " + (sharedBuffer == logForwarder.getBuffer()));
+
         setupShutdownHook();
         startTime = Instant.now();
 
@@ -103,6 +142,8 @@ public class Main {
         });
 
         log.info("DazzleDuck Logging Demo started - generating logs every {} ms", LOG_INTERVAL_MS);
+        log.info("LogForwarder running: {}, Buffer size: {}",
+                logForwarder.isRunning(), logForwarder.getBufferSize());
 
         // Schedule continuous log generation
         scheduler.scheduleAtFixedRate(
@@ -120,6 +161,14 @@ public class Main {
                 TimeUnit.SECONDS
         );
 
+        // Schedule buffer check every 5 seconds (for debugging)
+        scheduler.scheduleAtFixedRate(
+                Main::checkBuffer,
+                5,
+                5,
+                TimeUnit.SECONDS
+        );
+
         // Keep the main thread alive
         try {
             while (running.get()) {
@@ -131,6 +180,80 @@ public class Main {
         } finally {
             shutdown(scheduler);
         }
+    }
+
+    /**
+     * Initialize the LogForwarder with proper buffer sharing.
+     */
+    private static void initializeLogForwarder() {
+        System.out.println("[INIT] Building LogForwarderConfig...");
+
+        // Build configuration
+        LogForwarderConfig config = LogForwarderConfig.builder()
+                .baseUrl(DEFAULT_BASE_URL)
+                .username(DEFAULT_USERNAME)
+                .password(DEFAULT_PASSWORD)
+                .targetPath(DEFAULT_TARGET_PATH)
+                .httpClientTimeout(Duration.ofSeconds(30))
+                .maxBufferSize(MAX_BUFFER_SIZE)
+                .pollInterval(Duration.ofSeconds(1))
+                .minBatchSize(1024 * 1024)          // 1 MB
+                .maxBatchSize(16 * 1024 * 1024)     // 16 MB
+                .maxSendInterval(Duration.ofSeconds(1))
+                .maxInMemorySize(10 * 1024 * 1024)  // 10 MB
+                .maxOnDiskSize(1024 * 1024 * 1024L) // 1 GB
+                .retryCount(3)
+                .retryIntervalMillis(1000)
+                .project(List.of(
+                        "*",
+                        "'" + DEFAULT_APPLICATION_HOST + "' AS application_host",
+                        "'" + DEFAULT_APPLICATION_ID + "' AS application_id",
+                        "'" + DEFAULT_APPLICATION_NAME + "' AS application_name"
+                ))
+                .partitionBy(List.of())
+                .claims(Map.of(
+                        "ingestion_queue", DEFAULT_TARGET_PATH,
+                        "application_id", DEFAULT_APPLICATION_ID,
+                        "application_name", DEFAULT_APPLICATION_NAME,
+                        "application_host", DEFAULT_APPLICATION_HOST
+                ))
+                .enabled(FORWARDING_ENABLED)
+                .build();
+
+        System.out.println("[INIT] Config built. Creating LogForwarder with shared buffer...");
+        System.out.println("[INIT] baseUrl: " + DEFAULT_BASE_URL);
+        System.out.println("[INIT] targetPath: " + DEFAULT_TARGET_PATH);
+
+        // Create LogForwarder with the SHARED buffer from LogForwardingAppender
+        logForwarder = new LogForwarder(config, sharedBuffer);
+
+        System.out.println("[INIT] LogForwarder created. Starting...");
+
+        // Start the forwarder
+        logForwarder.start();
+
+        System.out.println("[INIT] LogForwarder started successfully!");
+        System.out.println("[INIT] LogForwarder.isRunning(): " + logForwarder.isRunning());
+    }
+
+    /**
+     * Periodic check of buffer status for debugging.
+     */
+    private static void checkBuffer() {
+        if (sharedBuffer != null) {
+            int size = sharedBuffer.getSize();
+            if (size > 0) {
+                System.out.println("[BUFFER] Current buffer size: " + size + " entries waiting to be sent");
+            }
+        }
+    }
+
+    /**
+     * Get environment variable with default fallback.
+     */
+    private static String getEnv(String name, String defaultValue) {
+        String value = System.getenv(name);
+        return (value != null && !value.isEmpty()) ? value : defaultValue;
     }
 
     /**
@@ -146,33 +269,25 @@ public class Main {
             String sessionId = generateSessionId();
             String user = getRandomUser();
 
-            // Set MDC context for request tracing
             MDC.put("request_id", requestId);
             MDC.put("session_id", sessionId);
             MDC.put("user_id", user);
             MDC.put("instance_id", "app-instance-01");
 
             try {
-                // Randomly select scenario type
                 int scenario = random.nextInt(100);
 
                 if (scenario < 40) {
-                    // 40% - Normal API request flow
                     simulateApiRequest(user);
                 } else if (scenario < 60) {
-                    // 20% - Database operation
                     simulateDatabaseOperation();
                 } else if (scenario < 75) {
-                    // 15% - User action audit
                     simulateUserAction(user);
                 } else if (scenario < 85) {
-                    // 10% - Performance monitoring
                     simulatePerformanceLog();
                 } else if (scenario < 95) {
-                    // 10% - Security event
                     simulateSecurityEvent(user);
                 } else {
-                    // 5% - Error scenario
                     simulateErrorScenario();
                 }
 
@@ -188,9 +303,6 @@ public class Main {
         }
     }
 
-    /**
-     * Simulates an API request with timing and response logging.
-     */
     private static void simulateApiRequest(String user) {
         String endpoint = getRandomEndpoint();
         String method = getRandomHttpMethod();
@@ -219,9 +331,6 @@ public class Main {
         }
     }
 
-    /**
-     * Simulates database operations with query timing.
-     */
     private static void simulateDatabaseOperation() {
         String operation = getRandomDatabaseOperation();
         String table = getRandomTable();
@@ -243,9 +352,6 @@ public class Main {
         }
     }
 
-    /**
-     * Simulates user action audit logging.
-     */
     private static void simulateUserAction(String user) {
         String action = getRandomAction();
         String ipAddress = generateIpAddress();
@@ -264,9 +370,6 @@ public class Main {
         }
     }
 
-    /**
-     * Simulates performance monitoring logs.
-     */
     private static void simulatePerformanceLog() {
         int cpuUsage = random.nextInt(100);
         int memoryUsage = random.nextInt(100);
@@ -290,9 +393,6 @@ public class Main {
         }
     }
 
-    /**
-     * Simulates security-related events.
-     */
     private static void simulateSecurityEvent(String user) {
         int eventType = random.nextInt(100);
         String ipAddress = generateIpAddress();
@@ -307,37 +407,29 @@ public class Main {
         } else if (eventType < 90) {
             log.warn(SECURITY, "Failed login attempt for user {} from {}", user, ipAddress);
         } else if (eventType < 95) {
-            log.warn(SECURITY, "Suspicious activity detected for user {} - multiple failed attempts",
-                    user);
+            log.warn(SECURITY, "Suspicious activity detected for user {} - multiple failed attempts", user);
         } else {
             log.warn(SECURITY, "Rate limit exceeded for IP {}", ipAddress);
         }
     }
 
-    /**
-     * Simulates error scenarios with stack traces.
-     */
     private static void simulateErrorScenario() {
         int errorType = random.nextInt(5);
 
         try {
             switch (errorType) {
-                case 0:
-                    throw new IllegalArgumentException("Invalid parameter: userId cannot be null");
-                case 1:
-                    throw new IllegalStateException("Service temporarily unavailable");
-                case 2:
+                case 0 -> throw new IllegalArgumentException("Invalid parameter: userId cannot be null");
+                case 1 -> throw new IllegalStateException("Service temporarily unavailable");
+                case 2 -> {
                     try {
                         throw new java.sql.SQLException("Connection timeout after 30000ms");
                     } catch (Exception inner) {
                         throw new RuntimeException("Database operation failed", inner);
                     }
-                case 3:
-                    throw new java.util.concurrent.TimeoutException("Request timed out after 60 seconds");
-                case 4:
-                    throw new SecurityException("Access denied: insufficient permissions");
-                default:
-                    throw new RuntimeException("Unexpected error occurred");
+                }
+                case 3 -> throw new java.util.concurrent.TimeoutException("Request timed out after 60 seconds");
+                case 4 -> throw new SecurityException("Access denied: insufficient permissions");
+                default -> throw new RuntimeException("Unexpected error occurred");
             }
         } catch (Exception e) {
             log.error("Error occurred during request processing: {}", e.getMessage(), e);
@@ -345,14 +437,14 @@ public class Main {
         }
     }
 
-    /**
-     * Prints current statistics about log generation.
-     */
     private static void printStatistics() {
         Duration uptime = Duration.between(startTime, Instant.now());
         long totalLogs = totalLogsGenerated.get();
         long errors = errorCount.get();
         double logsPerSecond = totalLogs / Math.max(1, uptime.getSeconds());
+
+        int bufferSize = sharedBuffer != null ? sharedBuffer.getSize() : 0;
+        boolean forwarderRunning = logForwarder != null && logForwarder.isRunning();
 
         System.out.println();
         System.out.println("┌─────────────────────────────────────────────────┐");
@@ -362,32 +454,40 @@ public class Main {
         System.out.printf("│  Total Logs:       %,26d  │%n", totalLogs);
         System.out.printf("│  Errors:           %,26d  │%n", errors);
         System.out.printf("│  Logs/Second:      %26.2f  │%n", logsPerSecond);
+        System.out.printf("│  Buffer Size:      %,26d  │%n", bufferSize);
+        System.out.printf("│  Forwarder Active: %26s  │%n", forwarderRunning ? "YES" : "NO");
         System.out.printf("│  Timestamp:        %26s  │%n",
                 LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
         System.out.println("└─────────────────────────────────────────────────┘");
         System.out.println();
 
-        log.info("Statistics: uptime={}, totalLogs={}, errors={}, logsPerSecond={:.2f}",
-                formatDuration(uptime), totalLogs, errors, logsPerSecond);
+        log.info("Statistics: uptime={}, totalLogs={}, errors={}, logsPerSecond={}, bufferSize={}",
+                formatDuration(uptime), totalLogs, errors, String.format("%.2f", logsPerSecond), bufferSize);
     }
 
-    /**
-     * Sets up graceful shutdown handling.
-     */
     private static void setupShutdownHook() {
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             System.out.println();
-            System.out.println("Shutdown signal received...");
+            System.out.println("[SHUTDOWN] Shutdown signal received...");
             running.set(false);
             log.info("Application shutdown initiated");
+
+            if (logForwarder != null) {
+                System.out.println("[SHUTDOWN] Waiting for logs to flush...");
+                try {
+                    Thread.sleep(2000); // Give time for final logs
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                System.out.println("[SHUTDOWN] Buffer size before close: " + sharedBuffer.getSize());
+                logForwarder.close();
+                System.out.println("[SHUTDOWN] LogForwarder closed.");
+            }
         }, "ShutdownHook"));
     }
 
-    /**
-     * Performs graceful shutdown of the scheduler.
-     */
     private static void shutdown(ScheduledExecutorService scheduler) {
-        System.out.println("Shutting down scheduler...");
+        System.out.println("[SHUTDOWN] Shutting down scheduler...");
         log.info("Shutting down log generator");
 
         scheduler.shutdown();
@@ -401,7 +501,6 @@ public class Main {
             Thread.currentThread().interrupt();
         }
 
-        // Final statistics
         printStatistics();
 
         System.out.println();
@@ -414,11 +513,12 @@ public class Main {
         System.out.println();
 
         log.info("Application shutdown complete. Total logs generated: {}", totalLogsGenerated.get());
+
+        if (logForwarder != null && logForwarder.isRunning()) {
+            logForwarder.close();
+        }
     }
 
-    /**
-     * Prints the application banner.
-     */
     private static void printBanner() {
         System.out.println();
         System.out.println("╔═══════════════════════════════════════════════════════════════╗");
@@ -430,18 +530,20 @@ public class Main {
         System.out.println("║     ██████╔╝██║  ██║███████╗███████╗███████╗███████╗          ║");
         System.out.println("║     ╚═════╝ ╚═╝  ╚═╝╚══════╝╚══════╝╚══════╝╚══════╝          ║");
         System.out.println("║                                                               ║");
-        System.out.println("║                   DAZZLE-DUCK LOGGING DEMO v1.0.0             ║");
+        System.out.println("║              DAZZLE-DUCK LOGGING DEMO v1.0.0                  ║");
+        System.out.println("║                  (Logback Edition)                            ║");
         System.out.println("║                                                               ║");
         System.out.println("╠═══════════════════════════════════════════════════════════════╣");
-        System.out.println("║  Server:     " + String.format("%-49s", DEFAULT_SERVER_URL) + "║");
+        System.out.println("║  Server:     " + String.format("%-49s", DEFAULT_BASE_URL) + "║");
+        System.out.println("║  Target:     " + String.format("%-49s", DEFAULT_TARGET_PATH) + "║");
         System.out.println("║  Interval:   " + String.format("%-49s", LOG_INTERVAL_MS + " ms") + "║");
+        System.out.println("║  Backend:    " + String.format("%-49s", "Logback + LogForwarder") + "║");
         System.out.println("║  Press Ctrl+C to stop                                         ║");
         System.out.println("╚═══════════════════════════════════════════════════════════════╝");
         System.out.println();
     }
 
-    // ======================== Helper Methods ========================
-
+    // Helper methods
     private static String generateRequestId() {
         return "REQ-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
     }
@@ -452,50 +554,28 @@ public class Main {
 
     private static String generateIpAddress() {
         return String.format("%d.%d.%d.%d",
-                random.nextInt(223) + 1,
-                random.nextInt(256),
-                random.nextInt(256),
-                random.nextInt(254) + 1);
+                random.nextInt(223) + 1, random.nextInt(256),
+                random.nextInt(256), random.nextInt(254) + 1);
     }
 
-    private static String getRandomUser() {
-        return USERS[random.nextInt(USERS.length)];
-    }
-
-    private static String getRandomAction() {
-        return ACTIONS[random.nextInt(ACTIONS.length)];
-    }
-
-    private static String getRandomEndpoint() {
-        return ENDPOINTS[random.nextInt(ENDPOINTS.length)];
-    }
-
-    private static String getRandomHttpMethod() {
-        return HTTP_METHODS[random.nextInt(HTTP_METHODS.length)];
-    }
-
-    private static String getRandomDatabaseOperation() {
-        return DATABASE_OPERATIONS[random.nextInt(DATABASE_OPERATIONS.length)];
-    }
-
-    private static String getRandomTable() {
-        return TABLES[random.nextInt(TABLES.length)];
-    }
+    private static String getRandomUser() { return USERS[random.nextInt(USERS.length)]; }
+    private static String getRandomAction() { return ACTIONS[random.nextInt(ACTIONS.length)]; }
+    private static String getRandomEndpoint() { return ENDPOINTS[random.nextInt(ENDPOINTS.length)]; }
+    private static String getRandomHttpMethod() { return HTTP_METHODS[random.nextInt(HTTP_METHODS.length)]; }
+    private static String getRandomDatabaseOperation() { return DATABASE_OPERATIONS[random.nextInt(DATABASE_OPERATIONS.length)]; }
+    private static String getRandomTable() { return TABLES[random.nextInt(TABLES.length)]; }
 
     private static int getRandomStatusCode() {
         int rand = random.nextInt(100);
-        if (rand < 85) return 200;          // 85% success
-        if (rand < 90) return 201;          // 5% created
-        if (rand < 93) return 400;          // 3% bad request
-        if (rand < 96) return 401;          // 3% unauthorized
-        if (rand < 98) return 404;          // 2% not found
-        return 500;                          // 2% server error
+        if (rand < 85) return 200;
+        if (rand < 90) return 201;
+        if (rand < 93) return 400;
+        if (rand < 96) return 401;
+        if (rand < 98) return 404;
+        return 500;
     }
 
     private static String formatDuration(Duration duration) {
-        long hours = duration.toHours();
-        long minutes = duration.toMinutesPart();
-        long seconds = duration.toSecondsPart();
-        return String.format("%02d:%02d:%02d", hours, minutes, seconds);
+        return String.format("%02d:%02d:%02d", duration.toHours(), duration.toMinutesPart(), duration.toSecondsPart());
     }
 }

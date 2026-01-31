@@ -21,8 +21,7 @@ services:
   dazzleduck-logger:
     image: dazzleduck/dazzleduck:latest
     container_name: dazzleduck-logger
-    command:
-      - "io.dazzleduck.sql.examples.logger.Main"
+    command: ["io.dazzleduck.sql.examples.logger.Main"]
     environment:
       - dazzleduck.server.url=http://dazzleduck-server:8081
     depends_on:
@@ -35,8 +34,7 @@ services:
   dazzleduck-metric:
     image: dazzleduck/dazzleduck:latest
     container_name: dazzleduck-metric
-    command:
-      - "io.dazzleduck.sql.examples.metric.Main"
+    command: ["io.dazzleduck.sql.examples.metric.Main"]
     environment:
       - dazzleduck.server.url=http://dazzleduck-server:8081
     depends_on:

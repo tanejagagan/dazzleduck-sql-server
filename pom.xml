@@ -171,49 +171,6 @@
                 </configuration>
             </plugin>
             <plugin>
-                <groupId>com.google.cloud.tools</groupId>
-                <artifactId>jib-maven-plugin</artifactId>
-                <version>3.4.4</version>
-                <configuration>
-                    <containerizingMode>packaged</containerizingMode>
-                    <from>
-                        <image>eclipse-temurin:21-jre-jammy</image>
-                    </from>
-                    <to>
-                        <image>docker.io/dazzleduck/dazzleduck</image>
-                        <tags>
-                            <tag>${project.version}</tag> <!-- Tags the image with your project version -->
-                            <tag>latest</tag> <!-- Adds a 'latest' tag -->
-                        </tags>
-                    </to>
-                    <container>
-                        <mainClass>io.dazzleduck.sql.runtime.Main</mainClass>
-                        <jvmFlags>
-                            <jvmFlag>-Xms512m</jvmFlag>
-                            <jvmFlag>-XX:+UseContainerSupport</jvmFlag>
-                            <jvmFlag>-XX:+UseG1GC</jvmFlag>
-                            <jvmFlag>-XX:+UseStringDeduplication</jvmFlag>
-                            <jvmFlag>-XX:+ExitOnOutOfMemoryError</jvmFlag>
-                            <jvmFlag>--add-opens=java.base/sun.nio.ch=ALL-UNNAMED</jvmFlag>
-                            <jvmFlag>--add-opens=java.base/java.nio=ALL-UNNAMED</jvmFlag>
-                            <jvmFlag>--add-opens=java.base/sun.util.calendar=ALL-UNNAMED</jvmFlag>
-                        </jvmFlags>
-                    </container>
-                    <extraDirectories>
-                        <paths>
-                            <path>
-                                <from>${maven-parent.basedir}/example/data</from>
-                                <into>/data</into>
-                            </path>
-                            <path>
-                                <from>${maven-parent.basedir}/example/startup</from>
-                                <into>/startup</into>
-                            </path>
-                        </paths>
-                    </extraDirectories>
-                </configuration>
-            </plugin>
-            <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-source-plugin</artifactId>
                 <version>3.3.1</version>
@@ -243,20 +200,6 @@
                 <executions>
                     <execution>
                         <id>bundle-javadoc</id>
-                        <phase>verify</phase>
-                        <goals>
-                            <goal>jar</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-source-plugin</artifactId>
-                <version>3.3.1</version>
-                <executions>
-                    <execution>
-                        <id>bundle-sources</id>
                         <phase>verify</phase>
                         <goals>
                             <goal>jar</goal>
