@@ -2,6 +2,7 @@ package io.dazzleduck.sql.http.server;
 
 import com.google.protobuf.Any;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
+import io.dazzleduck.sql.flight.server.HttpFlightAdaptor;
 import io.dazzleduck.sql.flight.server.StatementHandle;
 import io.dazzleduck.sql.http.server.model.Descriptor;
 import io.dazzleduck.sql.http.server.model.PlanResponse;
@@ -9,7 +10,6 @@ import io.dazzleduck.sql.http.server.model.QueryRequest;
 import io.helidon.webserver.http.ServerRequest;
 import io.helidon.webserver.http.ServerResponse;
 import org.apache.arrow.flight.FlightDescriptor;
-import org.apache.arrow.flight.FlightProducer;
 import org.apache.arrow.flight.sql.FlightSqlUtils;
 import org.apache.arrow.flight.sql.impl.FlightSql;
 import org.apache.arrow.memory.BufferAllocator;
@@ -19,11 +19,11 @@ import java.util.ArrayList;
 
 public class PlanningService extends AbstractQueryBasedService implements ParameterUtils {
 
-    private final FlightProducer flightProducer;
+    private final HttpFlightAdaptor httpFlightAdaptor;
     private final FlightToHttpEndpointMapper endpointMapper;
 
-    public PlanningService(FlightProducer flightProducer, FlightToHttpEndpointMapper endpointMapper) {
-        this.flightProducer = flightProducer;
+    public PlanningService(HttpFlightAdaptor httpFlightAdaptor, FlightToHttpEndpointMapper endpointMapper) {
+        this.httpFlightAdaptor = httpFlightAdaptor;
         this.endpointMapper = endpointMapper;
     }
 
@@ -35,8 +35,8 @@ public class PlanningService extends AbstractQueryBasedService implements Parame
             var command = FlightSql.CommandStatementQuery.newBuilder()
                     .setQuery(queryRequest.query())
                     .build();
-            var info = flightProducer.getFlightInfo(context,
-                    FlightDescriptor.command(Any.pack(command).toByteArray()));
+            var flightDescriptor = FlightDescriptor.command(Any.pack(command).toByteArray());
+            var info = httpFlightAdaptor.getFlightInfoStatement(command, context, flightDescriptor);
 
             var result = new ArrayList<PlanResponse>();
             for (var endpoint : info.getEndpoints()) {
@@ -68,4 +68,3 @@ public class PlanningService extends AbstractQueryBasedService implements Parame
         }
     }
 }
-

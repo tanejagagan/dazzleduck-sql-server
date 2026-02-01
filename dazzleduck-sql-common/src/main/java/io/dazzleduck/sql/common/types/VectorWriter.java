@@ -3,8 +3,8 @@ package io.dazzleduck.sql.common.types;
 import org.apache.arrow.vector.*;
 import org.apache.arrow.vector.complex.ListVector;
 import org.apache.arrow.vector.complex.MapVector;
-import org.apache.arrow.vector.complex.impl.UnionListWriter;
 import org.apache.arrow.vector.complex.impl.UnionMapWriter;
+import org.apache.arrow.vector.complex.writer.BaseWriter;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -24,7 +24,7 @@ public interface VectorWriter<V> {
                 return;
             }
             var v = (String) value;
-            varCharVector.set(index, v.getBytes(StandardCharsets.UTF_8));
+            varCharVector.setSafe(index, v.getBytes(StandardCharsets.UTF_8));
         }
     }
 
@@ -36,11 +36,11 @@ public interface VectorWriter<V> {
                 return;
             }
             var v = (Integer) value;
-            intVector.set(index, v);
+            intVector.setSafe(index, v);
         }
     }
 
-    class BigVectorWriter implements VectorWriter<BigIntVector> {
+    class BigIntVectorWriter implements VectorWriter<BigIntVector> {
         @Override
         public void write(BigIntVector bigIntVector, int index, Object value) {
             if (value == null) {
@@ -48,11 +48,11 @@ public interface VectorWriter<V> {
                 return;
             }
             var v = (Long) value;
-            bigIntVector.set(index, v);
+            bigIntVector.setSafe(index, v);
         }
     }
 
-    class FloatVectorWriter implements VectorWriter<Float8Vector> {
+    class Float8VectorWriter implements VectorWriter<Float8Vector> {
         @Override
         public void write(Float8Vector float8Vector, int index, Object value) {
             if (value == null) {
@@ -60,7 +60,7 @@ public interface VectorWriter<V> {
                 return;
             }
             var v = (Double) value;
-            float8Vector.set(index, v);
+            float8Vector.setSafe(index, v);
         }
     }
 
@@ -72,7 +72,7 @@ public interface VectorWriter<V> {
                 return;
             }
             var v = (Long) value;
-            timeStampMilliTZVector.set(index, v);
+            timeStampMilliTZVector.setSafe(index, v);
         }
     }
 
@@ -84,7 +84,7 @@ public interface VectorWriter<V> {
                 return;
             }
             var v = (Long) value;
-            timeStampMilliVector.set(index, v);
+            timeStampMilliVector.setSafe(index, v);
         }
     }
 
@@ -96,7 +96,7 @@ public interface VectorWriter<V> {
                 return;
             }
             var v = (BigDecimal) value;
-            decimalVector.set(index, v);
+            decimalVector.setSafe(index, v);
         }
     }
 
@@ -108,11 +108,11 @@ public interface VectorWriter<V> {
                 return;
             }
             var v = (BigDecimal) value;
-            decimal256Vector.set(index, v);
+            decimal256Vector.setSafe(index, v);
         }
     }
 
-    class DateMilliVectorVectorWriter implements VectorWriter<DateMilliVector> {
+    class DateMilliVectorWriter implements VectorWriter<DateMilliVector> {
         @Override
         public void write(DateMilliVector dateMilliVector, int index, Object value) {
             if (value == null) {
@@ -120,7 +120,7 @@ public interface VectorWriter<V> {
                 return;
             }
             var v = (Long) value;
-            dateMilliVector.set(index, v);
+            dateMilliVector.setSafe(index, v);
         }
     }
 
@@ -132,7 +132,7 @@ public interface VectorWriter<V> {
                 return;
             }
             var v = (Integer) value;
-            dateDayVector.set(index, v);
+            dateDayVector.setSafe(index, v);
         }
     }
 
@@ -144,12 +144,12 @@ public interface VectorWriter<V> {
         }
 
         public void write(ListVector listVector, int index, Object value) {
-            UnionListWriter writer = listVector.getWriter();
+            BaseWriter.ListWriter writer = listVector.getWriter();
+            writer.setPosition(index);
             if (value == null) {
                 writer.writeNull();
                 return;
             }
-            writer.setPosition(index);
             writer.startList();
             @SuppressWarnings("unchecked")
             var v = (List<Object>) value;
@@ -173,6 +173,10 @@ public interface VectorWriter<V> {
         public void write(MapVector mapVector, int index, Object value) {
             UnionMapWriter mapWriter = new UnionMapWriter(mapVector);
             mapWriter.setPosition(index);
+            if (value == null) {
+                mapWriter.writeNull();
+                return;
+            }
             mapWriter.startMap();
             @SuppressWarnings("unchecked")
             var m = (Map<Object, Object>) value;

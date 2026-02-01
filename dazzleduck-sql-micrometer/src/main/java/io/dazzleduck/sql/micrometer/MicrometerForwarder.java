@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *     .baseUrl("http://localhost:8081")
  *     .username("admin")
  *     .password("admin")
- *     .targetPath("metrics")
+ *     .ingestionQueue("metrics")
  *     .build();
  *
  * MicrometerForwarder forwarder = MicrometerForwarder.createAndStart(config);
@@ -73,8 +73,8 @@ public final class MicrometerForwarder implements Closeable {
         // Create composite registry (ArrowMicroMeterRegistry will be added in start())
         this.registry = new CompositeMeterRegistry();
 
-        logger.info("MicrometerForwarder initialized with baseUrl={}, targetPath={}, stepInterval={}",
-                config.baseUrl(), config.targetPath(), config.stepInterval());
+        logger.info("MicrometerForwarder initialized with baseUrl={}, ingestionQueue={}, stepInterval={}",
+                config.baseUrl(), config.ingestionQueue(), config.stepInterval());
     }
 
     /**
@@ -98,7 +98,7 @@ public final class MicrometerForwarder implements Closeable {
                     config.baseUrl(),
                     config.username(),
                     config.password(),
-                    config.targetPath(),
+                    config.ingestionQueue(),
                     config.httpClientTimeout(),
                     config.minBatchSize(),
                     config.maxBatchSize(),

@@ -120,13 +120,13 @@ public class ArrowSimpleLogger extends LegacyAbstractLogger implements AutoClose
         creatingProducer.set(Boolean.TRUE);
         try {
             Config http = config.getConfig(ConfigConstants.HTTP_PREFIX);
-            String targetPath = http.getString(ConfigConstants.TARGET_PATH_KEY);
+            String ingestionQueue = http.getString(ConfigConstants.INGESTION_QUEUE_KEY);
             return new HttpArrowProducer(
                     schema,
                     http.getString(ConfigConstants.BASE_URL_KEY),
                     http.getString(ConfigConstants.USERNAME_KEY),
                     http.getString(ConfigConstants.PASSWORD_KEY),
-                    targetPath,
+                    ingestionQueue,
                     Duration.ofMillis(http.getLong(ConfigConstants.HTTP_CLIENT_TIMEOUT_MS_KEY)),
                     config.getLong(ConfigConstants.MIN_BATCH_SIZE_KEY),
                     config.getLong(ConfigConstants.MAX_BATCH_SIZE_KEY),

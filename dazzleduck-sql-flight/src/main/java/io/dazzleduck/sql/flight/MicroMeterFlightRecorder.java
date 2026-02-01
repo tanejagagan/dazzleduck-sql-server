@@ -4,229 +4,370 @@ import io.dazzleduck.sql.flight.model.StatementAudit;
 import io.dazzleduck.sql.flight.server.DuckDBFlightSqlProducer.CacheKey;
 import io.dazzleduck.sql.flight.server.StatementContext;
 import io.micrometer.core.instrument.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.slf4j.MarkerFactory;
 
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.function.LongSupplier;
 
+/**
+ * Flight metrics recorder implementing a dual-stream pattern for real-time and time-series monitoring.
+ * <p>
+ * Architecture Overview:
+ * - LongAdders serve as the real-time source of truth for UI and operational queries
+ * - FunctionCounters bridge LongAdders to Micrometer for external monitoring (Prometheus, Grafana)
+ * <p>
+ * Why This Pattern?
+ * Micrometer Counters buffer metrics for time-series systems (typically 1-minute intervals).
+ * This causes unacceptable delays for real-time dashboards. By maintaining LongAdders as the
+ * source of truth and exposing them via FunctionCounters, we achieve:
+ * - Immediate metric updates for operational dashboards
+ * - Proper time-series formatting for monitoring systems
+ * - Zero redundant storage (FunctionCounter reads directly from LongAdder)
+ */
 public class MicroMeterFlightRecorder implements FlightRecorder {
 
     private final MeterRegistry registry;
     private static final Auditor auditor = new Auditor(MarkerFactory.getMarker("flight"));
+    private static final Logger logger = LoggerFactory.getLogger(MicroMeterFlightRecorder.class);
 
-    // -------------------- Counters -------------------------
-    private final Counter streamStatementCounter;
-    private final Counter streamStatementErrorCounter;
-    private final Counter stremStatementBytesOutCounter;
-    private final Counter streamPreparedStatementErrorCounter;
-    private final Counter streamPreparedStatementCounter;
+    /**
+     * These LongAdders provide immediate, accurate counts for UI display
+     * and are exposed to Micrometer via FunctionCounters.
+     */
 
-    private final Counter stremPreparedStatementBytesOutCounter;
+    // Cancellation metrics
+    private final LongAdder cancelStatementCount = new LongAdder();
+    private final LongAdder cancelPreparedStatementCount = new LongAdder();
 
-    private final Counter cancelStatementCounter;
-    private final Counter cancelPreparedStatementCounter;
+    // Completion metrics
+    private final LongAdder completedStatementCount = new LongAdder();
+    private final LongAdder completedPreparedStatementCount = new LongAdder();
 
-    private final Counter timeoutStatementCounter;
+    // Byte transfer metrics - separate counters for each stream type
+    private final LongAdder statementBytesOut = new LongAdder();
+    private final LongAdder preparedStatementBytesOut = new LongAdder();
 
-    private final Counter timeoutPreparedStatementCounter;
+    // Lifecycle metrics
+    private final LongAdder statementStartCount = new LongAdder();
+    private final LongAdder preparedStatementStartCount = new LongAdder();
+    private final LongAdder statementEndCount = new LongAdder();
 
-    // ---- Completed counters (Option 2) ----
-    private final Counter streamStatementCompletedCounter;
-    private final Counter streamPreparedStatementCompletedCounter;
-    private final Counter bulkIngestCompletedCounter;
+    // Error metrics
+    private final LongAdder statementErrorCount = new LongAdder();
+    private final LongAdder preparedStatementErrorCount = new LongAdder();
 
-    private final Counter statementStart;
-    private final Counter statementEnd;
-    private final Counter statementError;
+    // Timeout metrics
+    private final LongAdder timeoutStatementCount = new LongAdder();
+    private final LongAdder timeoutPreparedStatementCount = new LongAdder();
 
-    // Start time
+    // Start time tracking
     private final AtomicLong startTime = new AtomicLong(0);
 
-    // Thread-local timing
-    private final ThreadLocal<Long> startNanos = ThreadLocal.withInitial(() -> 0L);
-
+    /**
+     * Creates a new MicroMeterFlightRecorder and registers all metrics with the provided registry.
+     *
+     * @param registry   the Micrometer registry for metric registration
+     * @param producerId unique identifier for this producer instance (used as metric tag)
+     */
     public MicroMeterFlightRecorder(MeterRegistry registry, String producerId) {
         this.registry = registry;
         this.startTime.set(System.currentTimeMillis());
 
-        // ------- Started counters --------
+        // Register all LongAdders as FunctionCounters.
+        // This creates the bridge to Micrometer without duplicating data.
 
-        this.streamStatementCounter = counter("stream_statement", producerId);
-        this.streamPreparedStatementCounter = counter("stream_prepared_statement", producerId);
-        this.streamPreparedStatementErrorCounter = counter("stream_prepared_statement_error", producerId);
-        this.streamStatementErrorCounter = counter("stream_statement_error", producerId);
-        this.timeoutStatementCounter = counter("stream_statement_timeout", producerId);
-        this.timeoutPreparedStatementCounter = counter("stream_prepared_statement_timeout", producerId);
+        registerAdder("cancel_statement", producerId, cancelStatementCount);
+        registerAdder("cancel_prepared_statement", producerId, cancelPreparedStatementCount);
 
-        // ------- Cancelled counters -------
-        this.cancelStatementCounter = counter("cancel_statement", producerId);
-        this.cancelPreparedStatementCounter = counter("cancel_prepared_statement", producerId);
+        registerAdder("stream_statement_completed", producerId, completedStatementCount);
+        registerAdder("stream_prepared_statement_completed", producerId, completedPreparedStatementCount);
 
-        // ------- Completed counters -------
-        this.streamStatementCompletedCounter = counter("stream_statement_completed", producerId);
-        this.streamPreparedStatementCompletedCounter = counter("stream_prepared_statement_completed", producerId);
-        this.bulkIngestCompletedCounter = counter("bulk_ingest_completed", producerId);
-        this.stremPreparedStatementBytesOutCounter = counter("stream_prepared_statement_bytes_out", producerId);
-        this.stremStatementBytesOutCounter = counter("stream_statement_bytes_out", producerId);
-        this.statementStart = counter("statement_start", producerId);
-        this.statementEnd = counter("statement_end", producerId);
-        this.statementError = counter("statement_error", producerId);
+        registerAdder("stream_statement", producerId, statementStartCount);
+        registerAdder("stream_prepared_statement", producerId, preparedStatementStartCount);
+        registerAdder("statement_start", producerId, statementStartCount);
+        registerAdder("statement_end", producerId, statementEndCount);
+
+        registerAdder("stream_statement_error", producerId, statementErrorCount);
+        registerAdder("stream_prepared_statement_error", producerId, preparedStatementErrorCount);
+        registerAdder("statement_error", producerId, statementErrorCount);
+
+        registerAdder("stream_statement_timeout", producerId, timeoutStatementCount);
+        registerAdder("stream_prepared_statement_timeout", producerId, timeoutPreparedStatementCount);
+
+        registerAdder("stream_statement_bytes_out", producerId, statementBytesOut);
+        registerAdder("stream_prepared_statement_bytes_out", producerId, preparedStatementBytesOut);
+
+        logger.info("MicroMeterFlightRecorder initialized for producer '{}' with {} real-time metrics", producerId, 16);
     }
 
-    // ==========================================================
-    //                    HELPER BUILDERS
-    // ==========================================================
+    /**
+     * Registers a LongAdder with Micrometer as a FunctionCounter.
+     * <p>
+     * The FunctionCounter reads directly from the LongAdder on each scrape,
+     * ensuring monitoring systems see the same values as the UI.
+     *
+     * @param name       metric name suffix (prefixed with "dazzleduck.flight.")
+     * @param producerId producer identifier for tagging
+     * @param adder      the LongAdder to expose
+     */
+    private void registerAdder(String name, String producerId, LongAdder adder) {
+        FunctionCounter.builder(
+                        "dazzleduck.flight." + name + ".count",
+                        adder,
+                        LongAdder::sum
+                )
+                .tag("producer", producerId)
+                .description("Real-time counter for " + name)
+                .register(registry);
+    }
 
+    /**
+     * Original counter method - kept for compatibility if needed.
+     * Use registerAdder() for real-time metrics.
+     */
     private Counter counter(String name, String producerId) {
         return Counter.builder("dazzleduck.flight." + name + ".count")
                 .tag("producer", producerId)
                 .register(registry);
     }
 
-    private Timer timer(String name, String producerId) {
-        return Timer.builder("dazzleduck.flight." + name + ".timer")
-                .tag("producer", producerId)
-                .publishPercentiles(0.5, 0.9, 0.99)
-                .publishPercentileHistogram()
-                .register(registry);
-    }
+    // ---------------------------------------------------------------------------
+    // Recording Methods - Statement Lifecycle with Audit Trail
+    // ---------------------------------------------------------------------------
 
     @Override
     public void recordStatementCancel(CacheKey key, StatementContext<?> ctx) {
-        cancelStatementCounter.increment();
+        cancelStatementCount.increment();
         auditor.audit(buildAudit(key, ctx, "CANCEL", null));
     }
 
     @Override
     public void recordPreparedStatementCancel(CacheKey key, StatementContext<?> ctx) {
-        cancelPreparedStatementCounter.increment();
+        cancelPreparedStatementCount.increment();
         auditor.audit(buildAudit(key, ctx, "CANCEL", null));
     }
 
     @Override
     public void recordStatementStreamStart(CacheKey key, StatementContext<?> ctx) {
-        statementStart.increment();
+        statementStartCount.increment();
         auditor.audit(buildAudit(key, ctx, "START", null));
     }
 
     @Override
     public void recordStatementStreamEnd(CacheKey key, StatementContext<?> ctx) {
-        statementEnd.increment();
+        statementEndCount.increment();
         auditor.audit(buildAudit(key, ctx, "END", null));
     }
 
     @Override
     public void recordStatementStreamError(CacheKey key, StatementContext<?> ctx, Throwable error) {
-        statementError.increment();
+        statementErrorCount.increment();
         String errorMessage = error.getClass().getSimpleName() + ": " + error.getMessage();
         auditor.audit(buildAudit(key, ctx, "ERROR", errorMessage));
     }
 
     @Override
     public void recordStatementTimeout(CacheKey key, StatementContext<?> ctx) {
-        timeoutStatementCounter.increment();
+        timeoutStatementCount.increment();
         auditor.audit(buildAudit(key, ctx, "TIMEOUT", null));
     }
 
     @Override
     public void recordPreparedStatementTimeout(CacheKey key, StatementContext<?> ctx) {
-        timeoutPreparedStatementCounter.increment();
+        timeoutPreparedStatementCount.increment();
         auditor.audit(buildAudit(key, ctx, "TIMEOUT", null));
     }
 
+    // ---------------------------------------------------------------------------
+    // Recording Methods - Simple Counter Updates (No Audit)
+    // ---------------------------------------------------------------------------
+
     @Override
     public void startStreamStatement() {
-        streamStatementCounter.increment();
+        statementStartCount.increment();
     }
 
     @Override
     public void endStreamStatement() {
-        streamStatementCompletedCounter.increment();
+        completedStatementCount.increment();
     }
 
     @Override
     public void errorStreamStatement() {
-        streamStatementErrorCounter.increment();
+        statementErrorCount.increment();
     }
 
     @Override
     public void errorStreamPreparedStatement() {
-        streamPreparedStatementErrorCounter.increment();
+        preparedStatementErrorCount.increment();
     }
-
-    // ---------------- Stream Prepared Statement ----------------
 
     @Override
     public void startStreamPreparedStatement() {
-        streamPreparedStatementCounter.increment();
+        preparedStatementStartCount.increment();
     }
 
     @Override
     public void endStreamPreparedStatement() {
-        streamPreparedStatementCompletedCounter.increment();
+        completedPreparedStatementCount.increment();
     }
 
     @Override
     public void errorPreparedStreamStatement() {
-        streamStatementErrorCounter.increment();
+        preparedStatementErrorCount.increment();
     }
 
-
-
+    // ---------------------------------------------------------------------------
+    // Recording Methods - Byte Transfer Tracking
+    // ---------------------------------------------------------------------------
 
     @Override
     public void recordGetStreamPreparedStatement(long size) {
-        stremPreparedStatementBytesOutCounter.increment(size);
+        if (size > 0) {
+            preparedStatementBytesOut.add(size);
+        }
     }
 
     @Override
     public void recordGetStreamStatement(long size) {
-        stremStatementBytesOutCounter.increment(size);
+        if (size > 0) {
+            statementBytesOut.add(size);
+        }
     }
 
+    // ---------------------------------------------------------------------------
+    // Write Queue Registration
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Registers custom counters for a write/ingestion queue.
+     *
+     * This allows dynamic registration of queue-specific metrics that will be
+     * exposed via Micrometer with the queue identifier as a tag.
+     *
+     * @param identifier unique identifier for the write queue
+     * @param counters   map of counter names to their value suppliers
+     */
     @Override
-    public void registerWriteQueue(String identifier, Map<String, LongSupplier> counters)  {
+    public void registerWriteQueue(String identifier, Map<String, LongSupplier> counters) {
+        if (counters == null || counters.isEmpty()) {
+            logger.warn("Attempted to register write queue '{}' with null or empty counters", identifier);
+            return;
+        }
+
         counters.forEach((name, supplier) -> {
             FunctionCounter.builder("dazzleduck.flight.ingest_queue." + name, supplier, LongSupplier::getAsLong)
                     .tag("identifier", identifier)
+                    .description("Write queue counter for " + identifier + "." + name)
                     .register(registry);
         });
+        logger.debug("Registered write queue '{}' with {} counters", identifier, counters.size());
     }
 
+    // ---------------------------------------------------------------------------
+    // Public API - Real-Time Value Accessors
+    //
+    // These methods return the current sum from LongAdders, providing
+    // immediate access to metric values without Micrometer buffering delay.
+    // ---------------------------------------------------------------------------
 
     @Override
     public double getBytesOut() {
-        return stremStatementBytesOutCounter.count() + stremPreparedStatementBytesOutCounter.count();
+        return statementBytesOut.sum() + preparedStatementBytesOut.sum();
     }
 
     @Override
     public double getBytesIn() {
+        // Not currently tracked
         return 0;
     }
 
     @Override
     public long getCompletedStatements() {
-        return (long) streamStatementCompletedCounter.count();
+        return completedStatementCount.sum();
     }
+
     @Override
     public long getCompletedPreparedStatements() {
-        return (long) streamPreparedStatementCompletedCounter.count();
+        return completedPreparedStatementCount.sum();
     }
 
     @Override
     public long getCancelledStatements() {
-        return (long) cancelStatementCounter.count();
-    }
-    @Override
-    public long getCancelledPreparedStatements() {
-        return (long) cancelPreparedStatementCounter.count();
+        return cancelStatementCount.sum();
     }
 
-    // ==========================================================
-    //                    HELPER BUILDER
-    // ==========================================================
-    private static StatementAudit buildAudit(CacheKey key, StatementContext<?> ctx, String action, String error) {
+    @Override
+    public long getCancelledPreparedStatements() {
+        return cancelPreparedStatementCount.sum();
+    }
+
+    // ---------------------------------------------------------------------------
+    // Additional Monitoring Accessors
+    //
+    // Extended API for detailed metric access beyond the FlightRecorder interface.
+    // ---------------------------------------------------------------------------
+
+    public long getStatementTimeouts() {
+        return timeoutStatementCount.sum();
+    }
+
+    public long getPreparedStatementTimeouts() {
+        return timeoutPreparedStatementCount.sum();
+    }
+
+    public long getStatementErrors() {
+        return statementErrorCount.sum();
+    }
+
+    public long getPreparedStatementErrors() {
+        return preparedStatementErrorCount.sum();
+    }
+
+    public long getStatementStarts() {
+        return statementStartCount.sum();
+    }
+
+    public long getPreparedStatementStarts() {
+        return preparedStatementStartCount.sum();
+    }
+
+    public double getStatementBytesOut() {
+        return statementBytesOut.sum();
+    }
+
+    public double getPreparedStatementBytesOut() {
+        return preparedStatementBytesOut.sum();
+    }
+
+    /**
+     * Returns the Micrometer registry for advanced integration scenarios.
+     *
+     * @return the MeterRegistry instance used by this recorder
+     */
+    public MeterRegistry getRegistry() {
+        return registry;
+    }
+
+    // ---------------------------------------------------------------------------
+    // Helper Methods
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Builds a StatementAudit object for audit logging.
+     *
+     * @param key    cache key containing statement ID and peer identity
+     * @param ctx    statement context with query and timing information
+     * @param action the action being audited (START, END, CANCEL, ERROR, TIMEOUT)
+     * @param error  error message if applicable, null otherwise
+     * @return populated StatementAudit instance
+     */
+    private static StatementAudit buildAudit(CacheKey key, StatementContext<?> ctx,
+                                             String action, String error) {
         return new StatementAudit(
                 key.id(),
                 key.peerIdentity(),

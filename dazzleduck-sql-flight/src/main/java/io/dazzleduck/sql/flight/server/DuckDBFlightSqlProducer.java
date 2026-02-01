@@ -70,7 +70,7 @@ import static org.duckdb.DuckDBConnection.DEFAULT_SCHEMA;
  * and available in the header. More options will be supported in the future version.
  * Future implementation note for statement we check if its SET or RESET statement and based on that use cookies to set unset the values
  */
-public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable, HttpFlightAdaptor, SqlProducerMBean {
+public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProducerMBean {
 
     public static final String TEMP_WRITE_FORMAT = "arrow";
     public static final IngestionConfig DEFAULT_INGESTION_CONFIG = new IngestionConfig(1024 * 1024,
@@ -552,7 +552,30 @@ public class DuckDBFlightSqlProducer implements FlightSqlProducer, AutoCloseable
     @Override
     public SchemaResult getSchemaStatement(FlightSql.CommandStatementQuery command, CallContext context,
                                            FlightDescriptor descriptor) {
-        return null;
+        String query = command.getQuery();
+        try (Connection connection = getConnection(context, accessMode);
+             PreparedStatement preparedStatement = connection.prepareStatement(
+                     query, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)) {
+
+            DuckDBResultSetMetaData metaData = (DuckDBResultSetMetaData) preparedStatement.getMetaData();
+            Schema schema;
+            if (isNull(metaData) || metaData.getReturnType() == StatementReturnType.NOTHING) {
+                schema = new Schema(List.of());
+            } else {
+                schema = JdbcToArrowUtils.jdbcToArrowSchema(metaData, DEFAULT_CALENDAR);
+            }
+            return new SchemaResult(schema);
+        } catch (SQLException e) {
+            throw CallStatus.INVALID_ARGUMENT
+                    .withDescription("Failed to get schema for query: " + e.getMessage())
+                    .withCause(e)
+                    .toRuntimeException();
+        } catch (Exception e) {
+            throw CallStatus.INTERNAL
+                    .withDescription("Error getting schema: " + e.getMessage())
+                    .withCause(e)
+                    .toRuntimeException();
+        }
     }
 
 

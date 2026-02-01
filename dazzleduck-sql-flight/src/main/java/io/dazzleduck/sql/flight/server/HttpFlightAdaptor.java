@@ -1,11 +1,17 @@
 package io.dazzleduck.sql.flight.server;
 
 import io.dazzleduck.sql.flight.ingestion.IngestionParameters;
+import org.apache.arrow.flight.FlightDescriptor;
+import org.apache.arrow.flight.FlightInfo;
 import org.apache.arrow.flight.FlightProducer;
 import org.apache.arrow.flight.PutResult;
+import org.apache.arrow.flight.sql.impl.FlightSql;
 
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.sql.SQLException;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
 
 /**
  * Adaptor interface that extends {@link FlightProducer} to provide HTTP-specific
@@ -14,7 +20,7 @@ import java.sql.SQLException;
  * <p>This interface bridges the Arrow Flight SQL protocol with HTTP-based operations,
  * enabling both gRPC and REST API access to the same underlying query engine.
  */
-public interface HttpFlightAdaptor extends FlightProducer {
+public interface HttpFlightAdaptor {
 
     /**
      * Accepts a bulk ingestion request via HTTP, processing Arrow data from an input stream.
@@ -37,7 +43,6 @@ public interface HttpFlightAdaptor extends FlightProducer {
      * @return the producer ID
      */
     String getProducerId();
-
 
     /**
      * Attempts to cancel a running query without reporting status.
@@ -63,5 +68,61 @@ public interface HttpFlightAdaptor extends FlightProducer {
      * @param context the call context containing peer identity
      */
     boolean tryCancel(Long queryId,
-                   FlightProducer.CallContext context) throws SQLException;
+                      FlightProducer.CallContext context) throws SQLException;
+
+    /**
+     * Gets the stream for a statement query ticket.
+     * This method provides a typed API for HTTP services to retrieve query results.
+     *
+     * @param ticket the statement query ticket
+     * @param context the call context
+     * @param listener the stream listener to receive results
+     */
+    void getStreamStatement(FlightSql.TicketStatementQuery ticket,
+                            FlightProducer.CallContext context,
+                            FlightProducer.ServerStreamListener listener);
+
+    /**
+     * Gets flight info for a statement query command.
+     * This method provides a typed API for HTTP services to get query planning info.
+     *
+     * @param command the statement query command
+     * @param context the call context
+     * @param descriptor the flight descriptor
+     * @return the flight info containing endpoints and schema
+     */
+    FlightInfo getFlightInfoStatement(FlightSql.CommandStatementQuery command,
+                                      FlightProducer.CallContext context,
+                                      FlightDescriptor descriptor);
+
+    /**
+     * Gets the stream for a statement query ticket, writing directly to an OutputStream.
+     *
+     * <p>The default implementation delegates to {@link #getStreamStatement} using a
+     * {@link DirectOutputStreamListener} that writes Arrow IPC format to the output stream.
+     *
+     * <p>The outputStreamSupplier is used instead of a direct OutputStream to defer
+     * obtaining the stream until data is actually ready to write. This allows HTTP
+     * error responses to set proper status codes before the response is committed.
+     *
+     * @param ticket the statement query ticket
+     * @param context the call context
+     * @param outputStreamSupplier supplier that provides the output stream when data is ready to write
+     * @return a CompletableFuture that completes when streaming is done, or exceptionally on error
+     */
+    default CompletableFuture<Void> getStreamStatementDirect(
+            FlightSql.TicketStatementQuery ticket,
+            FlightProducer.CallContext context,
+            Supplier<OutputStream> outputStreamSupplier) {
+
+        CompletableFuture<Void> future = new CompletableFuture<>();
+        // Use lazy initialization - only get the outputStream when start() is called
+        // This allows errors before start() to be handled without committing the HTTP response
+        DirectOutputStreamListener listener = new DirectOutputStreamListener(outputStreamSupplier, future);
+
+        // getStreamStatement is typically async - it starts streaming and returns
+        getStreamStatement(ticket, context, listener);
+
+        return future;
+    }
 }

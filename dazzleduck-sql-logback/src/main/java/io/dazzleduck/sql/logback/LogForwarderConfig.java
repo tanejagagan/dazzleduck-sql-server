@@ -13,7 +13,7 @@ public final class LogForwarderConfig {
     private final String username;
     private final String password;
     private final Map<String, String> claims;
-    private final String targetPath;
+    private final String ingestionQueue;
     private final Duration httpClientTimeout;
 
     // Buffer settings
@@ -39,7 +39,7 @@ public final class LogForwarderConfig {
             String username,
             String password,
             Map<String, String> claims,
-            String targetPath,
+            String ingestionQueue,
             Duration httpClientTimeout,
             int maxBufferSize,
             Duration pollInterval,
@@ -56,7 +56,7 @@ public final class LogForwarderConfig {
         Objects.requireNonNull(baseUrl, "baseUrl must not be null");
         Objects.requireNonNull(username, "username must not be null");
         Objects.requireNonNull(password, "password must not be null");
-        Objects.requireNonNull(targetPath, "targetPath must not be null");
+        Objects.requireNonNull(ingestionQueue, "ingestionQueue must not be null");
         Objects.requireNonNull(httpClientTimeout, "httpClientTimeout must not be null");
         Objects.requireNonNull(pollInterval, "pollInterval must not be null");
         Objects.requireNonNull(maxSendInterval, "maxSendInterval must not be null");
@@ -65,7 +65,7 @@ public final class LogForwarderConfig {
         this.username = username;
         this.password = password;
         this.claims = claims;
-        this.targetPath = targetPath;
+        this.ingestionQueue = ingestionQueue;
         this.httpClientTimeout = httpClientTimeout;
         this.maxBufferSize = maxBufferSize;
         this.pollInterval = pollInterval;
@@ -97,8 +97,8 @@ public final class LogForwarderConfig {
         return claims;
     }
 
-    public String targetPath() {
-        return targetPath;
+    public String ingestionQueue() {
+        return ingestionQueue;
     }
 
     public Duration httpClientTimeout() {
@@ -169,7 +169,7 @@ public final class LogForwarderConfig {
                Objects.equals(baseUrl, that.baseUrl) &&
                Objects.equals(username, that.username) &&
                Objects.equals(password, that.password) &&
-               Objects.equals(targetPath, that.targetPath) &&
+               Objects.equals(ingestionQueue, that.ingestionQueue) &&
                Objects.equals(httpClientTimeout, that.httpClientTimeout) &&
                Objects.equals(pollInterval, that.pollInterval) &&
                Objects.equals(maxSendInterval, that.maxSendInterval) &&
@@ -179,7 +179,7 @@ public final class LogForwarderConfig {
 
     @Override
     public int hashCode() {
-        return Objects.hash(baseUrl, username, password, targetPath, httpClientTimeout,
+        return Objects.hash(baseUrl, username, password, ingestionQueue, httpClientTimeout,
                 maxBufferSize, pollInterval, minBatchSize, maxBatchSize, maxSendInterval,
                 maxInMemorySize, maxOnDiskSize, retryCount, retryIntervalMillis,
                 projections, partitionBy, enabled);
@@ -192,7 +192,7 @@ public final class LogForwarderConfig {
                ", username=" + username +
                ", password=***" +
                ", claims=" + claims +
-               ", targetPath=" + targetPath +
+               ", ingestionQueue=" + ingestionQueue +
                ", httpClientTimeout=" + httpClientTimeout +
                ", maxBufferSize=" + maxBufferSize +
                ", pollInterval=" + pollInterval +
@@ -218,7 +218,7 @@ public final class LogForwarderConfig {
         private String username = "admin";
         private String password = "admin";
         private Map<String, String> claims = Map.of();
-        private String targetPath = "logs";
+        private String ingestionQueue = "logs";
         private Duration httpClientTimeout = Duration.ofSeconds(3);
         private int maxBufferSize = 10000;
         private Duration pollInterval = Duration.ofSeconds(5);
@@ -251,8 +251,8 @@ public final class LogForwarderConfig {
             return this;
         }
 
-        public Builder targetPath(String targetPath) {
-            this.targetPath = Objects.requireNonNull(targetPath);
+        public Builder ingestionQueue(String ingestionQueue) {
+            this.ingestionQueue = Objects.requireNonNull(ingestionQueue);
             return this;
         }
 
@@ -339,7 +339,7 @@ public final class LogForwarderConfig {
                     username,
                     password,
                     claims,
-                    targetPath,
+                    ingestionQueue,
                     httpClientTimeout,
                     maxBufferSize,
                     pollInterval,
