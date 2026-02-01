@@ -52,6 +52,8 @@ public class ErrorHandling {
             throw CallStatus.RESOURCE_EXHAUSTED
                     .withDescription(pendingWriteEx.getMessage())
                     .toRuntimeException();
+        } else if (t instanceof UnauthorizedException e) {
+            handleUnauthorized(e);
         } else if (t instanceof NoSuchCatalogSchemaError e) {
             handleNoSuchDBSchema(e);
         } else if (t instanceof SQLSyntaxErrorException e) {
@@ -84,6 +86,9 @@ public class ErrorHandling {
             listener.error(CallStatus.RESOURCE_EXHAUSTED
                     .withDescription(pendingWriteEx.getMessage())
                     .toRuntimeException());
+            return;
+        } else if (t instanceof UnauthorizedException e) {
+            handleUnauthorized(listener, e);
             return;
         } else if (t instanceof NoRegisterExecutorException e) {
             handleNoRegisterExecutor(listener, e);
@@ -126,6 +131,9 @@ public class ErrorHandling {
             listener.onError(CallStatus.RESOURCE_EXHAUSTED
                     .withDescription(pendingWriteEx.getMessage())
                     .toRuntimeException());
+            return;
+        } else if (t instanceof UnauthorizedException e) {
+            handleUnauthorized(listener, e);
             return;
         } else if (t instanceof NoRegisterExecutorException e) {
             handleNoRegisterExecutor(listener, e);

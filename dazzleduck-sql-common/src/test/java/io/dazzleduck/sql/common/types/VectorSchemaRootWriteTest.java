@@ -20,7 +20,10 @@ import java.util.List;
 
 import static java.util.Arrays.asList;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.Map;
 
 public class VectorSchemaRootWriteTest {
@@ -185,6 +188,242 @@ public class VectorSchemaRootWriteTest {
                 writer.writeToVector(rows, root);
                 // --- Assertions ---
                 assertEquals(2, root.getRowCount());
+            }
+        }
+    }
+
+    @Test
+    public void testNullPrimitives() {
+        // Test null values for all primitive types
+        var row1 = new JavaRow(new Object[]{
+                1, 100L, 1.5, "hello"
+        });
+        var row2 = new JavaRow(new Object[]{
+                null, null, null, null  // All nulls
+        });
+        var row3 = new JavaRow(new Object[]{
+                3, 300L, 3.5, "world"
+        });
+        JavaRow[] testRows = {row1, row2, row3};
+
+        var intField = new Field("int", FieldType.nullable(new ArrowType.Int(32, true)), null);
+        var bigIntField = new Field("bigInt", FieldType.nullable(new ArrowType.Int(64, true)), null);
+        var floatField = new Field("float", FieldType.nullable(new ArrowType.FloatingPoint(FloatingPointPrecision.DOUBLE)), null);
+        var varCharField = new Field("varChar", FieldType.nullable(new ArrowType.Utf8()), null);
+
+        Schema schema = new Schema(List.of(intField, bigIntField, floatField, varCharField));
+
+        try (var allocator = new RootAllocator()) {
+            var writer = VectorSchemaRootWriter.of(schema);
+            try (var root = VectorSchemaRoot.create(schema, allocator)) {
+                writer.writeToVector(testRows, root);
+
+                assertEquals(3, root.getRowCount());
+
+                // Verify nulls in row 2 (index 1)
+                IntVector intVector = (IntVector) root.getVector(0);
+                BigIntVector bigIntVector = (BigIntVector) root.getVector(1);
+                Float8Vector floatVector = (Float8Vector) root.getVector(2);
+                VarCharVector varCharVector = (VarCharVector) root.getVector(3);
+
+                // Row 0 - not null
+                assertEquals(1, intVector.get(0));
+                assertEquals(100L, bigIntVector.get(0));
+
+                // Row 1 - all null
+                assertTrue(intVector.isNull(1));
+                assertTrue(bigIntVector.isNull(1));
+                assertTrue(floatVector.isNull(1));
+                assertTrue(varCharVector.isNull(1));
+
+                // Row 2 - not null
+                assertEquals(3, intVector.get(2));
+                assertEquals(300L, bigIntVector.get(2));
+            }
+        }
+    }
+
+    @Test
+    public void testNullTimestampsAndDates() {
+        var row1 = new JavaRow(new Object[]{
+                Instant.now().toEpochMilli(),
+                Instant.now().toEpochMilli(),
+                LocalDate.now().atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli(),
+                (int) LocalDate.now().toEpochDay()
+        });
+        var row2 = new JavaRow(new Object[]{
+                null, null, null, null  // All nulls
+        });
+        JavaRow[] testRows = {row1, row2};
+
+        var timestampTZField = new Field("timestampTZ", FieldType.nullable(new ArrowType.Timestamp(TimeUnit.MILLISECOND, "UTC")), null);
+        var timestampField = new Field("timestamp", FieldType.nullable(new ArrowType.Timestamp(TimeUnit.MILLISECOND, null)), null);
+        var dateMilliField = new Field("dateMilli", FieldType.nullable(new ArrowType.Date(DateUnit.MILLISECOND)), null);
+        var dateDayField = new Field("dateDay", FieldType.nullable(new ArrowType.Date(DateUnit.DAY)), null);
+
+        Schema schema = new Schema(List.of(timestampTZField, timestampField, dateMilliField, dateDayField));
+
+        try (var allocator = new RootAllocator()) {
+            var writer = VectorSchemaRootWriter.of(schema);
+            try (var root = VectorSchemaRoot.create(schema, allocator)) {
+                writer.writeToVector(testRows, root);
+
+                assertEquals(2, root.getRowCount());
+
+                // Verify nulls in row 1
+                assertTrue(((TimeStampMilliTZVector) root.getVector(0)).isNull(1));
+                assertTrue(((TimeStampMilliVector) root.getVector(1)).isNull(1));
+                assertTrue(((DateMilliVector) root.getVector(2)).isNull(1));
+                assertTrue(((DateDayVector) root.getVector(3)).isNull(1));
+            }
+        }
+    }
+
+    @Test
+    public void testNullDecimals() {
+        // Scale must match the Arrow field definition
+        var row1 = new JavaRow(new Object[]{
+                new BigDecimal("123.4500000000"),  // scale 10
+                new BigDecimal("9876543210.12345678901234567890")  // scale 20
+        });
+        var row2 = new JavaRow(new Object[]{
+                null, null
+        });
+        JavaRow[] testRows = {row1, row2};
+
+        var decimal128Field = new Field("decimal128", FieldType.nullable(new ArrowType.Decimal(38, 10, 128)), null);
+        var decimal256Field = new Field("decimal256", FieldType.nullable(new ArrowType.Decimal(76, 20, 256)), null);
+
+        Schema schema = new Schema(List.of(decimal128Field, decimal256Field));
+
+        try (var allocator = new RootAllocator()) {
+            var writer = VectorSchemaRootWriter.of(schema);
+            try (var root = VectorSchemaRoot.create(schema, allocator)) {
+                writer.writeToVector(testRows, root);
+
+                assertEquals(2, root.getRowCount());
+
+                assertTrue(((DecimalVector) root.getVector(0)).isNull(1));
+                assertTrue(((Decimal256Vector) root.getVector(1)).isNull(1));
+            }
+        }
+    }
+
+    @Test
+    public void testNullListAndMap() {
+        // Test null list and null map values
+        var row1 = new JavaRow(new Object[]{
+                List.of(1, 2, 3),
+                Map.of("a", 1)
+        });
+        var row2 = new JavaRow(new Object[]{
+                null,  // null list
+                null   // null map
+        });
+        var row3 = new JavaRow(new Object[]{
+                List.of(4, 5),
+                Map.of("b", 2)
+        });
+        JavaRow[] testRows = {row1, row2, row3};
+
+        Field intList = new Field("myIntList", FieldType.nullable(new ArrowType.List()),
+                List.of(new Field("item", FieldType.nullable(new ArrowType.Int(32, true)), null)));
+
+        Field entriesField = new Field("entries", FieldType.notNullable(new ArrowType.Struct()),
+                List.of(
+                        new Field("key", FieldType.notNullable(new ArrowType.Utf8()), null),
+                        new Field("value", FieldType.nullable(new ArrowType.Int(32, true)), null)
+                ));
+        Field mapField = new Field("myMap", FieldType.nullable(new ArrowType.Map(false)),
+                List.of(entriesField));
+
+        Schema schema = new Schema(List.of(intList, mapField));
+
+        try (var allocator = new RootAllocator()) {
+            var writer = VectorSchemaRootWriter.of(schema);
+            try (var root = VectorSchemaRoot.create(schema, allocator)) {
+                writer.writeToVector(testRows, root);
+
+                assertEquals(3, root.getRowCount());
+
+                // Verify nulls in row 1 (index 1)
+                var listVector = (org.apache.arrow.vector.complex.ListVector) root.getVector(0);
+                var mapVector = (org.apache.arrow.vector.complex.MapVector) root.getVector(1);
+
+                assertTrue(listVector.isNull(1));
+                assertTrue(mapVector.isNull(1));
+
+                // Verify non-nulls in row 0 and row 2
+                assertEquals(false, listVector.isNull(0));
+                assertEquals(false, listVector.isNull(2));
+                assertEquals(false, mapVector.isNull(0));
+                assertEquals(false, mapVector.isNull(2));
+            }
+        }
+    }
+
+    @Test
+    public void testNullElementsInList() {
+        // Test list with null elements inside
+        var listWithNulls = Arrays.asList(1, null, 3, null, 5);
+        var row1 = new JavaRow(new Object[]{listWithNulls});
+        var row2 = new JavaRow(new Object[]{List.of(10, 20)});
+        JavaRow[] testRows = {row1, row2};
+
+        Field intList = new Field("myIntList", FieldType.nullable(new ArrowType.List()),
+                List.of(new Field("item", FieldType.nullable(new ArrowType.Int(32, true)), null)));
+
+        Schema schema = new Schema(List.of(intList));
+
+        try (var allocator = new RootAllocator()) {
+            var writer = VectorSchemaRootWriter.of(schema);
+            try (var root = VectorSchemaRoot.create(schema, allocator)) {
+                writer.writeToVector(testRows, root);
+
+                assertEquals(2, root.getRowCount());
+
+                var listVector = (org.apache.arrow.vector.complex.ListVector) root.getVector(0);
+                // Row 0 should have a list with 5 elements (some null)
+                assertEquals(false, listVector.isNull(0));
+                // Row 1 should have a list with 2 elements
+                assertEquals(false, listVector.isNull(1));
+            }
+        }
+    }
+
+    @Test
+    public void testNullValuesInMap() {
+        // Test map with null values
+        Map<String, Integer> mapWithNullValue = new HashMap<>();
+        mapWithNullValue.put("a", 1);
+        mapWithNullValue.put("b", null);  // null value
+        mapWithNullValue.put("c", 3);
+
+        var row1 = new JavaRow(new Object[]{mapWithNullValue});
+        var row2 = new JavaRow(new Object[]{Map.of("x", 10)});
+        JavaRow[] testRows = {row1, row2};
+
+        Field entriesField = new Field("entries", FieldType.notNullable(new ArrowType.Struct()),
+                List.of(
+                        new Field("key", FieldType.notNullable(new ArrowType.Utf8()), null),
+                        new Field("value", FieldType.nullable(new ArrowType.Int(32, true)), null)
+                ));
+        Field mapField = new Field("myMap", FieldType.nullable(new ArrowType.Map(false)),
+                List.of(entriesField));
+
+        Schema schema = new Schema(List.of(mapField));
+
+        try (var allocator = new RootAllocator()) {
+            var writer = VectorSchemaRootWriter.of(schema);
+            try (var root = VectorSchemaRoot.create(schema, allocator)) {
+                writer.writeToVector(testRows, root);
+
+                assertEquals(2, root.getRowCount());
+
+                var mapVector = (org.apache.arrow.vector.complex.MapVector) root.getVector(0);
+                // Both rows should have maps (not null)
+                assertEquals(false, mapVector.isNull(0));
+                assertEquals(false, mapVector.isNull(1));
             }
         }
     }

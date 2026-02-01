@@ -294,13 +294,7 @@ public interface ArrowProducer extends Closeable {
                             }
 
                             try {
-                                // Send the batch (combining will happen inside doSendWithRetry if needed)
-                                doSendWithRetry(batch);
-
-                                // Update state for all original elements
-                                for (ProducerElement element : batch) {
-                                    updateState(element);
-                                }
+                                processBatch(batch);
                             } catch (Exception e) {
                                 error = true;
                                 shutdown = true;
@@ -308,11 +302,6 @@ public interface ArrowProducer extends Closeable {
                                 logger.atError().setCause(e).log("Error sending data");
                                 logger.atError().setCause(e).log("Shutting down because of exception");
                                 throw e;
-                            } finally {
-                                // Always close all original elements after sending (successful or not)
-                                for (ProducerElement element : batch) {
-                                    element.close();
-                                }
                             }
                         }
                     } catch (InterruptedException | IOException e) {
@@ -330,23 +319,11 @@ public interface ArrowProducer extends Closeable {
                             }
                             if (!batch.isEmpty() && !error) {
                                 try {
-                                    // Send the batch (combining will happen inside doSendWithRetry if needed)
-                                    doSendWithRetry(batch);
-
-                                    // Update state for all original elements
-                                    for (ProducerElement el : batch) {
-                                        updateState(el);
-                                    }
+                                    processBatch(batch);
                                 } catch (InterruptedException ex) {
-                                    // If interrupted again, restore interrupt status and close all elements
                                     Thread.currentThread().interrupt();
                                 } catch (IOException ex) {
                                     logger.atError().setCause(ex).log("Error sending message while closing");
-                                } finally {
-                                    // Close all original elements
-                                    for (ProducerElement el : batch) {
-                                        el.close();
-                                    }
                                 }
                             }
                         }
@@ -363,13 +340,24 @@ public interface ArrowProducer extends Closeable {
 
         private synchronized void enqueueCurrentBucket(){
             if (this.currentBucket.size() > 0) {
-                try (var c = bufferAllocator.newChildAllocator("child", minBatchSize, Long.MAX_VALUE)) {
-                    var bytes = this.currentBucket.getArrowBytes(schema, c, compressionType);
-                    if (bytes != null && bytes.length > 0) {
-                        enqueue(bytes);
-                        lastSent = clock.instant();
-                        currentBucket = new Bucket();
-                    }
+                serializeAndEnqueueBucket();
+            }
+        }
+
+        /**
+         * Serializes the current bucket to Arrow bytes and enqueues it for sending.
+         * Creates a new empty bucket before enqueuing to avoid "already serialized" errors
+         * if enqueue throws an exception.
+         */
+        private synchronized void serializeAndEnqueueBucket() {
+            try (var c = bufferAllocator.newChildAllocator("child", minBatchSize, Long.MAX_VALUE)) {
+                var bytes = currentBucket.getArrowBytes(schema, c, compressionType);
+                if (bytes != null && bytes.length > 0) {
+                    // IMPORTANT: Create new bucket BEFORE enqueue() to avoid "already serialized" error
+                    // if enqueue() throws (shutdown, queue full, etc.)
+                    currentBucket = new Bucket();
+                    enqueue(bytes);
+                    lastSent = clock.instant();
                 }
             }
         }
@@ -402,12 +390,7 @@ public interface ArrowProducer extends Closeable {
             }
             var currentSize = currentBucket.add(row);
             if (currentSize > minBatchSize) {
-                try(var c = bufferAllocator.newChildAllocator("child",  minBatchSize, Long.MAX_VALUE)) {
-                    var arrowBytes = currentBucket.getArrowBytes(schema, c, compressionType);
-                    enqueue(arrowBytes);
-                    this.lastSent = clock.instant();
-                    currentBucket = new Bucket();
-                }
+                serializeAndEnqueueBucket();
             }
         }
 
@@ -444,10 +427,31 @@ public interface ArrowProducer extends Closeable {
         }
 
         private synchronized void updateState(ProducerElement producerElement) {
-            if (producerElement instanceof MemoryElement) {
+            if (producerElement.isInMemory()) {
                 inMemorySize -= producerElement.length();
             } else {
                 onDiskSize -= producerElement.length();
+            }
+        }
+
+        /**
+         * Processes a batch of elements: sends with retry, updates state, and closes elements.
+         * Elements are always closed in the finally block regardless of success or failure.
+         *
+         * @param batch the batch of elements to process
+         * @throws InterruptedException if interrupted during send
+         * @throws IOException if an IO error occurs during send
+         */
+        private void processBatch(List<ProducerElement> batch) throws InterruptedException, IOException {
+            try {
+                doSendWithRetry(batch);
+                for (ProducerElement element : batch) {
+                    updateState(element);
+                }
+            } finally {
+                for (ProducerElement element : batch) {
+                    element.close();
+                }
             }
         }
 
@@ -718,13 +722,7 @@ public interface ArrowProducer extends Closeable {
             ProducerElement element;
             int droppedInCleanup = 0;
             while ((element = queue.poll()) != null) {
-                synchronized(this) {
-                    if (element instanceof MemoryElement) {
-                        inMemorySize -= element.length();
-                    } else {
-                        onDiskSize -= element.length();
-                    }
-                }
+                updateState(element);
                 droppedInCleanup++;
                 droppedElementCount.incrementAndGet();
                 // Close the element to cleanup resources
@@ -741,24 +739,46 @@ public interface ArrowProducer extends Closeable {
         long length();
         long getMinBatchId();
         long getMaxBatchId();
+        boolean isInMemory();
 
         @Override
         void close();
     }
 
-    class MemoryElement implements ProducerElement {
+    abstract class AbstractProducerElement implements ProducerElement {
+        protected final long minBatchId;
+        protected final long maxBatchId;
+
+        protected AbstractProducerElement(long batchId) {
+            this(batchId, batchId);
+        }
+
+        protected AbstractProducerElement(long minBatchId, long maxBatchId) {
+            this.minBatchId = minBatchId;
+            this.maxBatchId = maxBatchId;
+        }
+
+        @Override
+        public long getMinBatchId() {
+            return minBatchId;
+        }
+
+        @Override
+        public long getMaxBatchId() {
+            return maxBatchId;
+        }
+    }
+
+    class MemoryElement extends AbstractProducerElement {
         final byte[] data; // package-private for testing
-        private final long minBatchId;
-        private final long maxBatchId;
 
         public MemoryElement(byte[] data, long batchId) {
             this(data, batchId, batchId);
         }
 
         public MemoryElement(byte[] data, long minBatchId, long maxBatchId) {
+            super(minBatchId, maxBatchId);
             this.data = data;
-            this.minBatchId = minBatchId;
-            this.maxBatchId = maxBatchId;
         }
 
         @Override
@@ -772,13 +792,8 @@ public interface ArrowProducer extends Closeable {
         }
 
         @Override
-        public long getMinBatchId() {
-            return minBatchId;
-        }
-
-        @Override
-        public long getMaxBatchId() {
-            return maxBatchId;
+        public boolean isInMemory() {
+            return true;
         }
 
         @Override
@@ -787,20 +802,17 @@ public interface ArrowProducer extends Closeable {
         }
     }
 
-    class FileMappedMemoryElement implements ProducerElement {
+    class FileMappedMemoryElement extends AbstractProducerElement {
         private static final Logger logger = LoggerFactory.getLogger(FileMappedMemoryElement.class);
         private final Path tempFile;
         private final long length;
-        private final long minBatchId;
-        private final long maxBatchId;
 
         public FileMappedMemoryElement(byte[] data, long batchId) {
             this(data, batchId, batchId);
         }
 
         public FileMappedMemoryElement(byte[] data, long minBatchId, long maxBatchId) {
-            this.minBatchId = minBatchId;
-            this.maxBatchId = maxBatchId;
+            super(minBatchId, maxBatchId);
             Path temp = null;
             try {
                 temp = Files.createTempFile("flight-", ".arrow");
@@ -846,13 +858,8 @@ public interface ArrowProducer extends Closeable {
         }
 
         @Override
-        public long getMinBatchId() {
-            return minBatchId;
-        }
-
-        @Override
-        public long getMaxBatchId() {
-            return maxBatchId;
+        public boolean isInMemory() {
+            return false;
         }
     }
 
@@ -887,7 +894,6 @@ public interface ArrowProducer extends Closeable {
             if (serialized || buffer.isEmpty()) {
                 return null;
             }
-            serialized = true;
 
             try (VectorSchemaRoot root = VectorSchemaRoot.create(schema, allocator);
                  ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -898,6 +904,9 @@ public interface ArrowProducer extends Closeable {
                 writer.start();
                 writer.writeBatch();
                 writer.end();
+                // Only mark as serialized AFTER successful serialization
+                // This prevents leaving the bucket in an unusable state if serialization fails
+                serialized = true;
                 return out.toByteArray();
 
             } catch (Exception e) {

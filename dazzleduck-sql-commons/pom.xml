@@ -6,13 +6,13 @@
     <parent>
         <groupId>io.dazzleduck.sql</groupId>
         <artifactId>dazzleduck-parent</artifactId>
-        <version>0.0.17</version>
+        <version>0.0.19</version>
     </parent>
     <artifactId>dazzleduck-sql-commons</artifactId>
     <name>DazzleDuck Project Commons</name>
     <properties>
-        <maven.compiler.source>17</maven.compiler.source>
-        <maven.compiler.target>17</maven.compiler.target>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <testcontainer.version>2.0.2</testcontainer.version>
         <hadoop.version>3.3.4</hadoop.version>
@@ -155,7 +155,7 @@
         <dependency>
             <groupId>io.dazzleduck.sql</groupId>
             <artifactId>dazzleduck-sql-common</artifactId>
-            <version>0.0.17</version>
+            <version>0.0.19</version>
         </dependency>
     </dependencies>
 </project>
