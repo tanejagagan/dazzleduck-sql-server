@@ -71,6 +71,160 @@
                     </execution>
                 </executions>
             </plugin>
+            <!-- Shade plugin to repackage duckdb_jdbc without macOS/Windows binaries -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.6.0</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <shadedArtifactAttached>false</shadedArtifactAttached>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <filters>
+                                <filter>
+                                    <artifact>org.duckdb:duckdb_jdbc</artifact>
+                                    <excludes>
+                                        <!-- Exclude macOS universal binary -->
+                                        <exclude>libduckdb_java.so_osx_universal</exclude>
+                                        <!-- Exclude Windows binary -->
+                                        <exclude>libduckdb_java.so_windows_amd64</exclude>
+                                    </excludes>
+                                </filter>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>io.dazzleduck.sql.runtime.Main</mainClass>
+                                </transformer>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                            </transformers>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>com.google.cloud.tools</groupId>
+                <artifactId>jib-maven-plugin</artifactId>
+                <version>3.4.3</version>
+                <configuration>
+                    <from>
+                        <image>eclipse-temurin:21-jre</image>
+                    </from>
+                    <to>
+                        <image>dazzleduck/dazzleduck:latest</image>
+                    </to>
+
+                    <container>
+                        <!-- Use entrypoint script instead of mainClass -->
+                        <entrypoint>
+                            <shell>bash</shell>
+                            <option>-c</option>
+                            <option>/app/entrypoint.sh "$@"</option>
+                            <option>--</option>
+                        </entrypoint>
+                        <jvmFlags>
+                            <jvmFlag>--add-opens=java.base/java.nio=ALL-UNNAMED</jvmFlag>
+                        </jvmFlags>
+                        <ports>
+                            <port>8081</port>
+                            <port>59307</port>
+                        </ports>
+                    </container>
+
+                    <extraDirectories>
+                        <paths>
+                            <!-- Include example JARs -->
+                            <path>
+                                <from>${project.basedir}/../dazzleduck-sql-examples/target</from>
+                                <into>/app/extra</into>
+                                <includes>
+                                    <include>dazzleduck-sql-examples-*.jar</include>
+                                </includes>
+                                <excludes>
+                                    <exclude>*-sources.jar</exclude>
+                                    <exclude>*-javadoc.jar</exclude>
+                                </excludes>
+                            </path>
+                            <!-- Include example dependencies (lib folder) -->
+                            <path>
+                                <from>${project.basedir}/../dazzleduck-sql-examples/target/lib</from>
+                                <into>/app/extra</into>
+                            </path>
+                            <!-- Include logger JARs -->
+                            <path>
+                                <from>${project.basedir}/../dazzleduck-sql-logger/target</from>
+                                <into>/app/extra</into>
+                                <includes>
+                                    <include>dazzleduck-sql-logger-*.jar</include>
+                                </includes>
+                                <excludes>
+                                    <exclude>*-sources.jar</exclude>
+                                    <exclude>*-javadoc.jar</exclude>
+                                </excludes>
+                            </path>
+                            <!-- Include logback JARs -->
+                            <path>
+                                <from>${project.basedir}/../dazzleduck-sql-logback/target</from>
+                                <into>/app/extra</into>
+                                <includes>
+                                    <include>dazzleduck-sql-logback-*.jar</include>
+                                </includes>
+                                <excludes>
+                                    <exclude>*-sources.jar</exclude>
+                                    <exclude>*-javadoc.jar</exclude>
+                                </excludes>
+                            </path>
+                            <!-- Include micrometer JARs -->
+                            <path>
+                                <from>${project.basedir}/../dazzleduck-sql-micrometer/target</from>
+                                <into>/app/extra</into>
+                                <includes>
+                                    <include>dazzleduck-sql-micrometer-*.jar</include>
+                                </includes>
+                                <excludes>
+                                    <exclude>*-sources.jar</exclude>
+                                    <exclude>*-javadoc.jar</exclude>
+                                </excludes>
+                            </path>
+                            <!-- Include client JARs -->
+                            <path>
+                                <from>${project.basedir}/../dazzleduck-sql-client/target</from>
+                                <into>/app/extra</into>
+                                <includes>
+                                    <include>dazzleduck-sql-client-*.jar</include>
+                                </includes>
+                                <excludes>
+                                    <exclude>*-sources.jar</exclude>
+                                    <exclude>*-javadoc.jar</exclude>
+                                </excludes>
+                            </path>
+                            <!-- Add entrypoint script -->
+                            <path>
+                                <from>${project.basedir}/docker</from>
+                                <into>/app</into>
+                            </path>
+                        </paths>
+                        <permissions>
+                            <permission>
+                                <file>/app/entrypoint.sh</file>
+                                <mode>755</mode>
+                            </permission>
+                        </permissions>
+                    </extraDirectories>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 </project>

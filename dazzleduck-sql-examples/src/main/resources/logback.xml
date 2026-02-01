@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <!-- Console appender for local viewing -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- DazzleDuck Log Forwarding Appender -->
+    <appender name="LOG_FORWARDER" class="io.dazzleduck.sql.logback.LogForwardingAppender">
+        <maxBufferSize>10000</maxBufferSize>
+    </appender>
+
+    <!-- Exclude DazzleDuck internal packages to prevent infinite loops -->
+    <logger name="io.dazzleduck.sql.logback" level="INFO" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+    </logger>
+    <logger name="io.dazzleduck.sql.client" level="INFO" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+    </logger>
+    <logger name="org.apache.arrow" level="WARN" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+    </logger>
+
+    <!-- Root logger - both CONSOLE and LOG_FORWARDER -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="LOG_FORWARDER"/>
+    </root>
+
+</configuration>
