@@ -3,9 +3,13 @@ package io.dazzleduck.sql.logback;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.BigIntVector;
+import org.apache.arrow.vector.TimeStampMilliVector;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.arrow.vector.complex.MapVector;
+import org.apache.arrow.vector.complex.impl.UnionMapWriter;
 import org.apache.arrow.vector.ipc.ArrowStreamWriter;
+import org.apache.arrow.vector.types.TimeUnit;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.FieldType;
@@ -18,6 +22,7 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Converts LogEntry objects to Apache Arrow format for efficient transmission.
@@ -92,34 +97,76 @@ public final class LogToArrowConverter implements Closeable {
     }
 
     private Schema createArrowSchema() {
+        // MDC field as Map<String, String>
+        Field mdcField = new Field("mdc", FieldType.nullable(new ArrowType.Map(false)),
+                List.of(
+                        new Field("entries", FieldType.notNullable(new ArrowType.Struct()),
+                                List.of(
+                                        new Field("key", FieldType.notNullable(new ArrowType.Utf8()), null),
+                                        new Field("value", FieldType.nullable(new ArrowType.Utf8()), null)
+                                )
+                        )
+                )
+        );
+
         return new Schema(List.of(
                 new Field("s_no", FieldType.nullable(new ArrowType.Int(64, true)), null),
-                new Field("timestamp", FieldType.nullable(new ArrowType.Utf8()), null),
+                new Field("timestamp", FieldType.nullable(new ArrowType.Timestamp(TimeUnit.MILLISECOND, null)), null),
                 new Field("level", FieldType.nullable(new ArrowType.Utf8()), null),
                 new Field("logger", FieldType.nullable(new ArrowType.Utf8()), null),
                 new Field("thread", FieldType.nullable(new ArrowType.Utf8()), null),
-                new Field("message", FieldType.nullable(new ArrowType.Utf8()), null)
+                new Field("message", FieldType.nullable(new ArrowType.Utf8()), null),
+                mdcField
         ));
     }
 
     private void populateVectors(VectorSchemaRoot root, List<LogEntry> entries) {
         BigIntVector sNoVector = (BigIntVector) root.getVector("s_no");
-        VarCharVector timestampVec = (VarCharVector) root.getVector("timestamp");
+        TimeStampMilliVector timestampVec = (TimeStampMilliVector) root.getVector("timestamp");
         VarCharVector levelVec = (VarCharVector) root.getVector("level");
         VarCharVector loggerVec = (VarCharVector) root.getVector("logger");
         VarCharVector threadVec = (VarCharVector) root.getVector("thread");
         VarCharVector messageVec = (VarCharVector) root.getVector("message");
+        MapVector mdcVec = (MapVector) root.getVector("mdc");
+
+        mdcVec.allocateNew();
+        UnionMapWriter mdcWriter = mdcVec.getWriter();
 
         for (int i = 0; i < entries.size(); i++) {
             LogEntry entry = entries.get(i);
 
             sNoVector.setSafe(i, entry.sNo());
-            setVectorValue(timestampVec, i, entry.timestamp() != null ? entry.timestamp().toString() : null);
+            if (entry.timestamp() != null) {
+                timestampVec.setSafe(i, entry.timestamp().toEpochMilli());
+            } else {
+                timestampVec.setNull(i);
+            }
             setVectorValue(levelVec, i, entry.level());
             setVectorValue(loggerVec, i, entry.logger());
             setVectorValue(threadVec, i, entry.thread());
             setVectorValue(messageVec, i, entry.message());
+
+            // Write MDC map
+            mdcWriter.setPosition(i);
+            Map<String, String> mdc = entry.mdc();
+            if (mdc != null && !mdc.isEmpty()) {
+                mdcWriter.startMap();
+                for (Map.Entry<String, String> mdcEntry : mdc.entrySet()) {
+                    mdcWriter.startEntry();
+                    mdcWriter.key().varChar().writeVarChar(mdcEntry.getKey());
+                    if (mdcEntry.getValue() != null) {
+                        mdcWriter.value().varChar().writeVarChar(mdcEntry.getValue());
+                    } else {
+                        mdcWriter.value().writeNull();
+                    }
+                    mdcWriter.endEntry();
+                }
+                mdcWriter.endMap();
+            } else {
+                mdcWriter.writeNull();
+            }
         }
+        mdcWriter.setValueCount(entries.size());
     }
 
     private void setVectorValue(VarCharVector vector, int index, String value) {

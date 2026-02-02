@@ -21,7 +21,7 @@ import java.time.Duration;
  *     base_url = "http://localhost:8081"
  *     username = "admin"
  *     password = "admin"
- *     ingestion_queue = "logs"
+ *     ingestion_queue = "log"
  *     http_client_timeout_ms = 3000
  *   }
  *
@@ -32,7 +32,7 @@ import java.time.Duration;
  *   max_on_disk_bytes = 1073741824
  *   retry_count = 3
  *   retry_interval_ms = 1000
- *   projections = ["*", "CAST (timestamp AS date) AS date"]
+ *   project = ["*", "CAST (timestamp AS date) AS date"]
  *   partition_by = [date]
  * }
  * }</pre>
@@ -50,7 +50,7 @@ public final class LogForwarderConfigFactory {
      */
     public static LogForwarder createForwarder() {
         LogForwarderConfig forwarderConfig = createConfig();
-        return LogForwarder.createAndStart(forwarderConfig);
+        return new LogForwarder(forwarderConfig);
     }
 
     /**

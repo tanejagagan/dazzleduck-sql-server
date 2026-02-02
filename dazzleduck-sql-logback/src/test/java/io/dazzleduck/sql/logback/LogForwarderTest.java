@@ -11,12 +11,10 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class LogForwarderTest {
 
-    private LogBuffer buffer;
     private LogForwarderConfig config;
 
     @BeforeEach
     void setUp() {
-        buffer = new LogBuffer(1000);
         LogForwardingAppender.reset();
 
         config = LogForwarderConfig.builder()
@@ -25,7 +23,6 @@ class LogForwarderTest {
                 .password("test")
                 .ingestionQueue("test-logs")
                 .httpClientTimeout(Duration.ofMillis(100))
-                .maxBufferSize(1000)
                 .pollInterval(Duration.ofMillis(100))
                 .minBatchSize(100)
                 .maxSendInterval(Duration.ofMillis(100))
@@ -41,41 +38,15 @@ class LogForwarderTest {
     }
 
     @Test
-    void constructor_shouldInitializeCorrectly() {
-        try (LogForwarder forwarder = new LogForwarder(config, buffer)) {
-            assertFalse(forwarder.isRunning());
-            assertEquals(0, forwarder.getBufferSize());
-            assertSame(buffer, forwarder.getBuffer());
-        }
-    }
-
-    @Test
-    void start_shouldStartForwarder() {
-        try (LogForwarder forwarder = new LogForwarder(config, buffer)) {
-            forwarder.start();
-
+    void constructor_shouldStartImmediately() {
+        try (LogForwarder forwarder = new LogForwarder(config)) {
             assertTrue(forwarder.isRunning());
         }
     }
 
     @Test
-    void start_shouldNotStartWhenDisabled() {
-        LogForwarderConfig disabledConfig = LogForwarderConfig.builder()
-                .baseUrl("http://localhost:9999")
-                .enabled(false)
-                .build();
-
-        try (LogForwarder forwarder = new LogForwarder(disabledConfig)) {
-            forwarder.start();
-
-            assertFalse(forwarder.isRunning());
-        }
-    }
-
-    @Test
     void stop_shouldStopForwarder() {
-        try (LogForwarder forwarder = new LogForwarder(config, buffer)) {
-            forwarder.start();
+        try (LogForwarder forwarder = new LogForwarder(config)) {
             assertTrue(forwarder.isRunning());
 
             forwarder.stop();
@@ -85,8 +56,7 @@ class LogForwarderTest {
 
     @Test
     void close_shouldCloseAllResources() {
-        LogForwarder forwarder = new LogForwarder(config, buffer);
-        forwarder.start();
+        LogForwarder forwarder = new LogForwarder(config);
 
         forwarder.close();
 
@@ -94,54 +64,37 @@ class LogForwarderTest {
     }
 
     @Test
-    void forwardLogs_shouldDrainBuffer() {
-        try (LogForwarder forwarder = new LogForwarder(config, buffer)) {
-            buffer.offer(createEntry("test message 1"));
-            buffer.offer(createEntry("test message 2"));
+    void addLogEntry_shouldAcceptEntryWhenRunning() {
+        try (LogForwarder forwarder = new LogForwarder(config)) {
+            LogEntry entry = createEntry("test message");
 
-            assertEquals(2, buffer.getSize());
+            boolean accepted = forwarder.addLogEntry(entry);
 
-            // Call forwardLogs directly (without starting scheduler)
-            forwarder.forwardLogs();
-
-            // Buffer should be drained (entries moved to retry queue due to connection failure)
-            // or the entries might be returned for retry since server is not running
-            assertTrue(buffer.getSize() >= 0);
+            assertTrue(accepted);
         }
     }
 
     @Test
-    void forwardLogs_shouldHandleEmptyBuffer() {
-        try (LogForwarder forwarder = new LogForwarder(config, buffer)) {
-            // Should not throw
-            forwarder.forwardLogs();
+    void addLogEntry_shouldRejectEntryWhenStopped() {
+        try (LogForwarder forwarder = new LogForwarder(config)) {
+            forwarder.stop();
+            LogEntry entry = createEntry("test message");
 
-            assertEquals(0, buffer.getSize());
+            boolean accepted = forwarder.addLogEntry(entry);
+
+            assertFalse(accepted);
         }
     }
 
     @Test
-    void createAndStart_shouldReturnStartedForwarder() {
-        LogForwarder forwarder = LogForwarder.createAndStart(config);
-        try {
-            assertTrue(forwarder.isRunning());
-        } finally {
-            forwarder.close();
-        }
-    }
+    void addLogEntry_shouldRejectEntryWhenClosed() {
+        LogForwarder forwarder = new LogForwarder(config);
+        forwarder.close();
+        LogEntry entry = createEntry("test message");
 
-    @Test
-    void getBufferSize_shouldReflectBufferState() {
-        try (LogForwarder forwarder = new LogForwarder(config, buffer)) {
-            assertEquals(0, forwarder.getBufferSize());
+        boolean accepted = forwarder.addLogEntry(entry);
 
-            buffer.offer(createEntry("msg1"));
-            assertEquals(1, forwarder.getBufferSize());
-
-            buffer.offer(createEntry("msg2"));
-            buffer.offer(createEntry("msg3"));
-            assertEquals(3, forwarder.getBufferSize());
-        }
+        assertFalse(accepted);
     }
 
     private LogEntry createEntry(String message) {

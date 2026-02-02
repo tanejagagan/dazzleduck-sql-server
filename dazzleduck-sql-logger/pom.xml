@@ -88,7 +88,30 @@
                     <!-- Fork each test class to avoid state pollution between integration tests -->
                     <reuseForks>false</reuseForks>
                     <forkCount>1</forkCount>
+                    <!-- JVM flags required for Arrow memory management -->
+                    <argLine>--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED</argLine>
                 </configuration>
+            </plugin>
+            <!-- Copy dependencies for Docker builds -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <version>3.6.1</version>
+                <executions>
+                    <execution>
+                        <id>copy-dependencies</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>copy-dependencies</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.directory}/dependency</outputDirectory>
+                            <includeScope>runtime</includeScope>
+                            <!-- Exclude conflicting SLF4J providers -->
+                            <excludeArtifactIds>slf4j-simple</excludeArtifactIds>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

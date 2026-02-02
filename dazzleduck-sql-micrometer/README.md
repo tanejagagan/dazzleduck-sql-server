@@ -23,7 +23,6 @@ Add the dependency to your `pom.xml`:
 <dependency>
     <groupId>io.dazzleduck.sql</groupId>
     <artifactId>dazzleduck-sql-micrometer</artifactId>
-    <version>0.0.16</version>
 </dependency>
 ```
 
@@ -212,11 +211,9 @@ Metrics are stored with the following Arrow schema:
 | Column | Type | Description |
 |--------|------|-------------|
 | `s_no` | Long | Sequence number |
+| `timestamp` | Timestamp | Timestamp (millisecond precision) |
 | `name` | String | Metric name |
 | `type` | String | Metric type (counter, gauge, timer, etc.) |
-| `application_id` | String | Application identifier |
-| `application_name` | String | Application name |
-| `application_host` | String | Host where metric originated |
 | `tags` | `Map<String, String>` | Metric tags/labels |
 | `value` | Double | Primary metric value |
 | `min` | Double | Minimum value (for distributions) |

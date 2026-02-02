@@ -15,7 +15,7 @@ class LogForwarderConfigTest {
         assertEquals("http://localhost:8081", config.baseUrl());
         assertEquals("admin", config.username());
         assertEquals("admin", config.password());
-        assertEquals("logs", config.ingestionQueue());
+        assertEquals("log", config.ingestionQueue());
         assertEquals(Duration.ofSeconds(3), config.httpClientTimeout());
         assertEquals(10000, config.maxBufferSize());
         assertEquals(Duration.ofSeconds(5), config.pollInterval());

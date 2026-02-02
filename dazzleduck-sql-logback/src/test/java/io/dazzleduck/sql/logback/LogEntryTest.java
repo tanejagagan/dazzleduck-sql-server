@@ -19,6 +19,7 @@ class LogEntryTest {
         Logger logger = context.getLogger("com.example.TestLogger");
 
         LoggingEvent event = new LoggingEvent();
+        event.setLoggerContext(context);
         event.setLoggerName("com.example.TestLogger");
         event.setLevel(Level.ERROR);
         event.setMessage("Test error message");
@@ -33,6 +34,7 @@ class LogEntryTest {
         assertEquals("com.example.TestLogger", entry.logger());
         assertEquals("test-thread", entry.thread());
         assertEquals("Test error message", entry.message());
+        assertNotNull(entry.mdc());
     }
 
     @Test

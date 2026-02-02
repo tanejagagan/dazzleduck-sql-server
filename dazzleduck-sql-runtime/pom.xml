@@ -55,6 +55,13 @@
             <version>${calcite.version}</version>
             <scope>test</scope>
         </dependency>
+        <!-- Exclude slf4j-simple from runtime to allow Logback/ArrowSLF4JServiceProvider to be used -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
+            <version>${slf4j.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -68,49 +75,6 @@
                         <goals>
                             <goal>test-jar</goal>
                         </goals>
-                    </execution>
-                </executions>
-            </plugin>
-            <!-- Shade plugin to repackage duckdb_jdbc without macOS/Windows binaries -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-shade-plugin</artifactId>
-                <version>3.6.0</version>
-                <executions>
-                    <execution>
-                        <phase>package</phase>
-                        <goals>
-                            <goal>shade</goal>
-                        </goals>
-                        <configuration>
-                            <shadedArtifactAttached>false</shadedArtifactAttached>
-                            <createDependencyReducedPom>false</createDependencyReducedPom>
-                            <filters>
-                                <filter>
-                                    <artifact>org.duckdb:duckdb_jdbc</artifact>
-                                    <excludes>
-                                        <!-- Exclude macOS universal binary -->
-                                        <exclude>libduckdb_java.so_osx_universal</exclude>
-                                        <!-- Exclude Windows binary -->
-                                        <exclude>libduckdb_java.so_windows_amd64</exclude>
-                                    </excludes>
-                                </filter>
-                                <filter>
-                                    <artifact>*:*</artifact>
-                                    <excludes>
-                                        <exclude>META-INF/*.SF</exclude>
-                                        <exclude>META-INF/*.DSA</exclude>
-                                        <exclude>META-INF/*.RSA</exclude>
-                                    </excludes>
-                                </filter>
-                            </filters>
-                            <transformers>
-                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                                    <mainClass>io.dazzleduck.sql.runtime.Main</mainClass>
-                                </transformer>
-                                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
-                            </transformers>
-                        </configuration>
                     </execution>
                 </executions>
             </plugin>
@@ -209,6 +173,43 @@
                                     <exclude>*-sources.jar</exclude>
                                     <exclude>*-javadoc.jar</exclude>
                                 </excludes>
+                            </path>
+                            <!-- Include client-grpc JARs -->
+                            <path>
+                                <from>${project.basedir}/../dazzleduck-sql-client-grpc/target</from>
+                                <into>/app/extra</into>
+                                <includes>
+                                    <include>dazzleduck-sql-client-grpc-*.jar</include>
+                                </includes>
+                                <excludes>
+                                    <exclude>*-sources.jar</exclude>
+                                    <exclude>*-javadoc.jar</exclude>
+                                </excludes>
+                            </path>
+                            <!-- Include logger dependencies -->
+                            <path>
+                                <from>${project.basedir}/../dazzleduck-sql-logger/target/dependency</from>
+                                <into>/app/extra</into>
+                            </path>
+                            <!-- Include logback dependencies -->
+                            <path>
+                                <from>${project.basedir}/../dazzleduck-sql-logback/target/dependency</from>
+                                <into>/app/extra</into>
+                            </path>
+                            <!-- Include micrometer dependencies -->
+                            <path>
+                                <from>${project.basedir}/../dazzleduck-sql-micrometer/target/dependency</from>
+                                <into>/app/extra</into>
+                            </path>
+                            <!-- Include client dependencies -->
+                            <path>
+                                <from>${project.basedir}/../dazzleduck-sql-client/target/dependency</from>
+                                <into>/app/extra</into>
+                            </path>
+                            <!-- Include client-grpc dependencies -->
+                            <path>
+                                <from>${project.basedir}/../dazzleduck-sql-client-grpc/target/dependency</from>
+                                <into>/app/extra</into>
                             </path>
                             <!-- Add entrypoint script -->
                             <path>

@@ -19,8 +19,8 @@ public class DuckLakeIngestionTaskFactory implements IngestionTaskFactory {
     private static final String TABLE_PATH_QUERY =
             """
             SELECT CASE WHEN s.path_is_relative
-                        THEN concat(m."value", '/', s.path, '/', t.path, '/')
-                        ELSE concat(s.path, '/', t.path, '/')
+                        THEN concat(rtrim(m."value", '/'), '/', s.path, '/', t.path)
+                        ELSE concat(s.path, '/', t.path)
                    END AS path
             FROM %s.main.ducklake_schema s
             JOIN %s.main.ducklake_table t ON (s.schema_id = t.schema_id)

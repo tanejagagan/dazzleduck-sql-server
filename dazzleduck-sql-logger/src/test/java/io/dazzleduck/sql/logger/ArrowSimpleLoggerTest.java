@@ -1,31 +1,26 @@
 package io.dazzleduck.sql.logger;
 
 import io.dazzleduck.sql.client.ArrowProducer;
-import org.apache.arrow.vector.types.pojo.*;
+import io.dazzleduck.sql.common.types.JavaRow;
 import org.junit.jupiter.api.*;
+import org.slf4j.event.Level;
 
-import java.time.Clock;
-import java.time.Duration;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class ArrowSimpleLoggerTest {
 
     private ArrowSimpleLogger logger;
-    private TestArrowProducer sender;
+    private MockArrowProducer producer;
 
     @BeforeEach
     void setup() {
-        sender = new TestArrowProducer();
-        logger = new ArrowSimpleLogger("test-logger", sender);
-    }
-
-    @AfterEach
-    void tearDown() {
-        logger.close();
+        producer = new MockArrowProducer();
+        logger = new ArrowSimpleLogger("test-logger", producer, Level.INFO);
     }
 
     @Test
@@ -37,18 +32,18 @@ class ArrowSimpleLoggerTest {
     void testInfoLogIsForwarded() throws Exception {
         logger.info("hello {}", "world");
 
-        assertTrue(sender.awaitRows(1));
-        assertEquals(1, sender.rowsReceived.get());
+        assertTrue(producer.awaitRows(1));
+        assertEquals(1, producer.getRowCount());
     }
 
     @Test
-    void testMultipleLogsAreForwardedOnClose() throws Exception {
+    void testMultipleLogsAreForwarded() throws Exception {
         for (int i = 0; i < 5; i++) {
             logger.info("log {}", i);
         }
-        logger.close(); // forces bucket flush
-        // With minBatchSize=1, each log triggers a send, so we expect at least 1
-        assertTrue(sender.rowsReceived.get() >= 1, "Expected at least 1 batch to be sent");
+
+        assertTrue(producer.awaitRows(5));
+        assertEquals(5, producer.getRowCount());
     }
 
     @Test
@@ -63,52 +58,52 @@ class ArrowSimpleLoggerTest {
 
         logger.log(event);
 
-        assertTrue(sender.awaitRows(1));
-        assertTrue(sender.rowsReceived.get() >= 1, "Expected at least 1 batch to be sent");
+        assertTrue(producer.awaitRows(1));
+        assertEquals(1, producer.getRowCount());
     }
 
     @Test
-    void testCloseFlushesPendingRows() throws Exception {
-        logger.info("before close");
+    void testDebugLogNotForwardedWhenLevelIsInfo() throws Exception {
+        logger.debug("debug message");
 
-        logger.close();
-
-        assertTrue(sender.rowsReceived.get() >= 1);
+        // Wait a bit and verify no logs were sent
+        Thread.sleep(100);
+        assertEquals(0, producer.getRowCount());
     }
 
     @Test
-    void testFormatReplacement() throws Exception {
-        var m = ArrowSimpleLogger.class
-                .getDeclaredMethod("format", String.class, Object[].class);
-        m.setAccessible(true);
-
-        String out = (String) m.invoke(
-                logger,
-                "A {} B {}",
-                new Object[]{"X", 1}
-        );
-
-        assertEquals("A X B 1", out);
+    void testLogLevelChecks() {
+        // Logger is configured with INFO level
+        assertFalse(logger.isTraceEnabled());
+        assertFalse(logger.isDebugEnabled());
+        assertTrue(logger.isInfoEnabled());
+        assertTrue(logger.isWarnEnabled());
+        assertTrue(logger.isErrorEnabled());
     }
 
-    static class TestArrowProducer extends ArrowProducer.AbstractArrowProducer {
+    @Test
+    void testNullProducerDoesNotThrow() {
+        ArrowSimpleLogger nullProducerLogger = new ArrowSimpleLogger("null-producer", null, Level.INFO);
 
-        final AtomicInteger rowsReceived = new AtomicInteger();
-        final CountDownLatch latch = new CountDownLatch(10);
+        // Should not throw
+        assertDoesNotThrow(() -> nullProducerLogger.info("test message"));
+    }
 
-        TestArrowProducer() {
-            super(
-                    1,  // minBatchSize - set to 1 to send immediately
-                    1024 * 1024,
-                    Duration.ofMillis(100),
-                    // Use the same schema as ArrowSimpleLogger
-                    ArrowSimpleLogger.getSchema(),
-                    Clock.systemUTC(),
-                    3,
-                    1000,
-                    java.util.List.of(),
-                    java.util.List.of()
-            );
+    /**
+     * Simple mock that captures rows without using Arrow/Netty buffers.
+     */
+    static class MockArrowProducer implements ArrowProducer {
+
+        private final List<JavaRow> rows = new CopyOnWriteArrayList<>();
+
+        @Override
+        public void addRow(JavaRow row) {
+            rows.add(row);
+        }
+
+        @Override
+        public void enqueue(byte[] input) {
+            // Not used in tests
         }
 
         @Override
@@ -122,25 +117,21 @@ class ArrowSimpleLoggerTest {
         }
 
         @Override
-        protected void doSend(ProducerElement element) {
-            rowsReceived.incrementAndGet();
-            latch.countDown();
-            // Consume the element to simulate actual usage
-            try (org.apache.arrow.memory.BufferAllocator childAllocator =
-                    bufferAllocator.newChildAllocator("test-send", 0, Long.MAX_VALUE);
-                 java.io.InputStream in = element.read();
-                 org.apache.arrow.vector.ipc.ArrowStreamReader reader =
-                        new org.apache.arrow.vector.ipc.ArrowStreamReader(in, childAllocator)) {
-                while (reader.loadNextBatch()) {
-                    // Just iterate through batches
-                }
-            } catch (Exception ignored) {
-            }
+        public void close() {
+            // No resources to close
+        }
+
+        int getRowCount() {
+            return rows.size();
         }
 
         boolean awaitRows(int expected) throws InterruptedException {
-            latch.await(400, TimeUnit.MILLISECONDS);
-            return rowsReceived.get() >= expected;
+            // Wait up to 500ms for rows to arrive
+            long deadline = System.currentTimeMillis() + 500;
+            while (rows.size() < expected && System.currentTimeMillis() < deadline) {
+                Thread.sleep(10);
+            }
+            return rows.size() >= expected;
         }
     }
 }
