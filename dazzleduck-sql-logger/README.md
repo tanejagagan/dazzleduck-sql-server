@@ -70,7 +70,6 @@ If you see `logback-classic`, `log4j-slf4j-impl`, or `slf4j-simple`, use **dazzl
 <dependency>
     <groupId>io.dazzleduck.sql</groupId>
     <artifactId>dazzleduck-sql-logger</artifactId>
-    <version>0.0.16</version>
 </dependency>
 ```
 
@@ -532,7 +531,7 @@ dazzleduck_logger {
 
 ## Requirements
 
-- **Java 21+**
+- **Java 11+**
 - **DazzleDuck SQL Server** running with HTTP mode enabled
 
 ---

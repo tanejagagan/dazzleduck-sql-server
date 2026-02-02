@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
 
+    <!-- Shutdown hook ensures forwarder is flushed on JVM exit -->
+    <shutdownHook/>
+
     <!-- Console appender for local viewing -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
@@ -8,9 +11,14 @@
         </encoder>
     </appender>
 
-    <!-- DazzleDuck Log Forwarding Appender -->
+    <!-- DazzleDuck Log Forwarding Appender with project configuration -->
     <appender name="LOG_FORWARDER" class="io.dazzleduck.sql.logback.LogForwardingAppender">
-        <maxBufferSize>10000</maxBufferSize>
+        <baseUrl>http://localhost:18081</baseUrl>
+        <username>admin</username>
+        <password>admin</password>
+        <ingestionQueue>test-logs</ingestionQueue>
+        <project>*,'test-host' AS application_host,CAST(timestamp AS date) AS date</project>
+        <partitionBy>date</partitionBy>
     </appender>
 
     <!-- Exclude DazzleDuck internal packages to prevent infinite loops -->

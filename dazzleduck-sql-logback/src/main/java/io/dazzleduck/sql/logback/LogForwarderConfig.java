@@ -28,7 +28,7 @@ public final class LogForwarderConfig {
     private final long maxOnDiskSize;
     private final int retryCount;
     private final long retryIntervalMillis;
-    private final List<String> projections;
+    private final List<String> project;
     private final List<String> partitionBy;
 
     // Feature flags
@@ -50,7 +50,7 @@ public final class LogForwarderConfig {
             long maxOnDiskSize,
             int retryCount,
             long retryIntervalMillis,
-            List<String> projections,
+            List<String> project,
             List<String> partitionBy,
             boolean enabled) {
         Objects.requireNonNull(baseUrl, "baseUrl must not be null");
@@ -76,7 +76,7 @@ public final class LogForwarderConfig {
         this.maxOnDiskSize = maxOnDiskSize;
         this.retryCount = retryCount;
         this.retryIntervalMillis = retryIntervalMillis;
-        this.projections = Collections.unmodifiableList(new ArrayList<>(projections));
+        this.project = Collections.unmodifiableList(new ArrayList<>(project));
         this.partitionBy = Collections.unmodifiableList(new ArrayList<>(partitionBy));
         this.enabled = enabled;
     }
@@ -141,8 +141,8 @@ public final class LogForwarderConfig {
         return retryIntervalMillis;
     }
 
-    public List<String> projections() {
-        return projections;
+    public List<String> project() {
+        return project;
     }
 
     public List<String> partitionBy() {
@@ -173,7 +173,7 @@ public final class LogForwarderConfig {
                Objects.equals(httpClientTimeout, that.httpClientTimeout) &&
                Objects.equals(pollInterval, that.pollInterval) &&
                Objects.equals(maxSendInterval, that.maxSendInterval) &&
-               Objects.equals(projections, that.projections) &&
+               Objects.equals(project, that.project) &&
                Objects.equals(partitionBy, that.partitionBy);
     }
 
@@ -182,7 +182,7 @@ public final class LogForwarderConfig {
         return Objects.hash(baseUrl, username, password, ingestionQueue, httpClientTimeout,
                 maxBufferSize, pollInterval, minBatchSize, maxBatchSize, maxSendInterval,
                 maxInMemorySize, maxOnDiskSize, retryCount, retryIntervalMillis,
-                projections, partitionBy, enabled);
+                project, partitionBy, enabled);
     }
 
     @Override
@@ -203,7 +203,7 @@ public final class LogForwarderConfig {
                ", maxOnDiskSize=" + maxOnDiskSize +
                ", retryCount=" + retryCount +
                ", retryIntervalMillis=" + retryIntervalMillis +
-               ", projections=" + projections +
+               ", project=" + project +
                ", partitionBy=" + partitionBy +
                ", enabled=" + enabled +
                "]";
@@ -218,7 +218,7 @@ public final class LogForwarderConfig {
         private String username = "admin";
         private String password = "admin";
         private Map<String, String> claims = Map.of();
-        private String ingestionQueue = "logs";
+        private String ingestionQueue = "log";
         private Duration httpClientTimeout = Duration.ofSeconds(3);
         private int maxBufferSize = 10000;
         private Duration pollInterval = Duration.ofSeconds(5);
@@ -313,8 +313,8 @@ public final class LogForwarderConfig {
             return this;
         }
 
-        public Builder project(List<String> projections) {
-            this.project = Objects.requireNonNull(projections);
+        public Builder project(List<String> project) {
+            this.project = Objects.requireNonNull(project);
             return this;
         }
 

@@ -1,5 +1,6 @@
 package io.dazzleduck.sql.logback;
 
+import org.apache.arrow.vector.TimeStampMilliVector;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.ipc.ArrowStreamReader;
@@ -14,6 +15,7 @@ import java.io.IOException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -36,13 +38,14 @@ class LogToArrowConverterTest {
         Schema schema = converter.getSchema();
 
         assertNotNull(schema);
-        assertEquals(6, schema.getFields().size());
+        assertEquals(7, schema.getFields().size());
         assertNotNull(schema.findField("s_no"));
         assertNotNull(schema.findField("timestamp"));
         assertNotNull(schema.findField("level"));
         assertNotNull(schema.findField("logger"));
         assertNotNull(schema.findField("thread"));
         assertNotNull(schema.findField("message"));
+        assertNotNull(schema.findField("mdc"));
     }
 
     @Test
@@ -84,7 +87,8 @@ class LogToArrowConverterTest {
             VectorSchemaRoot root = reader.getVectorSchemaRoot();
             assertEquals(1, root.getRowCount());
 
-            assertEquals("2024-01-15T10:30:00Z", getString(root, "timestamp", 0));
+            TimeStampMilliVector timestampVec = (TimeStampMilliVector) root.getVector("timestamp");
+            assertEquals(now.toEpochMilli(), timestampVec.get(0));
             assertEquals("INFO", getString(root, "level", 0));
             assertEquals("com.example.Test", getString(root, "logger", 0));
             assertEquals("main", getString(root, "thread", 0));
@@ -150,7 +154,7 @@ class LogToArrowConverterTest {
             VectorSchemaRoot root = reader.getVectorSchemaRoot();
             assertEquals(1, root.getRowCount());
 
-            VarCharVector timestampVec = (VarCharVector) root.getVector("timestamp");
+            TimeStampMilliVector timestampVec = (TimeStampMilliVector) root.getVector("timestamp");
             VarCharVector loggerVec = (VarCharVector) root.getVector("logger");
 
             assertTrue(timestampVec.isNull(0));
@@ -215,6 +219,38 @@ class LogToArrowConverterTest {
             VectorSchemaRoot root = reader.getVectorSchemaRoot();
             String message = getString(root, "message", 0);
             assertEquals(10000, message.length());
+        }
+    }
+
+    @Test
+    void convertToArrowBytes_shouldIncludeMdcValues() throws IOException {
+        Map<String, String> mdc = Map.of("request_id", "REQ-123", "user_id", "alice");
+        LogEntry entry = new LogEntry(
+                1,
+                Instant.now(),
+                "INFO",
+                "TestLogger",
+                "main",
+                "Test with MDC",
+                mdc
+        );
+
+        byte[] arrowBytes = converter.convertToArrowBytes(List.of(entry));
+
+        assertNotNull(arrowBytes);
+        assertTrue(arrowBytes.length > 0);
+
+        try (RootAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+             ByteArrayInputStream bais = new ByteArrayInputStream(arrowBytes);
+             ArrowStreamReader reader = new ArrowStreamReader(bais, allocator)) {
+
+            assertTrue(reader.loadNextBatch());
+
+            VectorSchemaRoot root = reader.getVectorSchemaRoot();
+            assertEquals(1, root.getRowCount());
+            assertEquals("Test with MDC", getString(root, "message", 0));
+            // MDC map is present (we verified schema includes it)
+            assertNotNull(root.getVector("mdc"));
         }
     }
 

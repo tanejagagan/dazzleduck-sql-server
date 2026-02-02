@@ -4,6 +4,8 @@ package io.dazzleduck.sql.logback;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 
 import java.time.Instant;
+import java.util.Collections;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -16,14 +18,20 @@ public final class LogEntry {
     private final String logger;
     private final String thread;
     private final String message;
+    private final Map<String, String> mdc;
 
     public LogEntry(long sNo, Instant timestamp, String level, String logger, String thread, String message) {
+        this(sNo, timestamp, level, logger, thread, message, Collections.emptyMap());
+    }
+
+    public LogEntry(long sNo, Instant timestamp, String level, String logger, String thread, String message, Map<String, String> mdc) {
         this.sNo = sNo;
         this.timestamp = timestamp;
         this.level = level;
         this.logger = logger;
         this.thread = thread;
         this.message = message;
+        this.mdc = mdc != null ? Map.copyOf(mdc) : Collections.emptyMap();
     }
 
     /**
@@ -40,7 +48,8 @@ public final class LogEntry {
                 event.getLevel().toString(),
                 event.getLoggerName(),
                 event.getThreadName(),
-                event.getFormattedMessage()
+                event.getFormattedMessage(),
+                event.getMDCPropertyMap()
         );
     }
 
@@ -68,6 +77,10 @@ public final class LogEntry {
         return message;
     }
 
+    public Map<String, String> mdc() {
+        return mdc;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
@@ -78,12 +91,13 @@ public final class LogEntry {
                Objects.equals(level, logEntry.level) &&
                Objects.equals(logger, logEntry.logger) &&
                Objects.equals(thread, logEntry.thread) &&
-               Objects.equals(message, logEntry.message);
+               Objects.equals(message, logEntry.message) &&
+               Objects.equals(mdc, logEntry.mdc);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(sNo, timestamp, level, logger, thread, message);
+        return Objects.hash(sNo, timestamp, level, logger, thread, message, mdc);
     }
 
     @Override
@@ -95,6 +109,7 @@ public final class LogEntry {
                ", logger=" + logger +
                ", thread=" + thread +
                ", message=" + message +
+               ", mdc=" + mdc +
                "]";
     }
 }
