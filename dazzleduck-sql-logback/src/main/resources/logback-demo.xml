@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <shutdownHook/>
+
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <appender name="LOG_FORWARDER" class="io.dazzleduck.sql.logback.LogForwardingAppender">
+        <baseUrl>${DAZZLEDUCK_BASE_URL:-http://localhost:8081}</baseUrl>
+        <username>${DAZZLEDUCK_USERNAME:-admin}</username>
+        <password>${DAZZLEDUCK_PASSWORD:-admin}</password>
+        <ingestionQueue>${DAZZLEDUCK_INGESTION_QUEUE:-log}</ingestionQueue>
+        <project>*,CAST(timestamp AS date) AS date</project>
+        <partitionBy>date</partitionBy>
+    </appender>
+
+    <!-- Exclude DazzleDuck internal packages to prevent infinite loops -->
+    <!-- Use "io.dazzleduck.sql.logback.Log" (not the full package) so that
+         io.dazzleduck.sql.logback.demo.* still reaches the LOG_FORWARDER appender -->
+    <logger name="io.dazzleduck.sql.logback.Log" level="INFO" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+    </logger>
+    <logger name="io.dazzleduck.sql.client" level="INFO" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+    </logger>
+    <logger name="org.apache.arrow" level="WARN" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+    </logger>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="LOG_FORWARDER"/>
+    </root>
+
+</configuration>

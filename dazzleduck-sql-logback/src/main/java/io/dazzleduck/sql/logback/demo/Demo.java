@@ -1,5 +1,7 @@
 package io.dazzleduck.sql.logback.demo;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.VectorSchemaRoot;
@@ -10,8 +12,10 @@ import org.slf4j.MDC;
 
 import java.io.BufferedInputStream;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.Executors;
@@ -19,6 +23,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Continuous demo for the Logback LogForwardingAppender.
@@ -47,51 +52,109 @@ public class Demo {
     private static final Random random = new Random();
     private static final ScheduledExecutorService queryScheduler = Executors.newSingleThreadScheduledExecutor();
 
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final AtomicReference<String> cachedJwt = new AtomicReference<>();
+
     private static final String[] USERS = {"alice", "bob", "charlie", "diana", "eve"};
     private static final String[] ACTIONS = {"LOGIN", "LOGOUT", "VIEW", "UPDATE", "DELETE"};
     private static final String[] ENDPOINTS = {"/api/users", "/api/orders", "/api/products"};
 
     public static void main(String[] args) {
-        System.out.println("=== Logback LogForwardingAppender Demo ===");
-        System.out.println("Generating logs every 500ms. Press Ctrl+C to stop.\n");
-
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            System.out.println("\nShutting down...");
             running.set(false);
             queryScheduler.shutdown();
+            System.out.println("Demo stopped. Total logs generated: " + counter.get());
         }));
 
-        log.info("Demo started - logging to DazzleDuck server");
-
-        // Start background query task every 5 seconds
         String baseUrl = System.getenv().getOrDefault("DAZZLEDUCK_BASE_URL", "http://localhost:8081");
-        queryScheduler.scheduleAtFixedRate(() -> runCountQuery(baseUrl), 5, 5, TimeUnit.SECONDS);
+        System.out.println("Demo started - forwarding logs to " + baseUrl);
+
+        // Report ingested log count every 30 seconds
+        queryScheduler.scheduleAtFixedRate(() -> runCountQuery(baseUrl), 30, 30, TimeUnit.SECONDS);
 
         while (running.get()) {
             try {
                 generateLog();
-                Thread.sleep(500);
+                Thread.sleep(2000);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
             }
         }
+    }
 
-        log.info("Demo stopped. Total logs generated: {}", counter.get());
-        System.out.println("\n=== Demo complete ===");
-        System.out.println("Total logs generated: " + counter.get());
-        System.out.println("Query: SELECT * FROM read_parquet('warehouse/log/*.parquet') ORDER BY timestamp DESC;");
+    private static String login(String baseUrl) throws Exception {
+        String username = System.getenv().getOrDefault("DAZZLEDUCK_USERNAME", "admin");
+        String password = System.getenv().getOrDefault("DAZZLEDUCK_PASSWORD", "admin");
+        java.util.Map<String, String> credentials = new java.util.HashMap<>();
+        credentials.put("username", username);
+        credentials.put("password", password);
+        String body = MAPPER.writeValueAsString(credentials);
+
+        URL url = new URL(baseUrl + "/v1/login");
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        conn.setRequestMethod("POST");
+        conn.setDoOutput(true);
+        conn.setRequestProperty("Content-Type", "application/json");
+        conn.setRequestProperty("Accept", "application/json");
+        try (OutputStream os = conn.getOutputStream()) {
+            os.write(body.getBytes(StandardCharsets.UTF_8));
+        }
+
+        if (conn.getResponseCode() != 200) {
+            throw new RuntimeException("Login failed: HTTP " + conn.getResponseCode());
+        }
+
+        try (InputStream is = conn.getInputStream()) {
+            JsonNode json = MAPPER.readTree(is);
+            return json.get("tokenType").asText() + " " + json.get("accessToken").asText();
+        } finally {
+            conn.disconnect();
+        }
+    }
+
+    private static String getJwt(String baseUrl) {
+        String jwt = cachedJwt.get();
+        if (jwt == null) {
+            try {
+                jwt = login(baseUrl);
+                cachedJwt.set(jwt);
+            } catch (Exception e) {
+                System.err.println("Login failed: " + e.getMessage());
+            }
+        }
+        return jwt;
     }
 
     private static void runCountQuery(String baseUrl) {
         try (BufferAllocator allocator = new RootAllocator()) {
+            String jwt = getJwt(baseUrl);
+            if (jwt == null) {
+                System.err.println("Skipping count query: no JWT token available");
+                return;
+            }
+
             String query = "SELECT count(*) as count FROM ollylake.main.log";
             String urlStr = baseUrl + "/v1/query?q=" + java.net.URLEncoder.encode(query, "UTF-8");
             URL url = new URL(urlStr);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("GET");
+            conn.setRequestProperty("Authorization", jwt);
 
-            if (conn.getResponseCode() == 200) {
+            int status = conn.getResponseCode();
+            if (status == 401 || status == 403) {
+                // Token may have expired — invalidate and retry once
+                cachedJwt.set(null);
+                jwt = getJwt(baseUrl);
+                if (jwt == null) return;
+                conn.disconnect();
+                conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("GET");
+                conn.setRequestProperty("Authorization", jwt);
+                status = conn.getResponseCode();
+            }
+
+            if (status == 200) {
                 try (InputStream inputStream = new BufferedInputStream(conn.getInputStream());
                      ArrowStreamReader reader = new ArrowStreamReader(inputStream, allocator)) {
 
@@ -100,17 +163,16 @@ public class Demo {
                         if (root.getRowCount() > 0) {
                             org.apache.arrow.vector.BigIntVector countVector = (org.apache.arrow.vector.BigIntVector) root.getVector("count");
                             long count = countVector.getObject(0);
-                            System.out.println("[" + java.time.LocalTime.now() + "] Log count: " + count);
+                            System.out.println("Ingested log count: " + count);
                         }
                     }
                 }
             } else {
-                System.err.println("Query failed: HTTP " + conn.getResponseCode());
+                System.err.println("Count query failed: HTTP " + status);
             }
             conn.disconnect();
         } catch (Exception e) {
             System.err.println("Error running count query: " + e.getMessage());
-            e.printStackTrace();
         }
     }
 

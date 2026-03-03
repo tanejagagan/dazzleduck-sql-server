@@ -44,7 +44,11 @@ public class Runtime implements Closeable {
 
     public static Runtime start(String[] args) throws Exception {
         Config overrides = CommandLineConfigUtil.loadCommandLineConfig(args).config();
-        Config config = overrides.withFallback(ConfigFactory.load()).getConfig(CONFIG_PATH);
+        Config config = overrides
+                .withFallback(ConfigFactory.parseResources("reference.conf"))
+                .withFallback(ConfigFactory.systemProperties())
+                .resolve()
+                .getConfig(CONFIG_PATH);
         return start(config);
     }
 
