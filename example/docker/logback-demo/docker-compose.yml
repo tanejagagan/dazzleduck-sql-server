@@ -51,9 +51,26 @@ services:
       start_period: 30s
     restart: unless-stopped
 
-  logback-demo:
+  logback-demo-app1:
     image: dazzleduck/dazzleduck:latest
-    container_name: logback-demo
+    container_name: logback-demo-app1
+    command: ["io.dazzleduck.sql.logback.demo.Demo"]
+    environment:
+      - DAZZLEDUCK_BASE_URL=http://dazzleduck-server:8081
+      - DAZZLEDUCK_USERNAME=admin
+      - DAZZLEDUCK_PASSWORD=admin
+      - DAZZLEDUCK_INGESTION_QUEUE=log
+      - JAVA_TOOL_OPTIONS=-Dlogback.configurationFile=logback-demo.xml
+    depends_on:
+      dazzleduck-server:
+        condition: service_healthy
+    networks:
+      - dazzleduck-net
+    restart: on-failure
+
+  logback-demo-app2:
+    image: dazzleduck/dazzleduck:latest
+    container_name: logback-demo-app2
     command: ["io.dazzleduck.sql.logback.demo.Demo"]
     environment:
       - DAZZLEDUCK_BASE_URL=http://dazzleduck-server:8081
