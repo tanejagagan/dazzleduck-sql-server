@@ -57,7 +57,11 @@ public class Main {
 
     public static FlightServer createServer(String[] args) throws Exception {
         var commandLineConfig = CommandLineConfigUtil.loadCommandLineConfig(args).config();
-        var config = commandLineConfig.withFallback(ConfigFactory.load()).getConfig(CONFIG_PATH);
+        var config = commandLineConfig
+                .withFallback(ConfigFactory.parseResources("reference.conf"))
+                .withFallback(ConfigFactory.systemProperties())
+                .resolve()
+                .getConfig(CONFIG_PATH);
         return createServer(config);
     }
     public static FlightServer createServer(Config config) throws Exception {
@@ -124,10 +128,10 @@ public class Main {
         }
 
         // Validate port from producer location
-        int port = producer.getExternalLocation().getUri().getPort();
+        int port = producer.getServerLocation().getUri().getPort();
         validatePort(port);
 
-        String host = producer.getExternalLocation().getUri().getHost();
+        String host = producer.getServerLocation().getUri().getHost();
 
         logger.info("Starting Flight server with configuration:");
         logger.info("  Host: {}", host);
@@ -140,7 +144,7 @@ public class Main {
         try (var certStream = getInputStreamForResource(serverCertLocation);
              var keyStream = getInputStreamForResource(keystoreLocation)) {
 
-            var builder = FlightServer.builder(allocator, producer.getExternalLocation(), producer)
+            var builder = FlightServer.builder(allocator, producer.getServerLocation(), producer)
                     .middleware(AdvanceServerCallHeaderAuthMiddleware.KEY,
                             new AdvanceServerCallHeaderAuthMiddleware.Factory(authenticator));
             if (useEncryption) {

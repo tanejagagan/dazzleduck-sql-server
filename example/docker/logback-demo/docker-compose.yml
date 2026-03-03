@@ -19,7 +19,7 @@ services:
       - "59307:59307"
     working_dir: /workspace
     volumes:
-      - warehouse-data:/workspace/warehouse
+      - ./warehouse:/workspace/warehouse
     entrypoint:
       - /bin/sh
       - -c
@@ -60,15 +60,13 @@ services:
       - DAZZLEDUCK_USERNAME=admin
       - DAZZLEDUCK_PASSWORD=admin
       - DAZZLEDUCK_INGESTION_QUEUE=log
+      - JAVA_TOOL_OPTIONS=-Dlogback.configurationFile=logback-demo.xml
     depends_on:
       dazzleduck-server:
         condition: service_healthy
     networks:
       - dazzleduck-net
     restart: on-failure
-
-volumes:
-  warehouse-data:
 
 networks:
   dazzleduck-net:

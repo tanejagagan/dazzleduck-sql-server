@@ -25,9 +25,11 @@ public class ConfigConstants {
 
     // Flight SQL configuration keys
     public static final String FLIGHT_SQL_PREFIX = "flight_sql";
+    public static final String USE_ENCRYPTION_KEY = "use_encryption";
     public static final String FLIGHT_SQL_USE_ENCRYPTION_KEY = "flight_sql.use_encryption";
     public static final String FLIGHT_SQL_HOST_KEY = "flight_sql.host";
     public static final String FLIGHT_SQL_PORT_KEY = "flight_sql.port";
+    public static final String FLIGHT_SQL_DATA_PROCESSOR_LOCATIONS_KEY = "flight_sql.data_processor_locations";
 
     // Server configuration keys
     public static final String KEYSTORE_KEY = "keystore";

@@ -70,6 +70,8 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
 
     @Override
     public void write(WriteTask<String, IngestionResult> writeTask) {
+        logger.info("Ingestion queue '{}' received batch with {} files, outputPath={}",
+                queueId, writeTask.bucket().batches().size(), outputPath);
         try {
             IngestionResult ingestionResult = tryWrite(writeTask);
             var postIngestionTask = postIngestionTaskFactory.createPostIngestionTask(ingestionResult);
@@ -140,6 +142,7 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
                     TO '%s'
                     (FORMAT %s %s, RETURN_FILES, APPEND);
                 """.formatted(selectClause, this.inputFormat, arrowFiles, sortOrderClause, fullFilePath, outputFormat, partitionByClause);
+        logger.info("Executing COPY SQL: {}", sql);
         List<String> files = new ArrayList<>();
         long count = 0;
         try (var conn = ConnectionPool.getConnection();
@@ -173,6 +176,8 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
                 }
             }
         }
+        logger.info("COPY completed for queue '{}': {} rows written, {} files: {}",
+                queueId, count, files.size(), files);
         return new IngestionResult(this.queueId, writeTask.taskId(), this.applicationId,
                 writeTask.bucket().getProducerMaxBatchId(),
                 count,
