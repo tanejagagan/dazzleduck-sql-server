@@ -209,12 +209,12 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
     public static final String  DEFAULT_DATABASE = "memory";
     protected final FlightRecorder recorder;
     private final Instant startTime;
-    private final Random random = new Random();
     private final AccessMode accessMode;
     private final Set<Integer> supportedSqlInfo;
     protected final ExecutorService executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
     private final static Logger logger = LoggerFactory.getLogger(DuckDBFlightSqlProducer.class);
-    private final List<Location> locations = new ArrayList<>();
+    private Set<Location> dataProcessorLocations = new LinkedHashSet<>();
+    private final Location serverLocation;
     private final String producerId;
     protected final String secretKey;
 
@@ -272,7 +272,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         return dir;
     }
 
-    public DuckDBFlightSqlProducer(Location location,
+    public DuckDBFlightSqlProducer(Location serverLocation,
                                    String producerId,
                                    String secretKey,
                                    BufferAllocator allocator,
@@ -283,12 +283,12 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                                    ScheduledExecutorService scheduledExecutorService,
                                    Duration queryTimeout,
                                    IngestionConfig ingestionConfig) {
-        this(location, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, ingestionTaskFactory,
+        this(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, ingestionTaskFactory,
                 scheduledExecutorService, queryTimeout, Clock.systemDefaultZone(),
-                buildRecorder(producerId),  ingestionConfig);
+                buildRecorder(producerId), ingestionConfig, List.of());
 
     }
-    public DuckDBFlightSqlProducer(Location location,
+    public DuckDBFlightSqlProducer(Location serverLocation,
                                    String producerId,
                                    String secretKey,
                                    BufferAllocator allocator,
@@ -301,8 +301,27 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                                    Clock clock,
                                    FlightRecorder recorder,
                                    IngestionConfig bulkIngestionConfig) {
+        this(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, ingestionTaskFactory,
+                scheduledExecutorService, queryTimeout, clock, recorder, bulkIngestionConfig, List.of());
+    }
+
+    public DuckDBFlightSqlProducer(Location serverLocation,
+                                   String producerId,
+                                   String secretKey,
+                                   BufferAllocator allocator,
+                                   String warehousePath,
+                                   AccessMode accessMode,
+                                   Path tempDir,
+                                   IngestionTaskFactory ingestionTaskFactory,
+                                   ScheduledExecutorService scheduledExecutorService,
+                                   Duration queryTimeout,
+                                   Clock clock,
+                                   FlightRecorder recorder,
+                                   IngestionConfig bulkIngestionConfig,
+                                   List<Location> dataProcessorLocations) {
         this.startTime = clock.instant();
-        this.locations.add( location);
+        this.serverLocation = serverLocation;
+        this.dataProcessorLocations.addAll(dataProcessorLocations);
         this.producerId = producerId;
         this.allocator = allocator;
         this.secretKey = secretKey;
@@ -1078,11 +1097,21 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
 
 
     /**
-     * @return external location which will be visible to client.
-     * This can be  the location of the producer it can be overwritten based on external hostname and port
+     * @return external locations which will be visible to client.
+     * This can be the location of the producer it can be overwritten based on external hostname and port
      */
-    public synchronized Location getExternalLocation(){
-        return locations.get(random.nextInt(locations.size()));
+    public Location getServerLocation() {
+        return serverLocation;
+    }
+
+    public synchronized Set<Location> getDataProcessorLocations(){
+        return Set.copyOf(dataProcessorLocations);
+    }
+
+    public synchronized void setDataProcessorLocations(Collection<Location> dataProcessorLocations){
+        var newLocations = new LinkedHashSet<Location>();
+        newLocations.addAll(dataProcessorLocations);
+        this.dataProcessorLocations = newLocations;
     }
 
 
@@ -1129,11 +1158,11 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
     }
 
     public synchronized boolean addLocation(Location location){
-        return locations.add(location);
+        return dataProcessorLocations.add(location);
     }
 
     public synchronized boolean removeLocation(Location location){
-        return locations.remove(location);
+        return dataProcessorLocations.remove(location);
     }
 
     private StatementContext<?> getStatementContext(CacheKey key) {
@@ -1179,9 +1208,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
     protected <T extends Message> FlightInfo getFlightInfoForSchema(
             final T request, final FlightDescriptor descriptor, final Schema schema) {
         final Ticket ticket = new Ticket(pack(request).toByteArray());
-        // TODO Support multiple endpoints.
-        var location = getExternalLocation();
-        final List<FlightEndpoint> endpoints = singletonList(new FlightEndpoint(ticket, location));
+        var locs = getDataProcessorLocations();
+        final List<FlightEndpoint> endpoints = singletonList(new FlightEndpoint(ticket, locs.toArray(new Location[0])));
         return new FlightInfo(schema, descriptor, endpoints, -1, -1);
     }
 
@@ -1246,10 +1274,10 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
 
     <T extends Message> FlightInfo getFlightInfoForSchema(
             final List<T> requests, final FlightDescriptor descriptor,
-            final Schema schema, Location location) {
+            final Schema schema, Collection<Location> locs) {
         var endpoints = requests.stream().map(request -> {
             var ticket = new Ticket(pack(request).toByteArray());
-            return new FlightEndpoint(ticket, location);
+            return new FlightEndpoint(ticket, locs.toArray(new Location[0]));
         }).toList();
         return new FlightInfo(schema, descriptor, endpoints, -1, -1);
     }
