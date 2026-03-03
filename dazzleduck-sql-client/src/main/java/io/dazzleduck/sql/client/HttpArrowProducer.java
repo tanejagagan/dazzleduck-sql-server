@@ -337,7 +337,7 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
                 throw new RuntimeException("Ingestion failed with status " + resp.statusCode() + ": " + resp.body());
             }
 
-            logger.debug("Successfully sent to {}", buildIngestUrl());
+            logger.info("Successfully sent {} bytes to {}", payload.length, buildIngestUrl());
 
         } catch (HttpTimeoutException e) {
             logger.error("HTTP request timed out after {} to {}", httpClientTimeout, buildIngestUrl(), e);

@@ -141,7 +141,7 @@ public class FlightSqlProducerFactoryTest {
         DuckDBFlightSqlProducer producer = FlightSqlProducerFactory.createFromConfig(config);
 
         assertNotNull(producer);
-        assertEquals(Location.forGrpcInsecure("127.0.0.1", 12345), producer.getExternalLocation());
+        assertEquals(Location.forGrpcInsecure("127.0.0.1", 12345), producer.getServerLocation());
 
         // Clean up
         producer.close();
@@ -175,7 +175,7 @@ public class FlightSqlProducerFactoryTest {
         DuckDBFlightSqlProducer producer = FlightSqlProducerFactory.createFromConfig(config);
 
         assertNotNull(producer);
-        assertEquals(Location.forGrpcTls("secure.example.com", 443), producer.getExternalLocation());
+        assertEquals(Location.forGrpcTls("secure.example.com", 443), producer.getServerLocation());
 
         // Clean up
         producer.close();
@@ -559,7 +559,7 @@ public class FlightSqlProducerFactoryTest {
         assertNotNull(producer);
 
         // Verify defaults
-        assertEquals(Location.forGrpcInsecure("0.0.0.0", 32010), producer.getExternalLocation());
+        assertEquals(Location.forGrpcInsecure("0.0.0.0", 32010), producer.getServerLocation());
         assertEquals("test-producer", producer.getProducerId());
         assertFalse(producer instanceof RestrictedFlightSqlProducer); // Default is COMPLETE mode
 

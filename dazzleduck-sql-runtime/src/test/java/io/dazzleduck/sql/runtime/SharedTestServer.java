@@ -15,6 +15,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Test server that provides a Runtime instance for integration tests.
@@ -101,6 +102,8 @@ public final class SharedTestServer implements Closeable {
                 .withValue("flight_sql.port", ConfigValueFactory.fromAnyRef(flightPort))
                 .withValue("flight_sql.host", ConfigValueFactory.fromAnyRef("localhost"))
                 .withValue("flight_sql.use_encryption", ConfigValueFactory.fromAnyRef(false))
+                .withValue("flight_sql.data_processor_locations", ConfigValueFactory.fromIterable(
+                        List.of(ConfigValueFactory.fromMap(Map.of("host", "localhost", "port", flightPort, "use_encryption", false)).unwrapped())))
                 .withValue("warehouse", ConfigValueFactory.fromAnyRef(warehousePath))
                 .withValue("http.auth", ConfigValueFactory.fromAnyRef("jwt"))
                 .withValue("ingestion.max_delay_ms", ConfigValueFactory.fromAnyRef(50))
@@ -149,6 +152,8 @@ public final class SharedTestServer implements Closeable {
                 .withValue("flight_sql.port", ConfigValueFactory.fromAnyRef(flightPort))
                 .withValue("flight_sql.host", ConfigValueFactory.fromAnyRef("localhost"))
                 .withValue("flight_sql.use_encryption", ConfigValueFactory.fromAnyRef(false))
+                .withValue("flight_sql.data_processor_locations", ConfigValueFactory.fromIterable(
+                        List.of(ConfigValueFactory.fromMap(Map.of("host", "localhost", "port", flightPort, "use_encryption", false)).unwrapped())))
                 .withValue("http.auth", ConfigValueFactory.fromAnyRef("jwt"))
                 .withValue("ingestion.max_delay_ms", ConfigValueFactory.fromAnyRef(50))
                 .withValue("ingestion_task_factory_provider.class", ConfigValueFactory.fromAnyRef("io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider"))

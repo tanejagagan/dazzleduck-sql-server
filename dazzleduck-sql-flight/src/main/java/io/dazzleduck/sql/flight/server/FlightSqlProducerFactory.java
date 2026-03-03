@@ -18,6 +18,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 
@@ -98,6 +99,7 @@ public final class FlightSqlProducerFactory {
     public static class ProducerBuilder {
         private final Config config;
         private Location location;
+        private List<Location> dataProcessorLocations;
         private String producerId;
         private String secretKey;
         private String warehousePath;
@@ -124,6 +126,7 @@ public final class FlightSqlProducerFactory {
         private void readConfigValues() {
             // Location
             this.location = readLocationFromConfig();
+            this.dataProcessorLocations = readDataProcessorLocationsFromConfig();
 
             // Core settings
             this.warehousePath = ConfigConstants.getWarehousePath(config);
@@ -424,7 +427,8 @@ public final class FlightSqlProducerFactory {
                     clock,
                     finalRecorder,
                     queryOptimizer,
-                    ingestionConfig
+                    ingestionConfig,
+                    dataProcessorLocations
                 );
             } else {
                 return new DuckDBFlightSqlProducer(
@@ -440,7 +444,8 @@ public final class FlightSqlProducerFactory {
                     queryTimeout,
                     clock,
                     finalRecorder,
-                    ingestionConfig
+                    ingestionConfig,
+                    dataProcessorLocations
                 );
             }
         }
@@ -456,6 +461,24 @@ public final class FlightSqlProducerFactory {
             return useEncryption
                 ? Location.forGrpcTls(host, port)
                 : Location.forGrpcInsecure(host, port);
+        }
+
+        private List<Location> readDataProcessorLocationsFromConfig() {
+            if (!config.hasPath(ConfigConstants.FLIGHT_SQL_DATA_PROCESSOR_LOCATIONS_KEY)) {
+                return List.of();
+            }
+            return config.getConfigList(ConfigConstants.FLIGHT_SQL_DATA_PROCESSOR_LOCATIONS_KEY)
+                .stream()
+                .map(c -> {
+                    String host = c.getString(ConfigConstants.HOST_KEY);
+                    int port = c.getInt(ConfigConstants.PORT_KEY);
+                    boolean useEncryption = c.hasPath(ConfigConstants.USE_ENCRYPTION_KEY)
+                        && c.getBoolean(ConfigConstants.USE_ENCRYPTION_KEY);
+                    return useEncryption
+                        ? Location.forGrpcTls(host, port)
+                        : Location.forGrpcInsecure(host, port);
+                })
+                .toList();
         }
 
         private static IngestionTaskFactory loadIngestionTaskFactory(Config config) throws Exception {
