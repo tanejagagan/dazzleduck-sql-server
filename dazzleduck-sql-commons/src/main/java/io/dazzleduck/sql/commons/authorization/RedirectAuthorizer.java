@@ -13,9 +13,12 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Handles authorization for tokens with {@code token_type=redirect}.
@@ -33,31 +36,17 @@ public class RedirectAuthorizer {
     private static final Logger logger = LoggerFactory.getLogger(RedirectAuthorizer.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final HttpClient HTTP_CLIENT = HttpClient.newHttpClient();
+    private static final Duration RESOLVE_RESPONSE_TTL = Duration.ofMinutes(5);
 
     public static final RedirectAuthorizer INSTANCE = new RedirectAuthorizer();
 
-    private final String resolveUrl;
-
-    private RedirectAuthorizer() {
-        this.resolveUrl = deriveResolveUrl();
-    }
-
-    private static String deriveResolveUrl() {
-        try {
-            var config = ConfigFactory.load().getConfig(ConfigConstants.CONFIG_PATH);
-            if (!config.hasPath(ConfigConstants.LOGIN_URL_KEY)) {
-                return null;
-            }
-            String loginUrl = config.getString(ConfigConstants.LOGIN_URL_KEY);
-            if (loginUrl.endsWith("/login")) {
-                return loginUrl.substring(0, loginUrl.length() - "/login".length()) + "/resolve";
-            }
-            return loginUrl + "/resolve";
-        } catch (Exception e) {
-            logger.warn("Could not read login_url from config for redirect authorization: {}", e.getMessage());
-            return null;
+    private record ResolveResponseCacheEntry(ResolveResponse resolveResponse, Instant resolvedAt) {
+        boolean isExpired() {
+            return Instant.now().isAfter(resolvedAt.plus(RESOLVE_RESPONSE_TTL));
         }
     }
+
+    private final Map<String, ResolveResponseCacheEntry> resolveResponseByUser = new ConcurrentHashMap<>();
 
     /**
      * Authorizes a query by calling the remote resolve endpoint and matching each
@@ -73,7 +62,12 @@ public class RedirectAuthorizer {
             throw new UnauthorizedException("No bearer token available for redirect authorization");
         }
 
-        ResolveResponse response = callResolveEndpoint(bearerToken);
+        String redirectUrl = verifiedClaims.get(Headers.HEADER_REDIRECT_URL);
+        if (redirectUrl == null) {
+            throw new UnauthorizedException("No redirect url available for redirect authorization");
+        }
+
+        ResolveResponse response = callResolveEndpoint(user, bearerToken, redirectUrl);
 
         var firstStatement = Transformations.getFirstStatementNode(query);
         var catalogSchemaTables = Transformations.getAllTablesOrPathsFromSelect(firstStatement, database, schema);
@@ -157,10 +151,10 @@ public class RedirectAuthorizer {
         }
     }
 
-    private ResolveResponse callResolveEndpoint(String bearerToken) throws UnauthorizedException {
-        if (resolveUrl == null) {
-            throw new UnauthorizedException(
-                    "Redirect authorization requested but login_url is not configured on this server");
+    private ResolveResponse callResolveEndpoint(String user, String bearerToken, String resolveUrl) throws UnauthorizedException {
+        ResolveResponseCacheEntry entry = resolveResponseByUser.get(user);
+        if (entry != null && !entry.isExpired()) {
+            return entry.resolveResponse();
         }
         try {
             var request = HttpRequest.newBuilder()
@@ -173,7 +167,9 @@ public class RedirectAuthorizer {
                 throw new UnauthorizedException(
                         "Resolve endpoint returned status " + response.statusCode());
             }
-            return MAPPER.readValue(response.body(), ResolveResponse.class);
+            ResolveResponse resolved = MAPPER.readValue(response.body(), ResolveResponse.class);
+            resolveResponseByUser.put(user, new ResolveResponseCacheEntry(resolved, Instant.now()));
+            return resolved;
         } catch (UnauthorizedException e) {
             throw e;
         } catch (Exception e) {

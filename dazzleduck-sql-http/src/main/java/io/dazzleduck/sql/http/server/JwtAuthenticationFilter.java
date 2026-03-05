@@ -54,13 +54,12 @@ public class JwtAuthenticationFilter implements Filter {
                 var claimFromJwt = payload.get(key, String.class);
                 allClaimsFromJWT.put(key, claimFromJwt);
             }
-            // Always extract token_type regardless of claimHeader config,
-            // so the authorizer can dispatch inline vs redirect without any config change
             var tokenType = payload.get(Headers.HEADER_TOKEN_TYPE, String.class);
-            if (tokenType != null) {
-                allClaimsFromJWT.put(Headers.HEADER_TOKEN_TYPE, tokenType);
+            allClaimsFromJWT.put(Headers.HEADER_TOKEN_TYPE, tokenType != null ? tokenType : Headers.HEADER_TOKEN_INLINE);
+            var redirectUrl = payload.get(Headers.HEADER_REDIRECT_URL, String.class);
+            if (redirectUrl != null) {
+                allClaimsFromJWT.put(Headers.HEADER_REDIRECT_URL, redirectUrl);
             }
-            // Store the raw bearer token so redirect authorizer can forward it to /resolve
             allClaimsFromJWT.put(Headers.HEADER_BEARER_TOKEN, token);
             if (expiration.after(new Date())) {
                 return new SubjectAndVerifiedClaims(subject, Collections.unmodifiableMap(allClaimsFromJWT));
