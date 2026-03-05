@@ -7,6 +7,8 @@ import io.dazzleduck.sql.commons.Transformations;
 
 import java.util.Map;
 
+import static io.dazzleduck.sql.common.Headers.HEADER_TOKEN_REDIRECT;
+
 /**
  * JWT Claim-based Authorizer for SQL query and write access authorization.
  *
@@ -63,7 +65,7 @@ public class JwtClaimBasedAuthorizer implements SqlAuthorizer {
     public JsonNode authorize(String user, String database, String schema, JsonNode query, Map<String, String> verifiedClaims) throws UnauthorizedException {
         // Dispatch to redirect authorizer when the token signals redirect mode
         String tokenType = verifiedClaims.get(Headers.HEADER_TOKEN_TYPE);
-        if ("redirect".equalsIgnoreCase(tokenType)) {
+        if (HEADER_TOKEN_REDIRECT.equalsIgnoreCase(tokenType)) {
             return RedirectAuthorizer.INSTANCE.authorize(user, database, schema, query, verifiedClaims);
         }
 

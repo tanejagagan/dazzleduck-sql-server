@@ -39,6 +39,10 @@ public class Headers {
 
     // Token type claim for redirect vs inline authorization ("inline" or "redirect")
     public static final String HEADER_TOKEN_TYPE = "token_type";
+    public static final String HEADER_TOKEN_REDIRECT = "redirect";
+    public static final String HEADER_TOKEN_INLINE = "inline";
+
+    public static final String HEADER_REDIRECT_URL = "redirect_url";
 
     // Reserved internal key used to carry the raw bearer token through verifiedClaims
     // so that RedirectAuthorizer can forward it to the resolve endpoint

@@ -51,13 +51,6 @@ public class HttpServerRedirectAuthorizationTest extends HttpServerTestBase {
                 "--conf", "dazzleduck_server.http.%s=jwt".formatted(ConfigConstants.AUTHENTICATION_KEY)
         );
 
-        // Set login_url AFTER startServer() so DuckDB keeps using its built-in LoginService.
-        // RedirectAuthorizer is initialized lazily (on the first redirect query), at which
-        // point it calls ConfigFactory.load() fresh and picks up this system property to
-        // derive the resolve URL: http://localhost:5555/v1/resolve
-        System.setProperty("dazzleduck_server.login_url", "http://localhost:5555/v1/login");
-        ConfigFactory.invalidateCaches();
-
         ConnectionPool.executeBatch(new String[]{
                 "CREATE TABLE t1 (age INT, class VARCHAR(50), city VARCHAR(100))",
                 "CREATE TABLE t2 (age INT, class VARCHAR(50), city VARCHAR(100))",
@@ -93,7 +86,7 @@ public class HttpServerRedirectAuthorizationTest extends HttpServerTestBase {
      */
     @Test
     void testRedirectAuthorizedTable() throws Exception {
-        var jwtResponse = loginWithClaims(Map.of(Headers.HEADER_TOKEN_TYPE, "redirect", "cluster", "cc1", "org_id", "1"));
+        var jwtResponse = loginWithClaims(Map.of(Headers.HEADER_TOKEN_TYPE, "redirect", "cluster", "cc1", "org_id", "1", Headers.HEADER_REDIRECT_URL, "http://localhost:5555/v1/resolve"));
         assertEquals(200, jwtResponse.statusCode());
         var jwt = objectMapper.readValue(jwtResponse.body(), LoginResponse.class);
 
@@ -120,7 +113,7 @@ public class HttpServerRedirectAuthorizationTest extends HttpServerTestBase {
      */
     @Test
     void testInlineStillWorksRegression() throws Exception {
-        var jwtResponse = loginWithClaims(Map.of(Headers.HEADER_TABLE, "t2"));
+        var jwtResponse = loginWithClaims(Map.of(Headers.HEADER_TABLE, "t2", Headers.HEADER_REDIRECT_URL, "http://localhost:5555/v1/resolve"));
         assertEquals(200, jwtResponse.statusCode());
         var jwt = objectMapper.readValue(jwtResponse.body(), LoginResponse.class);
 
