@@ -1,6 +1,7 @@
 package io.dazzleduck.sql.commons.authorization;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.List;
 
@@ -10,7 +11,7 @@ import java.util.List;
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record ResolveAccessRow(
-        String catalog,
+        @JsonProperty("database") String catalog,
         String schema,
         String tableOrPath,
         String tableType,
