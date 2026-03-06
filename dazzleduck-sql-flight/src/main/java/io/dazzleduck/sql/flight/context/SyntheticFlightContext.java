@@ -37,7 +37,7 @@ public class SyntheticFlightContext implements FlightProducer.CallContext {
         if (subjectAndVerifiedClaims != null) {
             this.peerIdentity = subjectAndVerifiedClaims.subject();
         } else {
-            this.peerIdentity = extractPeerIdentityFromBasicAuth(headers);
+            this.peerIdentity = extractPeerIdentityFromAuth(headers);
         }
 
         AuthResultWithClaims authResultWithClaims = subjectAndVerifiedClaims != null
@@ -79,18 +79,20 @@ public class SyntheticFlightContext implements FlightProducer.CallContext {
         return middlewareMap;
     }
 
-    public static String extractPeerIdentityFromBasicAuth(Map<String, List<String>> headers) {
+    public static String extractPeerIdentityFromAuth(Map<String, List<String>> headers) {
         List<String> authHeaders = headers.get(Auth2Constants.AUTHORIZATION_HEADER);
         if (authHeaders == null || authHeaders.isEmpty()) {
             return null;
         }
 
         String authHeader = authHeaders.get(0);
-        if (!authHeader.startsWith(Auth2Constants.BASIC_PREFIX)) {
-            return null;
+        String encodedCredentials;
+        if (authHeader.startsWith(Auth2Constants.BEARER_PREFIX)) {
+            encodedCredentials = authHeader.substring(Auth2Constants.BEARER_PREFIX.length() + 1);
+        } else {
+            encodedCredentials = authHeader.substring(Auth2Constants.BASIC_PREFIX.length() + 1);
         }
 
-        String encodedCredentials = authHeader.substring(Auth2Constants.BASIC_PREFIX.length() + 1);
         String decodedCredentials = new String(
                 Base64.getDecoder().decode(encodedCredentials),
                 StandardCharsets.UTF_8

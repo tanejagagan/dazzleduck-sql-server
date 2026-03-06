@@ -1,9 +1,8 @@
 package io.dazzleduck.sql.commons.authorization;
 
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.typesafe.config.ConfigFactory;
-import io.dazzleduck.sql.common.ConfigConstants;
 import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.commons.Transformations;
 import org.slf4j.Logger;
@@ -85,7 +84,7 @@ public class RedirectAuthorizer {
             if (matched == null) {
                 throw new UnauthorizedException("No access to %s".formatted(cst));
             }
-            if (firstFilter == null && matched.filter() != null) {
+            if (firstFilter == null && matched.filter() != null && !matched.filter().isEmpty()) {
                 firstFilter = matched.filter();
                 firstType = cst.type();
             }
@@ -105,8 +104,8 @@ public class RedirectAuthorizer {
     }
 
     private ResolveAccessRow findMatchingRow(ResolveResponse response,
-                                              Transformations.CatalogSchemaTable cst,
-                                              String database, String schema) {
+                                             Transformations.CatalogSchemaTable cst,
+                                             String database, String schema) {
         List<ResolveAccessRow> candidates = switch (cst.type()) {
             case TABLE_FUNCTION -> response.functions() != null ? response.functions() : List.of();
             case BASE_TABLE -> response.tables() != null ? response.tables() : List.of();
@@ -117,7 +116,7 @@ public class RedirectAuthorizer {
                 continue;
             }
             if (cst.type() == Transformations.TableType.BASE_TABLE) {
-                if (database.equals(row.database())
+                if (database.equals(row.catalog())
                         && schema.equals(row.schema())
                         && SqlAuthorizer.hasAccessToTable(database, schema, row.tableOrPath(), cst)) {
                     return row;
@@ -140,7 +139,6 @@ public class RedirectAuthorizer {
             return false;
         }
         try {
-            // expiration may be a full datetime string; take only the date part
             String datePart = row.expiration().length() >= 10
                     ? row.expiration().substring(0, 10)
                     : row.expiration();

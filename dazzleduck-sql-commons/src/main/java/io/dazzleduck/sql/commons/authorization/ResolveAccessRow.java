@@ -10,17 +10,11 @@ import java.util.List;
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record ResolveAccessRow(
-        Long id,
-        String clusterName,
-        String sourceType,
-        String sourceName,
-        String database,
+        String catalog,
         String schema,
         String tableOrPath,
         String tableType,
         List<String> columns,
         String filter,
         String functionName,
-        String expiration,
-        String accessTime) {
-}
+        String expiration) { }

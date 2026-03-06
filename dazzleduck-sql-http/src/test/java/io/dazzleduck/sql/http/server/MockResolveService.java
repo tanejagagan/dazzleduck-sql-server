@@ -86,34 +86,29 @@ public class MockResolveService implements HttpService {
         // --- Tables (BASE_TABLE) ---
         // redirect_test: primary test table, carries org_id row-level filter
         ResolveAccessRow redirectTest = new ResolveAccessRow(
-                1L, cluster, "USER", "admin",
                 "memory", "main", "t1", "BASE_TABLE",
-                List.of(), "city = 'Bangalore'", "", "2099-12-31", "");
+                List.of(), "city = 'Bangalore'", "", "2099-12-31");
 
         // redirect_users: second test table, no row filter
         ResolveAccessRow redirectUsers = new ResolveAccessRow(
-                2L, cluster, "USER", "admin",
                 "memory", "main", "t2", "BASE_TABLE",
-                List.of(), "age > 20", "", "2099-12-31", "");
+                List.of(), "age > 20", "", "2099-12-31");
 
         // redirect_events: third test table, carries org_id row-level filter
         ResolveAccessRow redirectEvents = new ResolveAccessRow(
-                3L, cluster, "USER", "admin",
                 "memory", "main", "t3", "BASE_TABLE",
-                List.of(), "", "", "2025-12-31", "");
+                List.of(), "", "", "2025-12-31");
 
         // --- Functions (TABLE_FUNCTION) ---
         // read_parquet: grants access to all parquet files under the cluster's data path
         ResolveAccessRow readParquet = new ResolveAccessRow(
-                4L, cluster, "USER", "admin",
                 "memory", "main", cluster, "TABLE_FUNCTION",
-                List.of(), "", "read_parquet", "2099-12-31", "");
+                List.of(), "", "read_parquet", "2099-12-31");
 
         // read_delta: same path prefix, different function
         ResolveAccessRow readDelta = new ResolveAccessRow(
-                5L, cluster, "USER", "admin",
                 "memory", "main", cluster, "TABLE_FUNCTION",
-                List.of(), "", "read_delta", "2099-12-31", "");
+                List.of(), "", "read_delta", "2099-12-31");
 
         ResolveResponse response = new ResolveResponse(
                 List.of(redirectTest, redirectUsers, redirectEvents),
