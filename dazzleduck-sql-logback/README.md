@@ -49,6 +49,11 @@ Create a standard Logback XML file (any filename) in `src/main/resources/`:
         <baseUrl>http://localhost:8081</baseUrl>
         <username>admin</username>
         <password>admin</password>
+        <claims>
+            <database>logs_db</database>
+            <schema>public</schema>
+            <environment>production</environment>
+        </claims>
         <ingestionQueue>app-logs</ingestionQueue>
         <project>*, CAST(timestamp AS DATE) AS date</project>
         <partitionBy>date</partitionBy>
@@ -191,6 +196,7 @@ All properties that can appear inside the `<appender>` element:
 | `baseUrl` | DazzleDuck server URL | `http://localhost:8081` |
 | `username` | Authentication username | `admin` |
 | `password` | Authentication password | `admin` |
+| `claims` | Custom JWT claims for row-level security | `{}` |
 | `ingestionQueue` | Target ingestion queue name | `log` |
 | `minBatchSize` | Min bytes to accumulate before sending | `1024` |
 | `project` | Comma-separated SQL projection expressions | _(all columns)_ |
@@ -290,10 +296,17 @@ Add the following to your logback XML to route these to console only:
 ## Programmatic Configuration
 
 ```java
+import java.util.Map;
+
 LogForwarderConfig config = LogForwarderConfig.builder()
         .baseUrl("http://localhost:8081")
         .username("admin")
         .password("admin")
+        .claims(Map.of(
+            "database", "logs_db",
+            "schema", "public",
+            "environment", "production"
+        ))
         .ingestionQueue("log")
         .project(List.of("*", "CAST(timestamp AS DATE) AS date"))
         .partitionBy(List.of("date"))

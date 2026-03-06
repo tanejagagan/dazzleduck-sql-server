@@ -11,6 +11,7 @@ import org.apache.arrow.vector.types.pojo.Schema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
@@ -67,6 +68,7 @@ public class MetricsForwarder {
             properties.getBaseUrl(),
             properties.getUsername(),
             properties.getPassword(),
+            properties.getClaims(),
             properties.getPath(),
             Duration.ofMillis(properties.getReadTimeoutMs()),
             properties.getMinBatchSize(),
@@ -77,7 +79,8 @@ public class MetricsForwarder {
             properties.getProject(),  // transformations
             properties.getPartition(),  // partitionBy
             properties.getMaxInMemorySize(),
-            properties.getMaxOnDiskSize()
+            properties.getMaxOnDiskSize(),
+            Clock.systemUTC()
         );
 
         log.info("MetricsForwarder initialized with HttpArrowProducer: serverUrl={}, path={}",

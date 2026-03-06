@@ -289,6 +289,10 @@ public class CollectorConfig {
         return getStringList("partition", new ArrayList<>());
     }
 
+    public java.util.Map<String, String> getClaims() {
+        return getMap("auth.claims", new java.util.HashMap<>());
+    }
+
     /**
      * Convert this configuration to CollectorProperties.
      * This provides backward compatibility with existing code.
@@ -320,6 +324,7 @@ public class CollectorConfig {
         props.setMaxOnDiskSize(getMaxOnDiskSize());
         props.setProject(getProject());
         props.setPartition(getPartition());
+        props.setClaims(getClaims());
         return props;
     }
 
@@ -378,6 +383,22 @@ public class CollectorConfig {
         try {
             if (config.hasPath(fullPath)) {
                 return config.getStringList(fullPath);
+            }
+        } catch (Exception e) {
+            log.debug("Error reading config path {}: {}", fullPath, e.getMessage());
+        }
+        return defaultValue;
+    }
+
+    private java.util.Map<String, String> getMap(String path, java.util.Map<String, String> defaultValue) {
+        String fullPath = CONFIG_PREFIX + "." + path;
+        try {
+            if (config.hasPath(fullPath)) {
+                return config.getObject(fullPath).unwrapped().entrySet().stream()
+                        .collect(java.util.stream.Collectors.toMap(
+                                e -> e.getKey().toString(),
+                                e -> e.getValue() != null ? e.getValue().toString() : null
+                        ));
             }
         } catch (Exception e) {
             log.debug("Error reading config path {}: {}", fullPath, e.getMessage());

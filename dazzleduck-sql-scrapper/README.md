@@ -115,6 +115,9 @@ services:
       # ---- auth ----
       - collector.auth.username=admin
       - collector.auth.password=admin
+      - collector.auth.claims.database=metrics_db
+      - collector.auth.claims.schema=public
+      - collector.auth.claims.environment=production
 
       # ---- identity (shows up in every metric row) ----
       - collector.identity.id=envoy-scraper
@@ -144,6 +147,8 @@ services:
 
       - collector.auth.username=admin
       - collector.auth.password=admin
+      - collector.auth.claims.database=app_metrics
+      - collector.auth.claims.schema=public
 
       - collector.identity.id=spring-scraper
       - collector.identity.name=Spring Boot Scraper
@@ -300,6 +305,11 @@ collector {
     auth {
         username = "admin"
         password = "admin"
+        claims {
+            database = "metrics_db"
+            schema = "public"
+            environment = "production"
+        }
     }
 
     # Arrow producer batching and buffering settings
@@ -533,6 +543,7 @@ import io.dazzleduck.sql.scrapper.MetricsCollector;
 import io.dazzleduck.sql.scrapper.config.CollectorConfig;
 
 import java.util.List;
+import java.util.Map;
 
 public class Example {
 
@@ -553,6 +564,11 @@ public class Example {
         props.setFlushIntervalMs(5000);
         props.setUsername("admin");
         props.setPassword("admin");
+        props.setClaims(Map.of(
+            "database", "metrics_db",
+            "schema", "public",
+            "environment", "production"
+        ));
 
         MetricsCollector collector = new MetricsCollector(props);
         collector.start();

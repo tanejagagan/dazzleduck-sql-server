@@ -151,6 +151,8 @@ public class CollectorProperties {
 
     private List<String> partition = List.of();
 
+    private java.util.Map<String, String> claims = java.util.Map.of();
+
     // Getters and Setters
 
     public boolean isEnabled() {
@@ -351,6 +353,14 @@ public class CollectorProperties {
 
     public void setPartition(List<String> partition) {
         this.partition = partition;
+    }
+
+    public java.util.Map<String, String> getClaims() {
+        return claims;
+    }
+
+    public void setClaims(java.util.Map<String, String> claims) {
+        this.claims = claims;
     }
 
     /**
