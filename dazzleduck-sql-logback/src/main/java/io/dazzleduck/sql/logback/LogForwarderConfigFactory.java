@@ -6,6 +6,8 @@ import io.dazzleduck.sql.common.ConfigConstants;
 
 import java.io.File;
 import java.time.Duration;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Factory for creating LogForwarderConfig instances configured from application.conf
@@ -108,10 +110,16 @@ public final class LogForwarderConfigFactory {
     private static LogForwarderConfig buildConfig(Config config) {
         Config http = config.getConfig(ConfigConstants.HTTP_PREFIX);
 
+        Map<String, String> claims = http.hasPath(ConfigConstants.CLAIMS_KEY)
+                ? http.getObject(ConfigConstants.CLAIMS_KEY).unwrapped().entrySet().stream()
+                        .collect(Collectors.toMap(e -> e.getKey(), e -> e.getValue().toString()))
+                : Map.of();
+
         return LogForwarderConfig.builder()
                 .baseUrl(http.getString(ConfigConstants.BASE_URL_KEY))
                 .username(http.getString(ConfigConstants.USERNAME_KEY))
                 .password(http.getString(ConfigConstants.PASSWORD_KEY))
+                .claims(claims)
                 .ingestionQueue(http.getString(ConfigConstants.INGESTION_QUEUE_KEY))
                 .httpClientTimeout(Duration.ofMillis(http.getLong(ConfigConstants.HTTP_CLIENT_TIMEOUT_MS_KEY)))
                 .maxBufferSize(config.getInt(ConfigConstants.MAX_BUFFER_SIZE_KEY))

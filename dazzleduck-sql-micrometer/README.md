@@ -34,9 +34,6 @@ Create an `application.conf` file in your resources:
 
 ```hocon
 dazzleduck_micrometer = {
-  application_id   = "my-app"
-  application_name = "My Application"
-  application_host = "localhost"
   enabled          = true
 
   step_interval_ms = 10000
@@ -48,15 +45,22 @@ dazzleduck_micrometer = {
   max_on_disk_bytes    = 1073741824 # 1 GB
   retry_count          = 3
   retry_interval_ms    = 1000
-  transformations      = []
+  project              = ["*"]
   partition_by         = []
 
   http {
     base_url               = "http://localhost:8081"
     username               = "admin"
     password               = "admin"
-    target_path            = "metrics"
+    ingestion_queue        = "metrics"
     http_client_timeout_ms = 5000
+
+    # Optional: JWT claims for row-level security (RESTRICTED access mode)
+    claims = {
+      database = "metrics_db"
+      schema   = "app_metrics"
+      table    = "events"
+    }
   }
 }
 ```
@@ -200,9 +204,51 @@ Counter counter = Counter.builder("api.calls")
 | `maxOnDiskSize` | Max disk buffer size | `1 GB` |
 | `retryCount` | Number of retry attempts | `3` |
 | `retryIntervalMillis` | Delay between retries | `1000 ms` |
+| `claims` | JWT claims passed to the server at login for row-level security | `{}` (empty) |
 | `transformations` | SQL transformations for metrics | `[]` |
 | `partitionBy` | Partition columns for storage | `[]` |
 | `enabled` | Enable/disable forwarding | `true` |
+
+## JWT Claims
+
+Claims are key-value pairs sent to the server during login. The server embeds them in the JWT token, which is then used for row-level security and query filtering on subsequent requests.
+
+Use claims when the server is configured with `access_mode = RESTRICTED` and you need to scope metric ingestion to a specific database, schema, or table.
+
+### Supported Claim Keys
+
+| Key | Description |
+|-----|-------------|
+| `database` | Target database |
+| `catalog` | Target catalog |
+| `schema` | Target schema |
+| `table` | Target table |
+| `filter` | Row-level filter expression |
+| `path` | Storage path |
+
+### Programmatic Configuration
+
+Claims are set via the builder:
+
+```java
+MicrometerForwarderConfig config = MicrometerForwarderConfig.builder()
+        .baseUrl("http://localhost:8081")
+        .username("admin")
+        .password("admin")
+        .claims(Map.of(
+                "database", "metrics_db",
+                "schema",   "app_metrics",
+                "table",    "events"
+        ))
+        .ingestionQueue("metrics")
+        .stepInterval(Duration.ofSeconds(10))
+        .build();
+
+MicrometerForwarder forwarder = MicrometerForwarder.createAndStart(config);
+```
+
+> Claims are also read automatically from `application.conf` when using `MetricsRegistryFactory`.
+> Set them under `dazzleduck_micrometer.http.claims` as shown in the Quick Start section above.
 
 ## Metrics Schema
 

@@ -98,6 +98,7 @@ public final class MicrometerForwarder implements Closeable {
                     config.baseUrl(),
                     config.username(),
                     config.password(),
+                    config.claims(),
                     config.ingestionQueue(),
                     config.httpClientTimeout(),
                     config.minBatchSize(),
@@ -108,7 +109,8 @@ public final class MicrometerForwarder implements Closeable {
                     config.projections(),
                     config.partitionBy(),
                     config.maxInMemorySize(),
-                    config.maxOnDiskSize()
+                    config.maxOnDiskSize(),
+                    java.time.Clock.systemUTC()
             );
 
             // Create ArrowMicroMeterRegistry

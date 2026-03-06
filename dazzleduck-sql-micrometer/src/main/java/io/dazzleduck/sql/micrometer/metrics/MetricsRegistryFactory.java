@@ -8,6 +8,8 @@ import io.dazzleduck.sql.micrometer.config.MicrometerForwarderConfig;
 import io.micrometer.core.instrument.MeterRegistry;
 
 import java.time.Duration;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Factory for creating MeterRegistry instances configured from application.conf.
@@ -71,10 +73,16 @@ public final class MetricsRegistryFactory {
     public static MicrometerForwarderConfig createConfig() {
         Config http = config.getConfig(ConfigConstants.HTTP_PREFIX);
 
+        Map<String, String> claims = http.hasPath(ConfigConstants.CLAIMS_KEY)
+                ? http.getObject(ConfigConstants.CLAIMS_KEY).unwrapped().entrySet().stream()
+                        .collect(Collectors.toMap(e -> e.getKey(), e -> e.getValue().toString()))
+                : Map.of();
+
         return MicrometerForwarderConfig.builder()
                 .baseUrl(http.getString(ConfigConstants.BASE_URL_KEY))
                 .username(http.getString(ConfigConstants.USERNAME_KEY))
                 .password(http.getString(ConfigConstants.PASSWORD_KEY))
+                .claims(claims)
                 .ingestionQueue(http.getString(ConfigConstants.INGESTION_QUEUE_KEY))
                 .httpClientTimeout(Duration.ofMillis(http.getLong(ConfigConstants.HTTP_CLIENT_TIMEOUT_MS_KEY)))
                 .stepInterval(Duration.ofMillis(config.getLong(ConfigConstants.STEP_INTERVAL_MS_KEY)))

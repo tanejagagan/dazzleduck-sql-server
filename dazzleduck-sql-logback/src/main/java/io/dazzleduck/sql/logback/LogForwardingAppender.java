@@ -6,7 +6,9 @@ import ch.qos.logback.core.AppenderBase;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -70,6 +72,7 @@ public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
     private String baseUrl;
     private String username = "admin";
     private String password = "admin";
+    private Map<String, String> claims = Collections.emptyMap();
     private String ingestionQueue = "log";
     private long minBatchSize = 1024; // 1 KB default for logs (smaller than metrics)
     private List<String> project = Collections.emptyList();
@@ -95,6 +98,24 @@ public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
 
     public void setPassword(String password) {
         this.password = password;
+    }
+
+    /**
+     * Set JWT claims as a comma-separated list of {@code key=value} pairs.
+     * Claims are forwarded to the server at login for row-level security.
+     * Example: {@code database=mydb,schema=app_logs,table=events}
+     */
+    public void setClaims(String claims) {
+        if (claims != null && !claims.trim().isEmpty()) {
+            Map<String, String> result = new LinkedHashMap<>();
+            for (String pair : claims.split(",")) {
+                String[] parts = pair.split("=", 2);
+                if (parts.length == 2) {
+                    result.put(parts[0].trim(), parts[1].trim());
+                }
+            }
+            this.claims = Collections.unmodifiableMap(result);
+        }
     }
 
     public void setIngestionQueue(String ingestionQueue) {
@@ -169,6 +190,7 @@ public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
                         .baseUrl(baseUrl)
                         .username(username)
                         .password(password)
+                        .claims(claims)
                         .ingestionQueue(ingestionQueue)
                         .minBatchSize(minBatchSize)
                         .project(project)

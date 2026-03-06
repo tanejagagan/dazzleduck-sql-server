@@ -56,6 +56,7 @@ public class ConfigConstants {
     public static final String LOGIN_URL_KEY = "login_url";
     public static final String USERNAME_KEY = "username";
     public static final String PASSWORD_KEY = "password";
+    public static final String CLAIMS_KEY = "claims";
     public static final String AUTH_NONE = "none";
     public static final String AUTH_JWT = "jwt";
 
