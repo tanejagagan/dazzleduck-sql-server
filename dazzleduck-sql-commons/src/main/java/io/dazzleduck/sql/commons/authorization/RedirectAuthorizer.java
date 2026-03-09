@@ -80,7 +80,7 @@ public class RedirectAuthorizer {
         Transformations.TableType firstType = null;
 
         for (var cst : catalogSchemaTables) {
-            ResolveAccessRow matched = findMatchingRow(response, cst, database, schema);
+            ResolveAccessRow matched = findMatchingRow(response, cst);
             if (matched == null) {
                 throw new UnauthorizedException("No access to %s".formatted(cst));
             }
@@ -104,8 +104,7 @@ public class RedirectAuthorizer {
     }
 
     private ResolveAccessRow findMatchingRow(ResolveResponse response,
-                                             Transformations.CatalogSchemaTable cst,
-                                             String database, String schema) {
+                                             Transformations.CatalogSchemaTable cst) {
         List<ResolveAccessRow> candidates = switch (cst.type()) {
             case TABLE_FUNCTION -> response.functions() != null ? response.functions() : List.of();
             case BASE_TABLE -> response.tables() != null ? response.tables() : List.of();
@@ -116,9 +115,9 @@ public class RedirectAuthorizer {
                 continue;
             }
             if (cst.type() == Transformations.TableType.BASE_TABLE) {
-                if (database.equals(row.catalog())
-                        && schema.equals(row.schema())
-                        && SqlAuthorizer.hasAccessToTable(database, schema, row.tableOrPath(), cst)) {
+                if (cst.catalog().equals(row.catalog())
+                        && cst.schema().equals(row.schema())
+                        && SqlAuthorizer.hasAccessToTable(cst.catalog(), cst.schema(), row.tableOrPath(), cst)) {
                     return row;
                 }
             } else {

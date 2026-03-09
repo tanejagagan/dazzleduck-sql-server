@@ -115,8 +115,14 @@ public interface SqlAuthorizer {
         }
         var typeNode = fromTable.get(ExpressionConstants.FIELD_TYPE);
         if (typeNode != null && typeNode.asText().equals(ExpressionConstants.BASE_TABLE_TYPE)) {
-            fromTable.put(ExpressionConstants.FIELD_CATALOG_NAME, database);
-            fromTable.put(ExpressionConstants.FIELD_SCHEMA_NAME, schema);
+            var existingCatalog = fromTable.get(ExpressionConstants.FIELD_CATALOG_NAME);
+            var existingSchema = fromTable.get(ExpressionConstants.FIELD_SCHEMA_NAME);
+            if (existingCatalog == null || existingCatalog.asText().isEmpty()) {
+                fromTable.put(ExpressionConstants.FIELD_CATALOG_NAME, database);
+            }
+            if (existingSchema == null || existingSchema.asText().isEmpty()) {
+                fromTable.put(ExpressionConstants.FIELD_SCHEMA_NAME, schema);
+            }
             return copy;
         }
         return tree;
