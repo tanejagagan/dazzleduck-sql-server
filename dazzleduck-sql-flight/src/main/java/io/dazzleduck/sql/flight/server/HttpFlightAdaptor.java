@@ -164,6 +164,9 @@ public interface HttpFlightAdaptor {
      * @param outputStreamSupplier supplier that provides the output stream when data is ready to write
      * @return a CompletableFuture that completes when streaming is done, or exceptionally on error
      */
+
+
+    // shift this from here to query service.
     default CompletableFuture<Void> getStreamStatementDirectTsv(
             FlightSql.TicketStatementQuery ticket,
             FlightProducer.CallContext context,
