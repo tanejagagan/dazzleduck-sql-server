@@ -3,17 +3,14 @@ package io.dazzleduck.sql.http.server;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.http.server.model.ContentTypes;
 import io.dazzleduck.sql.http.server.model.QueryRequest;
+import io.helidon.http.HeaderValues;
 import org.junit.jupiter.api.*;
 
-import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.sql.SQLException;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -45,7 +42,7 @@ public class HttpServerTsvTest extends HttpServerTestBase {
         var query = "SELECT * FROM tsv_test ORDER BY id";
         var request = authenticatedRequestBuilder(uriForQuery(query))
                 .GET()
-                .header("Accept", ContentTypes.TEXT_TSV)
+                .header(HeaderValues.ACCEPT_JSON.name(), ContentTypes.TEXT_TSV)
                 .build();
         var response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
@@ -65,7 +62,7 @@ public class HttpServerTsvTest extends HttpServerTestBase {
         var body = objectMapper.writeValueAsBytes(new QueryRequest(query));
         var request = authenticatedRequestBuilder(URI.create(baseUrl + "/v1/query"))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
-                .header("Accept", ContentTypes.TEXT_TSV)
+                .header(HeaderValues.ACCEPT_JSON.name(), ContentTypes.TEXT_TSV)
                 .build();
         var response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
@@ -81,7 +78,7 @@ public class HttpServerTsvTest extends HttpServerTestBase {
     public void testQueryTsvResponseContentType() throws Exception {
         var request = authenticatedRequestBuilder(uriForQuery("SELECT 1 AS id"))
                 .GET()
-                .header("Accept", ContentTypes.TEXT_TSV)
+                .header(HeaderValues.ACCEPT_JSON.name(), ContentTypes.TEXT_TSV)
                 .build();
         var response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
@@ -98,7 +95,7 @@ public class HttpServerTsvTest extends HttpServerTestBase {
     public void testQueryTsvSingleColumn() throws Exception {
         var request = authenticatedRequestBuilder(uriForQuery("SELECT 42 AS answer"))
                 .GET()
-                .header("Accept", ContentTypes.TEXT_TSV)
+                .header(HeaderValues.ACCEPT_JSON.name(), ContentTypes.TEXT_TSV)
                 .build();
         var response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
@@ -114,7 +111,7 @@ public class HttpServerTsvTest extends HttpServerTestBase {
     public void testQueryTsvEmptyResultHasHeader() throws Exception {
         var request = authenticatedRequestBuilder(uriForQuery("SELECT * FROM tsv_test WHERE id = -999"))
                 .GET()
-                .header("Accept", ContentTypes.TEXT_TSV)
+                .header(HeaderValues.ACCEPT_JSON.name(), ContentTypes.TEXT_TSV)
                 .build();
         var response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
@@ -127,7 +124,7 @@ public class HttpServerTsvTest extends HttpServerTestBase {
     @Test
     @Timeout(value = 30, unit = TimeUnit.SECONDS)
     public void testQueryWithoutAcceptHeaderReturnsArrow() throws Exception {
-        // Omitting Accept header should fall back to Arrow (existing behaviour unchanged)
+        // Omitting Accept header should fall back to Arrow (existing behavior unchanged)
         var request = authenticatedRequestBuilder(uriForQuery("SELECT 1 AS id"))
                 .GET()
                 .build();
@@ -139,116 +136,21 @@ public class HttpServerTsvTest extends HttpServerTestBase {
                 "No Accept header should not return TSV Content-Type");
     }
 
-    // ==================== INGESTION TESTS ====================
-
     @Test
-    @Timeout(value = 30, unit = TimeUnit.SECONDS)
-    public void testIngestionTsv() throws Exception, SQLException {
-        var queue = "tsv_ingest_basic";
-        Files.createDirectories(Path.of(ingestionPath, queue));
-        String tsv = "id\tname\n1\tAlice\n2\tBob\n3\tCarol\n";
-
-        var request = authenticatedRequestBuilder(URI.create(baseUrl + "/v1/ingest?ingestion_queue=" + queue))
-                .POST(HttpRequest.BodyPublishers.ofString(tsv, StandardCharsets.UTF_8))
-                .header("Content-Type", ContentTypes.TEXT_TSV)
+    @Timeout(value = 60, unit = TimeUnit.SECONDS)
+    public void testQueryMillionRowsSingleColumn() throws Exception {
+        var query = "SELECT generate_series FROM generate_series(1, 1000000)";
+        var request = authenticatedRequestBuilder(uriForQuery(query))
+                .GET()
+                .header(HeaderValues.ACCEPT_JSON.name(), ContentTypes.TEXT_TSV)
                 .build();
         var response = client.send(request, HttpResponse.BodyHandlers.ofString());
-
         assertEquals(200, response.statusCode());
-        var count = ConnectionPool.collectFirst(
-                "SELECT count(*) FROM read_parquet('%s/%s/*.parquet')".formatted(ingestionPath, queue), Long.class);
-        assertEquals(3L, count);
-    }
-
-    @Test
-    @Timeout(value = 30, unit = TimeUnit.SECONDS)
-    public void testIngestionTsvWithCharsetParam() throws Exception, SQLException {
-        // Content-Type: text/tab-separated-values; charset=utf-8 must also be accepted
-        var queue = "tsv_ingest_charset";
-        Files.createDirectories(Path.of(ingestionPath, queue));
-        String tsv = "id\tname\n10\tDave\n20\tEve\n";
-
-        var request = authenticatedRequestBuilder(URI.create(baseUrl + "/v1/ingest?ingestion_queue=" + queue))
-                .POST(HttpRequest.BodyPublishers.ofString(tsv, StandardCharsets.UTF_8))
-                .header("Content-Type", ContentTypes.TEXT_TSV_UTF8)
-                .build();
-        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
-
-        assertEquals(200, response.statusCode());
-        var count = ConnectionPool.collectFirst(
-                "SELECT count(*) FROM read_parquet('%s/%s/*.parquet')".formatted(ingestionPath, queue), Long.class);
-        assertEquals(2L, count);
-    }
-
-    @Test
-    @Timeout(value = 30, unit = TimeUnit.SECONDS)
-    public void testIngestionTsvWithNullFields() throws Exception, SQLException {
-        // Empty tab fields become null Arrow values
-        var queue = "tsv_ingest_nulls";
-        Files.createDirectories(Path.of(ingestionPath, queue));
-        String tsv = "id\tname\tvalue\n1\tAlice\t\n2\t\t99\n";
-
-        var request = authenticatedRequestBuilder(URI.create(baseUrl + "/v1/ingest?ingestion_queue=" + queue))
-                .POST(HttpRequest.BodyPublishers.ofString(tsv, StandardCharsets.UTF_8))
-                .header("Content-Type", ContentTypes.TEXT_TSV)
-                .build();
-        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
-
-        assertEquals(200, response.statusCode());
-        var count = ConnectionPool.collectFirst(
-                "SELECT count(*) FROM read_parquet('%s/%s/*.parquet')".formatted(ingestionPath, queue), Long.class);
-        assertEquals(2L, count);
-    }
-
-    @Test
-    @Timeout(value = 30, unit = TimeUnit.SECONDS)
-    public void testIngestionTsvValuesAreCorrect() throws Exception, SQLException {
-        var queue = "tsv_ingest_values";
-        Files.createDirectories(Path.of(ingestionPath, queue));
-        String tsv = "code\tlabel\n42\thello\n99\tworld\n";
-
-        var request = authenticatedRequestBuilder(URI.create(baseUrl + "/v1/ingest?ingestion_queue=" + queue))
-                .POST(HttpRequest.BodyPublishers.ofString(tsv, StandardCharsets.UTF_8))
-                .header("Content-Type", ContentTypes.TEXT_TSV)
-                .build();
-        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
-
-        assertEquals(200, response.statusCode());
-        // All TSV columns land as VARCHAR — use DuckDB to verify the values exist
-        var found = ConnectionPool.collectFirst(
-                "SELECT count(*) FROM read_parquet('%s/%s/*.parquet') WHERE code='42' AND label='hello'"
-                        .formatted(ingestionPath, queue), Long.class);
-        assertEquals(1L, found);
-    }
-
-    @Test
-    @Timeout(value = 30, unit = TimeUnit.SECONDS)
-    public void testIngestionWrongContentTypeReturns415() throws Exception {
-        var queue = "tsv_wrong_ct";
-        Files.createDirectories(Path.of(ingestionPath, queue));
-
-        var request = authenticatedRequestBuilder(URI.create(baseUrl + "/v1/ingest?ingestion_queue=" + queue))
-                .POST(HttpRequest.BodyPublishers.ofString("id\tname\n1\tAlice\n"))
-                .header("Content-Type", "text/plain")
-                .build();
-        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
-
-        assertEquals(415, response.statusCode());
-    }
-
-    @Test
-    @Timeout(value = 30, unit = TimeUnit.SECONDS)
-    public void testIngestionMissingContentTypeReturns415() throws Exception {
-        var queue = "tsv_no_ct";
-        Files.createDirectories(Path.of(ingestionPath, queue));
-
-        // HttpRequest.BodyPublishers.ofString sets no Content-Type by default
-        var request = authenticatedRequestBuilder(URI.create(baseUrl + "/v1/ingest?ingestion_queue=" + queue))
-                .POST(HttpRequest.BodyPublishers.ofString("id\tname\n1\tAlice\n"))
-                .build();
-        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
-
-        assertEquals(415, response.statusCode());
+        String[] lines = response.body().split("\n");
+        assertEquals(1000001, lines.length); // header + 1M rows
+        assertEquals("generate_series", lines[0]);
+        assertEquals("1", lines[1]);
+        assertEquals("1000000", lines[1000000]);
     }
 
     // ==================== HELPERS ====================

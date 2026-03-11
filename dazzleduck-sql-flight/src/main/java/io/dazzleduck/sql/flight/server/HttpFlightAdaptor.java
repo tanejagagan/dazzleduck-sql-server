@@ -152,29 +152,4 @@ public interface HttpFlightAdaptor {
 
         return future;
     }
-
-    /**
-     * Gets the stream for a statement query ticket, writing results as TSV to an OutputStream.
-     *
-     * <p>The first row written is the header row (column names). Each data row is written as
-     * tab-separated values. Null values are written as empty strings.
-     *
-     * @param ticket the statement query ticket
-     * @param context the call context
-     * @param outputStreamSupplier supplier that provides the output stream when data is ready to write
-     * @return a CompletableFuture that completes when streaming is done, or exceptionally on error
-     */
-
-
-    // shift this from here to query service.
-    default CompletableFuture<Void> getStreamStatementDirectTsv(
-            FlightSql.TicketStatementQuery ticket,
-            FlightProducer.CallContext context,
-            Supplier<OutputStream> outputStreamSupplier) {
-
-        CompletableFuture<Void> future = new CompletableFuture<>();
-        TsvOutputStreamListener listener = new TsvOutputStreamListener(outputStreamSupplier, future);
-        getStreamStatement(ticket, context, listener);
-        return future;
-    }
 }

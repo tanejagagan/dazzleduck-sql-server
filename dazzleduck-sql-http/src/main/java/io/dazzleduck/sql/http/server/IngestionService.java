@@ -3,7 +3,6 @@ package io.dazzleduck.sql.http.server;
 import io.dazzleduck.sql.commons.ingestion.PendingWriteExceededException;
 import io.dazzleduck.sql.flight.ingestion.IngestionParameters;
 import io.dazzleduck.sql.flight.server.HttpFlightAdaptor;
-import io.dazzleduck.sql.flight.server.TsvToArrowConverter;
 import io.dazzleduck.sql.http.server.model.ContentTypes;
 import io.helidon.common.uri.UriQuery;
 import io.helidon.http.HeaderNames;
@@ -41,13 +40,7 @@ public class IngestionService implements HttpService, ParameterUtils, Controller
 
     protected boolean handleMismatchContentType(ServerRequest serverRequest, ServerResponse serverResponse){
         var contentType = serverRequest.headers().value(HeaderNames.CONTENT_TYPE);
-        if (contentType.isEmpty()) {
-            serverResponse.status(Status.UNSUPPORTED_MEDIA_TYPE_415);
-            serverResponse.send();
-            return true;
-        }
-        String ct = contentType.get();
-        if (!ct.equals(ContentTypes.APPLICATION_ARROW) && !ct.startsWith(ContentTypes.TEXT_TSV)) {
+        if (contentType.isEmpty() || !contentType.get().equals(ContentTypes.APPLICATION_ARROW)) {
             serverResponse.status(Status.UNSUPPORTED_MEDIA_TYPE_415);
             serverResponse.send();
             return true;
@@ -103,11 +96,6 @@ public class IngestionService implements HttpService, ParameterUtils, Controller
             var context = ControllerService.createContext(serverRequest);
             var ingestionParameters = parseIngestionParameters(serverRequest);
             InputStream inputStream = serverRequest.content().inputStream();
-
-            var contentType = serverRequest.headers().value(HeaderNames.CONTENT_TYPE);
-            if (contentType.isPresent() && contentType.get().startsWith(ContentTypes.TEXT_TSV)) {
-                inputStream = TsvToArrowConverter.convert(inputStream);
-            }
 
             // Track if response has been sent to prevent double-send
             final boolean[] responseSent = {false};
