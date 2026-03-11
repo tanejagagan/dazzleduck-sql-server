@@ -23,7 +23,7 @@ public class Headers {
     public static final String QUERY_PARAMETER_INGESTION_QUEUE = "ingestion_queue";
     public static final String HEADER_FUNCTION = "function";
     public static final String HEADER_FILTER = "filter";
-    public static final String HEADER_ACCESS_TYPE = "access-type";
+    public static final String HEADER_ACCESS_TYPE = "access_type";
     public static final String HEADER_SPLIT_SIZE = "x-dd-split-size";
     public static final String HEADER_DATA_PARTITION = "x-dd-partition";
     public static final String HEADER_DATA_FORMAT = "x-dd-format";
