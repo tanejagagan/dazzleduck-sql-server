@@ -34,7 +34,7 @@ public class HttpServerTsvTest extends HttpServerTestBase {
         cleanupWarehouse();
     }
 
-    // ==================== QUERY OUTPUT TESTS ====================
+    // ==================== BASIC QUERY TESTS ====================
 
     @Test
     @Timeout(value = 30, unit = TimeUnit.SECONDS)
@@ -151,6 +151,308 @@ public class HttpServerTsvTest extends HttpServerTestBase {
         assertEquals("generate_series", lines[0]);
         assertEquals("1", lines[1]);
         assertEquals("1000000", lines[1000000]);
+    }
+
+    // ==================== DATE / TIME / TIMESTAMP TESTS ====================
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testDateType() throws Exception {
+        var request = authenticatedRequestBuilder(uriForQuery("SELECT CAST('2026-03-12' AS DATE) AS d"))
+                .GET()
+                .header(HeaderValues.ACCEPT_JSON.name(), ContentTypes.TEXT_TSV)
+                .build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, response.statusCode());
+        String[] lines = response.body().split("\n");
+        assertEquals("d", lines[0]);
+        assertEquals("2026-03-12", lines[1]);
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testTimeType() throws Exception {
+        var request = authenticatedRequestBuilder(uriForQuery("SELECT CAST('12:30:45' AS TIME) AS t"))
+                .GET()
+                .header(HeaderValues.ACCEPT_JSON.name(), ContentTypes.TEXT_TSV)
+                .build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, response.statusCode());
+        String[] lines = response.body().split("\n");
+        assertEquals("t", lines[0]);
+        assertTrue(lines[1].startsWith("12:30:45"), "Expected time starting with 12:30:45, got: " + lines[1]);
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testTimestampType() throws Exception {
+        var request = authenticatedRequestBuilder(uriForQuery("SELECT CAST('2026-03-12 10:30:00' AS TIMESTAMP) AS ts"))
+                .GET()
+                .header(HeaderValues.ACCEPT_JSON.name(), ContentTypes.TEXT_TSV)
+                .build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, response.statusCode());
+        String[] lines = response.body().split("\n");
+        assertEquals("ts", lines[0]);
+        assertTrue(lines[1].startsWith("2026-03-12"), "Expected timestamp starting with 2026-03-12, got: " + lines[1]);
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testTimestampTzType() throws Exception {
+        var request = authenticatedRequestBuilder(uriForQuery("SELECT CAST('2026-03-12 10:30:00+00' AS TIMESTAMPTZ) AS tstz"))
+                .GET()
+                .header(HeaderValues.ACCEPT_JSON.name(), ContentTypes.TEXT_TSV)
+                .build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, response.statusCode());
+        String[] lines = response.body().split("\n");
+        assertEquals("tstz", lines[0]);
+        assertTrue(lines[1].contains("2026-03-12"), "Expected TIMESTAMPTZ containing 2026-03-12, got: " + lines[1]);
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testAllTemporalTypesInOneQuery() throws Exception {
+        var sql = "SELECT " +
+                "CAST('2026-03-12' AS DATE) AS d, " +
+                "CAST('14:00:00' AS TIME) AS t, " +
+                "CAST('2026-03-12 14:00:00' AS TIMESTAMP) AS ts, " +
+                "CAST('2026-03-12 14:00:00+00' AS TIMESTAMPTZ) AS tstz";
+        var request = authenticatedRequestBuilder(uriForQuery(sql))
+                .GET()
+                .header(HeaderValues.ACCEPT_JSON.name(), ContentTypes.TEXT_TSV)
+                .build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, response.statusCode());
+        String[] lines = response.body().split("\n");
+        assertEquals("d\tt\tts\ttstz", lines[0]);
+        String[] cols = lines[1].split("\t");
+        assertEquals("2026-03-12", cols[0]);
+        assertTrue(cols[1].startsWith("14:00"), "TIME: " + cols[1]);
+        assertTrue(cols[2].startsWith("2026-03-12"), "TIMESTAMP: " + cols[2]);
+        assertTrue(cols[3].contains("2026-03-12"), "TIMESTAMPTZ: " + cols[3]);
+    }
+
+    // ==================== NULL TESTS ====================
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testNullValues() throws Exception {
+        var sql = "SELECT NULL::INTEGER AS i, NULL::VARCHAR AS s, NULL::DATE AS d, NULL::TIMESTAMP AS ts";
+        var request = authenticatedRequestBuilder(uriForQuery(sql))
+                .GET()
+                .header(HeaderValues.ACCEPT_JSON.name(), ContentTypes.TEXT_TSV)
+                .build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, response.statusCode());
+        String[] lines = response.body().split("\n");
+        assertEquals("i\ts\td\tts", lines[0]);
+        assertEquals("\t\t\t", lines[1]); // all nulls → empty strings separated by tabs
+    }
+
+    // ==================== NUMERIC TYPES ====================
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testNumericTypes() throws Exception {
+        var sql = "SELECT " +
+                "CAST(1 AS TINYINT) AS ti, " +
+                "CAST(2 AS SMALLINT) AS si, " +
+                "CAST(3 AS INTEGER) AS i, " +
+                "CAST(4 AS BIGINT) AS bi, " +
+                "CAST(1.5 AS FLOAT) AS f, " +
+                "CAST(2.5 AS DOUBLE) AS d, " +
+                "CAST(3.14 AS DECIMAL(10,2)) AS dec, " +
+                "true AS b";
+        var request = authenticatedRequestBuilder(uriForQuery(sql))
+                .GET()
+                .header(HeaderValues.ACCEPT_JSON.name(), ContentTypes.TEXT_TSV)
+                .build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, response.statusCode());
+        String[] lines = response.body().split("\n");
+        assertEquals("ti\tsi\ti\tbi\tf\td\tdec\tb", lines[0]);
+        String[] cols = lines[1].split("\t");
+        assertEquals("1", cols[0]);
+        assertEquals("2", cols[1]);
+        assertEquals("3", cols[2]);
+        assertEquals("4", cols[3]);
+        assertEquals("1.5", cols[4]);
+        assertEquals("2.5", cols[5]);
+        assertEquals("3.14", cols[6]);
+        assertEquals("true", cols[7]);
+    }
+
+    // ==================== ARRAY / LIST TESTS ====================
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testIntegerArray() throws Exception {
+        var request = authenticatedRequestBuilder(uriForQuery("SELECT [1, 2, 3] AS arr"))
+                .GET()
+                .header(HeaderValues.ACCEPT_JSON.name(), ContentTypes.TEXT_TSV)
+                .build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, response.statusCode());
+        String[] lines = response.body().split("\n");
+        assertEquals("arr", lines[0]);
+        assertTrue(lines[1].contains("1"), "Array should contain 1: " + lines[1]);
+        assertTrue(lines[1].contains("2"), "Array should contain 2: " + lines[1]);
+        assertTrue(lines[1].contains("3"), "Array should contain 3: " + lines[1]);
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testStringArray() throws Exception {
+        var request = authenticatedRequestBuilder(uriForQuery("SELECT ['a', 'b', 'c'] AS arr"))
+                .GET()
+                .header(HeaderValues.ACCEPT_JSON.name(), ContentTypes.TEXT_TSV)
+                .build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, response.statusCode());
+        String[] lines = response.body().split("\n");
+        assertEquals("arr", lines[0]);
+        assertTrue(lines[1].contains("a"), "Array should contain a: " + lines[1]);
+        assertTrue(lines[1].contains("b"), "Array should contain b: " + lines[1]);
+        assertTrue(lines[1].contains("c"), "Array should contain c: " + lines[1]);
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testArrayWithNulls() throws Exception {
+        var request = authenticatedRequestBuilder(uriForQuery("SELECT [1, NULL, 3] AS arr"))
+                .GET()
+                .header(HeaderValues.ACCEPT_JSON.name(), ContentTypes.TEXT_TSV)
+                .build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, response.statusCode());
+        String[] lines = response.body().split("\n");
+        assertEquals("arr", lines[0]);
+        assertNotNull(lines[1]);
+    }
+
+    // ==================== STRUCT / NESTED TESTS ====================
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testStructType() throws Exception {
+        var request = authenticatedRequestBuilder(uriForQuery("SELECT {'name': 'Alice', 'age': 30} AS s"))
+                .GET()
+                .header(HeaderValues.ACCEPT_JSON.name(), ContentTypes.TEXT_TSV)
+                .build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, response.statusCode());
+        String[] lines = response.body().split("\n");
+        assertEquals("s", lines[0]);
+        assertTrue(lines[1].contains("Alice"), "Struct should contain Alice: " + lines[1]);
+        assertTrue(lines[1].contains("30"), "Struct should contain 30: " + lines[1]);
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testNestedStruct() throws Exception {
+        var sql = "SELECT {'outer': {'inner': 42}} AS nested";
+        var request = authenticatedRequestBuilder(uriForQuery(sql))
+                .GET()
+                .header(HeaderValues.ACCEPT_JSON.name(), ContentTypes.TEXT_TSV)
+                .build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, response.statusCode());
+        String[] lines = response.body().split("\n");
+        assertEquals("nested", lines[0]);
+        assertTrue(lines[1].contains("42"), "Nested struct should contain 42: " + lines[1]);
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testStructWithTemporalFields() throws Exception {
+        var sql = "SELECT {'d': CAST('2026-03-12' AS DATE), 'name': 'test'} AS s";
+        var request = authenticatedRequestBuilder(uriForQuery(sql))
+                .GET()
+                .header(HeaderValues.ACCEPT_JSON.name(), ContentTypes.TEXT_TSV)
+                .build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, response.statusCode());
+        String[] lines = response.body().split("\n");
+        assertEquals("s", lines[0]);
+        assertNotNull(lines[1]);
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testArrayOfStructs() throws Exception {
+        var sql = "SELECT [{'a': 1, 'b': 'x'}, {'a': 2, 'b': 'y'}] AS arr";
+        var request = authenticatedRequestBuilder(uriForQuery(sql))
+                .GET()
+                .header(HeaderValues.ACCEPT_JSON.name(), ContentTypes.TEXT_TSV)
+                .build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, response.statusCode());
+        String[] lines = response.body().split("\n");
+        assertEquals("arr", lines[0]);
+        assertTrue(lines[1].contains("1"), "Should contain 1: " + lines[1]);
+        assertTrue(lines[1].contains("x"), "Should contain x: " + lines[1]);
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testMapType() throws Exception {
+        var request = authenticatedRequestBuilder(uriForQuery("SELECT MAP {'key1': 1, 'key2': 2} AS m"))
+                .GET()
+                .header(HeaderValues.ACCEPT_JSON.name(), ContentTypes.TEXT_TSV)
+                .build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, response.statusCode());
+        String[] lines = response.body().split("\n");
+        assertEquals("m", lines[0]);
+        assertTrue(lines[1].contains("key1"), "Map should contain key1: " + lines[1]);
+        assertTrue(lines[1].contains("key2"), "Map should contain key2: " + lines[1]);
+    }
+
+    // ==================== MIXED TYPES ====================
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testMixedTypesInOneRow() throws Exception {
+        var sql = "SELECT " +
+                "42 AS i, " +
+                "'hello' AS s, " +
+                "true AS b, " +
+                "CAST('2026-03-12' AS DATE) AS d, " +
+                "[1,2,3] AS arr, " +
+                "{'x': 10} AS st";
+        var request = authenticatedRequestBuilder(uriForQuery(sql))
+                .GET()
+                .header(HeaderValues.ACCEPT_JSON.name(), ContentTypes.TEXT_TSV)
+                .build();
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, response.statusCode());
+        String[] lines = response.body().split("\n");
+        assertEquals("i\ts\tb\td\tarr\tst", lines[0]);
+        String[] cols = lines[1].split("\t");
+        assertEquals("42", cols[0]);
+        assertEquals("hello", cols[1]);
+        assertEquals("true", cols[2]);
+        assertEquals("2026-03-12", cols[3]);
+        assertTrue(cols[4].contains("1"), "Array: " + cols[4]);
+        assertTrue(cols[5].contains("10"), "Struct: " + cols[5]);
     }
 
     // ==================== HELPERS ====================
