@@ -18,7 +18,7 @@ public class NOOPAuthorizer implements SqlAuthorizer {
     }
 
     @Override
-    public boolean hasWriteAccess(String user, String path, Map<String, String> verifiedClaims) {
+    public boolean hasWriteAccess(String user, String ingestionQueue, Map<String, String> verifiedClaims) {
         // NOOP authorizer grants write access to all paths
         return true;
     }
