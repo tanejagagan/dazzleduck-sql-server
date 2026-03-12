@@ -22,9 +22,9 @@ public class DuckLakeIngestionTaskFactory implements IngestionTaskFactory {
                         THEN concat(rtrim(m."value", '/'), '/', s.path, '/', t.path)
                         ELSE concat(s.path, '/', t.path)
                    END AS path
-            FROM %s.main.ducklake_schema s
-            JOIN %s.main.ducklake_table t ON (s.schema_id = t.schema_id)
-            CROSS JOIN %s.main.ducklake_metadata m
+            FROM %s.ducklake_schema s
+            JOIN %s.ducklake_table t ON (s.schema_id = t.schema_id)
+            CROSS JOIN %s.ducklake_metadata m
             WHERE m.key = 'data_path'
               AND s.schema_name = '%s'
               AND t.table_name = '%s'
