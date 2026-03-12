@@ -23,7 +23,7 @@ public class Headers {
     public static final String QUERY_PARAMETER_INGESTION_QUEUE = "ingestion_queue";
     public static final String HEADER_FUNCTION = "function";
     public static final String HEADER_FILTER = "filter";
-    public static final String HEADER_ACCESS_TYPE = "access_type";
+    public static final String HEADER_ACCESS_TYPE = "access-type";
     public static final String HEADER_SPLIT_SIZE = "x-dd-split-size";
     public static final String HEADER_DATA_PARTITION = "x-dd-partition";
     public static final String HEADER_DATA_FORMAT = "x-dd-format";
@@ -38,7 +38,7 @@ public class Headers {
     public static final String HEADER_ARROW_COMPRESSION = "x-dd-arrow-compression";
 
     // Token type claim for redirect vs inline authorization ("inline" or "redirect")
-    public static final String HEADER_TOKEN_TYPE = "token_type";
+    public static final String HEADER_TOKEN_TYPE = "token-type";
     public static final String HEADER_TOKEN_REDIRECT = "redirect";
     public static final String HEADER_TOKEN_INLINE = "inline";
 
@@ -51,6 +51,6 @@ public class Headers {
     public static final Set<String> SUPPORTED_HEADERS = Set.of(HEADER_FETCH_SIZE, HEADER_DATABASE, HEADER_SCHEMA, HEADER_SPLIT_SIZE,
             HEADER_DATA_PARTITION, HEADER_DATA_FORMAT, HEADER_PRODUCER_ID, HEADER_PRODUCER_BATCH_ID, HEADER_SORT_ORDER,
             HEADER_DATA_PROJECT, HEADER_APP_DATA_TRANSFORMATION, HEADER_PATH, HEADER_TABLE, HEADER_FUNCTION, HEADER_FILTER, HEADER_ACCESS_TYPE,
-            HEADER_ARROW_COMPRESSION);
+            HEADER_ARROW_COMPRESSION, QUERY_PARAMETER_INGESTION_QUEUE);
 
 }

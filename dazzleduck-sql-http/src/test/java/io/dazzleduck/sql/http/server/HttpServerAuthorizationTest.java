@@ -108,7 +108,7 @@ public class HttpServerAuthorizationTest extends HttpServerTestBase {
         var authorizer = SqlAuthorizer.JWT_AUTHORIZER;
         var claims = Map.of(
                 Headers.HEADER_ACCESS_TYPE, AccessType.WRITE.name(),
-                Headers.HEADER_PATH, "data/ingestion"
+                Headers.QUERY_PARAMETER_INGESTION_QUEUE, "data/ingestion"
         );
         assertTrue(authorizer.hasWriteAccess("admin", "data/ingestion", claims));
         assertTrue(authorizer.hasWriteAccess("admin", "data/ingestion/subpath", claims));
