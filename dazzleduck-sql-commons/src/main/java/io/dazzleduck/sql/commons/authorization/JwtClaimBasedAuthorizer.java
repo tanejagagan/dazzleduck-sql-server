@@ -2,7 +2,6 @@ package io.dazzleduck.sql.commons.authorization;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.dazzleduck.sql.common.Headers;
-import io.dazzleduck.sql.commons.authorization.UnauthorizedException;
 import io.dazzleduck.sql.commons.Transformations;
 
 import java.util.Map;
@@ -122,15 +121,15 @@ public class JwtClaimBasedAuthorizer implements SqlAuthorizer {
     }
 
     @Override
-    public boolean hasWriteAccess(String user, String path, Map<String, String> verifiedClaims) {
+    public boolean hasWriteAccess(String user, String ingestionQueue, Map<String, String> verifiedClaims) {
         var accessType = verifiedClaims.get(Headers.HEADER_ACCESS_TYPE);
         if (!AccessType.WRITE.name().equalsIgnoreCase(accessType)) {
             return false;
         }
-        var authorizedPath = verifiedClaims.get(Headers.QUERY_PARAMETER_INGESTION_QUEUE);
-        if (authorizedPath == null) {
+        var authorizedIngestionQueue = verifiedClaims.get(Headers.QUERY_PARAMETER_INGESTION_QUEUE);
+        if (authorizedIngestionQueue == null) {
             return false;
         }
-        return SqlAuthorizer.hasAccessToPath(authorizedPath, path);
+        return authorizedIngestionQueue.equals(ingestionQueue);
     }
 }
