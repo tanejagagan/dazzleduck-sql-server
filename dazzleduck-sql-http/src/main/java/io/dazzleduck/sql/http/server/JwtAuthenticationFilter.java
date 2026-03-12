@@ -3,6 +3,7 @@ package io.dazzleduck.sql.http.server;
 import com.typesafe.config.Config;
 import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.common.ConfigConstants;
+import io.dazzleduck.sql.common.auth.JwtClaimsExtractor;
 import io.dazzleduck.sql.commons.authorization.SqlAuthorizer;
 import io.dazzleduck.sql.commons.authorization.SubjectAndVerifiedClaims;
 import io.helidon.http.HeaderNames;
@@ -16,7 +17,11 @@ import io.jsonwebtoken.JwtParser;
 import io.jsonwebtoken.Jwts;
 
 import javax.crypto.SecretKey;
-import java.util.*;
+import java.util.Collections;
+import java.util.Date;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 
 public class JwtAuthenticationFilter implements Filter {
     public static final String SUBJECT_KEY = "subject";
@@ -49,18 +54,7 @@ public class JwtAuthenticationFilter implements Filter {
             var subject = payload.getSubject();
             var expiration = payload.getExpiration();
 
-            var allClaimsFromJWT = new HashMap<String, String>();
-            for (String key : claimHeader) {
-                var claimFromJwt = payload.get(key, String.class);
-                allClaimsFromJWT.put(key, claimFromJwt);
-            }
-            var tokenType = payload.get(Headers.HEADER_TOKEN_TYPE, String.class);
-            allClaimsFromJWT.put(Headers.HEADER_TOKEN_TYPE, tokenType != null ? tokenType : Headers.HEADER_TOKEN_INLINE);
-            var redirectUrl = payload.get(Headers.HEADER_REDIRECT_URL, String.class);
-            if (redirectUrl != null) {
-                allClaimsFromJWT.put(Headers.HEADER_REDIRECT_URL, redirectUrl);
-            }
-            allClaimsFromJWT.put(Headers.HEADER_BEARER_TOKEN, token);
+            var allClaimsFromJWT = JwtClaimsExtractor.extractClaims(payload, claimHeader, token);
             if (expiration.after(new Date())) {
                 return new SubjectAndVerifiedClaims(subject, Collections.unmodifiableMap(allClaimsFromJWT));
             }

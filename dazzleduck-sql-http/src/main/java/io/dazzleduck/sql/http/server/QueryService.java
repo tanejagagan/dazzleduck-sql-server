@@ -4,19 +4,26 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.google.protobuf.ByteString;
 import io.dazzleduck.sql.flight.server.HttpFlightAdaptor;
 import io.dazzleduck.sql.flight.server.StatementHandle;
+import io.dazzleduck.sql.flight.server.TsvOutputStreamListener;
+import io.dazzleduck.sql.http.server.model.ContentTypes;
 import io.dazzleduck.sql.http.server.model.HttpConfig;
 import io.dazzleduck.sql.http.server.model.QueryRequest;
+import io.helidon.http.HeaderNames;
 import io.helidon.http.Status;
 import io.helidon.webserver.http.ServerRequest;
 import io.helidon.webserver.http.ServerResponse;
+import org.apache.arrow.flight.FlightProducer;
 import org.apache.arrow.flight.FlightRuntimeException;
 import org.apache.arrow.flight.FlightStatusCode;
 import org.apache.arrow.flight.sql.impl.FlightSql;
 import org.apache.arrow.vector.compression.CompressionUtil;
 
+import java.io.OutputStream;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Supplier;
 
 
 public class QueryService extends AbstractQueryBasedService {
@@ -45,12 +52,21 @@ public class QueryService extends AbstractQueryBasedService {
             var statementHandle = StatementHandle.newStatementHandle(id, query.query(), producerId, -1);
             var ticket = createTicket(statementHandle);
 
-            // Get Arrow compression codec from header (defaults to ZSTD)
-            CompressionUtil.CodecType compressionCodec = ParameterUtils.getArrowCompression(request);
-            logger.atDebug().log("Using Arrow compression codec: {}", compressionCodec);
+            var acceptHeader = request.headers().value(HeaderNames.ACCEPT);
+            boolean wantsTsv = acceptHeader.isPresent() && acceptHeader.get().contains(ContentTypes.TEXT_TSV);
 
-            logger.atDebug().log("Calling getStreamStatementDirect for query: {}", query.query());
-            var future = httpFlightAdaptor.getStreamStatementDirect(ticket, context, () -> response.outputStream(), compressionCodec);
+            CompletableFuture<Void> future;
+            if (wantsTsv) {
+                logger.atDebug().log("TSV output requested for query: {}", query.query());
+                response.headers().set(HeaderNames.CONTENT_TYPE, ContentTypes.TEXT_TSV_UTF8);
+                future = getStreamStatementDirectTsv(ticket, context, () -> response.outputStream());
+            } else {
+                // Get Arrow compression codec from header (defaults to ZSTD)
+                CompressionUtil.CodecType compressionCodec = ParameterUtils.getArrowCompression(request);
+                logger.atDebug().log("Using Arrow compression codec: {}", compressionCodec);
+                logger.atDebug().log("Calling getStreamStatementDirect for query: {}", query.query());
+                future = httpFlightAdaptor.getStreamStatementDirect(ticket, context, () -> response.outputStream(), compressionCodec);
+            }
 
             logger.atDebug().log("Waiting for future.get() with timeout {}ms", httpConfig.getQueryTimeoutMs());
             future.get(httpConfig.getQueryTimeoutMs(), TimeUnit.MILLISECONDS);
@@ -124,5 +140,28 @@ public class QueryService extends AbstractQueryBasedService {
         var builder = FlightSql.TicketStatementQuery.newBuilder();
         builder.setStatementHandle(ByteString.copyFrom(MAPPER.writeValueAsBytes(statementHandle)));
         return builder.build();
+    }
+
+    /**
+     * Gets the stream for a statement query ticket, writing results as TSV to an OutputStream.
+     *
+     * <p>The first row written is the header row (column names). Each data row is written as
+     * tab-separated values. Null values are written as empty strings.
+     *
+     * @param ticket               the statement query ticket
+     * @param context              the call context
+     * @param outputStreamSupplier supplier that provides the output stream when data is ready to write
+     * @return a CompletableFuture that completes when streaming is done, or exceptionally on error
+     */
+
+    private CompletableFuture<Void> getStreamStatementDirectTsv(
+            FlightSql.TicketStatementQuery ticket,
+            FlightProducer.CallContext context,
+            Supplier<OutputStream> outputStreamSupplier) {
+
+        CompletableFuture<Void> future = new CompletableFuture<>();
+        TsvOutputStreamListener listener = new TsvOutputStreamListener(outputStreamSupplier, future);
+        httpFlightAdaptor.getStreamStatement(ticket, context, listener);
+        return future;
     }
 }

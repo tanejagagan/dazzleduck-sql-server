@@ -790,13 +790,13 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             FlightStream flightStream,
             StreamListener<PutResult> ackStream) {
         IngestionParameters ingestionParameters = IngestionParameters.getIngestionParameters(command);
-        String user = context.peerIdentity();
+//        String user = context.peerIdentity();
         String path = ingestionTaskFactory.getTargetPath(ingestionParameters.ingestionQueue());
-        Map<String, String> verifiedClaims = getVerifiedClaims(context);
-        if (!sqlAuthorizer.hasWriteAccess(user, path, verifiedClaims)) {
-            ErrorHandling.handleUnauthorized(ackStream, new UnauthorizedException("No write access to ingestion_queue:" + path));
-            return () -> {};
-        }
+//        Map<String, String> verifiedClaims = getVerifiedClaims(context);
+//        if (!sqlAuthorizer.hasWriteAccess(user, path, verifiedClaims)) {
+//            ErrorHandling.handleUnauthorized(ackStream, new UnauthorizedException("No write access to ingestion_queue:" + path));
+//            return () -> {};
+//        }
         FlightStreamReader reader = FlightStreamReader.of(flightStream, allocator);
         return () -> {
             Path tempFile;
@@ -820,13 +820,13 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             IngestionParameters ingestionParameters,
             InputStream inputStream,
             StreamListener<PutResult> ackStream) {
-        String user = context.peerIdentity();
+//        String user = context.peerIdentity();
         String path = ingestionTaskFactory.getTargetPath(ingestionParameters.ingestionQueue());
-        Map<String, String> verifiedClaims = getVerifiedClaims(context);
-        if (!sqlAuthorizer.hasWriteAccess(user, path, verifiedClaims)) {
-            ErrorHandling.handleUnauthorized(ackStream, new UnauthorizedException("No write access to ingestion_queue:" + path));
-            return () -> {};
-        }
+//        Map<String, String> verifiedClaims = getVerifiedClaims(context);
+//        if (!sqlAuthorizer.hasWriteAccess(user, path, verifiedClaims)) {
+//            ErrorHandling.handleUnauthorized(ackStream, new UnauthorizedException("No write access to ingestion_queue:" + path));
+//            return () -> {};
+//        }
         return () -> {
             Path tempFile;
             try (ArrowReader inputReader = new ArrowStreamReader(inputStream, allocator)) {

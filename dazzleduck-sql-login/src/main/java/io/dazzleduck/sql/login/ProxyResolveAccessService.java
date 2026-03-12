@@ -1,4 +1,4 @@
-package io.dazzleduck.sql.http.server;
+package io.dazzleduck.sql.login;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -35,7 +35,7 @@ import java.util.List;
  *
  * <p>Usage:
  * <pre>{@code
- * MockResolveService resolveService = new MockResolveService();
+ * ProxyResolveAccessService resolveService = new ProxyResolveAccessService();
  *
  * WebServer mockServer = WebServer.builder()
  *         .routing(r -> r.register("/v1/resolve", resolveService))
@@ -44,7 +44,7 @@ import java.util.List;
  *         .start();
  * }</pre>
  */
-public class MockResolveService implements HttpService {
+public class ProxyResolveAccessService implements HttpService {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final String BEARER_PREFIX = "Bearer ";
@@ -110,9 +110,34 @@ public class MockResolveService implements HttpService {
                 "memory", "main", cluster, "TABLE_FUNCTION",
                 List.of(), "", "read_delta", "2099-12-31");
 
+        ResolveAccessRow redirectTest1 = new ResolveAccessRow(
+                "postgres", "schema", "t1", "BASE_TABLE",
+                List.of(), "city = 'Bangalore'", "", "2099-12-31");
+
+        // redirect_users: second test table, no row filter
+        ResolveAccessRow redirectUsers1 = new ResolveAccessRow(
+                "postgres", "schema", "t2", "BASE_TABLE",
+                List.of(), "age > 20", "", "2099-12-31");
+
+        // redirect_events: third test table, carries org_id row-level filter
+        ResolveAccessRow redirectEvents1 = new ResolveAccessRow(
+                "postgres", "schema", "t3", "BASE_TABLE",
+                List.of(), "", "", "2025-12-31");
+
+        // --- Functions (TABLE_FUNCTION) ---
+        // read_parquet: grants access to all parquet files under the cluster's data path
+        ResolveAccessRow readParquet1 = new ResolveAccessRow(
+                "postgres", "schema", cluster, "TABLE_FUNCTION",
+                List.of(), "", "read_parquet", "2099-12-31");
+
+        // read_delta: same path prefix, different function
+        ResolveAccessRow readDelta1 = new ResolveAccessRow(
+                "postgres", "schema", cluster, "TABLE_FUNCTION",
+                List.of(), "", "read_delta", "2099-12-31");
+
         ResolveResponse response = new ResolveResponse(
-                List.of(redirectTest, redirectUsers, redirectEvents),
-                List.of(readParquet, readDelta),
+                List.of(redirectTest, redirectUsers, redirectEvents, redirectTest1, redirectUsers1, redirectEvents1),
+                List.of(readParquet, readDelta, readParquet1, readDelta1),
                 "1");
 
         // 5. Return the response as JSON

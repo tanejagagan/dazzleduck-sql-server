@@ -127,7 +127,7 @@ public class JwtClaimBasedAuthorizer implements SqlAuthorizer {
         if (!AccessType.WRITE.name().equalsIgnoreCase(accessType)) {
             return false;
         }
-        var authorizedPath = verifiedClaims.get(Headers.HEADER_PATH);
+        var authorizedPath = verifiedClaims.get(Headers.QUERY_PARAMETER_INGESTION_QUEUE);
         if (authorizedPath == null) {
             return false;
         }

@@ -9,6 +9,7 @@ import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.dazzleduck.sql.http.server.model.QueryRequest;
+import io.dazzleduck.sql.login.ProxyResolveAccessService;
 import io.helidon.http.HeaderNames;
 import io.helidon.http.HeaderValues;
 import io.helidon.webserver.WebServer;
@@ -38,7 +39,7 @@ public class HttpServerRedirectAuthorizationTest extends HttpServerTestBase {
 
     private static void startMockResolveServer() throws Exception {
         webServer = WebServer.builder()
-                .routing(r -> r.register("/v1/resolve", new MockResolveService()))
+                .routing(r -> r.register("/v1/resolve", new ProxyResolveAccessService()))
                 .port(5555)
                 .build()
                 .start();
