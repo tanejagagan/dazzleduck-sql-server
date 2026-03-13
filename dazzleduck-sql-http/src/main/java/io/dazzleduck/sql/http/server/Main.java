@@ -11,7 +11,9 @@ import io.dazzleduck.sql.flight.server.DuckDBFlightSqlProducer;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
 import io.dazzleduck.sql.login.LoginService;
 import io.dazzleduck.sql.login.ProxyLoginService;
+import io.helidon.common.tls.Tls;
 import io.helidon.config.Config;
+import io.helidon.config.ConfigSources;
 import io.helidon.cors.CrossOriginConfig;
 import io.helidon.logging.common.LogConfig;
 import io.helidon.webserver.WebServer;
@@ -281,7 +283,9 @@ public class Main {
         var auth = httpConfig.getString(ConfigConstants.AUTHENTICATION_KEY);
        String base64SecretKey = appConfig.getString(ConfigConstants.SECRET_KEY_KEY);
         var secretKey = Validator.fromBase64String(base64SecretKey);
-        String location = PROTOCOL_HTTP + "://%s:%s".formatted(host, port);
+        boolean tlsEnabled = appConfig.getBoolean("tls.enabled");
+        String locationProtocol = tlsEnabled ? PROTOCOL_HTTPS : PROTOCOL_HTTP;
+        String location = locationProtocol + "://%s:%s".formatted(host, port);
         AccessMode accessMode = DuckDBFlightSqlProducer.getAccessMode(appConfig);
         var jwtExpiration = appConfig.getDuration(CONFIG_JWT_EXPIRATION);
         var cors = CorsSupport.builder()
@@ -302,7 +306,7 @@ public class Main {
         // All versioned endpoints now require JWT authentication
         logger.info("JWT authentication is required for all versioned API endpoints (auth={}, accessMode={})", auth, accessMode);
 
-        WebServer server = WebServer.builder()
+        var serverBuilder = WebServer.builder()
                 .config(helidonConfig.get(ConfigConstants.CONFIG_PATH))
                 .config(helidonConfig.get(CONFIG_FLIGHT_SQL))
                 .routing(routing -> {
@@ -325,9 +329,21 @@ public class Main {
                     ));
                 })
                 .port(port)
-                .host(host)
-                .build()
-                .start();
+                .host(host);
+
+        if (tlsEnabled) {
+            Config tlsConfig = Config.builder()
+                    .addSource(ConfigSources.classpath("reference.conf"))
+                    .build()
+                    .get(CONFIG_PATH)
+                    .get("tls");
+            serverBuilder.tls(Tls.create(tlsConfig));
+            logger.info("TLS enabled — HTTP/2 (h2) active");
+        } else {
+            logger.info("TLS disabled — HTTP/2 (h2c) active");
+        }
+
+        WebServer server = serverBuilder.build().start();
 
         var http = server.hasTls() ? PROTOCOL_HTTPS : PROTOCOL_HTTP;
         String url = "%s://%s:%s".formatted(http, host, port);
