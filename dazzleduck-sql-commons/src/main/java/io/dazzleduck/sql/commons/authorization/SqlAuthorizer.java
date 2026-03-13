@@ -73,7 +73,7 @@ public interface SqlAuthorizer {
                        Map<String, String> verifiedClaims
     ) throws UnauthorizedException;
 
-    boolean hasWriteAccess(String user, String path, Map<String, String> verifiedClaims);
+    boolean hasWriteAccess(String user, String ingestionQueue, Map<String, String> verifiedClaims);
 
     static boolean hasAccessToPath(String authorizedPath, String queriedPath) {
         var authorizedSplits = authorizedPath.split("/");

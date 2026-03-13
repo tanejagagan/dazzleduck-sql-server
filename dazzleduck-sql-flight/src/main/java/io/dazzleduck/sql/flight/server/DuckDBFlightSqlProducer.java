@@ -790,20 +790,15 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             FlightStream flightStream,
             StreamListener<PutResult> ackStream) {
         IngestionParameters ingestionParameters = IngestionParameters.getIngestionParameters(command);
-//        String user = context.peerIdentity();
         String path = ingestionTaskFactory.getTargetPath(ingestionParameters.ingestionQueue());
-//        Map<String, String> verifiedClaims = getVerifiedClaims(context);
-//        if (!sqlAuthorizer.hasWriteAccess(user, path, verifiedClaims)) {
-//            ErrorHandling.handleUnauthorized(ackStream, new UnauthorizedException("No write access to ingestion_queue:" + path));
-//            return () -> {};
-//        }
+        var queue = ingestionParameters.ingestionQueue();
         FlightStreamReader reader = FlightStreamReader.of(flightStream, allocator);
         return () -> {
             Path tempFile;
             try (reader) {
                 tempFile = BulkIngestQueue.writeAndValidateTempArrowFile(tempDir, reader);
                 var batch = ingestionParameters.constructBatch(Files.size(tempFile), tempFile.toAbsolutePath().toString());
-                var ingestionQueue = getOrCreateParquetIngestionQueue(ingestionParameters.ingestionQueue(), path);
+                var ingestionQueue = getOrCreateParquetIngestionQueue(queue, path);
                 var result = ingestionQueue.add(batch);
                 result.get();
                 ackStream.onNext(PutResult.empty());
@@ -820,13 +815,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             IngestionParameters ingestionParameters,
             InputStream inputStream,
             StreamListener<PutResult> ackStream) {
-//        String user = context.peerIdentity();
         String path = ingestionTaskFactory.getTargetPath(ingestionParameters.ingestionQueue());
-//        Map<String, String> verifiedClaims = getVerifiedClaims(context);
-//        if (!sqlAuthorizer.hasWriteAccess(user, path, verifiedClaims)) {
-//            ErrorHandling.handleUnauthorized(ackStream, new UnauthorizedException("No write access to ingestion_queue:" + path));
-//            return () -> {};
-//        }
         return () -> {
             Path tempFile;
             try (ArrowReader inputReader = new ArrowStreamReader(inputStream, allocator)) {
