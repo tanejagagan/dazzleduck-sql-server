@@ -7,6 +7,7 @@ import io.dazzleduck.sql.commons.authorization.UnauthorizedException;
 import io.dazzleduck.sql.commons.Transformations;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.ingestion.IngestionTaskFactory;
+import io.dazzleduck.sql.flight.ingestion.IngestionParameters;
 import io.dazzleduck.sql.commons.planner.SplitPlanner;
 import io.dazzleduck.sql.flight.FlightRecorder;
 import io.dazzleduck.sql.flight.optimizer.QueryOptimizer;
@@ -131,6 +132,23 @@ public class RestrictedFlightSqlProducer extends DuckDBFlightSqlProducer {
             FlightStream flightStream,
             StreamListener<PutResult> ackStream) {
         return throwNotSupported("Update statements are not supported in restricted mode");
+    }
+
+    @Override
+    public Runnable acceptPutStatementBulkIngest(
+            FlightSql.CommandStatementIngest command,
+            CallContext context,
+            FlightStream flightStream,
+            StreamListener<PutResult> ackStream) {
+        var queue = IngestionParameters.getIngestionParameters(command).ingestionQueue();
+        var user = context.peerIdentity();
+        var verifiedClaims = getVerifiedClaims(context);
+        if (!getSqlAuthorizer().hasWriteAccess(user, queue, verifiedClaims)) {
+            ErrorHandling.handleUnauthorized(ackStream,
+                    new UnauthorizedException("No write access to ingestion_queue:" + queue));
+            return () -> {};
+        }
+        return super.acceptPutStatementBulkIngest(command, context, flightStream, ackStream);
     }
 
     /**
