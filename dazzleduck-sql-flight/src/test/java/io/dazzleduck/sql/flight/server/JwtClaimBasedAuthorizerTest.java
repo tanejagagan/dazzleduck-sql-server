@@ -130,10 +130,9 @@ public class JwtClaimBasedAuthorizerTest {
         var authorizer = SqlAuthorizer.JWT_AUTHORIZER;
         var claims = Map.of(
                 Headers.HEADER_ACCESS_TYPE, AccessType.WRITE.name(),
-                Headers.HEADER_PATH, "example/data/hive_table"
+                Headers.QUERY_PARAMETER_INGESTION_QUEUE, "ingestion_queue1"
         );
-        assertTrue(authorizer.hasWriteAccess(TEST_USER, "example/data/hive_table", claims));
-        assertTrue(authorizer.hasWriteAccess(TEST_USER, "example/data/hive_table/subpath", claims));
+        assertTrue(authorizer.hasWriteAccess(TEST_USER, "ingestion_queue1", claims));
     }
 
     @Test
