@@ -2,8 +2,7 @@ package io.dazzleduck.sql.flight.server;
 
 import org.apache.arrow.flight.FlightProducer;
 import org.apache.arrow.memory.ArrowBuf;
-import org.apache.arrow.vector.FieldVector;
-import org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.arrow.vector.*;
 import org.apache.arrow.vector.dictionary.DictionaryProvider;
 import org.apache.arrow.vector.ipc.message.IpcOption;
 import org.slf4j.Logger;
@@ -14,6 +13,9 @@ import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
@@ -141,12 +143,67 @@ public class TsvOutputStreamListener implements FlightProducer.ServerStreamListe
         for (int row = 0; row < rowCount; row++) {
             for (int col = 0; col < vectors.size(); col++) {
                 if (col > 0) writer.write(TAB);
-                Object value = vectors.get(col).getObject(row);
+                String value = formatValue(vectors.get(col), row);
                 if (value != null) {
-                    writer.write(value.toString());
+                    writer.write(value);
                 }
             }
             writer.write(NEWLINE);
         }
+    }
+
+    /**
+     * Formats a single cell value as a string.
+     *
+     * Arrow vectors for date/time types backed by raw integers are converted to
+     * ISO-8601 strings. All other types fall back to {@code getObject().toString()},
+     * which already produces readable output for numerics, strings, booleans,
+     * non-TZ timestamps (LocalDateTime), lists (JsonStringArrayList), and
+     * structs (JsonStringHashMap).
+     */
+    private String formatValue(FieldVector vector, int row) {
+        if (vector.isNull(row)) return null;
+        return switch (vector.getMinorType()) {
+            // Date types — getObject() returns Integer (days since epoch)
+            case DATEDAY ->
+                LocalDate.ofEpochDay(((DateDayVector) vector).get(row)).toString();
+            case DATEMILLI ->
+                LocalDate.ofEpochDay(((DateMilliVector) vector).get(row) / 86_400_000L).toString();
+
+            // Time types — getObject() returns raw Integer/Long
+            case TIMESEC ->
+                LocalTime.ofSecondOfDay(((TimeSecVector) vector).get(row)).toString();
+            case TIMEMILLI ->
+                LocalTime.ofNanoOfDay((long) ((TimeMilliVector) vector).get(row) * 1_000_000L).toString();
+            case TIMEMICRO ->
+                LocalTime.ofNanoOfDay(((TimeMicroVector) vector).get(row) * 1_000L).toString();
+            case TIMENANO ->
+                LocalTime.ofNanoOfDay(((TimeNanoVector) vector).get(row)).toString();
+
+            // Timezone-aware timestamp types — getObject() returns Long (raw units since epoch)
+            case TIMESTAMPSECTZ ->
+                Instant.ofEpochSecond(((TimeStampSecTZVector) vector).get(row)).toString();
+            case TIMESTAMPMILLITZ ->
+                Instant.ofEpochMilli(((TimeStampMilliTZVector) vector).get(row)).toString();
+            case TIMESTAMPMICROTZ -> {
+                long micros = ((TimeStampMicroTZVector) vector).get(row);
+                yield Instant.ofEpochSecond(
+                        Math.floorDiv(micros, 1_000_000L),
+                        Math.floorMod(micros, 1_000_000L) * 1_000L).toString();
+            }
+            case TIMESTAMPNANOTZ -> {
+                long nanos = ((TimeStampNanoTZVector) vector).get(row);
+                yield Instant.ofEpochSecond(
+                        Math.floorDiv(nanos, 1_000_000_000L),
+                        Math.floorMod(nanos, 1_000_000_000L)).toString();
+            }
+
+            // All other types (numerics, strings, booleans, non-TZ timestamps,
+            // lists, structs, maps) — getObject() already returns a readable value
+            default -> {
+                Object value = vector.getObject(row);
+                yield value != null ? value.toString() : null;
+            }
+        };
     }
 }
