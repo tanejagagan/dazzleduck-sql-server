@@ -283,7 +283,7 @@ public class Main {
         var auth = httpConfig.getString(ConfigConstants.AUTHENTICATION_KEY);
        String base64SecretKey = appConfig.getString(ConfigConstants.SECRET_KEY_KEY);
         var secretKey = Validator.fromBase64String(base64SecretKey);
-        boolean tlsEnabled = appConfig.getBoolean("tls.enabled");
+        boolean tlsEnabled = httpConfig.getBoolean("tls.enabled");
         String locationProtocol = tlsEnabled ? PROTOCOL_HTTPS : PROTOCOL_HTTP;
         String location = locationProtocol + "://%s:%s".formatted(host, port);
         AccessMode accessMode = DuckDBFlightSqlProducer.getAccessMode(appConfig);
