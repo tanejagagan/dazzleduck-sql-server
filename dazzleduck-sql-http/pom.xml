@@ -54,5 +54,10 @@
             <artifactId>helidon-health-checks</artifactId>
             <version>${helidon.version}</version>
         </dependency>
+        <dependency>
+            <groupId>io.helidon.webserver</groupId>
+            <artifactId>helidon-webserver-http2</artifactId>
+            <version>${helidon.version}</version>
+        </dependency>
     </dependencies>
 </project>
