@@ -1146,14 +1146,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         }
     }
 
-    public synchronized boolean addLocation(Location location){
-        return dataProcessorLocations.add(location);
-    }
-
-    public synchronized boolean removeLocation(Location location){
-        return dataProcessorLocations.remove(location);
-    }
-
     private StatementContext<?> getStatementContext(CacheKey key) {
         StatementContext<?> context = statementLoadingCache.getIfPresent(key);
         if (context == null) {
