@@ -30,6 +30,7 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
     private final IngestionTaskFactory postIngestionTaskFactory;
     private final String applicationId;
     private final String inputFormat;
+    private final String transformation;
 
 
 
@@ -60,12 +61,30 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
                                  IngestionTaskFactory postIngestionTaskFactory,
                                  ScheduledExecutorService executorService,
                                  Clock clock) {
+        this(applicationId, inputFormat, outputPath, ingestionQueue, minBucketSize, maxBucketSize,
+                maxBatches, maxPendingWrite, maxDelay, postIngestionTaskFactory, executorService, clock, null);
+    }
+
+    public ParquetIngestionQueue(String applicationId,
+                                 String inputFormat,
+                                 String outputPath,
+                                 String ingestionQueue,
+                                 long minBucketSize,
+                                 long maxBucketSize,
+                                 int maxBatches,
+                                 long maxPendingWrite,
+                                 Duration maxDelay,
+                                 IngestionTaskFactory postIngestionTaskFactory,
+                                 ScheduledExecutorService executorService,
+                                 Clock clock,
+                                 String transformation) {
         super(ingestionQueue, minBucketSize, maxBucketSize, maxBatches, maxPendingWrite, maxDelay, executorService, clock);
         this.outputPath = outputPath;
         this.queueId = ingestionQueue;
         this.postIngestionTaskFactory = postIngestionTaskFactory;
         this.applicationId = applicationId;
         this.inputFormat = inputFormat;
+        this.transformation = transformation;
     }
 
     @Override
@@ -131,17 +150,23 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
             fullFilePath = this.outputPath;
         }
 
+        // Inner SQL reads from the temp Arrow files
+        var innerSql = "SELECT %s FROM read_%s([%s]) %s".formatted(selectClause, this.inputFormat, arrowFiles, sortOrderClause);
+
+        // If a transformation is configured, wrap the inner SQL as a CTE named __this
+        // and use the transformation query (e.g. "SELECT a, b, c FROM __this") as the outer query.
+        var querySql = (transformation != null && !transformation.isBlank())
+                ? "WITH __this AS (%s) %s".formatted(innerSql, transformation)
+                : innerSql;
+
         // Build SQL
         // https://duckdb.org/docs/stable/sql/statements/copy
-        // Search for return File and stats during the copy statement.
-        // Need to create correct postIngestionTaskFactory so that you create correct IngestionTask which will be executed
-        // The ingestion task will essentially insert the data into the database which will complete our implementation
         var sql = """
                 COPY
-                    (SELECT %s FROM read_%s([%s]) %s)
+                    (%s)
                     TO '%s'
                     (FORMAT %s %s, RETURN_FILES, APPEND);
-                """.formatted(selectClause, this.inputFormat, arrowFiles, sortOrderClause, fullFilePath, outputFormat, partitionByClause);
+                """.formatted(querySql, fullFilePath, outputFormat, partitionByClause);
         logger.info("Executing COPY SQL: {}", sql);
         List<String> files = new ArrayList<>();
         long count = 0;

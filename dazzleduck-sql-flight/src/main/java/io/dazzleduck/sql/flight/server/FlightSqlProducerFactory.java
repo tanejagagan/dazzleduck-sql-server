@@ -486,7 +486,9 @@ public final class FlightSqlProducerFactory {
                 config,
                 ConfigConstants.INGESTION_CONFIG_PREFIX
             );
-            return provider.getIngestionTaskFactory();
+            IngestionTaskFactory factory = provider.getIngestionTaskFactory();
+            provider.validate();
+            return factory;
         }
 
         private static QueryOptimizer loadQueryOptimizer(Config config) throws Exception {

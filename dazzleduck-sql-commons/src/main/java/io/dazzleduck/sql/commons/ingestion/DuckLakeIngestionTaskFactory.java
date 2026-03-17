@@ -83,6 +83,15 @@ public class DuckLakeIngestionTaskFactory implements IngestionTaskFactory {
         return queueIdToPathMapping.get(queueId);
     }
 
+    @Override
+    public String getTransformation(String queueId) {
+        QueueIdToTableMapping mapping = queueIdsToTableMappings.get(queueId);
+        if (mapping == null) {
+            mapping = queueIdsToTableMappings.get(extractSuffix(queueId));
+        }
+        return mapping != null ? mapping.transformation() : null;
+    }
+
     // extracting last path segment of queueName (eg. log, metric)
     private String extractSuffix(String queueName) {
         String normalized = queueName.replace("\\", "/");

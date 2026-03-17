@@ -763,7 +763,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
      */
     protected BulkIngestQueue<String, IngestionResult> getOrCreateParquetIngestionQueue(String queueId, String path) {
         return ingestionQueueMap.computeIfAbsent(queueId, p -> {
-
+            String transformation = ingestionTaskFactory.getTransformation(p);
             var queue = new ParquetIngestionQueue(producerId, TEMP_WRITE_FORMAT, path, p,
                     bulkIngestionConfig.minBucketSize(),
                     bulkIngestionConfig.maxBucketSize(),
@@ -772,7 +772,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                     bulkIngestionConfig.maxDelay(),
                     ingestionTaskFactory,
                     Executors.newSingleThreadScheduledExecutor(),
-                    Clock.systemDefaultZone());
+                    Clock.systemDefaultZone(),
+                    transformation);
             recorder.registerWriteQueue(p, Map.of(
                     "write_batches", queue::getTotalWriteBatches,
                     "write_buckets", queue::getTotalWriteBuckets,
