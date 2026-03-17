@@ -2,6 +2,7 @@ package io.dazzleduck.sql.commons.ingestion;
 
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.util.MutableClock;
+import io.dazzleduck.sql.commons.util.TestUtils;
 import org.jmock.lib.concurrent.DeterministicScheduler;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -436,6 +437,140 @@ public class ParquetIngestionQueueTest {
 
             // Should have entries for both producers
             assertTrue(result.maxProducerIds().size() >= 1);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Transformation tests
+    // -------------------------------------------------------------------------
+
+    // Source data generation SQL — mirrors createTestParquetFile(n)
+    private static String sourceData(int rows) {
+        return "SELECT i AS id, i * 2 AS value, 'category' || (i %% 3) AS category FROM range(0, %d) t(i)".formatted(rows);
+    }
+
+    @Test
+    public void testTransformationSelectsSubsetOfColumns() throws Exception {
+        var service = new DeterministicScheduler();
+        var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
+        var postTaskFactory = createPostTaskFactory(new AtomicBoolean(), false);
+
+        // Source has: id, value, category — transformation drops category
+        String transformation = "SELECT id, value FROM __this";
+
+        try (var queue = new ParquetIngestionQueue(
+                TEST_APP_ID, INPUT_FORMAT, targetPath.toString(), "test-queue",
+                DEFAULT_MIN_BATCH_SIZE, Long.MAX_VALUE, Integer.MAX_VALUE, Long.MAX_VALUE,
+                DEFAULT_MAX_DELAY, postTaskFactory, service, clock, transformation)) {
+
+            var future = queue.add(createBatch(sourceFile1.toString(), "producer1", 0, DEFAULT_MIN_BATCH_SIZE + 1));
+            service.tick(1, TimeUnit.MILLISECONDS);
+            var result = future.get(2, SECONDS);
+
+            String outputFile = result.filesCreated().get(0);
+            TestUtils.isEqual(
+                "SELECT id, value FROM (%s)".formatted(sourceData(100)),
+                "SELECT * FROM read_parquet('%s')".formatted(outputFile));
+        }
+    }
+
+    @Test
+    public void testTransformationWithDerivedColumn() throws Exception {
+        var service = new DeterministicScheduler();
+        var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
+        var postTaskFactory = createPostTaskFactory(new AtomicBoolean(), false);
+
+        // Transformation replaces value with doubled_value = value * 2
+        String transformation = "SELECT id, value * 2 AS doubled_value FROM __this";
+
+        try (var queue = new ParquetIngestionQueue(
+                TEST_APP_ID, INPUT_FORMAT, targetPath.toString(), "test-queue",
+                DEFAULT_MIN_BATCH_SIZE, Long.MAX_VALUE, Integer.MAX_VALUE, Long.MAX_VALUE,
+                DEFAULT_MAX_DELAY, postTaskFactory, service, clock, transformation)) {
+
+            var future = queue.add(createBatch(sourceFile1.toString(), "producer1", 0, DEFAULT_MIN_BATCH_SIZE + 1));
+            service.tick(1, TimeUnit.MILLISECONDS);
+            var result = future.get(2, SECONDS);
+
+            String outputFile = result.filesCreated().get(0);
+            TestUtils.isEqual(
+                "SELECT id, value * 2 AS doubled_value FROM (%s)".formatted(sourceData(100)),
+                "SELECT * FROM read_parquet('%s')".formatted(outputFile));
+        }
+    }
+
+    @Test
+    public void testTransformationWithFilter() throws Exception {
+        var service = new DeterministicScheduler();
+        var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
+        var postTaskFactory = createPostTaskFactory(new AtomicBoolean(), false);
+
+        // Source has 100 rows with id 0–99; filter keeps id >= 50 (50 rows)
+        String transformation = "SELECT * FROM __this WHERE id >= 50";
+
+        try (var queue = new ParquetIngestionQueue(
+                TEST_APP_ID, INPUT_FORMAT, targetPath.toString(), "test-queue",
+                DEFAULT_MIN_BATCH_SIZE, Long.MAX_VALUE, Integer.MAX_VALUE, Long.MAX_VALUE,
+                DEFAULT_MAX_DELAY, postTaskFactory, service, clock, transformation)) {
+
+            var future = queue.add(createBatch(sourceFile1.toString(), "producer1", 0, DEFAULT_MIN_BATCH_SIZE + 1));
+            service.tick(1, TimeUnit.MILLISECONDS);
+            var result = future.get(2, SECONDS);
+
+            String outputFile = result.filesCreated().get(0);
+            TestUtils.isEqual(
+                "SELECT * FROM (%s) WHERE id >= 50".formatted(sourceData(100)),
+                "SELECT * FROM read_parquet('%s')".formatted(outputFile));
+        }
+    }
+
+    @Test
+    public void testTransformationAppliedAcrossMultipleBatches() throws Exception {
+        var service = new DeterministicScheduler();
+        var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
+        var postTaskFactory = createPostTaskFactory(new AtomicBoolean(), false);
+
+        // Two source files (100 + 50 rows); transformation selects only id and value
+        String transformation = "SELECT id, value FROM __this";
+
+        try (var queue = new ParquetIngestionQueue(
+                TEST_APP_ID, INPUT_FORMAT, targetPath.toString(), "test-queue",
+                DEFAULT_SMALL_BATCH_SIZE, Long.MAX_VALUE, Integer.MAX_VALUE, Long.MAX_VALUE,
+                DEFAULT_MAX_DELAY, postTaskFactory, service, clock, transformation)) {
+
+            var future1 = queue.add(createBatch(sourceFile1.toString(), "producer1", 0, 600));
+            var future2 = queue.add(createBatch(sourceFile2.toString(), "producer1", 1, 600));
+            service.tick(1, TimeUnit.MILLISECONDS);
+
+            var result = future1.get(2, SECONDS);
+            future2.get(2, SECONDS);
+
+            String outputFile = result.filesCreated().get(0);
+            TestUtils.isEqual(
+                "SELECT id, value FROM (%s UNION ALL %s)".formatted(sourceData(100), sourceData(50)),
+                "SELECT * FROM read_parquet('%s')".formatted(outputFile));
+        }
+    }
+
+    @Test
+    public void testNullTransformationWritesAllColumns() throws Exception {
+        var service = new DeterministicScheduler();
+        var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
+        var postTaskFactory = createPostTaskFactory(new AtomicBoolean(), false);
+
+        try (var queue = new ParquetIngestionQueue(
+                TEST_APP_ID, INPUT_FORMAT, targetPath.toString(), "test-queue",
+                DEFAULT_MIN_BATCH_SIZE, Long.MAX_VALUE, Integer.MAX_VALUE, Long.MAX_VALUE,
+                DEFAULT_MAX_DELAY, postTaskFactory, service, clock, null)) {
+
+            var future = queue.add(createBatch(sourceFile1.toString(), "producer1", 0, DEFAULT_MIN_BATCH_SIZE + 1));
+            service.tick(1, TimeUnit.MILLISECONDS);
+            var result = future.get(2, SECONDS);
+
+            String outputFile = result.filesCreated().get(0);
+            TestUtils.isEqual(
+                sourceData(100),
+                "SELECT * FROM read_parquet('%s')".formatted(outputFile));
         }
     }
 
