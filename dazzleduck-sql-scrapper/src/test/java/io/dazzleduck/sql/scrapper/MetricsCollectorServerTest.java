@@ -301,10 +301,12 @@ class MetricsCollectorServerTest {
         // Start in background
         executor.submit(server::start);
 
-        // Wait for some scrapes
-        Thread.sleep(500);
-
+        // Wait for server to fully start (Arrow memory init can be slow on first run)
+        waitUntil(server::isRunning, 10000);
         assertTrue(server.isRunning());
+
+        // Wait for at least one scrape and flush to complete
+        waitUntil(() -> server.getCollector().getMetricsSentCount() > 0, 5000);
 
         // Should have scraped from target
         assertTrue(targetServer.getRequestCount() > 0, "Should have scraped at least once");
