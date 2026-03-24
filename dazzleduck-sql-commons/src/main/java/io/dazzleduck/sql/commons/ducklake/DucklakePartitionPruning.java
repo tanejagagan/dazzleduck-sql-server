@@ -42,14 +42,18 @@ public class DucklakePartitionPruning {
                     " R AS (%s)\n" +
                     " SELECT L.path, L.file_size_bytes, cast(0  as  bigint), L.path_is_relative, L.table_id, L.mapping_id FROM L INNER JOIN R ON L.data_file_id = R.data_file_id LEFT OUTER JOIN M ON M.mapping_id = L.mapping_id ORDER BY L.data_file_id";
     private static final String NO_FILTER_QUERY = "SELECT L.path, L.file_size_bytes, cast(0  as  bigint), L.path_is_relative, L.table_id, L.mapping_id FROM %s.ducklake_data_file L WHERE table_id = %s ORDER by L.data_file_id";
-    private static final String RELATIVE_PATH_QUERY = "select if(s.path_is_relative, concat(m.\"value\", s.path, t.path), concat(s.path, t.path)) as path from %s.main.ducklake_schema s join %s.main.ducklake_table t on  (s.schema_id = t.schema_id) cross join  %s.main.ducklake_metadata m where m.key =  'data_path' and t.table_id = %s";
     private static final String PIVOT_TABLE_ALIAS = "P";
 
     private final String metadataDatabase;
+    private final String schemaQualifier;
     private final Map<String, VersionEntity<Map<String, ColumnInfo>>> columnInfoCache = new ConcurrentHashMap<>();
     private final Map<Long, VersionEntity<String>> relativePathCache = new ConcurrentHashMap<>();
     public DucklakePartitionPruning(String metadataDatabase) {
+        this(metadataDatabase, ".");
+    }
+    public DucklakePartitionPruning(String metadataDatabase, String schemaQualifier) {
         this.metadataDatabase = metadataDatabase;
+        this.schemaQualifier = schemaQualifier;
     }
 
     private String getNoFilterQuery(long tableId) {
@@ -75,7 +79,8 @@ public class DucklakePartitionPruning {
     }
 
     private String getTablePathQuery(long tableId) {
-        return RELATIVE_PATH_QUERY.formatted(metadataDatabase, metadataDatabase, metadataDatabase, tableId);
+        String sql = "select if(s.path_is_relative, concat(m.\"value\", s.path, t.path), concat(s.path, t.path)) as path from %s" + schemaQualifier + "ducklake_schema s join %s" + schemaQualifier + "ducklake_table t on (s.schema_id = t.schema_id) cross join %s" + schemaQualifier + "ducklake_metadata m where m.key = 'data_path' and t.table_id = %s";
+        return sql.formatted(metadataDatabase, metadataDatabase, metadataDatabase, tableId);
     }
 
     private String getTablePath(long tableId) {
