@@ -56,11 +56,8 @@ public class SyntheticFlightContext implements FlightProducer.CallContext {
     }
 
     public static String extractPeerIdentityFromAuth(Map<String, List<String>> headers) {
-        List<String> authHeaders = headers.entrySet().stream()
-                .filter(e -> e.getKey().equalsIgnoreCase(Auth2Constants.AUTHORIZATION_HEADER))
-                .map(Map.Entry::getValue)
-                .findFirst()
-                .orElse(null);
+        List<String> authHeaders = headers.getOrDefault(Auth2Constants.AUTHORIZATION_HEADER,
+                headers.get(Auth2Constants.AUTHORIZATION_HEADER.toLowerCase()));
 
         if (authHeaders == null || authHeaders.isEmpty()) {
             return null;
