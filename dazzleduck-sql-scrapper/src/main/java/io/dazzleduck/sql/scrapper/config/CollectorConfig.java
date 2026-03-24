@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Loads collector configuration from HOCON files.
@@ -61,7 +62,10 @@ public class CollectorConfig {
      * Load configuration from default locations.
      */
     public CollectorConfig() {
-        this.config = ConfigFactory.load().resolve();
+        this.config = buildConfigFromEnv()
+                .withFallback(ConfigFactory.systemProperties())
+                .withFallback(ConfigFactory.load())
+                .resolve();
         log.debug("Configuration loaded from default locations");
     }
 
@@ -70,13 +74,14 @@ public class CollectorConfig {
      *
      * Configuration is loaded in the following priority (highest to lowest):
      * 1. System properties
-     * 2. External config file (if specified)
-     * 3. application.conf from classpath
+     * 2. Environment variables
+     * 3. External config file (if specified)
+     * 4. application.conf / reference.conf from classpath
      *
      * @param externalConfigPath path to external config file (can be null)
      */
     public CollectorConfig(String externalConfigPath) {
-        Config classpathConfig = ConfigFactory.load();
+        Config envConfig = buildConfigFromEnv();
         Config resultConfig;
 
         // Load external config file if specified
@@ -85,22 +90,61 @@ public class CollectorConfig {
             if (externalFile.exists()) {
                 log.info("Loading external configuration from: {}", externalConfigPath);
                 Config externalConfig = ConfigFactory.parseFile(externalFile);
-                // External config overrides classpath config
-                Config withExternal = externalConfig.withFallback(classpathConfig);
-                // System properties override everything
-                resultConfig = ConfigFactory.systemProperties().withFallback(withExternal);
+                resultConfig = envConfig
+                        .withFallback(ConfigFactory.systemProperties())
+                        .withFallback(externalConfig)
+                        .withFallback(ConfigFactory.load());
             } else {
                 log.warn("External configuration file not found: {}", externalConfigPath);
-                resultConfig = classpathConfig;
+                resultConfig = envConfig
+                        .withFallback(ConfigFactory.systemProperties())
+                        .withFallback(ConfigFactory.load());
             }
         } else {
-            resultConfig = classpathConfig;
+            resultConfig = envConfig
+                    .withFallback(ConfigFactory.systemProperties())
+                    .withFallback(ConfigFactory.load());
         }
 
         // Resolve and cache config
         this.config = resultConfig.resolve();
 
         log.debug("Configuration loaded successfully");
+    }
+
+    /**
+     * Builds a TypeSafe Config from environment variables with the "collector." prefix.
+     * Values that look like JSON arrays (starting with "[") are parsed as HOCON lists,
+     * allowing Docker environment variables like:
+     *   collector.partition=["date", "application"]
+     *   collector.project=["*", "'envoy' AS application"]
+     */
+    private static Config buildConfigFromEnv() {
+        StringBuilder hocon = new StringBuilder();
+        for (Map.Entry<String, String> entry : System.getenv().entrySet()) {
+            String key = entry.getKey();
+            String value = entry.getValue();
+            if (!key.startsWith(CONFIG_PREFIX + ".") && !key.equals(CONFIG_PREFIX)) {
+                continue;
+            }
+            String trimmed = value.trim();
+            // JSON array/object or bare number/boolean — emit as-is
+            if (trimmed.startsWith("[") || trimmed.startsWith("{")
+                    || trimmed.equals("true") || trimmed.equals("false")
+                    || trimmed.matches("-?\\d+(\\.\\d+)?")) {
+                hocon.append(key).append(" = ").append(trimmed).append("\n");
+            } else {
+                // Plain string — quote it
+                hocon.append(key).append(" = \"")
+                        .append(value.replace("\\", "\\\\").replace("\"", "\\\""))
+                        .append("\"\n");
+            }
+        }
+        if (hocon.isEmpty()) {
+            return ConfigFactory.empty();
+        }
+        log.debug("Env-var config:\n{}", hocon);
+        return ConfigFactory.parseString(hocon.toString());
     }
 
     /**

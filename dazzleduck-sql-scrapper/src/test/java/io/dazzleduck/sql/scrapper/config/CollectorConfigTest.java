@@ -224,6 +224,26 @@ class CollectorConfigTest {
     }
 
     @Test
+    @DisplayName("Should parse partition and project from env-var style JSON arrays")
+    void envVarJsonArrayParsing() {
+        // Simulate what buildConfigFromEnv() produces when Docker sets:
+        //   collector.partition=["date", "application"]
+        //   collector.project=["*", "'envoy' AS application_host", "CAST (timestamp AS date) AS date"]
+        String envConfig = """
+            collector.partition = ["date", "application"]
+            collector.project = ["*", "'envoy' AS application_host", "CAST (timestamp AS date) AS date"]
+            """;
+
+        Config config = ConfigFactory.parseString(envConfig)
+                .withFallback(ConfigFactory.load());
+        CollectorConfig collectorConfig = new CollectorConfig(config);
+
+        assertEquals(List.of("date", "application"), collectorConfig.getPartition());
+        assertEquals(List.of("*", "'envoy' AS application_host", "CAST (timestamp AS date) AS date"),
+                collectorConfig.getProject());
+    }
+
+    @Test
     @DisplayName("Should create from Config object")
     void createFromConfigObject() {
         String hoconString = """

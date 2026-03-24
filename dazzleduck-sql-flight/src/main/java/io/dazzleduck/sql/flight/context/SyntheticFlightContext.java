@@ -11,10 +11,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import javax.annotation.Nullable;
 import java.nio.charset.StandardCharsets;
-import java.util.Base64;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 public class SyntheticFlightContext implements FlightProducer.CallContext {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
@@ -59,7 +56,9 @@ public class SyntheticFlightContext implements FlightProducer.CallContext {
     }
 
     public static String extractPeerIdentityFromAuth(Map<String, List<String>> headers) {
-        List<String> authHeaders = headers.get(Auth2Constants.AUTHORIZATION_HEADER);
+        List<String> authHeaders = headers.getOrDefault(Auth2Constants.AUTHORIZATION_HEADER,
+                headers.get(Auth2Constants.AUTHORIZATION_HEADER.toLowerCase()));
+
         if (authHeaders == null || authHeaders.isEmpty()) {
             return null;
         }
