@@ -48,8 +48,8 @@ public class OtelMetricSchema {
                     FieldType.nullable(new ArrowType.Timestamp(TimeUnit.MILLISECOND, null)), null),
             new Field("time_ms",
                     FieldType.nullable(new ArrowType.Timestamp(TimeUnit.MILLISECOND, null)), null),
-            mapField("attributes"),
-            mapField("resource_attributes"),
+            OtelSchemaFields.mapField("attributes"),
+            OtelSchemaFields.mapField("resource_attributes"),
             new Field("scope_name",
                     FieldType.nullable(new ArrowType.Utf8()), null),
             new Field("scope_version",
@@ -62,8 +62,8 @@ public class OtelMetricSchema {
                     FieldType.nullable(new ArrowType.Int(64, true)), null),
             new Field("sum",
                     FieldType.nullable(new ArrowType.FloatingPoint(FloatingPointPrecision.DOUBLE)), null),
-            listField("bucket_counts", new ArrowType.Int(64, true)),
-            listField("explicit_bounds", new ArrowType.FloatingPoint(FloatingPointPrecision.DOUBLE)),
+            OtelSchemaFields.listField("bucket_counts", new ArrowType.Int(64, true)),
+            OtelSchemaFields.listField("explicit_bounds", new ArrowType.FloatingPoint(FloatingPointPrecision.DOUBLE)),
             quantileValuesField(),
             new Field("is_monotonic",
                     FieldType.nullable(new ArrowType.Bool()), null),
@@ -81,22 +81,4 @@ public class OtelMetricSchema {
         return new Field("quantile_values", FieldType.nullable(new ArrowType.List()), List.of(qvStruct));
     }
 
-    private static Field listField(String name, ArrowType elementType) {
-        return new Field(name,
-                FieldType.nullable(new ArrowType.List()),
-                List.of(new Field("item", FieldType.nullable(elementType), null)));
-    }
-
-    private static Field mapField(String name) {
-        return new Field(name,
-                FieldType.nullable(new ArrowType.Map(false)),
-                List.of(new Field("entries",
-                        FieldType.notNullable(new ArrowType.Struct()),
-                        List.of(
-                                new Field("key", FieldType.notNullable(new ArrowType.Utf8()), null),
-                                new Field("value", FieldType.nullable(new ArrowType.Utf8()), null)
-                        )
-                ))
-        );
-    }
 }
