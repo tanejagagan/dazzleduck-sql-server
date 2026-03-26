@@ -8,6 +8,7 @@ import org.apache.arrow.vector.types.pojo.Field;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
 
 
 public class VectorSchemaRootWriter {
@@ -67,6 +68,8 @@ public class VectorSchemaRootWriter {
             ArrowType.Date dateType = (ArrowType.Date) type;
             if (dateType.getUnit() == DateUnit.DAY) return new VectorWriter.DateDayVectorWriter();
             else return new VectorWriter.DateMilliVectorWriter();
+        } else if (type instanceof ArrowType.Bool) {
+            return new VectorWriter.BitVectorWriter();
         } else if (type instanceof ArrowType.Decimal) {
             ArrowType.Decimal decimalType = (ArrowType.Decimal) type;
             if (decimalType.getBitWidth() == 128) return new VectorWriter.DecimalVectorWriter();
@@ -79,6 +82,27 @@ public class VectorSchemaRootWriter {
             ArrowType elementType = elementField.getType();
 
             ElementWriteFunction elementFunc;
+
+            if (elementType instanceof ArrowType.Struct) {
+                List<VectorWriter.StructField> structFields = elementField.getChildren().stream()
+                        .map(childField -> {
+                            ArrowType childType = childField.getType();
+                            StructFieldWriter sfWriter;
+                            if (childType instanceof ArrowType.Utf8) {
+                                sfWriter = StructFieldWriter.VARCHAR;
+                            } else if (childType instanceof ArrowType.Int
+                                    && ((ArrowType.Int) childType).getBitWidth() == 64) {
+                                sfWriter = StructFieldWriter.BIGINT;
+                            } else {
+                                throw new UnsupportedOperationException(
+                                        "Unsupported struct field type in List<Struct>: " + childType);
+                            }
+                            return new VectorWriter.StructField(childField.getName(), sfWriter);
+
+                        })
+                        .collect(Collectors.toList());
+                return new VectorWriter.ListOfStructVectorWriter(structFields);
+            }
 
             if (elementType instanceof ArrowType.Int) {
                 ArrowType.Int intType = (ArrowType.Int) elementType;

@@ -20,6 +20,7 @@ import java.util.List;
 
 import static java.util.Arrays.asList;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Arrays;
@@ -387,6 +388,73 @@ public class VectorSchemaRootWriteTest {
                 assertEquals(false, listVector.isNull(0));
                 // Row 1 should have a list with 2 elements
                 assertEquals(false, listVector.isNull(1));
+            }
+        }
+    }
+
+    @Test
+    public void testListOfStruct() {
+        Field structField = new Field("event",
+                FieldType.nullable(new ArrowType.Struct()),
+                List.of(
+                        new Field("name", FieldType.nullable(new ArrowType.Utf8()), null),
+                        new Field("time_ms", FieldType.nullable(new ArrowType.Int(64, true)), null)
+                ));
+        Field eventsField = new Field("events",
+                FieldType.nullable(new ArrowType.List()),
+                List.of(structField));
+        Schema schema = new Schema(List.of(eventsField));
+
+        var row1 = new JavaRow(new Object[]{
+                List.of(
+                        new Object[]{"click", 1000L},
+                        new Object[]{"submit", 2000L}
+                )
+        });
+        var row2 = new JavaRow(new Object[]{null});  // null list
+        var row3 = new JavaRow(new Object[]{
+                java.util.Collections.singletonList(new Object[]{null, null})  // struct with null fields
+        });
+        JavaRow[] rows = {row1, row2, row3};
+
+        try (var allocator = new RootAllocator()) {
+            var writer = VectorSchemaRootWriter.of(schema);
+            try (var root = VectorSchemaRoot.create(schema, allocator)) {
+                writer.writeToVector(rows, root);
+
+                assertEquals(3, root.getRowCount());
+
+                var listVector = (org.apache.arrow.vector.complex.ListVector) root.getVector(0);
+                assertFalse(listVector.isNull(0));
+                assertTrue(listVector.isNull(1));
+                assertFalse(listVector.isNull(2));
+
+                System.out.println(root.contentToTSVString());
+            }
+        }
+    }
+
+    @Test
+    public void testBoolean() {
+        var row1 = new JavaRow(new Object[]{true});
+        var row2 = new JavaRow(new Object[]{false});
+        var row3 = new JavaRow(new Object[]{null});
+        JavaRow[] testRows = {row1, row2, row3};
+
+        var boolField = new Field("bool", FieldType.nullable(new ArrowType.Bool()), null);
+        Schema schema = new Schema(List.of(boolField));
+
+        try (var allocator = new RootAllocator()) {
+            var writer = VectorSchemaRootWriter.of(schema);
+            try (var root = VectorSchemaRoot.create(schema, allocator)) {
+                writer.writeToVector(testRows, root);
+
+                assertEquals(3, root.getRowCount());
+
+                BitVector bitVector = (BitVector) root.getVector(0);
+                assertEquals(1, bitVector.get(0));   // true
+                assertEquals(0, bitVector.get(1));   // false
+                assertTrue(bitVector.isNull(2));      // null
             }
         }
     }

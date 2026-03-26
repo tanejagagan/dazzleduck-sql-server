@@ -15,6 +15,15 @@ import java.util.Map;
 public interface VectorWriter<V> {
     void write(V listVector, int index, Object value);
 
+    class StructField {
+        public final String name;
+        public final StructFieldWriter writer;
+        public StructField(String name, StructFieldWriter writer) {
+            this.name = name;
+            this.writer = writer;
+        }
+    }
+
 
     class VarCharVectorWriter implements VectorWriter<VarCharVector> {
         @Override
@@ -155,6 +164,48 @@ public interface VectorWriter<V> {
             var v = (List<Object>) value;
             for (Object object : v) {
                 elementWriteFunction.apply(writer, object);
+            }
+            writer.endList();
+        }
+    }
+
+    class BitVectorWriter implements VectorWriter<BitVector> {
+        @Override
+        public void write(BitVector bitVector, int index, Object value) {
+            if (value == null) {
+                bitVector.setNull(index);
+                return;
+            }
+            bitVector.setSafe(index, ((Boolean) value) ? 1 : 0);
+        }
+    }
+
+    class ListOfStructVectorWriter implements VectorWriter<ListVector> {
+        private final List<StructField> fields;
+
+        public ListOfStructVectorWriter(List<StructField> fields) {
+            this.fields = fields;
+        }
+
+        @Override
+        public void write(ListVector listVector, int index, Object value) {
+            BaseWriter.ListWriter writer = listVector.getWriter();
+            writer.setPosition(index);
+            if (value == null) {
+                writer.writeNull();
+                return;
+            }
+            writer.startList();
+            @SuppressWarnings("unchecked")
+            List<Object[]> rows = (List<Object[]>) value;
+            for (Object[] row : rows) {
+                BaseWriter.StructWriter sw = writer.struct();
+                sw.start();
+                for (int i = 0; i < fields.size(); i++) {
+                    StructField sf = fields.get(i);
+                    sf.writer.write(sw, sf.name, row[i]);
+                }
+                sw.end();
             }
             writer.endList();
         }
