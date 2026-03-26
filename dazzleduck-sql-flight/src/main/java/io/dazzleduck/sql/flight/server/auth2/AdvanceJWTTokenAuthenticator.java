@@ -1,12 +1,14 @@
 package io.dazzleduck.sql.flight.server.auth2;
 
 import com.google.common.base.Strings;
+import com.nimbusds.jwt.JWTClaimsSet;
+import com.nimbusds.jwt.JWTParser;
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.common.ConfigConstants;
 import io.dazzleduck.sql.common.auth.JwtClaimsExtractor;
 import io.grpc.Metadata;
-import io.jsonwebtoken.JwtParser;
+import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import org.apache.arrow.flight.CallHeaders;
 import org.apache.arrow.flight.CallStatus;
@@ -22,11 +24,12 @@ import javax.crypto.SecretKey;
 import java.time.Duration;
 import java.util.*;
 
+import static io.dazzleduck.sql.common.auth.JwtClaimsExtractor.parseJwtClaims;
+
 public class AdvanceJWTTokenAuthenticator implements CallHeaderAuthenticator {
 
     private static final Logger logger = LoggerFactory.getLogger(AdvanceBasicCallHeaderAuthenticator.class);
     private final SecretKey key;
-    private final JwtParser jwtParser;
     private final Duration timeMinutes;
     private final CallHeaderAuthenticator initialAuthenticator;
     private final List<String> claimHeader;
@@ -41,9 +44,6 @@ public class AdvanceJWTTokenAuthenticator implements CallHeaderAuthenticator {
 
     public AdvanceJWTTokenAuthenticator(CallHeaderAuthenticator initialAuthenticator, SecretKey key, Config config) {
         this.key = key;
-        this.jwtParser = Jwts.parser()     // (1)
-                .verifyWith(key)//     or a constant key used to verify all signed JWTs
-                .build();
         this.initialAuthenticator = initialAuthenticator;
         this.timeMinutes = config.getDuration(ConfigConstants.JWT_TOKEN_EXPIRATION_KEY);
         this.claimHeader = config.getStringList(ConfigConstants.JWT_TOKEN_CLAIMS_GENERATE_HEADERS_KEY);
@@ -118,8 +118,7 @@ public class AdvanceJWTTokenAuthenticator implements CallHeaderAuthenticator {
 
     protected AuthResultWithClaims validateBearer(String bearerToken, CallHeaders incomingHeader) {
         try {
-            var jwt = jwtParser.parseSignedClaims(bearerToken);
-            var payload = jwt.getPayload();
+            var payload = parseJwtClaims(bearerToken);
             var subject = payload.getSubject();
             var expiration = payload.getExpiration();
             if (expiration.before(new Date())) {

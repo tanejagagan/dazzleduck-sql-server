@@ -15,6 +15,8 @@ import java.io.IOException;
 import java.util.Base64;
 import java.util.List;
 
+import static io.dazzleduck.sql.common.auth.JwtClaimsExtractor.parseJwtClaims;
+
 /**
  * Helidon mock service for the {@code GET /resolve} endpoint used in
  * redirect-mode authorization tests.
@@ -64,19 +66,11 @@ public class ProxyResolveAccessService implements HttpService {
         String token = authHeader.get().substring(BEARER_PREFIX.length());
 
         // 2. Decode the JWT payload (middle segment) without signature verification
-        JsonNode claims;
-        try {
-            String[] parts = token.split("\\.");
-            byte[] payloadBytes = Base64.getUrlDecoder().decode(parts[1]);
-            claims = MAPPER.readTree(payloadBytes);
-        } catch (Exception e) {
-            res.status(Status.UNAUTHORIZED_401).send("Cannot decode JWT payload");
-            return;
-        }
+        var claims = parseJwtClaims(token);
 
         // 3. Extract cluster and org_id claims
-        String cluster = claims.has("cluster") ? claims.get("cluster").asText() : "default";
-        String orgId = claims.has("org_id") ? claims.get("org_id").asText() : "";
+        String cluster = claims.get("cluster", String.class);
+        String orgId = claims.get("org_id", String.class);
 
         if (cluster == null || cluster.isEmpty() || orgId.isEmpty()) {
             res.status(Status.UNAUTHORIZED_401).send("cluster or org_id is empty");
