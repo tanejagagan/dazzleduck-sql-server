@@ -93,6 +93,10 @@ public class VectorSchemaRootWriter {
                             } else if (childType instanceof ArrowType.Int
                                     && ((ArrowType.Int) childType).getBitWidth() == 64) {
                                 sfWriter = StructFieldWriter.BIGINT;
+                            } else if (childType instanceof ArrowType.FloatingPoint) {
+                                sfWriter = StructFieldWriter.DOUBLE;
+                            } else if (childType instanceof ArrowType.Map) {
+                                sfWriter = StructFieldWriter.STR_MAP;
                             } else {
                                 throw new UnsupportedOperationException(
                                         "Unsupported struct field type in List<Struct>: " + childType);

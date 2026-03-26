@@ -88,8 +88,8 @@ public class MetricConverter {
                 LogRecordConverter.kvListToMap(dp.getAttributesList()));
         v[OtelMetricSchema.COL_COUNT] = dp.getCount();
         v[OtelMetricSchema.COL_SUM] = dp.hasSum() ? dp.getSum() : null;
-        v[OtelMetricSchema.COL_BUCKET_COUNTS] = longListToJson(dp.getBucketCountsList());
-        v[OtelMetricSchema.COL_EXPLICIT_BOUNDS] = doubleListToJson(dp.getExplicitBoundsList());
+        v[OtelMetricSchema.COL_BUCKET_COUNTS] = dp.getBucketCountsList().isEmpty() ? null : dp.getBucketCountsList();
+        v[OtelMetricSchema.COL_EXPLICIT_BOUNDS] = dp.getExplicitBoundsList().isEmpty() ? null : dp.getExplicitBoundsList();
         v[OtelMetricSchema.COL_AGGREGATION_TEMPORALITY] = aggregationTemporality;
         return new JavaRow(v);
     }
@@ -112,7 +112,7 @@ public class MetricConverter {
                 LogRecordConverter.kvListToMap(dp.getAttributesList()));
         v[OtelMetricSchema.COL_COUNT] = dp.getCount();
         v[OtelMetricSchema.COL_SUM] = dp.getSum();
-        v[OtelMetricSchema.COL_QUANTILE_VALUES] = quantileValuesToJson(dp);
+        v[OtelMetricSchema.COL_QUANTILE_VALUES] = quantileValuesToList(dp);
         return new JavaRow(v);
     }
 
@@ -135,37 +135,13 @@ public class MetricConverter {
         return v;
     }
 
-    private static String longListToJson(List<Long> values) {
-        if (values.isEmpty()) return null;
-        StringBuilder sb = new StringBuilder("[");
-        for (int i = 0; i < values.size(); i++) {
-            if (i > 0) sb.append(",");
-            sb.append(values.get(i));
-        }
-        return sb.append("]").toString();
-    }
-
-    private static String doubleListToJson(List<Double> values) {
-        if (values.isEmpty()) return null;
-        StringBuilder sb = new StringBuilder("[");
-        for (int i = 0; i < values.size(); i++) {
-            if (i > 0) sb.append(",");
-            sb.append(values.get(i));
-        }
-        return sb.append("]").toString();
-    }
-
-    private static String quantileValuesToJson(SummaryDataPoint dp) {
+    private static List<Object[]> quantileValuesToList(SummaryDataPoint dp) {
         if (dp.getQuantileValuesCount() == 0) return null;
-        StringBuilder sb = new StringBuilder("[");
-        var qvs = dp.getQuantileValuesList();
-        for (int i = 0; i < qvs.size(); i++) {
-            if (i > 0) sb.append(",");
-            var qv = qvs.get(i);
-            sb.append("{\"quantile\":").append(qv.getQuantile())
-              .append(",\"value\":").append(qv.getValue()).append("}");
+        List<Object[]> result = new ArrayList<>();
+        for (var qv : dp.getQuantileValuesList()) {
+            result.add(new Object[]{qv.getQuantile(), qv.getValue()});
         }
-        return sb.append("]").toString();
+        return result;
     }
 
     private static String stripAggTemporalityPrefix(String name) {

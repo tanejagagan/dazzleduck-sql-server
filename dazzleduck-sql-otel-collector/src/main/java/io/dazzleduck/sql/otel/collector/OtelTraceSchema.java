@@ -68,7 +68,7 @@ public class OtelTraceSchema {
                 List.of(
                         new Field("name", FieldType.nullable(new ArrowType.Utf8()), null),
                         new Field("time_ms", FieldType.nullable(new ArrowType.Int(64, true)), null),
-                        new Field("attributes", FieldType.nullable(new ArrowType.Utf8()), null)
+                        mapField("attributes")
                 ));
         return new Field("events", FieldType.nullable(new ArrowType.List()), List.of(eventStruct));
     }
@@ -79,7 +79,7 @@ public class OtelTraceSchema {
                 List.of(
                         new Field("trace_id", FieldType.nullable(new ArrowType.Utf8()), null),
                         new Field("span_id", FieldType.nullable(new ArrowType.Utf8()), null),
-                        new Field("attributes", FieldType.nullable(new ArrowType.Utf8()), null)
+                        mapField("attributes")
                 ));
         return new Field("links", FieldType.nullable(new ArrowType.List()), List.of(linkStruct));
     }

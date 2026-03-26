@@ -2,7 +2,6 @@ package io.dazzleduck.sql.otel.collector;
 
 import io.dazzleduck.sql.common.types.JavaRow;
 import io.opentelemetry.proto.common.v1.InstrumentationScope;
-import io.opentelemetry.proto.common.v1.KeyValue;
 import io.opentelemetry.proto.resource.v1.Resource;
 import io.opentelemetry.proto.trace.v1.Span;
 import io.opentelemetry.proto.trace.v1.Status;
@@ -73,7 +72,7 @@ public class SpanConverter {
             result.add(new Object[]{
                     emptyToNull(e.getName()),
                     e.getTimeUnixNano() > 0 ? e.getTimeUnixNano() / 1_000_000L : null,
-                    e.getAttributesCount() > 0 ? attrsToJson(e.getAttributesList()) : null
+                    e.getAttributesCount() > 0 ? LogRecordConverter.kvListToMap(e.getAttributesList()) : null
             });
         }
         return result;
@@ -88,41 +87,10 @@ public class SpanConverter {
             result.add(new Object[]{
                     tid.length > 0 ? HEX.formatHex(tid) : null,
                     sid.length > 0 ? HEX.formatHex(sid) : null,
-                    l.getAttributesCount() > 0 ? attrsToJson(l.getAttributesList()) : null
+                    l.getAttributesCount() > 0 ? LogRecordConverter.kvListToMap(l.getAttributesList()) : null
             });
         }
         return result;
-    }
-
-    private static String attrsToJson(List<KeyValue> attrs) {
-        StringBuilder sb = new StringBuilder("{");
-        for (int i = 0; i < attrs.size(); i++) {
-            if (i > 0) sb.append(",");
-            KeyValue kv = attrs.get(i);
-            appendJsonString(sb, kv.getKey());
-            sb.append(":");
-            appendJsonString(sb, LogRecordConverter.anyValueToString(kv.getValue()));
-        }
-        return sb.append("}").toString();
-    }
-
-    private static void appendJsonString(StringBuilder sb, String s) {
-        if (s == null) {
-            sb.append("null");
-            return;
-        }
-        sb.append('"');
-        for (char c : s.toCharArray()) {
-            switch (c) {
-                case '"'  -> sb.append("\\\"");
-                case '\\' -> sb.append("\\\\");
-                case '\n' -> sb.append("\\n");
-                case '\r' -> sb.append("\\r");
-                case '\t' -> sb.append("\\t");
-                default   -> sb.append(c);
-            }
-        }
-        sb.append('"');
     }
 
     private static String emptyToNull(String s) {

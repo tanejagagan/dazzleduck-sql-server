@@ -62,17 +62,30 @@ public class OtelMetricSchema {
                     FieldType.nullable(new ArrowType.Int(64, true)), null),
             new Field("sum",
                     FieldType.nullable(new ArrowType.FloatingPoint(FloatingPointPrecision.DOUBLE)), null),
-            new Field("bucket_counts",
-                    FieldType.nullable(new ArrowType.Utf8()), null),
-            new Field("explicit_bounds",
-                    FieldType.nullable(new ArrowType.Utf8()), null),
-            new Field("quantile_values",
-                    FieldType.nullable(new ArrowType.Utf8()), null),
+            listField("bucket_counts", new ArrowType.Int(64, true)),
+            listField("explicit_bounds", new ArrowType.FloatingPoint(FloatingPointPrecision.DOUBLE)),
+            quantileValuesField(),
             new Field("is_monotonic",
                     FieldType.nullable(new ArrowType.Bool()), null),
             new Field("aggregation_temporality",
                     FieldType.nullable(new ArrowType.Utf8()), null)
     ));
+
+    private static Field quantileValuesField() {
+        Field qvStruct = new Field("quantile_value",
+                FieldType.nullable(new ArrowType.Struct()),
+                List.of(
+                        new Field("quantile", FieldType.nullable(new ArrowType.FloatingPoint(FloatingPointPrecision.DOUBLE)), null),
+                        new Field("value", FieldType.nullable(new ArrowType.FloatingPoint(FloatingPointPrecision.DOUBLE)), null)
+                ));
+        return new Field("quantile_values", FieldType.nullable(new ArrowType.List()), List.of(qvStruct));
+    }
+
+    private static Field listField(String name, ArrowType elementType) {
+        return new Field(name,
+                FieldType.nullable(new ArrowType.List()),
+                List.of(new Field("item", FieldType.nullable(elementType), null)));
+    }
 
     private static Field mapField(String name) {
         return new Field(name,
