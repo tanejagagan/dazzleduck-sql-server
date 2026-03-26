@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>io.dazzleduck.sql</groupId>
     <artifactId>dazzleduck-parent</artifactId>
-    <version>0.0.26</version>
+    <version>0.0.27</version>
     <packaging>pom</packaging>
     <name>DazzleDuck Project Parent POM</name>
     <url>https://github.com/dazzleduck-web/dazzleduck-sql-server</url>
@@ -41,6 +41,7 @@
         <module>dazzleduck-sql-client-grpc</module>
         <module>dazzleduck-sql-scrapper</module>
         <module>dazzleduck-sql-logback</module>
+        <module>dazzleduck-sql-otel-collector</module>
     </modules>
     <properties>
         <maven.compiler.source>17</maven.compiler.source>
