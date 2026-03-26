@@ -1,14 +1,11 @@
 package io.dazzleduck.sql.flight.server.auth2;
 
 import com.google.common.base.Strings;
-import com.nimbusds.jwt.JWTClaimsSet;
-import com.nimbusds.jwt.JWTParser;
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.common.ConfigConstants;
 import io.dazzleduck.sql.common.auth.JwtClaimsExtractor;
 import io.grpc.Metadata;
-import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import org.apache.arrow.flight.CallHeaders;
 import org.apache.arrow.flight.CallStatus;

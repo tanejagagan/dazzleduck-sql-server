@@ -5,8 +5,6 @@ import com.nimbusds.jwt.JWTParser;
 import io.dazzleduck.sql.common.Headers;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
-import io.jsonwebtoken.JwtParser;
-import io.jsonwebtoken.Jwts;
 
 import javax.crypto.SecretKey;
 import java.util.HashMap;

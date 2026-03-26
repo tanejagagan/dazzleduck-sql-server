@@ -1,6 +1,5 @@
 package io.dazzleduck.sql.login;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.dazzleduck.sql.commons.authorization.ResolveAccessRow;
 import io.dazzleduck.sql.commons.authorization.ResolveResponse;
@@ -12,7 +11,6 @@ import io.helidon.webserver.http.ServerRequest;
 import io.helidon.webserver.http.ServerResponse;
 
 import java.io.IOException;
-import java.util.Base64;
 import java.util.List;
 
 import static io.dazzleduck.sql.common.auth.JwtClaimsExtractor.parseJwtClaims;
