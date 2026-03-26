@@ -106,7 +106,6 @@ public final class MicrometerForwarder implements Closeable {
                     config.maxSendInterval(),
                     config.retryCount(),
                     config.retryIntervalMillis(),
-                    config.projections(),
                     config.partitionBy(),
                     config.maxInMemorySize(),
                     config.maxOnDiskSize(),

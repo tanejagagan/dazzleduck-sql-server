@@ -57,12 +57,11 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
             Duration maxSendInterval,
             int retryCount,
             long retryIntervalMillis,
-            java.util.List<String> projections,
             java.util.List<String> partitionBy,
             long maxInMemorySize,
             long maxOnDiskSize
     ) {
-        this(schema, baseUrl, username, password, Map.of(), ingestionQueue, httpClientTimeout, minBatchSize, maxBatchSize, maxSendInterval, retryCount, retryIntervalMillis, projections, partitionBy, maxInMemorySize, maxOnDiskSize, CompressionUtil.CodecType.ZSTD, Clock.systemUTC());
+        this(schema, baseUrl, username, password, Map.of(), ingestionQueue, httpClientTimeout, minBatchSize, maxBatchSize, maxSendInterval, retryCount, retryIntervalMillis, partitionBy, maxInMemorySize, maxOnDiskSize, CompressionUtil.CodecType.ZSTD, Clock.systemUTC());
     }
 
     public HttpArrowProducer(
@@ -77,13 +76,12 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
             Duration maxSendInterval,
             int retryCount,
             long retryIntervalMillis,
-            java.util.List<String> projections,
             java.util.List<String> partitionBy,
             long maxInMemorySize,
             long maxOnDiskSize,
             CompressionUtil.CodecType compressionType
     ) {
-        this(schema, baseUrl, username, password, Map.of(), ingestionQueue, httpClientTimeout, minBatchSize, maxBatchSize, maxSendInterval, retryCount, retryIntervalMillis, projections, partitionBy, maxInMemorySize, maxOnDiskSize, compressionType, Clock.systemUTC());
+        this(schema, baseUrl, username, password, Map.of(), ingestionQueue, httpClientTimeout, minBatchSize, maxBatchSize, maxSendInterval, retryCount, retryIntervalMillis, partitionBy, maxInMemorySize, maxOnDiskSize, compressionType, Clock.systemUTC());
     }
 
     public HttpArrowProducer(
@@ -99,13 +97,12 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
             Duration maxSendInterval,
             int retryCount,
             long retryIntervalMillis,
-            java.util.List<String> projections,
             java.util.List<String> partitionBy,
             long maxInMemorySize,
             long maxOnDiskSize,
             Clock clock
     ) {
-        this(schema, baseUrl, username, password, claims, ingestionQueue, httpClientTimeout, minBatchSize, maxBatchSize, maxSendInterval, retryCount, retryIntervalMillis, projections, partitionBy, maxInMemorySize, maxOnDiskSize, CompressionUtil.CodecType.ZSTD, clock);
+        this(schema, baseUrl, username, password, claims, ingestionQueue, httpClientTimeout, minBatchSize, maxBatchSize, maxSendInterval, retryCount, retryIntervalMillis, partitionBy, maxInMemorySize, maxOnDiskSize, CompressionUtil.CodecType.ZSTD, clock);
     }
 
     public HttpArrowProducer(
@@ -121,14 +118,13 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
             Duration maxSendInterval,
             int retryCount,
             long retryIntervalMillis,
-            java.util.List<String> projections,
             java.util.List<String> partitionBy,
             long maxInMemorySize,
             long maxOnDiskSize,
             CompressionUtil.CodecType compressionType,
             Clock clock
     ) {
-        super(minBatchSize, maxBatchSize, maxSendInterval, schema, clock, retryCount, retryIntervalMillis, projections, partitionBy, compressionType);
+        super(minBatchSize, maxBatchSize, maxSendInterval, schema, clock, retryCount, retryIntervalMillis, partitionBy, compressionType);
 
         // Issue #3: Parameter validation
         Objects.requireNonNull(baseUrl, "baseUrl must not be null");
@@ -393,12 +389,6 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
                 .header("Authorization", getJwt())
                 .header("Content-Type", "application/vnd.apache.arrow.stream");
 
-        // Add projections and partitionBy headers if present (URL encoded)
-        if (!getProjections().isEmpty()) {
-            String projectionsValue = String.join(",", getProjections());
-            requestBuilder.header(io.dazzleduck.sql.common.Headers.HEADER_DATA_PROJECT,
-                java.net.URLEncoder.encode(projectionsValue, java.nio.charset.StandardCharsets.UTF_8));
-        }
         if (!getPartitionBy().isEmpty()) {
             String partitionByValue = String.join(",", getPartitionBy());
             requestBuilder.header(io.dazzleduck.sql.common.Headers.HEADER_DATA_PARTITION,

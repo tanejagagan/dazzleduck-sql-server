@@ -31,7 +31,6 @@ public class Headers {
     public static final String HEADER_QUERY_ID = "x-dd-query-id";
     public static final String HEADER_PRODUCER_BATCH_ID = "x-dd-producer-batch-id";
     public static final String HEADER_SORT_ORDER = "x-dd-sort-order";
-    public static final String HEADER_DATA_PROJECT = "x-dd-project";
 
     public static final String HEADER_DATA_LIMIT = "x-dd-limit";
     public static final String HEADER_APP_DATA_TRANSFORMATION = "x-dd-udf-transformation";
@@ -50,7 +49,7 @@ public class Headers {
 
     public static final Set<String> SUPPORTED_HEADERS = Set.of(HEADER_FETCH_SIZE, HEADER_DATABASE, HEADER_SCHEMA, HEADER_SPLIT_SIZE,
             HEADER_DATA_PARTITION, HEADER_DATA_FORMAT, HEADER_PRODUCER_ID, HEADER_PRODUCER_BATCH_ID, HEADER_SORT_ORDER,
-            HEADER_DATA_PROJECT, HEADER_APP_DATA_TRANSFORMATION, HEADER_PATH, HEADER_TABLE, HEADER_FUNCTION, HEADER_FILTER, HEADER_ACCESS_TYPE,
+            HEADER_APP_DATA_TRANSFORMATION, HEADER_PATH, HEADER_TABLE, HEADER_FUNCTION, HEADER_FILTER, HEADER_ACCESS_TYPE,
             HEADER_ARROW_COMPRESSION, QUERY_PARAMETER_INGESTION_QUEUE);
 
 }

@@ -87,56 +87,6 @@ public class ParquetIngestionQueueTest {
     }
 
     @Test
-    public void testIngestionWithProjections() throws Exception {
-        var service = new DeterministicScheduler();
-        var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
-
-        var postTaskFactory = createPostTaskFactory(new AtomicBoolean(), false);
-
-        try (var queue = new ParquetIngestionQueue(
-                TEST_APP_ID,
-                INPUT_FORMAT,
-                targetPath.toString(),
-                "test-queue",
-                DEFAULT_MIN_BATCH_SIZE,
-                Long.MAX_VALUE,  // maxBucketSize
-                Integer.MAX_VALUE,
-                Long.MAX_VALUE,
-                DEFAULT_MAX_DELAY,
-                postTaskFactory,
-                service,
-                clock)) {
-
-            // Projections now replace * entirely, so include all columns we want
-            var batch = new Batch<>(
-                    null,  // sortOrder
-                    new String[]{"id", "value * 2 as doubled_value"},  // projections
-                    null,  // partitionBy
-                    sourceFile1.toString(),
-                    "producer1",
-                    0L,
-                    DEFAULT_MIN_BATCH_SIZE + 1,
-                    "parquet",
-                    Instant.now()
-            );
-
-            var future = queue.add(batch);
-
-            service.tick(1, TimeUnit.MILLISECONDS);
-            var result = future.get(2, SECONDS);
-            assertEquals(100, result.rowCount());
-            assertFalse(result.filesCreated().isEmpty());
-
-            // Verify the output file has the projected columns
-            String outputFile = result.filesCreated().get(0);
-            var schema = ConnectionPool.collectFirst(
-                "SELECT column_name FROM (DESCRIBE SELECT * FROM read_parquet('%s'))".formatted(outputFile),
-                String.class);
-            assertNotNull(schema);
-        }
-    }
-
-    @Test
     public void testIngestionWithSortOrder() throws Exception {
         var service = new DeterministicScheduler();
         var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
@@ -159,7 +109,6 @@ public class ParquetIngestionQueueTest {
 
             var batch = new Batch<>(
                     new String[]{"id"},  // sortOrder
-                    null,  // projections
                     null,  // partitionBy
                     sourceFile1.toString(),
                     "producer1",
@@ -200,7 +149,6 @@ public class ParquetIngestionQueueTest {
 
             var batch = new Batch<>(
                     null,  // sortOrder
-                    null,  // projections
                     new String[]{"category"},  // partitionBy
                     sourceFile1.toString(),
                     "producer1",
@@ -593,7 +541,6 @@ public class ParquetIngestionQueueTest {
     private Batch<String> createBatch(String file, String producerId, long batchId, long totalSize) {
         return new Batch<>(
                 null,  // sortOrder
-                null,  // projections
                 null,  // partitionBy
                 file,
                 producerId,

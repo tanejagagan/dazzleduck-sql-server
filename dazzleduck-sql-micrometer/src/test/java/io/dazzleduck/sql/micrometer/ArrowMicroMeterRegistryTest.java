@@ -52,7 +52,6 @@ class ArrowMicroMeterRegistryTest {
                 Duration.ofSeconds(6),      // maxSendInterval
                 3,                          // retryCount
                 1000,                       // retryIntervalMillis
-                java.util.List.of(),        // transformations
                 java.util.List.of(),        // partitionBy
                 10_000_000,                 // maxInMemoryBytes
                 10_000_000,                 // maxOnDiskBytes

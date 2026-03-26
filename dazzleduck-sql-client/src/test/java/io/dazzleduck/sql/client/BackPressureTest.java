@@ -85,7 +85,6 @@ public class BackPressureTest {
                 0,         // retryCount - no retries for other errors
                 100,       // retryIntervalMillis
                 List.of(),
-                List.of(),
                 100_000,
                 100_000,
                 Clock.systemUTC()
@@ -127,7 +126,6 @@ public class BackPressureTest {
                 Duration.ofMillis(100),
                 3,         // retryCount for other errors
                 100,       // retryIntervalMillis - starting backoff (100ms)
-                List.of(),
                 List.of(),
                 100_000,
                 100_000,
@@ -180,7 +178,6 @@ public class BackPressureTest {
                 3,
                 100,  // 100ms starting backoff
                 List.of(),
-                List.of(),
                 100_000,
                 100_000,
                 Clock.systemUTC()
@@ -224,7 +221,6 @@ public class BackPressureTest {
                 3,
                 100,  // Small base retry interval
                 List.of(),
-                List.of(),
                 100_000,
                 100_000,
                 Clock.systemUTC()
@@ -266,7 +262,6 @@ public class BackPressureTest {
                 Duration.ofMillis(50),
                 3,    // Allow 3 retries for back pressure
                 50,   // 50ms starting backoff for faster test
-                List.of(),
                 List.of(),
                 100_000,
                 100_000,

@@ -46,7 +46,6 @@ public final class LogForwarder implements Closeable {
                 config.retryCount(),
                 config.retryIntervalMillis(),
                 config.project(),
-                config.partitionBy(),
                 config.maxInMemorySize(),
                 config.maxOnDiskSize(),
                 Clock.systemUTC()

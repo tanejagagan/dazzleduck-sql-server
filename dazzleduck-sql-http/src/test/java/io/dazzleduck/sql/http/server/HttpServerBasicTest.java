@@ -175,13 +175,12 @@ public class HttpServerBasicTest extends HttpServerTestBase {
                             new ByteArrayInputStream(byteArrayOutputStream.toByteArray())))
                     .header("Content-Type", ContentTypes.APPLICATION_ARROW)
                     .header(HEADER_DATA_PARTITION, urlEncode("a"))
-                    .header(HEADER_DATA_PROJECT, urlEncode("*, (a + 1) as b"))
-                    .header(HEADER_SORT_ORDER, urlEncode("b desc"))
+                    .header(HEADER_SORT_ORDER, urlEncode("a desc"))
                     .build();
             var res = client.send(request, HttpResponse.BodyHandlers.ofString());
             assertEquals(200, res.statusCode());
-            var testSql = "select generate_series, a, b from read_parquet('%s/%s/*/*.parquet')".formatted(ingestionPath, table);
-            var expected = "select generate_series, generate_series a, (a+1) as b from generate_series(10) order by b desc";
+            var testSql = "select generate_series, a from read_parquet('%s/%s/*/*.parquet')".formatted(ingestionPath, table);
+            var expected = "select generate_series, generate_series a from generate_series(10) order by a desc";
             System.out.println(testSql);
             TestUtils.isEqual(expected, testSql);
         }
@@ -258,8 +257,7 @@ public class HttpServerBasicTest extends HttpServerTestBase {
                                         new ByteArrayInputStream(byteArrayOutputStream.toByteArray())))
                                 .header("Content-Type", ContentTypes.APPLICATION_ARROW)
                                 .header(HEADER_DATA_PARTITION, urlEncode("a"))
-                                .header(HEADER_DATA_PROJECT, urlEncode("*, a + " + final1 + " as b"))
-                                .header(HEADER_SORT_ORDER, urlEncode("b desc"))
+                                .header(HEADER_SORT_ORDER, urlEncode("a desc"))
                                 .build();
 
                         HttpResponse<String> res = client.send(request, HttpResponse.BodyHandlers.ofString());

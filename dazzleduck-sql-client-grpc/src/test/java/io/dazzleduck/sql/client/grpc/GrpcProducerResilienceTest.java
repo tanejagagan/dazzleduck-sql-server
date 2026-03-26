@@ -120,7 +120,6 @@ public class GrpcProducerResilienceTest {
                     2000, // retryCount - high for resilience during initial outage
                     100,  // retryIntervalMillis
                     List.of(),
-                    List.of(),
                     10_000_000,  // larger buffer
                     50_000_000,  // larger disk buffer
                     allocator,

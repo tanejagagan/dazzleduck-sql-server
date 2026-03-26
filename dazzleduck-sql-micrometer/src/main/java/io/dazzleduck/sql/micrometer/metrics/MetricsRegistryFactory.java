@@ -93,7 +93,6 @@ public final class MetricsRegistryFactory {
                 .maxOnDiskSize(config.getLong(ConfigConstants.MAX_ON_DISK_BYTES_KEY))
                 .retryCount(config.getInt(ConfigConstants.RETRY_COUNT_KEY))
                 .retryIntervalMillis(config.getLong(ConfigConstants.RETRY_INTERVAL_MS_KEY))
-                .project(config.getStringList(ConfigConstants.PROJECT_KEY))
                 .partitionBy(config.getStringList(ConfigConstants.PARTITION_BY_KEY))
                 .enabled(config.getBoolean(ConfigConstants.ENABLED_KEY))
                 .build();

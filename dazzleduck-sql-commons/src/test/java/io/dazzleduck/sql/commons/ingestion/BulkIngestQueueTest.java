@@ -148,7 +148,7 @@ public class BulkIngestQueueTest {
     }
 
     private Batch<String> mockBatch(String producerId, long producerBatchId, long totalSize) {
-        return new Batch<String>(new String[0], new String[0], new String[0], "", producerId, producerBatchId, totalSize, "parquet",Instant.now());
+        return new Batch<String>(new String[0], new String[0], "", producerId, producerBatchId, totalSize, "parquet",Instant.now());
     }
 
     interface ServiceAndQueue {

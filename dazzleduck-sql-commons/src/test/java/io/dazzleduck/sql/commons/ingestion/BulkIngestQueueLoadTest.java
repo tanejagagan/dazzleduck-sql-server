@@ -292,7 +292,7 @@ public class BulkIngestQueueLoadTest {
 
     private Batch<String> createBatch(String producerId, long batchId, long size) {
         return new Batch<>(
-                new String[0], new String[0], new String[0],
+                new String[0], new String[0],
                 "", producerId, batchId, size, "parquet", Instant.now()
         );
     }

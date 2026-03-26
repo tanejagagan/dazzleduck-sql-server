@@ -134,12 +134,8 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
         var batches = writeTask.bucket().batches();
         // All Arrow files
         var arrowFiles = batches.stream().map(Batch::record).map("'%s'"::formatted).collect(Collectors.joining(","));
-        String projectionsClause = getClause(batches.get(0).projections(), "%s");
         String partitionByClause = getClause(batches.get(0).partitionBy(), ", PARTITION_BY(%s)");
         String sortOrderClause = getClause(batches.get(0).sortOrder(), "ORDER BY %s ");
-
-        // Select clause: use projections if specified, otherwise select all columns
-        var selectClause = projectionsClause.isEmpty() ? "*" : projectionsClause;
         // Last format
         var outputFormat = batches.isEmpty() ? "" : batches.get(batches.size() - 1).format();
         String fullFilePath;
@@ -151,7 +147,7 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
         }
 
         // Inner SQL reads from the temp Arrow files
-        var innerSql = "SELECT %s FROM read_%s([%s]) %s".formatted(selectClause, this.inputFormat, arrowFiles, sortOrderClause);
+        var innerSql = "SELECT * FROM read_%s([%s]) %s".formatted(this.inputFormat, arrowFiles, sortOrderClause);
 
         // If a transformation is configured, wrap the inner SQL as a CTE named __this
         // and use the transformation query (e.g. "SELECT a, b, c FROM __this") as the outer query.

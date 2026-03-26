@@ -93,8 +93,7 @@ class GrpcArrowProducerTest {
                 Clock.systemUTC(),
                 3,
                 1000,
-                java.util.List.of(),
-                java.util.List.of(),
+                List.of(),
                 5_000_000,
                 20_000_000,
                 allocator,
@@ -134,50 +133,6 @@ class GrpcArrowProducerTest {
 
 
     @Test
-    void testProjectionsAndPartitionByParameters() throws Exception {
-        Schema schema = new Schema(List.of(new Field("value", FieldType.nullable(new ArrowType.Int(32, true)), null)));
-        String path = "both-params-grpc-test";
-        Files.createDirectories(Path.of(ingestionPath, path));
-
-        try (GrpcArrowProducer sender = new GrpcArrowProducer(
-                schema,
-                1024,
-                2048,
-                Duration.ofMillis(200),
-                Clock.systemUTC(),
-                3,
-                1000,
-                java.util.List.of("*", "'c1' as c1", "'c2' as  c2"),
-                java.util.List.of("c1", "c2"),
-                5_000_000,
-                20_000_000,
-                allocator,
-                Location.forGrpcInsecure(HOST, flightPort),
-                USER,
-                PASSWORD,
-                Map.of(Headers.QUERY_PARAMETER_INGESTION_QUEUE, path),
-                Duration.ofSeconds(30)
-        )) {
-            sender.addRow(new JavaRow(new Object[]{1}));
-            sender.addRow(new JavaRow(new Object[]{2}));
-            sender.addRow(new JavaRow(new Object[]{3}));
-        }
-
-        var query = String.format("SELECT count(*) as cnt FROM read_parquet('%s/%s/*/*/*.parquet')", ingestionPath, path);
-        FlightInfo flightInfo = client.execute(query);
-
-        try (FlightStream stream = client.getStream(flightInfo.getEndpoints().get(0).getTicket())) {
-            while (stream.next()) {
-                var root = stream.getRoot();
-                var countVector = (org.apache.arrow.vector.BigIntVector) root.getVector("cnt");
-                assertEquals(3L, countVector.get(0));
-            }
-        }
-    }
-
-
-
-    @Test
     void testEmptyListsDoNotSendParameters() throws Exception {
         Schema schema = new Schema(List.of(new Field("value", FieldType.nullable(new ArrowType.Int(32, true)), null)));
         String path = "empty-lists-grpc-test";
@@ -192,8 +147,7 @@ class GrpcArrowProducerTest {
                 Clock.systemUTC(),
                 3,
                 1000,
-                java.util.List.of(),
-                java.util.List.of(),
+                List.of(),
                 5_000_000,
                 20_000_000,
                 allocator,
