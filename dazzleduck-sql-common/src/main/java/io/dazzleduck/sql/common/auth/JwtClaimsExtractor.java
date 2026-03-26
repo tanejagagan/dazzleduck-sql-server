@@ -5,6 +5,8 @@ import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 
 import javax.crypto.SecretKey;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -13,9 +15,11 @@ public class JwtClaimsExtractor {
 
     public static Claims parseJwtClaims(String token) {
         try {
+            var unsecuredJwt = toUnsecuredJwt(token);
             return Jwts.parser()
-                    .unsecured().build()
-                    .parseSignedClaims(token)
+                    .unsecured()
+                    .build()
+                    .parseUnsecuredClaims(unsecuredJwt)
                     .getPayload();
         } catch (Exception e) {
             throw new RuntimeException("Failed to parse JWT claims", e);
@@ -53,5 +57,18 @@ public class JwtClaimsExtractor {
         }
         allClaimsFromJWT.put(Headers.HEADER_BEARER_TOKEN, bearerToken);
         return allClaimsFromJWT;
+    }
+
+    public static String toUnsecuredJwt(String token) {
+        int firstDot = token.indexOf('.');
+        int secondDot = token.indexOf('.', firstDot + 1);
+        if (firstDot < 0 || secondDot < 0) {
+            throw new IllegalArgumentException("Invalid JWT");
+        }
+        String payload = token.substring(firstDot + 1, secondDot);
+        String unsecuredHeader = Base64.getUrlEncoder()
+                .withoutPadding()
+                .encodeToString("{\"alg\":\"none\"}".getBytes(StandardCharsets.UTF_8));
+        return unsecuredHeader + "." + payload + ".";
     }
 }
