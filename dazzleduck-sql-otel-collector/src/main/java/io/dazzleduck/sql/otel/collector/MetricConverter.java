@@ -121,8 +121,8 @@ public class MetricConverter {
                                     java.util.Map<String, String> attributes) {
         Object[] v = new Object[19];
         v[OtelMetricSchema.COL_NAME] = metric.getName();
-        v[OtelMetricSchema.COL_DESCRIPTION] = emptyToNull(metric.getDescription());
-        v[OtelMetricSchema.COL_UNIT] = emptyToNull(metric.getUnit());
+        v[OtelMetricSchema.COL_DESCRIPTION] = LogRecordConverter.emptyToNull(metric.getDescription());
+        v[OtelMetricSchema.COL_UNIT] = LogRecordConverter.emptyToNull(metric.getUnit());
         v[OtelMetricSchema.COL_METRIC_TYPE] = metricType;
         v[OtelMetricSchema.COL_START_TIME_MS] = startNanos > 0 ? startNanos / 1_000_000L : null;
         v[OtelMetricSchema.COL_TIME_MS] = timeNanos > 0 ? timeNanos / 1_000_000L : null;
@@ -130,8 +130,8 @@ public class MetricConverter {
         v[OtelMetricSchema.COL_RESOURCE_ATTRIBUTES] = resource != null
                 ? LogRecordConverter.kvListToMap(resource.getAttributesList())
                 : new LinkedHashMap<>();
-        v[OtelMetricSchema.COL_SCOPE_NAME] = scope != null ? emptyToNull(scope.getName()) : null;
-        v[OtelMetricSchema.COL_SCOPE_VERSION] = scope != null ? emptyToNull(scope.getVersion()) : null;
+        v[OtelMetricSchema.COL_SCOPE_NAME] = scope != null ? LogRecordConverter.emptyToNull(scope.getName()) : null;
+        v[OtelMetricSchema.COL_SCOPE_VERSION] = scope != null ? LogRecordConverter.emptyToNull(scope.getVersion()) : null;
         return v;
     }
 
@@ -149,7 +149,4 @@ public class MetricConverter {
         return name.startsWith(prefix) ? name.substring(prefix.length()) : name;
     }
 
-    private static String emptyToNull(String s) {
-        return (s == null || s.isEmpty()) ? null : s;
-    }
 }

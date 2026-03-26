@@ -51,10 +51,10 @@ public class OtelLogSchema {
                     FieldType.nullable(new ArrowType.Utf8()), null),
 
             // LogRecord.attributes: Map<String, String>
-            mapField("attributes"),
+            OtelSchemaFields.mapField("attributes"),
 
             // Resource.attributes: Map<String, String>
-            mapField("resource_attributes"),
+            OtelSchemaFields.mapField("resource_attributes"),
 
             // InstrumentationScope fields
             new Field("scope_name",
@@ -63,16 +63,4 @@ public class OtelLogSchema {
                     FieldType.nullable(new ArrowType.Utf8()), null)
     ));
 
-    private static Field mapField(String name) {
-        return new Field(name,
-                FieldType.nullable(new ArrowType.Map(false)),
-                List.of(new Field("entries",
-                        FieldType.notNullable(new ArrowType.Struct()),
-                        List.of(
-                                new Field("key", FieldType.notNullable(new ArrowType.Utf8()), null),
-                                new Field("value", FieldType.nullable(new ArrowType.Utf8()), null)
-                        )
-                ))
-        );
-    }
 }

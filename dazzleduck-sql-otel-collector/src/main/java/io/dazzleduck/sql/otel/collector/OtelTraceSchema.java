@@ -52,8 +52,8 @@ public class OtelTraceSchema {
                     FieldType.nullable(new ArrowType.Utf8()), null),
             new Field("status_message",
                     FieldType.nullable(new ArrowType.Utf8()), null),
-            mapField("attributes"),
-            mapField("resource_attributes"),
+            OtelSchemaFields.mapField("attributes"),
+            OtelSchemaFields.mapField("resource_attributes"),
             new Field("scope_name",
                     FieldType.nullable(new ArrowType.Utf8()), null),
             new Field("scope_version",
@@ -68,7 +68,7 @@ public class OtelTraceSchema {
                 List.of(
                         new Field("name", FieldType.nullable(new ArrowType.Utf8()), null),
                         new Field("time_ms", FieldType.nullable(new ArrowType.Int(64, true)), null),
-                        mapField("attributes")
+                        OtelSchemaFields.mapField("attributes")
                 ));
         return new Field("events", FieldType.nullable(new ArrowType.List()), List.of(eventStruct));
     }
@@ -79,21 +79,9 @@ public class OtelTraceSchema {
                 List.of(
                         new Field("trace_id", FieldType.nullable(new ArrowType.Utf8()), null),
                         new Field("span_id", FieldType.nullable(new ArrowType.Utf8()), null),
-                        mapField("attributes")
+                        OtelSchemaFields.mapField("attributes")
                 ));
         return new Field("links", FieldType.nullable(new ArrowType.List()), List.of(linkStruct));
     }
 
-    private static Field mapField(String name) {
-        return new Field(name,
-                FieldType.nullable(new ArrowType.Map(false)),
-                List.of(new Field("entries",
-                        FieldType.notNullable(new ArrowType.Struct()),
-                        List.of(
-                                new Field("key", FieldType.notNullable(new ArrowType.Utf8()), null),
-                                new Field("value", FieldType.nullable(new ArrowType.Utf8()), null)
-                        )
-                ))
-        );
-    }
 }

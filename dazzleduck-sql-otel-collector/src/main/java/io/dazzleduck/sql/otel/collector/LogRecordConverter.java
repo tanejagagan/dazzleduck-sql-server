@@ -128,7 +128,7 @@ public class LogRecordConverter {
         sb.append('"');
     }
 
-    private static String emptyToNull(String s) {
+    static String emptyToNull(String s) {
         return (s == null || s.isEmpty()) ? null : s;
     }
 }

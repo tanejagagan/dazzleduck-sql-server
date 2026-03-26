@@ -31,7 +31,7 @@ public class SpanConverter {
         byte[] parentSpanId = span.getParentSpanId().toByteArray();
         values[OtelTraceSchema.COL_PARENT_SPAN_ID] = parentSpanId.length > 0 ? HEX.formatHex(parentSpanId) : null;
 
-        values[OtelTraceSchema.COL_NAME] = emptyToNull(span.getName());
+        values[OtelTraceSchema.COL_NAME] = LogRecordConverter.emptyToNull(span.getName());
 
         String kind = span.getKind().name();
         if (kind.startsWith("SPAN_KIND_")) kind = kind.substring("SPAN_KIND_".length());
@@ -49,15 +49,15 @@ public class SpanConverter {
         String statusCode = status.getCode().name();
         if (statusCode.startsWith("STATUS_CODE_")) statusCode = statusCode.substring("STATUS_CODE_".length());
         values[OtelTraceSchema.COL_STATUS_CODE] = statusCode;
-        values[OtelTraceSchema.COL_STATUS_MESSAGE] = emptyToNull(status.getMessage());
+        values[OtelTraceSchema.COL_STATUS_MESSAGE] = LogRecordConverter.emptyToNull(status.getMessage());
 
         values[OtelTraceSchema.COL_ATTRIBUTES] = LogRecordConverter.kvListToMap(span.getAttributesList());
         values[OtelTraceSchema.COL_RESOURCE_ATTRIBUTES] = resource != null
                 ? LogRecordConverter.kvListToMap(resource.getAttributesList())
                 : new LinkedHashMap<>();
 
-        values[OtelTraceSchema.COL_SCOPE_NAME] = scope != null ? emptyToNull(scope.getName()) : null;
-        values[OtelTraceSchema.COL_SCOPE_VERSION] = scope != null ? emptyToNull(scope.getVersion()) : null;
+        values[OtelTraceSchema.COL_SCOPE_NAME] = scope != null ? LogRecordConverter.emptyToNull(scope.getName()) : null;
+        values[OtelTraceSchema.COL_SCOPE_VERSION] = scope != null ? LogRecordConverter.emptyToNull(scope.getVersion()) : null;
 
         values[OtelTraceSchema.COL_EVENTS] = eventsToList(span);
         values[OtelTraceSchema.COL_LINKS] = linksToList(span);
@@ -70,7 +70,7 @@ public class SpanConverter {
         List<Object[]> result = new ArrayList<>();
         for (var e : span.getEventsList()) {
             result.add(new Object[]{
-                    emptyToNull(e.getName()),
+                    LogRecordConverter.emptyToNull(e.getName()),
                     e.getTimeUnixNano() > 0 ? e.getTimeUnixNano() / 1_000_000L : null,
                     e.getAttributesCount() > 0 ? LogRecordConverter.kvListToMap(e.getAttributesList()) : null
             });
@@ -93,7 +93,4 @@ public class SpanConverter {
         return result;
     }
 
-    private static String emptyToNull(String s) {
-        return (s == null || s.isEmpty()) ? null : s;
-    }
 }
