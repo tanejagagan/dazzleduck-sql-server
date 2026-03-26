@@ -45,19 +45,20 @@ public class OtelCollectorServer implements Closeable {
                 .addService(new OtelTraceService(traceWriter))
                 .addService(new OtelMetricsService(metricsWriter));
 
-        if ("jwt".equals(props.getAuthentication())) {
-            if (props.getSecretKey() == null || props.getSecretKey().isEmpty()) {
-                throw new IllegalStateException("otel_collector.secret_key is required when authentication = jwt");
-            }
-            var secretKey = Validator.fromBase64String(props.getSecretKey());
-            var userHashMap = new java.util.HashMap<String, byte[]>();
-            props.getUsers().forEach((u, p) -> userHashMap.put(u, Validator.hash(p)));
-            builder.intercept(new JwtServerInterceptor(secretKey, userHashMap, props.getJwtExpiration(), props.getLoginUrl()));
-            if (props.getLoginUrl() != null) {
-                log.info("JWT authentication enabled with login delegation to {}", props.getLoginUrl());
-            } else {
-                log.info("JWT authentication enabled for {} user(s)", userHashMap.size());
-            }
+        if (!"jwt".equals(props.getAuthentication())) {
+            throw new IllegalStateException("Unsupported authentication mode: " + props.getAuthentication() + ". Only 'jwt' is supported.");
+        }
+        if (props.getSecretKey() == null || props.getSecretKey().isEmpty()) {
+            throw new IllegalStateException("otel_collector.secret_key is required");
+        }
+        var secretKey = Validator.fromBase64String(props.getSecretKey());
+        var userHashMap = new java.util.HashMap<String, byte[]>();
+        props.getUsers().forEach((u, p) -> userHashMap.put(u, Validator.hash(p)));
+        builder.intercept(new JwtServerInterceptor(secretKey, userHashMap, props.getJwtExpiration(), props.getLoginUrl()));
+        if (props.getLoginUrl() != null) {
+            log.info("JWT authentication enabled with login delegation to {}", props.getLoginUrl());
+        } else {
+            log.info("JWT authentication enabled for {} user(s)", userHashMap.size());
         }
 
         grpcServer = builder.build().start();

@@ -133,7 +133,7 @@ public class CollectorConfig {
     }
 
     public String getAuthentication() {
-        return getString("authentication", "none");
+        return getString("authentication", "jwt");
     }
 
     public String getSecretKey() {

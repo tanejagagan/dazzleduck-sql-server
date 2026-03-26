@@ -325,7 +325,8 @@ public class OtelCollectorLoginDelegationTest {
             CollectorProperties props = new CollectorProperties();
             props.setGrpcPort(otelPort);
             props.setOutputPath(outputPath.toString());
-            props.setAuthentication("none");
+            props.setAuthentication("jwt");
+            props.setSecretKey(SECRET_KEY_BASE64);
             props.setFlushThreshold(1);       // flush synchronously after each record
             props.setFlushIntervalMs(60_000); // disable timer-based flush
             props.setTransformations("severity_number * 2 as doubled_severity");
@@ -336,7 +337,10 @@ public class OtelCollectorLoginDelegationTest {
             channel = ManagedChannelBuilder.forAddress("localhost", otelPort)
                     .usePlaintext()
                     .build();
-            stub = LogsServiceGrpc.newBlockingStub(channel);
+            var meta = new Metadata();
+            meta.put(AUTHORIZATION_KEY, "Bearer " + generateValidToken());
+            stub = LogsServiceGrpc.newBlockingStub(channel)
+                    .withInterceptors(MetadataUtils.newAttachHeadersInterceptor(meta));
         }
 
         @AfterAll
@@ -397,7 +401,8 @@ public class OtelCollectorLoginDelegationTest {
             CollectorProperties props = new CollectorProperties();
             props.setGrpcPort(otelPort);
             props.setTracesOutputPath(tracesOutputPath.toString());
-            props.setAuthentication("none");
+            props.setAuthentication("jwt");
+            props.setSecretKey(SECRET_KEY_BASE64);
             props.setFlushThreshold(1);
             props.setFlushIntervalMs(60_000);
 
@@ -407,7 +412,10 @@ public class OtelCollectorLoginDelegationTest {
             channel = ManagedChannelBuilder.forAddress("localhost", otelPort)
                     .usePlaintext()
                     .build();
-            stub = TraceServiceGrpc.newBlockingStub(channel);
+            var meta = new Metadata();
+            meta.put(AUTHORIZATION_KEY, "Bearer " + generateValidToken());
+            stub = TraceServiceGrpc.newBlockingStub(channel)
+                    .withInterceptors(MetadataUtils.newAttachHeadersInterceptor(meta));
         }
 
         @AfterAll
@@ -473,7 +481,8 @@ public class OtelCollectorLoginDelegationTest {
             CollectorProperties props = new CollectorProperties();
             props.setGrpcPort(otelPort);
             props.setMetricsOutputPath(metricsOutputPath.toString());
-            props.setAuthentication("none");
+            props.setAuthentication("jwt");
+            props.setSecretKey(SECRET_KEY_BASE64);
             props.setFlushThreshold(1);
             props.setFlushIntervalMs(60_000);
 
@@ -483,7 +492,10 @@ public class OtelCollectorLoginDelegationTest {
             channel = ManagedChannelBuilder.forAddress("localhost", otelPort)
                     .usePlaintext()
                     .build();
-            stub = MetricsServiceGrpc.newBlockingStub(channel);
+            var meta = new Metadata();
+            meta.put(AUTHORIZATION_KEY, "Bearer " + generateValidToken());
+            stub = MetricsServiceGrpc.newBlockingStub(channel)
+                    .withInterceptors(MetadataUtils.newAttachHeadersInterceptor(meta));
         }
 
         @AfterAll

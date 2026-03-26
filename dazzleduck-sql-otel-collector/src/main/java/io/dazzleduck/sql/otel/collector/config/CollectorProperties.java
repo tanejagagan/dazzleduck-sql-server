@@ -15,7 +15,7 @@ public class CollectorProperties {
     private long flushIntervalMs = 5000;
     private List<String> partitionBy = List.of();
     private String transformations = null;
-    private String authentication = "none";
+    private String authentication = "jwt";
     private String secretKey = null;
     private String loginUrl = null;
     private Map<String, String> users = new HashMap<>();
