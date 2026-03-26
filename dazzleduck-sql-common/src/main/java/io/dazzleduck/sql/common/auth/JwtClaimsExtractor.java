@@ -1,7 +1,5 @@
 package io.dazzleduck.sql.common.auth;
 
-import com.nimbusds.jwt.JWTClaimsSet;
-import com.nimbusds.jwt.JWTParser;
 import io.dazzleduck.sql.common.Headers;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
@@ -15,8 +13,10 @@ public class JwtClaimsExtractor {
 
     public static Claims parseJwtClaims(String token) {
         try {
-            JWTClaimsSet claimsSet = JWTParser.parse(token).getJWTClaimsSet();
-            return Jwts.claims().add(claimsSet.getClaims()).build();
+            return Jwts.parser()
+                    .unsecured().build()
+                    .parseSignedClaims(token)
+                    .getPayload();
         } catch (Exception e) {
             throw new RuntimeException("Failed to parse JWT claims", e);
         }
@@ -24,10 +24,11 @@ public class JwtClaimsExtractor {
 
     public static Claims parseJwtClaims(String token, SecretKey secretKey) {
         try {
-            var jwtParser = Jwts.parser()
+            return Jwts.parser()
                     .verifyWith(secretKey)
-                    .build();
-            return jwtParser.parseSignedClaims(token).getPayload();
+                    .build()
+                    .parseSignedClaims(token)
+                    .getPayload();
         } catch (Exception e) {
             throw new RuntimeException("Failed to parse JWT claims", e);
         }
