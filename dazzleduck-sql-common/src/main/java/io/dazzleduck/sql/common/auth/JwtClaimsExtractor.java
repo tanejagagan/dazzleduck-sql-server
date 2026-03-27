@@ -2,9 +2,8 @@ package io.dazzleduck.sql.common.auth;
 
 import io.dazzleduck.sql.common.Headers;
 import io.jsonwebtoken.Claims;
-import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.JwtParser;
 
-import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.HashMap;
@@ -12,27 +11,14 @@ import java.util.List;
 import java.util.Map;
 
 public class JwtClaimsExtractor {
-
-    public static Claims parseJwtClaims(String token) {
+    public static Claims parseJwtClaims(String token, JwtParser jwtParser, Boolean verifySignature) {
         try {
-            var unsecuredJwt = toUnsecuredJwt(token);
-            return Jwts.parser()
-                    .unsecured()
-                    .build()
-                    .parseUnsecuredClaims(unsecuredJwt)
-                    .getPayload();
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to parse JWT claims", e);
-        }
-    }
-
-    public static Claims parseJwtClaims(String token, SecretKey secretKey) {
-        try {
-            return Jwts.parser()
-                    .verifyWith(secretKey)
-                    .build()
-                    .parseSignedClaims(token)
-                    .getPayload();
+            if (verifySignature) {
+                return jwtParser.parseSignedClaims(token).getPayload();
+            } else {
+                var unsecuredJwt = toUnsecuredJwt(token);
+                return jwtParser.parseUnsecuredClaims(unsecuredJwt).getPayload();
+            }
         } catch (Exception e) {
             throw new RuntimeException("Failed to parse JWT claims", e);
         }
