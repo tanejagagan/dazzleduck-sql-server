@@ -2,6 +2,10 @@ package io.dazzleduck.sql.otel.collector.config;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
+import io.dazzleduck.sql.commons.config.ConfigBasedProvider;
+import io.dazzleduck.sql.commons.ingestion.IngestionTaskFactory;
+import io.dazzleduck.sql.commons.ingestion.IngestionTaskFactoryProvider;
+import io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -101,35 +105,69 @@ public class CollectorConfig {
     }
 
     public int getGrpcPort() {
-        return getInt("grpc.port", 4317);
+        return getInt("grpc_port", 4317);
     }
 
-    public String getOutputPath() {
-        return getString("output.path", "./otel-logs");
+    public String getLogsOutputPath() {
+        return getString("logs_output_path", "./otel-logs");
     }
 
     public String getTracesOutputPath() {
-        return getString("traces.output.path", "./otel-traces");
+        return getString("traces_output_path", "./otel-traces");
     }
 
     public String getMetricsOutputPath() {
-        return getString("metrics.output.path", "./otel-metrics");
+        return getString("metrics_output_path", "./otel-metrics");
     }
 
-    public int getFlushThreshold() {
-        return getInt("flush.threshold", 1000);
+    public long getMinBucketSizeBytes() {
+        return getLong("ingestion.min_bucket_size", 1_048_576L);
     }
 
-    public long getFlushIntervalMs() {
-        return getLong("flush.interval-ms", 5000);
+    public long getMaxDelayMs() {
+        return getLong("ingestion.max_delay_ms", 5000);
     }
 
     public List<String> getPartitionBy() {
-        return getStringList("partition-by", List.of());
+        return getStringList("partition_by", List.of());
     }
 
     public String getTransformations() {
         return getString("transformations", null);
+    }
+
+    public String getStartupScript() {
+        return getString("startup_script", "INSTALL arrow FROM community; LOAD arrow;");
+    }
+
+    public IngestionTaskFactory getLogIngestionTaskFactory() {
+        return loadIngestionTaskFactory("log_ingestion_task_factory_provider", getLogsOutputPath());
+    }
+
+    public IngestionTaskFactory getTraceIngestionTaskFactory() {
+        return loadIngestionTaskFactory("trace_ingestion_task_factory_provider", getTracesOutputPath());
+    }
+
+    public IngestionTaskFactory getMetricIngestionTaskFactory() {
+        return loadIngestionTaskFactory("metric_ingestion_task_factory_provider", getMetricsOutputPath());
+    }
+
+    private IngestionTaskFactory loadIngestionTaskFactory(String providerKey, String defaultPath) {
+        try {
+            var defaultProvider = new NOOPIngestionTaskFactoryProvider(defaultPath);
+            var provider = ConfigBasedProvider.load(
+                    config.getConfig(CONFIG_PREFIX), providerKey,
+                    (IngestionTaskFactoryProvider) defaultProvider);
+            provider.validate();
+            return provider.getIngestionTaskFactory();
+        } catch (Exception e) {
+            log.warn("Failed to load {}, using NOOP: {}", providerKey, e.getMessage());
+            return new NOOPIngestionTaskFactoryProvider(defaultPath).getIngestionTaskFactory();
+        }
+    }
+
+    public String getServiceName() {
+        return getString("service_name", "open-telemetry-collector");
     }
 
     public String getAuthentication() {
@@ -173,18 +211,23 @@ public class CollectorConfig {
     public CollectorProperties toProperties() {
         CollectorProperties props = new CollectorProperties();
         props.setGrpcPort(getGrpcPort());
-        props.setOutputPath(getOutputPath());
+        props.setLogsOutputPath(getLogsOutputPath());
         props.setTracesOutputPath(getTracesOutputPath());
         props.setMetricsOutputPath(getMetricsOutputPath());
-        props.setFlushThreshold(getFlushThreshold());
-        props.setFlushIntervalMs(getFlushIntervalMs());
+        props.setMinBucketSizeBytes(getMinBucketSizeBytes());
+        props.setMaxDelayMs(getMaxDelayMs());
         props.setPartitionBy(getPartitionBy());
         props.setTransformations(getTransformations());
+        props.setStartupScript(getStartupScript());
         props.setAuthentication(getAuthentication());
         props.setSecretKey(getSecretKey());
         props.setLoginUrl(getLoginUrl());
         props.setUsers(getUsers());
         props.setJwtExpiration(getJwtExpiration());
+        props.setServiceName(getServiceName());
+        props.setLogIngestionTaskFactory(getLogIngestionTaskFactory());
+        props.setTraceIngestionTaskFactory(getTraceIngestionTaskFactory());
+        props.setMetricIngestionTaskFactory(getMetricIngestionTaskFactory());
         return props;
     }
 

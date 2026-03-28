@@ -118,7 +118,7 @@ public class OtelCollectorLoginDelegationTest {
 
             CollectorProperties props = new CollectorProperties();
             props.setGrpcPort(otelPort);
-            props.setOutputPath(outputPath.toString());
+            props.setLogsOutputPath(outputPath.toString());
             props.setAuthentication("jwt");
             props.setSecretKey(SECRET_KEY_BASE64);
             props.setLoginUrl("http://localhost:" + stubPort + "/v1/login");
@@ -247,7 +247,7 @@ public class OtelCollectorLoginDelegationTest {
 
             CollectorProperties props = new CollectorProperties();
             props.setGrpcPort(otelPort);
-            props.setOutputPath(outputPath.toString());
+            props.setLogsOutputPath(outputPath.toString());
             props.setAuthentication("jwt");
             props.setSecretKey(SECRET_KEY_BASE64);
             props.setUsers(Map.of(VALID_USER, VALID_PASS));
@@ -324,11 +324,11 @@ public class OtelCollectorLoginDelegationTest {
 
             CollectorProperties props = new CollectorProperties();
             props.setGrpcPort(otelPort);
-            props.setOutputPath(outputPath.toString());
+            props.setLogsOutputPath(outputPath.toString());
             props.setAuthentication("jwt");
             props.setSecretKey(SECRET_KEY_BASE64);
-            props.setFlushThreshold(1);       // flush synchronously after each record
-            props.setFlushIntervalMs(60_000); // disable timer-based flush
+            props.setMinBucketSizeBytes(1);       // flush synchronously after each record
+            props.setMaxDelayMs(60_000); // disable timer-based flush
             props.setTransformations("severity_number * 2 as doubled_severity");
 
             otelServer = new OtelCollectorServer(props);
@@ -403,8 +403,8 @@ public class OtelCollectorLoginDelegationTest {
             props.setTracesOutputPath(tracesOutputPath.toString());
             props.setAuthentication("jwt");
             props.setSecretKey(SECRET_KEY_BASE64);
-            props.setFlushThreshold(1);
-            props.setFlushIntervalMs(60_000);
+            props.setMinBucketSizeBytes(1);
+            props.setMaxDelayMs(60_000);
 
             otelServer = new OtelCollectorServer(props);
             otelServer.start();
@@ -483,8 +483,8 @@ public class OtelCollectorLoginDelegationTest {
             props.setMetricsOutputPath(metricsOutputPath.toString());
             props.setAuthentication("jwt");
             props.setSecretKey(SECRET_KEY_BASE64);
-            props.setFlushThreshold(1);
-            props.setFlushIntervalMs(60_000);
+            props.setMinBucketSizeBytes(1);
+            props.setMaxDelayMs(60_000);
 
             otelServer = new OtelCollectorServer(props);
             otelServer.start();
