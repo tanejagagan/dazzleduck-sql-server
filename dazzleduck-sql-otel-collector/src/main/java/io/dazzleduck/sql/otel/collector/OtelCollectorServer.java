@@ -1,15 +1,18 @@
 package io.dazzleduck.sql.otel.collector;
 
+import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.auth.Validator;
 import io.dazzleduck.sql.otel.collector.auth.JwtServerInterceptor;
 import io.dazzleduck.sql.otel.collector.config.CollectorProperties;
 import io.grpc.Server;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.net.InetAddress;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -30,20 +33,33 @@ public class OtelCollectorServer implements Closeable {
     }
 
     public void start() throws IOException {
-        logWriter = new SignalWriter(OtelLogSchema.SCHEMA, props.getOutputPath(), props.getPartitionBy(),
-                props.getTransformations(), props.getFlushThreshold(), props.getFlushIntervalMs());
-        traceWriter = new SignalWriter(OtelTraceSchema.SCHEMA, props.getTracesOutputPath(),
-                props.getPartitionBy(), null,
-                props.getFlushThreshold(), props.getFlushIntervalMs());
-        metricsWriter = new SignalWriter(OtelMetricSchema.SCHEMA, props.getMetricsOutputPath(),
-                props.getPartitionBy(), null,
-                props.getFlushThreshold(), props.getFlushIntervalMs());
+        String startupScript = props.getStartupScript();
+        if (startupScript != null && !startupScript.isBlank()) {
+            log.info("Executing startup script");
+            ConnectionPool.executeOnSingleton(startupScript);
+        }
+
+        logWriter = new SignalWriter(props.getLogsOutputPath(), props.getPartitionBy(),
+                props.getTransformations(), props.getMinBucketSizeBytes(), props.getMaxDelayMs(),
+                props.getLogIngestionTaskFactory());
+        traceWriter = new SignalWriter(props.getTracesOutputPath(), props.getPartitionBy(),
+                null, props.getMinBucketSizeBytes(), props.getMaxDelayMs(),
+                props.getTraceIngestionTaskFactory());
+        metricsWriter = new SignalWriter(props.getMetricsOutputPath(), props.getPartitionBy(),
+                null, props.getMinBucketSizeBytes(), props.getMaxDelayMs(),
+                props.getMetricIngestionTaskFactory());
+
+        setupCommonTags(props.getMeterRegistry(), props.getServiceName());
+        OtelCollectorMetrics metrics = new OtelCollectorMetrics(props.getMeterRegistry(), props.getMaxDelayMs());
+        metrics.registerWriter("logs",    logWriter);
+        metrics.registerWriter("traces",  traceWriter);
+        metrics.registerWriter("metrics", metricsWriter);
 
         var builder = NettyServerBuilder
                 .forPort(props.getGrpcPort())
-                .addService(new OtelLogService(logWriter))
-                .addService(new OtelTraceService(traceWriter))
-                .addService(new OtelMetricsService(metricsWriter));
+                .addService(new OtelLogService(logWriter, metrics))
+                .addService(new OtelTraceService(traceWriter, metrics))
+                .addService(new OtelMetricsService(metricsWriter, metrics));
 
         if (!"jwt".equals(props.getAuthentication())) {
             throw new IllegalStateException("Unsupported authentication mode: " + props.getAuthentication() + ". Only 'jwt' is supported.");
@@ -64,8 +80,24 @@ public class OtelCollectorServer implements Closeable {
         grpcServer = builder.build().start();
 
         log.info("OTLP gRPC server started on port {} — logs={}, traces={}, metrics={}",
-                props.getGrpcPort(), props.getOutputPath(),
+                props.getGrpcPort(), props.getLogsOutputPath(),
                 props.getTracesOutputPath(), props.getMetricsOutputPath());
+    }
+
+    private static void setupCommonTags(MeterRegistry registry, String serviceName) {
+        String hostname = System.getenv("HOSTNAME");
+        if (hostname == null || hostname.isBlank()) {
+            try {
+                hostname = InetAddress.getLocalHost().getHostName();
+            } catch (Exception e) {
+                hostname = "unknown";
+            }
+        }
+        String containerId = System.getenv().getOrDefault("CONTAINER_ID", "unknown");
+        registry.config().commonTags(
+                "service.name", serviceName,
+                "host.name", hostname,
+                "container.id", containerId);
     }
 
     public void blockUntilShutdown() throws InterruptedException {

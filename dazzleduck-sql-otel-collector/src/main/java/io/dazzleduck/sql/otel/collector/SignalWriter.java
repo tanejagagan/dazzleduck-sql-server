@@ -1,172 +1,117 @@
 package io.dazzleduck.sql.otel.collector;
 
-import io.dazzleduck.sql.common.types.JavaRow;
-import io.dazzleduck.sql.common.types.VectorSchemaRootWriter;
-import io.dazzleduck.sql.commons.ConnectionPool;
-import org.apache.arrow.memory.RootAllocator;
-import org.apache.arrow.vector.VectorSchemaRoot;
-import org.apache.arrow.vector.ipc.ArrowStreamReader;
-import org.apache.arrow.vector.ipc.ArrowStreamWriter;
-import org.apache.arrow.vector.types.pojo.Schema;
+import io.dazzleduck.sql.commons.ingestion.Batch;
+import io.dazzleduck.sql.commons.ingestion.IngestionTaskFactory;
+import io.dazzleduck.sql.commons.ingestion.ParquetIngestionQueue;
+import io.dazzleduck.sql.commons.ingestion.Stats;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
-import java.nio.channels.Channels;
-import java.util.ArrayList;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Buffers OTLP signal rows (logs, metrics, or traces) and flushes them to Parquet via DuckDB.
+ * Accepts Arrow batches from OTLP services, spills each batch to a temp Arrow
+ * file on disk, and delegates batching + Parquet writing to
+ * {@link ParquetIngestionQueue}.
  *
- * Flush is triggered when:
- * - buffer size reaches flushThreshold, or
- * - flushIntervalMs elapses since last flush
+ * <p>DuckDB reads all accumulated Arrow files in one
+ * {@code COPY (SELECT * FROM read_arrow([...])) TO outputPath} statement,
+ * which is more efficient than writing one Parquet file per batch.
  *
- * The response future returned by {@link #addBatch} completes only after the Parquet write
- * succeeds (or fails), so callers can back-pressure the gRPC response accordingly.
+ * <p>Flush is triggered when accumulated file bytes reach {@code minBucketSizeBytes}
+ * or after {@code maxDelayMs} elapses since the first batch in the current bucket.
  */
 public class SignalWriter implements Closeable {
 
     private static final Logger log = LoggerFactory.getLogger(SignalWriter.class);
 
-    private final Schema schema;
-    private final String outputPath;
-    private final List<String> partitionBy;
-    private final String transformations;
-    private final int flushThreshold;
-    private final long flushIntervalMs;
+    private static final long MAX_BUCKET_SIZE  = 100L * 1024 * 1024; // 100 MB
+    private static final long MAX_PENDING_WRITE = 500L * 1024 * 1024; // 500 MB
 
-    private final List<JavaRow> buffer = new ArrayList<>();
-    private final List<CompletableFuture<Void>> pendingFutures = new ArrayList<>();
-    private final VectorSchemaRootWriter schemaWriter;
+    private final String outputPath;
+    private final ParquetIngestionQueue queue;
+    private final String[] partitions;
+    private final String[] projections;
     private final ScheduledExecutorService scheduler;
 
-    private final AtomicLong totalWritten = new AtomicLong(0);
-    private final AtomicLong totalDropped = new AtomicLong(0);
-    private volatile long lastFlushTime = System.currentTimeMillis();
-
-    public SignalWriter(Schema schema, String outputPath, List<String> partitionBy,
-                        String transformations, int flushThreshold, long flushIntervalMs) {
-        this.schema = schema;
+    public SignalWriter(String outputPath, List<String> partitionBy, String transformations,
+                        long minBucketSizeBytes, long maxDelayMs,
+                        IngestionTaskFactory ingestionTaskFactory) throws IOException {
         this.outputPath = outputPath;
-        this.partitionBy = partitionBy;
-        this.transformations = transformations;
-        this.flushThreshold = flushThreshold;
-        this.flushIntervalMs = flushIntervalMs;
-        this.schemaWriter = VectorSchemaRootWriter.of(schema);
+        Files.createDirectories(Path.of(outputPath));
+        this.partitions = partitionBy.toArray(new String[0]);
+        // ParquetIngestionQueue uses projections as the SELECT clause.
+        // Otel transformations are additive (SELECT *, <expr>), so prepend "*".
+        this.projections = (transformations != null && !transformations.isBlank())
+                ? new String[]{"*", transformations} : new String[0];
         this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "otel-signal-flusher[" + outputPath + "]");
+            Thread t = new Thread(r, "otel-signal-scheduler[" + outputPath + "]");
             t.setDaemon(true);
             return t;
         });
-        scheduler.scheduleAtFixedRate(this::checkAndFlush, flushIntervalMs, flushIntervalMs, TimeUnit.MILLISECONDS);
+
+        this.queue = new ParquetIngestionQueue(
+                "otel-collector",
+                "arrow",
+                outputPath,
+                outputPath,
+                minBucketSizeBytes,
+                MAX_BUCKET_SIZE,
+                Integer.MAX_VALUE,
+                MAX_PENDING_WRITE,
+                Duration.ofMillis(maxDelayMs),
+                ingestionTaskFactory,
+                scheduler,
+                Clock.systemUTC()
+        );
     }
 
     /**
-     * Adds a batch of rows to the buffer and returns a future that completes
-     * when the flush containing these rows finishes writing to Parquet.
-     * The future completes exceptionally if the write fails.
+     * Submits an Arrow file to the ingestion queue.
+     * Returns a future that completes when the file has been written to Parquet.
      */
-    public synchronized CompletableFuture<Void> addBatch(List<JavaRow> rows) {
-        if (rows.isEmpty()) {
-            return CompletableFuture.completedFuture(null);
-        }
-        buffer.addAll(rows);
-        CompletableFuture<Void> future = new CompletableFuture<>();
-        pendingFutures.add(future);
-        if (buffer.size() >= flushThreshold) {
-            flush();
-        }
-        return future;
-    }
-
-    private void checkAndFlush() {
-        long elapsed = System.currentTimeMillis() - lastFlushTime;
-        if (elapsed >= flushIntervalMs) {
-            synchronized (this) {
-                if (!buffer.isEmpty()) {
-                    flush();
-                }
-            }
-        }
-    }
-
-    /** Must be called with {@code this} lock held. */
-    private void flush() {
-        if (buffer.isEmpty()) return;
-
-        List<JavaRow> rows = new ArrayList<>(buffer);
-        List<CompletableFuture<Void>> futures = new ArrayList<>(pendingFutures);
-        buffer.clear();
-        pendingFutures.clear();
-        lastFlushTime = System.currentTimeMillis();
-
+    public CompletableFuture<Void> addBatch(Path arrowFile) {
         try {
-            writeToParquet(rows);
-            totalWritten.addAndGet(rows.size());
-            log.debug("Flushed {} rows to {}", rows.size(), outputPath);
-            futures.forEach(f -> f.complete(null));
-        } catch (Exception e) {
-            totalDropped.addAndGet(rows.size());
-            log.error("Failed to flush {} rows to parquet at {}", rows.size(), outputPath, e);
-            futures.forEach(f -> f.completeExceptionally(e));
+            long fileSize = Files.size(arrowFile);
+            Batch<String> batch = new Batch<>(
+                    new String[0],
+                    projections,
+                    partitions,
+                    arrowFile.toString(),
+                    null,
+                    0,
+                    fileSize,
+                    "parquet",
+                    Instant.now()
+            );
+            return queue.add(batch).thenApply(ignored -> null);
+        } catch (IOException e) {
+            return CompletableFuture.failedFuture(e);
         }
     }
 
-    private void writeToParquet(List<JavaRow> rows) throws Exception {
-        JavaRow[] rowArray = rows.toArray(new JavaRow[0]);
-
-        try (RootAllocator allocator = new RootAllocator();
-             VectorSchemaRoot root = VectorSchemaRoot.create(schema, allocator)) {
-
-            schemaWriter.writeToVector(rowArray, root);
-
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            try (ArrowStreamWriter writer = new ArrowStreamWriter(root, null, Channels.newChannel(baos))) {
-                writer.start();
-                writer.writeBatch();
-                writer.end();
-            }
-
-            try (ArrowStreamReader reader = new ArrowStreamReader(
-                    new ByteArrayInputStream(baos.toByteArray()), allocator)) {
-                ConnectionPool.bulkIngestToFile(reader, allocator, outputPath, partitionBy, "parquet", transformations);
-            }
-        }
-    }
-
-    public long getTotalWritten() {
-        return totalWritten.get();
-    }
-
-    public long getTotalDropped() {
-        return totalDropped.get();
+    public Stats getStats() {
+        return queue.getStats();
     }
 
     @Override
     public void close() {
-        scheduler.shutdown();
         try {
-            scheduler.awaitTermination(5, TimeUnit.SECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+            queue.close();
+        } catch (Exception e) {
+            log.warn("Error closing ingestion queue for {}", outputPath, e);
         }
-        synchronized (this) {
-            if (!buffer.isEmpty()) {
-                flush();
-            }
-            var ex = new RuntimeException("SignalWriter closed before flush completed");
-            pendingFutures.forEach(f -> f.completeExceptionally(ex));
-            pendingFutures.clear();
-        }
-        log.info("SignalWriter[{}] closed — written={}, dropped={}", outputPath, totalWritten.get(), totalDropped.get());
+        scheduler.shutdown();
+        log.info("SignalWriter[{}] closed", outputPath);
     }
 }
