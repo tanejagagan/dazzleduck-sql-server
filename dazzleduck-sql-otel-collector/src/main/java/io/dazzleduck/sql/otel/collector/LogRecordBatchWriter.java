@@ -20,11 +20,11 @@ import java.util.List;
  * Writes a batch of OTLP log records directly into an Arrow VectorSchemaRoot,
  * bypassing the JavaRow intermediate representation.
  */
-class LogRecordBatchWriter {
+public class LogRecordBatchWriter {
 
     private static final HexFormat HEX = HexFormat.of();
 
-    static void write(List<LogEntry> entries, VectorSchemaRoot root) {
+    public static void write(List<LogEntry> entries, VectorSchemaRoot root) {
         root.allocateNew();
 
         TimeStampMilliVector tsVec      = (TimeStampMilliVector) root.getVector(OtelLogSchema.COL_TIMESTAMP);

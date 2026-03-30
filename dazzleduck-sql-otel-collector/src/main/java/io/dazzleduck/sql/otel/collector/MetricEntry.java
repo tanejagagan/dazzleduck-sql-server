@@ -8,4 +8,4 @@ import io.opentelemetry.proto.resource.v1.Resource;
  * Holds the three protobuf objects that together describe a single metric.
  * One MetricEntry may expand to multiple rows (one per data point) when written.
  */
-record MetricEntry(Metric metric, Resource resource, InstrumentationScope scope) {}
+public record MetricEntry(Metric metric, Resource resource, InstrumentationScope scope) {}
