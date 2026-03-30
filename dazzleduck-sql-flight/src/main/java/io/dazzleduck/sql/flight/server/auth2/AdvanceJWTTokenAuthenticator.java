@@ -22,11 +22,14 @@ import javax.crypto.SecretKey;
 import java.time.Duration;
 import java.util.*;
 
+import static io.dazzleduck.sql.common.auth.JwtClaimsExtractor.parseJwtClaims;
+
 public class AdvanceJWTTokenAuthenticator implements CallHeaderAuthenticator {
 
     private static final Logger logger = LoggerFactory.getLogger(AdvanceBasicCallHeaderAuthenticator.class);
     private final SecretKey key;
     private final JwtParser jwtParser;
+    private final Boolean verifySignature;
     private final Duration timeMinutes;
     private final CallHeaderAuthenticator initialAuthenticator;
     private final List<String> claimHeader;
@@ -41,9 +44,16 @@ public class AdvanceJWTTokenAuthenticator implements CallHeaderAuthenticator {
 
     public AdvanceJWTTokenAuthenticator(CallHeaderAuthenticator initialAuthenticator, SecretKey key, Config config) {
         this.key = key;
-        this.jwtParser = Jwts.parser()     // (1)
-                .verifyWith(key)//     or a constant key used to verify all signed JWTs
-                .build();
+        this.verifySignature = config.getBoolean("jwt_token.verify_signature");
+        if (verifySignature) {
+            this.jwtParser = Jwts.parser()      // (1)
+                    .verifyWith(key)            // or a constant key used to verify all signed JWTs
+                    .build();
+        } else {
+            this.jwtParser = Jwts.parser()
+                    .unsecured()
+                    .build();
+        }
         this.initialAuthenticator = initialAuthenticator;
         this.timeMinutes = config.getDuration(ConfigConstants.JWT_TOKEN_EXPIRATION_KEY);
         this.claimHeader = config.getStringList(ConfigConstants.JWT_TOKEN_CLAIMS_GENERATE_HEADERS_KEY);
@@ -57,6 +67,7 @@ public class AdvanceJWTTokenAuthenticator implements CallHeaderAuthenticator {
                 jwt_token.claims.generate.headers = []
                 jwt_token.claims.validate.headers = []
                 jwt_token.generation = true
+                jwt_token.verify_signature = true
                 """;
         return ConfigFactory.parseString(defaultConfig);
     }
@@ -118,8 +129,7 @@ public class AdvanceJWTTokenAuthenticator implements CallHeaderAuthenticator {
 
     protected AuthResultWithClaims validateBearer(String bearerToken, CallHeaders incomingHeader) {
         try {
-            var jwt = jwtParser.parseSignedClaims(bearerToken);
-            var payload = jwt.getPayload();
+            var payload = parseJwtClaims(bearerToken, jwtParser, verifySignature);
             var subject = payload.getSubject();
             var expiration = payload.getExpiration();
             if (expiration.before(new Date())) {

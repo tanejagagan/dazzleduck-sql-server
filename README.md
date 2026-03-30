@@ -191,7 +191,47 @@ CREATE SECRET http_auth (
 SELECT * FROM read_arrow(concat('http://localhost:8081/v1/query?q=', url_encode('select 1, 2, 3')));
 ```
 
-### Publishing the project 
+## DuckLake Post-Ingestion Provider
+
+After Arrow data is ingested and written as Parquet, DazzleDuck can automatically register those files with a DuckLake catalog table via `ingestion_task_factory_provider` (disabled by default in `reference.conf`).
+
+Set `class` to `io.dazzleduck.sql.commons.ingestion.DuckLakeIngestionTaskFactoryProvider` and configure `ingestion_queue_table_mapping` entries:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `ingestion_queue` | Yes | Queue name sent by the producer via the `ingestion_queue` header |
+| `catalog` | Yes | DuckLake catalog owning the target table |
+| `schema` | Yes | Schema within the catalog |
+| `table` | Yes | Target table name |
+| `transformation` | No | SQL `SELECT` referencing placeholder table `__this`; omit to write all columns as-is |
+| `additional_parameters` | No | Extra key/value pairs forwarded to the post-ingestion task |
+
+### Transformation
+
+`transformation` is a SQL `SELECT` that runs on each batch before it is persisted. The server wraps it as:
+
+```sql
+WITH __this AS (SELECT * FROM read_parquet([...]) ORDER BY ...)
+<transformation>
+```
+
+Common patterns:
+
+```sql
+-- Column subset
+SELECT id, ts, msg FROM __this
+
+-- Derived column
+SELECT *, upper(level) AS level FROM __this
+
+-- Row filter
+SELECT * FROM __this WHERE level != 'DEBUG'
+
+-- Add ingestion timestamp
+SELECT id, ts, msg, current_timestamp AS ingested_at FROM __this
+```
+
+### Publishing the project
 - export GPG_TTY=$(tty)
 - ./mvnw -P release-sign-artifacts -DskipTests clean verify
 - ./mvnw -P release-sign-artifacts -DskipTests deploy

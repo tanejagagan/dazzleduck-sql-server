@@ -23,6 +23,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+import static io.dazzleduck.sql.common.auth.JwtClaimsExtractor.parseJwtClaims;
+
 public class JwtAuthenticationFilter implements Filter {
     public static final String SUBJECT_KEY = "subject";
     public static final String INGESTION_PATH = "/v1/ingest";
@@ -30,6 +32,7 @@ public class JwtAuthenticationFilter implements Filter {
     private final Config config;
     private final SecretKey secretKey;
     private final JwtParser jwtParser;
+    private final Boolean verifySignature;
     private final List<String> paths;
     private final List<String> claimHeader;
     private final Set<String> validateHeaders;
@@ -38,9 +41,16 @@ public class JwtAuthenticationFilter implements Filter {
     public JwtAuthenticationFilter(List<String> paths, Config config, SecretKey secretKey, SqlAuthorizer sqlAuthorizer) {
         this.config = config;
         this.secretKey = secretKey;
-        this.jwtParser = Jwts.parser()
-                .verifyWith(secretKey)
-                .build();
+        this.verifySignature = config.getBoolean("jwt_token.verify_signature");
+        if (verifySignature) {
+            this.jwtParser = Jwts.parser()
+                    .verifyWith(secretKey)
+                    .build();
+        } else {
+            this.jwtParser = Jwts.parser()
+                    .unsecured()
+                    .build();
+        }
         this.paths = paths;
         this.claimHeader = config.getStringList(ConfigConstants.JWT_TOKEN_CLAIMS_GENERATE_HEADERS_KEY);
         this.validateHeaders = new HashSet<>(config.getStringList(ConfigConstants.JWT_TOKEN_CLAIMS_VALIDATE_HEADERS_KEY));
@@ -49,8 +59,7 @@ public class JwtAuthenticationFilter implements Filter {
 
     public SubjectAndVerifiedClaims authenticate(String token) {
         try {
-            var jwt = jwtParser.parseSignedClaims(token);
-            var payload = jwt.getPayload();
+            var payload = parseJwtClaims(token, jwtParser, verifySignature);
             var subject = payload.getSubject();
             var expiration = payload.getExpiration();
 
