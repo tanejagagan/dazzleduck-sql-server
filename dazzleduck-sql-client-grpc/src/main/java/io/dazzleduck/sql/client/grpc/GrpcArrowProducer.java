@@ -41,7 +41,6 @@ public final class GrpcArrowProducer extends ArrowProducer.AbstractArrowProducer
             Clock clock,
             int retryCount,
             long retryIntervalMillis,
-            java.util.List<String> projections,
             java.util.List<String> partitionBy,
             long maxInMemorySize,
             long maxOnDiskSize,
@@ -52,7 +51,7 @@ public final class GrpcArrowProducer extends ArrowProducer.AbstractArrowProducer
             Map<String, String> ingestParams,
             Duration grpcTimeout
     ) {
-        super(minBatchSize, maxBatchSize, maxSendInterval, schema, clock, retryCount, retryIntervalMillis, projections, partitionBy);
+        super(minBatchSize, maxBatchSize, maxSendInterval, schema, clock, retryCount, retryIntervalMillis, partitionBy);
 
         // Validate parameters
         this.allocator = Objects.requireNonNull(allocator, "allocator must not be null");
@@ -85,12 +84,7 @@ public final class GrpcArrowProducer extends ArrowProducer.AbstractArrowProducer
                         .build()
         );
 
-        // Add projections and partitionBy to ingestParams
         Map<String, String> enrichedParams = new java.util.HashMap<>(ingestParams);
-        if (!getProjections().isEmpty()) {
-            String projectionsValue = String.join(",", getProjections());
-            enrichedParams.put(Headers.HEADER_DATA_PROJECT, projectionsValue);
-        }
         if (!getPartitionBy().isEmpty()) {
             String partitionByValue = String.join(",", getPartitionBy());
             enrichedParams.put(Headers.HEADER_DATA_PARTITION, partitionByValue);

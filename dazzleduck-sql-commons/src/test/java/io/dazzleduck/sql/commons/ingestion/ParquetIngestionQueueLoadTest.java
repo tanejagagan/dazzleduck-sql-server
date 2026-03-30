@@ -321,7 +321,6 @@ public class ParquetIngestionQueueLoadTest {
                     var generated = files.get(b);
                     var batch = new Batch<>(
                             null,  // sortOrder
-                            null,  // projections
                             null,  // partitionBy
                             generated.path().toString(),
                             producerIdStr,

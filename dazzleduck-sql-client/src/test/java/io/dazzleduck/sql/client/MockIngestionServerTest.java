@@ -281,7 +281,6 @@ class MockIngestionServerTest {
                 3,     // retryCount
                 100,   // retryIntervalMillis
                 List.of(),
-                List.of(),
                 1_000_000,
                 5_000_000,
                 Clock.systemUTC()

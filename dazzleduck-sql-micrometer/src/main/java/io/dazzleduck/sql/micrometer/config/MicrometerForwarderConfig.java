@@ -30,7 +30,6 @@ public record MicrometerForwarderConfig(
         long maxOnDiskSize,
         int retryCount,
         long retryIntervalMillis,
-        List<String> projections,
         List<String> partitionBy,
 
         // Feature flags
@@ -44,7 +43,6 @@ public record MicrometerForwarderConfig(
         Objects.requireNonNull(httpClientTimeout, "httpClientTimeout must not be null");
         Objects.requireNonNull(stepInterval, "stepInterval must not be null");
         Objects.requireNonNull(maxSendInterval, "maxSendInterval must not be null");
-        projections = List.copyOf(projections);
         partitionBy = List.copyOf(partitionBy);
     }
 
@@ -67,7 +65,6 @@ public record MicrometerForwarderConfig(
         private long maxOnDiskSize = 1024 * 1024 * 1024L; // 1 GB
         private int retryCount = 3;
         private long retryIntervalMillis = 1000; // 1 second
-        private List<String> project = List.of();
         private List<String> partitionBy = List.of();
         private boolean enabled = true;
 
@@ -150,11 +147,6 @@ public record MicrometerForwarderConfig(
             return this;
         }
 
-        public Builder project(List<String> projections) {
-            this.project = Objects.requireNonNull(projections);
-            return this;
-        }
-
         public Builder partitionBy(List<String> partitionBy) {
             this.partitionBy = Objects.requireNonNull(partitionBy);
             return this;
@@ -181,7 +173,6 @@ public record MicrometerForwarderConfig(
                     maxOnDiskSize,
                     retryCount,
                     retryIntervalMillis,
-                    project,
                     partitionBy,
                     enabled
             );

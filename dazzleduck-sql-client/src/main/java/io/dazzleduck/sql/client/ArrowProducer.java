@@ -187,8 +187,6 @@ public interface ArrowProducer extends Closeable {
 
         private final long retryIntervalMillis;
 
-        private final java.util.List<String> projections;
-
         private final java.util.List<String> partitionBy;
 
         private final CompressionUtil.CodecType compressionType;
@@ -204,19 +202,19 @@ public interface ArrowProducer extends Closeable {
         private long currentBatchId = 0;
 
 
-        public AbstractArrowProducer(long minBatchSize, long maxBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock, int retryCount, long retryIntervalMillis, java.util.List<String> projections, java.util.List<String> partitionBy){
-            this(minBatchSize, maxBatchSize, maxDataSendInterval, schema, clock, retryCount, retryIntervalMillis, projections, partitionBy, CompressionUtil.CodecType.ZSTD, Executors.newSingleThreadScheduledExecutor());
+        public AbstractArrowProducer(long minBatchSize, long maxBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock, int retryCount, long retryIntervalMillis, java.util.List<String> partitionBy){
+            this(minBatchSize, maxBatchSize, maxDataSendInterval, schema, clock, retryCount, retryIntervalMillis, partitionBy, CompressionUtil.CodecType.ZSTD, Executors.newSingleThreadScheduledExecutor());
         }
 
-        public AbstractArrowProducer(long minBatchSize, long maxBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock, int retryCount, long retryIntervalMillis, java.util.List<String> projections, java.util.List<String> partitionBy, CompressionUtil.CodecType compressionType){
-            this(minBatchSize, maxBatchSize, maxDataSendInterval, schema, clock, retryCount, retryIntervalMillis, projections, partitionBy, compressionType, Executors.newSingleThreadScheduledExecutor());
+        public AbstractArrowProducer(long minBatchSize, long maxBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock, int retryCount, long retryIntervalMillis, java.util.List<String> partitionBy, CompressionUtil.CodecType compressionType){
+            this(minBatchSize, maxBatchSize, maxDataSendInterval, schema, clock, retryCount, retryIntervalMillis, partitionBy, compressionType, Executors.newSingleThreadScheduledExecutor());
         }
 
-        public AbstractArrowProducer(long minBatchSize, long maxBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock, int retryCount, long retryIntervalMillis, java.util.List<String> projections, java.util.List<String> partitionBy, ScheduledExecutorService scheduledExecutorService){
-            this(minBatchSize, maxBatchSize, maxDataSendInterval, schema, clock, retryCount, retryIntervalMillis, projections, partitionBy, CompressionUtil.CodecType.ZSTD, scheduledExecutorService);
+        public AbstractArrowProducer(long minBatchSize, long maxBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock, int retryCount, long retryIntervalMillis, java.util.List<String> partitionBy, ScheduledExecutorService scheduledExecutorService){
+            this(minBatchSize, maxBatchSize, maxDataSendInterval, schema, clock, retryCount, retryIntervalMillis, partitionBy, CompressionUtil.CodecType.ZSTD, scheduledExecutorService);
         }
 
-        public AbstractArrowProducer(long minBatchSize, long maxBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock, int retryCount, long retryIntervalMillis, java.util.List<String> projections, java.util.List<String> partitionBy, CompressionUtil.CodecType compressionType, ScheduledExecutorService scheduledExecutorService ){
+        public AbstractArrowProducer(long minBatchSize, long maxBatchSize, Duration maxDataSendInterval, Schema schema, Clock clock, int retryCount, long retryIntervalMillis, java.util.List<String> partitionBy, CompressionUtil.CodecType compressionType, ScheduledExecutorService scheduledExecutorService ){
             // Validate parameters
             if (minBatchSize <= 0) {
                 throw new IllegalArgumentException("minBatchSize must be positive, got: " + minBatchSize);
@@ -242,9 +240,6 @@ public interface ArrowProducer extends Closeable {
             if (retryIntervalMillis < 0) {
                 throw new IllegalArgumentException("retryIntervalMillis must be non-negative, got: " + retryIntervalMillis);
             }
-            if (projections == null) {
-                throw new IllegalArgumentException("projections must not be null");
-            }
             if (partitionBy == null) {
                 throw new IllegalArgumentException("partitionBy must not be null");
             }
@@ -255,13 +250,12 @@ public interface ArrowProducer extends Closeable {
                 throw new IllegalArgumentException("scheduledExecutorService must not be null");
             }
 
-            logger.info("FlightSender started at {} with send interval {}, retryCount {}, retryIntervalMillis {}, projections {}, partitionBy {}, compression {}", clock.instant(), maxDataSendInterval, retryCount, retryIntervalMillis, projections, partitionBy, compressionType);
+            logger.info("FlightSender started at {} with send interval {}, retryCount {}, retryIntervalMillis {}, partitionBy {}, compression {}", clock.instant(), maxDataSendInterval, retryCount, retryIntervalMillis, partitionBy, compressionType);
             this.minBatchSize = minBatchSize;
             this.maxBatchSize = maxBatchSize;
             this.maxDataSendInterval = maxDataSendInterval;
             this.retryCount = retryCount;
             this.retryIntervalMillis = retryIntervalMillis;
-            this.projections = List.copyOf(projections);
             this.partitionBy = List.copyOf(partitionBy);
             this.compressionType = compressionType;
             this.clock = clock;
@@ -596,10 +590,6 @@ public interface ArrowProducer extends Closeable {
 
         protected long getRetryIntervalMillis() {
             return retryIntervalMillis;
-        }
-
-        protected java.util.List<String> getProjections() {
-            return projections;
         }
 
         protected java.util.List<String> getPartitionBy() {

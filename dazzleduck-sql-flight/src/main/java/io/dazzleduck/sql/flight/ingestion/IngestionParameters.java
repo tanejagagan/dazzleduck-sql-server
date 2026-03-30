@@ -9,13 +9,12 @@ import java.time.Instant;
 import java.util.Map;
 
 public record IngestionParameters(String ingestionQueue,
-                                  String format, String[] partitionBy, String[] projections,
+                                  String format, String[] partitionBy,
                                   String[] sortOrder, String producerId, Long producerBatchId,
                                   Map<String, String> parameters) {
     public Batch<String> constructBatch(long size, String tempFile) {
         return new Batch<>(
                 sortOrder,
-                projections,
                 partitionBy,
                 tempFile,
                 producerId,
@@ -44,9 +43,8 @@ public record IngestionParameters(String ingestionQueue,
         String producerId = optionMap.get(Headers.HEADER_PRODUCER_ID);
         // Optional comma-separated lists
         String[] partitionBy = HeaderUtils.parseCsv(optionMap.get(Headers.HEADER_DATA_PARTITION));
-        String[] projections = HeaderUtils.parseCsv(optionMap.get(Headers.HEADER_DATA_PROJECT));
         String[] sortOrder = HeaderUtils.parseCsv(optionMap.get(Headers.HEADER_SORT_ORDER));
-        return new IngestionParameters(ingestionQueue, format, partitionBy, projections, sortOrder, producerId, 0L, Map.of());
+        return new IngestionParameters(ingestionQueue, format, partitionBy, sortOrder, producerId, 0L, Map.of());
     }
 
     public FlightSql.CommandStatementIngest createCommand() {
@@ -54,7 +52,6 @@ public record IngestionParameters(String ingestionQueue,
                 Headers.QUERY_PARAMETER_INGESTION_QUEUE, ingestionQueue(),
                 Headers.HEADER_DATA_PARTITION, String.join(",", partitionBy()),
                 Headers.HEADER_DATA_FORMAT, format(),
-                Headers.HEADER_DATA_PROJECT, String.join(",", projections()),
                 Headers.HEADER_SORT_ORDER, String.join(",", sortOrder()));
         return FlightSql.CommandStatementIngest.newBuilder().putAllOptions(options).build();
     }

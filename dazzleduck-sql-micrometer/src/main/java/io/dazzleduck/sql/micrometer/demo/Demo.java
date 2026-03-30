@@ -74,18 +74,15 @@ public class Demo {
         String username = System.getenv().getOrDefault("DAZZLEDUCK_USERNAME", "admin");
         String password = System.getenv().getOrDefault("DAZZLEDUCK_PASSWORD", "admin");
         String ingestionQueue = System.getenv().getOrDefault("DAZZLEDUCK_INGESTION_QUEUE", "metric");
-        String projectEnv = System.getenv().getOrDefault("DAZZLEDUCK_PROJECT", "*, CAST(timestamp AS DATE) AS date");
         String partitionByEnv = System.getenv().getOrDefault("DAZZLEDUCK_PARTITION_BY", "date");
 
         // Parse comma-separated values
-        List<String> projections = List.of(projectEnv.split(","));
         List<String> partitionBy = List.of(partitionByEnv.split(","));
 
         System.out.println("Configuration:");
         System.out.println("  Base URL: " + baseUrl);
         System.out.println("  Username: " + username);
         System.out.println("  Ingestion Queue: " + ingestionQueue);
-        System.out.println("  Projections: " + projections);
         System.out.println("  Partition By: " + partitionBy);
         System.out.println();
 
@@ -95,7 +92,6 @@ public class Demo {
                 .username(username)
                 .password(password)
                 .ingestionQueue(ingestionQueue)
-                .project(projections)
                 .partitionBy(partitionBy)
                 .stepInterval(Duration.ofSeconds(5))  // Publish metrics every 5 seconds
                 .maxSendInterval(Duration.ofSeconds(2))

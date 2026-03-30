@@ -80,7 +80,6 @@ public class HttpArrowProducerTest {
                 3,
                 1000,
                 java.util.List.of(),
-                java.util.List.of(),
                 100,
                 100_000,
                 Clock.systemDefaultZone()
@@ -138,7 +137,6 @@ public class HttpArrowProducerTest {
                 Duration.ofMillis(200),
                 3,
                 1000,
-                java.util.List.of(),
                 java.util.List.of(),
                 100_000,
                 500_000)) {
@@ -232,7 +230,7 @@ public class HttpArrowProducerTest {
     void testQueueFullBehavior() throws Exception {
         String file = "full-" + System.nanoTime();
         var limitedSender = new HttpArrowProducer(schema, baseUrl, "admin", "admin", file, Duration.ofSeconds(3), 100_000, 200_000,
-                Duration.ofMillis(200), 3, 1000, java.util.List.of(), java.util.List.of(), 100, 200);
+                Duration.ofMillis(200), 3, 1000, java.util.List.of(), 100, 200);
 
         byte[] largeData = arrowBytes("select * from generate_series(200)");
 
@@ -248,7 +246,7 @@ public class HttpArrowProducerTest {
         var path = "spill-" + System.nanoTime();
         Files.createDirectories(Path.of(ingestionPath, path));
         var spillSender = new HttpArrowProducer(schema, baseUrl, "admin", "admin", path, Duration.ofSeconds(10), 100_000, 200_000,
-                Duration.ofMillis(200), 3, 1000, java.util.List.of(), java.util.List.of(), 50, 100_000);
+                Duration.ofMillis(200), 3, 1000, java.util.List.of(), 50, 100_000);
 
         spillSender.enqueue(arrowBytes("select * from generate_series(30)"));
 
@@ -262,8 +260,8 @@ public class HttpArrowProducerTest {
     }
 
     @Test
-    void testProjectionsHeader() throws Exception {
-        String path = "projections-test-" + System.nanoTime();
+    void testEmptyPartitionByDoesNotSendHeader() throws Exception {
+        String path = "empty-partition-test-" + System.nanoTime();
         Files.createDirectories(Path.of(ingestionPath, path));
 
         try (HttpArrowProducer sender = new HttpArrowProducer(
@@ -278,70 +276,6 @@ public class HttpArrowProducerTest {
                 Duration.ofMillis(200),
                 3,
                 1000,
-                java.util.List.of("*", "'c1' as c1", "'c2' as c2"),
-                java.util.List.of(),
-                100_000,
-                500_000)) {
-
-            sender.enqueue(arrowBytes("select * from generate_series(5)"));
-        }
-
-        var actualQuery = String.format("SELECT generate_series, c1, c2 FROM read_parquet('%s/%s/*.parquet') WHERE c1 = 'c1' AND c2 = 'c2' ORDER BY generate_series", ingestionPath, path);
-        var expectedQuery = "SELECT generate_series, 'c1' as c1, 'c2' as c2 FROM generate_series(5) ORDER BY generate_series";
-        TestUtils.isEqual(expectedQuery, actualQuery);
-    }
-
-    @Test
-    void testProjectionsAndPartitionByHeaders() throws Exception {
-        String path = "both-headers-test-" + System.nanoTime();
-        Files.createDirectories(Path.of(ingestionPath, path));
-
-        try (HttpArrowProducer sender = new HttpArrowProducer(
-                schema,
-                baseUrl,
-                "admin",
-                "admin",
-                path,
-                Duration.ofSeconds(3),
-                100_000,
-                200_000,
-                Duration.ofMillis(200),
-                3,
-                1000,
-                java.util.List.of("*", "'c1' as c1", "'c2' as  c2"),
-                java.util.List.of("c1", "c2"),
-                100_000,
-                500_000)) {
-
-            sender.enqueue(arrowBytes("select * from generate_series(5)"));
-        }
-
-        await().atMost(5, TimeUnit.SECONDS).ignoreExceptions().untilAsserted(() -> {
-            var actualQuery = String.format("SELECT generate_series, c1, c2 FROM read_parquet('%s/%s/*/*/*.parquet') ORDER BY generate_series", ingestionPath, path);
-            var expectedQuery = "SELECT generate_series, 'c1' as c1, 'c2' as c2 FROM generate_series(5) ORDER BY generate_series";
-            TestUtils.isEqual(expectedQuery, actualQuery);
-        });
-    }
-
-    @Test
-    void testEmptyListsDoNotSendHeaders() throws Exception {
-        String path = "empty-lists-test-" + System.nanoTime();
-        Files.createDirectories(Path.of(ingestionPath, path));
-
-        // Empty lists should work fine and not send headers
-        try (HttpArrowProducer sender = new HttpArrowProducer(
-                schema,
-                baseUrl,
-                "admin",
-                "admin",
-                path,
-                Duration.ofSeconds(3),
-                100_000,
-                200_000,
-                Duration.ofMillis(200),
-                3,
-                1000,
-                java.util.List.of(),
                 java.util.List.of(),
                 100_000,
                 500_000)) {

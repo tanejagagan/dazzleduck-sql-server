@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import java.io.ByteArrayOutputStream;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
@@ -73,8 +74,7 @@ public class HttpArrowProducerTimeoutTest {
                 Duration.ofMillis(200),
                 3,
                 1000,
-                java.util.List.of(),
-                java.util.List.of(),
+                List.of(),
                 100,
                 100_000,
                 Clock.systemDefaultZone()

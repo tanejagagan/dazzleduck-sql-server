@@ -77,7 +77,6 @@ public class MetricsForwarder {
             properties.getMaxRetries(),
             properties.getRetryDelayMs(),
             properties.getProject(),  // transformations
-            properties.getPartition(),  // partitionBy
             properties.getMaxInMemorySize(),
             properties.getMaxOnDiskSize(),
             Clock.systemUTC()
