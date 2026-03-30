@@ -12,6 +12,8 @@ public interface SqlProducerMBean {
     long getRunningPreparedStatements();
     double getBytesOut();
     double getBytesIn();
+    long getIngestRequests();
+    long getIngestErrors();
     Instant getStartTime();
     long getCompletedStatements();
     long getCompletedPreparedStatements();

@@ -189,6 +189,8 @@ public class UIService implements HttpService {
     }
 
     private String buildNetworkMetricsTable() {
+        long completedBatchesOut = producerMBean.getCompletedStatements()
+                + producerMBean.getCompletedPreparedStatements();
         return """
                 <table>
                     <caption>Network</caption>
@@ -196,20 +198,24 @@ public class UIService implements HttpService {
                         <tr>
                             <th>Data In</th>
                             <th>Data Out</th>
-                            <th>Arrow Batch In</th>
-                            <th>Arrow Batch Out</th>
+                            <th>Ingest Requests</th>
+                            <th>Completed Query Streams</th>
                         </tr>
                     </thead>
                     <tbody>
                         <tr>
-                            <td>%.2f</td>
-                            <td>%.2f</td>
-                            <td>No GM</td>
-                            <td>NO GM</td>
+                            <td>%s</td>
+                            <td>%s</td>
+                            <td>%d</td>
+                            <td>%d</td>
                         </tr>
                     </tbody>
                 </table>
-                """.formatted(producerMBean.getBytesIn(), producerMBean.getBytesOut());
+                """.formatted(
+                formatBytes(producerMBean.getBytesIn()),
+                formatBytes(producerMBean.getBytesOut()),
+                producerMBean.getIngestRequests(),
+                completedBatchesOut);
     }
 
     private String buildRunningStatementsTable() {
@@ -248,12 +254,12 @@ public class UIService implements HttpService {
                 <thead>
                     <tr>
                         <th>Identifier</th>
-                        <th>Total Write Bytes</th>
+                        <th>Bytes Written</th>
                         <th>Total Batches</th>
                         <th>Total Buckets</th>
                         <th>Time Writing (ms)</th>
-                        <th>Scheduled Batches</th>
-                        <th>Queue Depth</th>
+                        <th>Pending Batches</th>
+                        <th>Pending Buckets</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -264,12 +270,10 @@ public class UIService implements HttpService {
     }
 
     private String buildBulkIngestRow(Stats stats) {
-        long queueDepth = stats.scheduledWriteBatches() - stats.totalWriteBatches();
-
         return """
             <tr>
                 <td>%s</td>
-                <td>%d</td>
+                <td>%s</td>
                 <td>%d</td>
                 <td>%d</td>
                 <td>%d</td>
@@ -278,12 +282,12 @@ public class UIService implements HttpService {
             </tr>
             """.formatted(
                 escapeHtml(stats.identifier()),
-                stats.totalWriteBytes(),
+                formatBytes(stats.totalWriteBytes()),
                 stats.totalWriteBatches(),
                 stats.totalWriteBuckets(),
                 stats.timeSpentWriting(),
-                stats.scheduledWriteBatches(),
-                queueDepth
+                stats.pendingBatches(),
+                stats.pendingBuckets()
         );
     }
 
@@ -345,6 +349,14 @@ public class UIService implements HttpService {
         if (hours > 0) return String.format("%dh %dm", hours, minutes);
         if (minutes > 0) return String.format("%dm %ds", minutes, seconds);
         return String.format("%ds", seconds);
+    }
+
+    private static String formatBytes(double bytes) {
+        if (bytes <= 0) return "0 B";
+        if (bytes < 1024) return String.format("%.0f B", bytes);
+        if (bytes < 1024 * 1024) return String.format("%.1f KB", bytes / 1024);
+        if (bytes < 1024 * 1024 * 1024) return String.format("%.1f MB", bytes / (1024 * 1024));
+        return String.format("%.2f GB", bytes / (1024 * 1024 * 1024));
     }
 
     private String escapeHtml(String text) {

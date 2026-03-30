@@ -73,7 +73,24 @@ public interface FlightRecorder {
     void recordGetStreamStatement(long size);
 
 
-    void registerWriteQueue(String identifier, Map<String, LongSupplier> counters);
+    /**
+     * Pairs of count and total-time suppliers for registering a FunctionTimer.
+     */
+    record WriteTimerSuppliers(LongSupplier count, LongSupplier totalTimeMs) {}
+
+    void registerWriteQueue(String identifier,
+                            Map<String, LongSupplier> counters,
+                            Map<String, LongSupplier> gauges,
+                            Map<String, WriteTimerSuppliers> timers);
+
+    void recordIngestReceived(long bytes);
+
+    void recordIngestError();
+
+    long getIngestRequests();
+
+    long getIngestErrors();
+
     double getBytesOut();
 
     double getBytesIn();

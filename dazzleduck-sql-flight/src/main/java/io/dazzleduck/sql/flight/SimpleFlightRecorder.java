@@ -36,6 +36,9 @@ public class SimpleFlightRecorder implements FlightRecorder {
 
     // Byte counters
     private final LongAdder bytesOut = new LongAdder();
+    private final LongAdder bytesIn = new LongAdder();
+    private final LongAdder ingestRequests = new LongAdder();
+    private final LongAdder ingestErrors = new LongAdder();
 
     @Override
     public void recordStatementCancel(CacheKey key, StatementContext<?> ctx) {
@@ -124,9 +127,33 @@ public class SimpleFlightRecorder implements FlightRecorder {
     }
 
     @Override
-    public void registerWriteQueue(String identifier, Map<String, LongSupplier> counters) {
+    public void registerWriteQueue(String identifier, Map<String, LongSupplier> counters,
+                                   Map<String, LongSupplier> gauges, Map<String, WriteTimerSuppliers> timers) {
         // No-op: This simple implementation does not support write queue registration.
         // Use MicroMeterFlightRecorder for full metrics integration.
+    }
+
+    @Override
+    public void recordIngestReceived(long bytes) {
+        ingestRequests.increment();
+        if (bytes > 0) {
+            bytesIn.add(bytes);
+        }
+    }
+
+    @Override
+    public void recordIngestError() {
+        ingestErrors.increment();
+    }
+
+    @Override
+    public long getIngestRequests() {
+        return ingestRequests.sum();
+    }
+
+    @Override
+    public long getIngestErrors() {
+        return ingestErrors.sum();
     }
 
     @Override
@@ -136,8 +163,7 @@ public class SimpleFlightRecorder implements FlightRecorder {
 
     @Override
     public double getBytesIn() {
-        // Bytes in is not currently tracked in the Flight protocol implementation
-        return 0;
+        return bytesIn.sum();
     }
 
     @Override

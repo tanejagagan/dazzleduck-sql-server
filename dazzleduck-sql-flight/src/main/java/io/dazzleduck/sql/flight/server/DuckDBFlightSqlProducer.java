@@ -183,6 +183,16 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
     }
 
     @Override
+    public long getIngestRequests() {
+        return recorder.getIngestRequests();
+    }
+
+    @Override
+    public long getIngestErrors() {
+        return recorder.getIngestErrors();
+    }
+
+    @Override
     public double getBytesIn() {
         return recorder.getBytesIn();
     }
@@ -195,10 +205,15 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
     public static FlightRecorder buildRecorder(String producerId) {
         try {
             var registry = new LoggingMeterRegistry();
+            setupCommonTags(registry, producerId);
             return new MicroMeterFlightRecorder(registry, producerId);
         } catch (Throwable t) {
             return new SimpleFlightRecorder();
         }
+    }
+
+    private static void setupCommonTags(io.micrometer.core.instrument.MeterRegistry registry, String producerId) {
+        MicroMeterFlightRecorder.setupCommonTags(registry, producerId);
     }
 
 
@@ -774,12 +789,15 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                     Executors.newSingleThreadScheduledExecutor(),
                     Clock.systemDefaultZone(),
                     transformation);
-            recorder.registerWriteQueue(p, Map.of(
-                    "write_batches", queue::getTotalWriteBatches,
-                    "write_buckets", queue::getTotalWriteBuckets,
-                    "total_write", queue::getTotalWrite,
-                    "time_spent_writing", queue::getTimeSpentWriting
-            ));
+            recorder.registerWriteQueue(p,
+                    Map.of("write_batches",  queue::getTotalWriteBatches,
+                           "write_buckets",  queue::getTotalWriteBuckets,
+                           "bytes_written",  queue::getTotalWriteBytes),
+                    Map.of("pending_batches", queue::getPendingBatches,
+                           "pending_buckets", queue::getPendingBuckets),
+                    Map.of("write_latency",  new FlightRecorder.WriteTimerSuppliers(
+                                                 queue::getTotalWriteBuckets,
+                                                 queue::getTimeSpentWriting)));
             return queue;
         });
     }
@@ -798,13 +816,16 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             Path tempFile;
             try (reader) {
                 tempFile = BulkIngestQueue.writeAndValidateTempArrowFile(tempDir, reader);
-                var batch = ingestionParameters.constructBatch(Files.size(tempFile), tempFile.toAbsolutePath().toString());
+                long fileSize = Files.size(tempFile);
+                recorder.recordIngestReceived(fileSize);
+                var batch = ingestionParameters.constructBatch(fileSize, tempFile.toAbsolutePath().toString());
                 var ingestionQueue = getOrCreateParquetIngestionQueue(queue, path);
                 var result = ingestionQueue.add(batch);
                 result.get();
                 ackStream.onNext(PutResult.empty());
                 ackStream.onCompleted();
             } catch (Throwable throwable) {
+                recorder.recordIngestError();
                 ErrorHandling.handleThrowable(ackStream, throwable);
             }
         };
@@ -821,7 +842,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             Path tempFile;
             try (ArrowReader inputReader = new ArrowStreamReader(inputStream, allocator)) {
                 tempFile = BulkIngestQueue.writeAndValidateTempArrowFile(tempDir, inputReader);
-                var batch = ingestionParameters.constructBatch(Files.size(tempFile), tempFile.toAbsolutePath().toString());
+                long fileSize = Files.size(tempFile);
+                recorder.recordIngestReceived(fileSize);
+                var batch = ingestionParameters.constructBatch(fileSize, tempFile.toAbsolutePath().toString());
                 var ingestionQueue = getOrCreateParquetIngestionQueue(ingestionParameters.ingestionQueue(),
                         path);
                 var result = ingestionQueue.add(batch);
@@ -829,6 +852,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                 ackStream.onNext(PutResult.empty());
                 ackStream.onCompleted();
             } catch (Throwable throwable) {
+                recorder.recordIngestError();
                 ErrorHandling.handleThrowable(ackStream, throwable);
             }
         };

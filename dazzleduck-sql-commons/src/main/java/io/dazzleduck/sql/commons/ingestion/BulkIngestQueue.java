@@ -189,7 +189,8 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
 
     @Override
     public Stats getStats(){
-        return new Stats(identifier, totalWrite.get(), totalWriteBatches.get(), totalWriteBuckets.get(), timeSpentWriting.get(),acceptedBatches.get() - totalWrite.get(), writeQueue.size());
+        return new Stats(identifier, totalWrite.get(), totalWriteBatches.get(), totalWriteBuckets.get(),
+                timeSpentWriting.get(), getPendingBatches(), getPendingBuckets());
     }
 
     public long getTotalWriteBatches() {
@@ -200,12 +201,20 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
         return totalWriteBuckets.get();
     }
 
-    public long getTotalWrite() {
+    public long getTotalWriteBytes() {
         return totalWrite.get();
     }
 
     public long getTimeSpentWriting() {
         return timeSpentWriting.get();
+    }
+
+    public long getPendingBatches() {
+        return acceptedBatches.get() - totalWriteBatches.get();
+    }
+
+    public long getPendingBuckets() {
+        return writeQueue.size();
     }
 
     @Override

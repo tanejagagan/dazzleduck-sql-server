@@ -267,7 +267,7 @@ public class BulkIngestQueueV2Test {
     public void testWriteQueueSize() throws Exception {
         withServiceAndQueue((service, queue, clock) -> {
             var initialStats = queue.getStats();
-            assertEquals(0, initialStats.scheduledWriteBuckets());
+            assertEquals(0, initialStats.pendingBuckets());
 
             // Add enough batches to trigger multiple writes without processing them
             for (int i = 0; i < 50; i++) {
@@ -276,7 +276,7 @@ public class BulkIngestQueueV2Test {
 
             // Don't tick the service to process writes
             var stats = queue.getStats();
-            assertTrue(stats.scheduledWriteBuckets() > 0);
+            assertTrue(stats.pendingBuckets() > 0);
         });
     }
 
