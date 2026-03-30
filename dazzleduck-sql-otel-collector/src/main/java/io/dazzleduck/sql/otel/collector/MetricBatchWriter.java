@@ -27,9 +27,9 @@ import java.util.List;
  * bypassing the JavaRow intermediate representation.
  * One MetricEntry may produce multiple rows (one per data point).
  */
-class MetricBatchWriter {
+public class MetricBatchWriter {
 
-    static void write(List<MetricEntry> entries, VectorSchemaRoot root) {
+    public static void write(List<MetricEntry> entries, VectorSchemaRoot root) {
         root.allocateNew();
 
         VarCharVector nameVec           = (VarCharVector)        root.getVector(OtelMetricSchema.COL_NAME);

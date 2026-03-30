@@ -4,14 +4,27 @@ import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.JWTParser;
 import io.dazzleduck.sql.common.Headers;
 import io.jsonwebtoken.Claims;
-import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.JwtParser;
 
-import javax.crypto.SecretKey;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 public class JwtClaimsExtractor {
+    public static Claims parseJwtClaims(String token, JwtParser jwtParser, Boolean verifySignature) {
+        try {
+            if (verifySignature) {
+                return jwtParser.parseSignedClaims(token).getPayload();
+            } else {
+                var unsecuredJwt = toUnsecuredJwt(token);
+                return jwtParser.parseUnsecuredClaims(unsecuredJwt).getPayload();
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to parse JWT claims", e);
+        }
+    }
 
     public static Claims parseJwtClaims(String token) {
         try {
@@ -52,5 +65,18 @@ public class JwtClaimsExtractor {
         }
         allClaimsFromJWT.put(Headers.HEADER_BEARER_TOKEN, bearerToken);
         return allClaimsFromJWT;
+    }
+
+    public static String toUnsecuredJwt(String token) {
+        int firstDot = token.indexOf('.');
+        int secondDot = token.indexOf('.', firstDot + 1);
+        if (firstDot < 0 || secondDot < 0) {
+            throw new IllegalArgumentException("Invalid JWT");
+        }
+        String payload = token.substring(firstDot + 1, secondDot);
+        String unsecuredHeader = Base64.getUrlEncoder()
+                .withoutPadding()
+                .encodeToString("{\"alg\":\"none\"}".getBytes(StandardCharsets.UTF_8));
+        return unsecuredHeader + "." + payload + ".";
     }
 }

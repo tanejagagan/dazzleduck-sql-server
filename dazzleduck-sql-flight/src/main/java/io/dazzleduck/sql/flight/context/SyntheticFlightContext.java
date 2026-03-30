@@ -3,11 +3,10 @@ package io.dazzleduck.sql.flight.context;
 import io.dazzleduck.sql.commons.authorization.SubjectAndVerifiedClaims;
 import io.dazzleduck.sql.flight.server.auth2.AdvanceServerCallHeaderAuthMiddleware;
 import io.dazzleduck.sql.flight.server.auth2.AuthResultWithClaims;
+import io.jsonwebtoken.JwtParser;
+import io.jsonwebtoken.Jwts;
 import org.apache.arrow.flight.*;
 import org.apache.arrow.flight.auth2.Auth2Constants;
-
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 
 import javax.annotation.Nullable;
 import java.nio.charset.StandardCharsets;
@@ -16,9 +15,9 @@ import java.util.*;
 import static io.dazzleduck.sql.common.auth.JwtClaimsExtractor.parseJwtClaims;
 
 public class SyntheticFlightContext implements FlightProducer.CallContext {
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private final CallHeaders callHeaders;
     private final String peerIdentity;
+    private static final JwtParser jwtParser = Jwts.parser().unsecured().build();;
     private final Map<FlightServerMiddleware.Key<?>, FlightServerMiddleware> middlewareMap;
 
     public SyntheticFlightContext(Map<String, List<String>> headers) {
@@ -71,7 +70,7 @@ public class SyntheticFlightContext implements FlightProducer.CallContext {
             // JWT format: header.payload.signature (each part Base64URL-encoded)
             // Extract subject from payload without verifying signature (already verified by middleware)
             String bearerToken = authHeader.substring(Auth2Constants.BEARER_PREFIX.length()).trim();
-            var payload = parseJwtClaims(bearerToken);
+            var payload = parseJwtClaims(bearerToken, jwtParser, false);
             try {
                 return payload.getSubject();
             } catch (Exception e) {
