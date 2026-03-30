@@ -167,7 +167,7 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
                     TO '%s'
                     (FORMAT %s %s, RETURN_FILES, APPEND);
                 """.formatted(querySql, fullFilePath, outputFormat, partitionByClause);
-        logger.info("Executing COPY SQL: {}", sql);
+        logger.debug("Executing COPY SQL: {}", sql);
         List<String> files = new ArrayList<>();
         long count = 0;
         try (var conn = ConnectionPool.getConnection();
