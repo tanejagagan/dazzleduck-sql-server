@@ -7,4 +7,4 @@ import io.opentelemetry.proto.trace.v1.Span;
 /**
  * Holds the three protobuf objects that together describe a single span.
  */
-record SpanEntry(Span span, Resource resource, InstrumentationScope scope) {}
+public record SpanEntry(Span span, Resource resource, InstrumentationScope scope) {}

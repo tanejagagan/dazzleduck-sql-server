@@ -22,11 +22,11 @@ import java.util.List;
  * Writes a batch of OTLP spans directly into an Arrow VectorSchemaRoot,
  * bypassing the JavaRow intermediate representation.
  */
-class SpanBatchWriter {
+public class SpanBatchWriter {
 
     private static final HexFormat HEX = HexFormat.of();
 
-    static void write(List<SpanEntry> entries, VectorSchemaRoot root) {
+    public static void write(List<SpanEntry> entries, VectorSchemaRoot root) {
         root.allocateNew();
 
         VarCharVector traceIdVec        = (VarCharVector)        root.getVector(OtelTraceSchema.COL_TRACE_ID);

@@ -7,4 +7,4 @@ import io.opentelemetry.proto.resource.v1.Resource;
 /**
  * Holds the three protobuf objects that together describe a single log record.
  */
-record LogEntry(LogRecord record, Resource resource, InstrumentationScope scope) {}
+public record LogEntry(LogRecord record, Resource resource, InstrumentationScope scope) {}
