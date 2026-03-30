@@ -1,6 +1,5 @@
 package io.dazzleduck.sql.login;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.dazzleduck.sql.commons.authorization.ResolveAccessRow;
 import io.dazzleduck.sql.commons.authorization.ResolveResponse;
@@ -12,7 +11,6 @@ import io.helidon.webserver.http.ServerRequest;
 import io.helidon.webserver.http.ServerResponse;
 
 import java.io.IOException;
-import java.util.Base64;
 import java.util.List;
 
 /**
@@ -61,27 +59,6 @@ public class ProxyResolveAccessService implements HttpService {
             res.status(Status.UNAUTHORIZED_401).send("Missing or invalid Authorization header");
             return;
         }
-        String token = authHeader.get().substring(BEARER_PREFIX.length());
-
-        // 2. Decode the JWT payload (middle segment) without signature verification
-        JsonNode claims;
-        try {
-            String[] parts = token.split("\\.");
-            byte[] payloadBytes = Base64.getUrlDecoder().decode(parts[1]);
-            claims = MAPPER.readTree(payloadBytes);
-        } catch (Exception e) {
-            res.status(Status.UNAUTHORIZED_401).send("Cannot decode JWT payload");
-            return;
-        }
-
-        // 3. Extract cluster and org_id claims
-        String cluster = claims.has("cluster") ? claims.get("cluster").asText() : "default";
-        String orgId = claims.has("org_id") ? claims.get("org_id").asText() : "";
-
-        if (cluster == null || cluster.isEmpty() || orgId.isEmpty()) {
-            res.status(Status.UNAUTHORIZED_401).send("cluster or org_id is empty");
-            return;
-        }
 
         // --- Tables (BASE_TABLE) ---
         // redirect_test: primary test table, carries org_id row-level filter
@@ -102,12 +79,12 @@ public class ProxyResolveAccessService implements HttpService {
         // --- Functions (TABLE_FUNCTION) ---
         // read_parquet: grants access to all parquet files under the cluster's data path
         ResolveAccessRow readParquet = new ResolveAccessRow(
-                "memory", "main", cluster, "TABLE_FUNCTION",
+                "memory", "main", "cluster", "TABLE_FUNCTION",
                 List.of(), "", "read_parquet", "2099-12-31");
 
         // read_delta: same path prefix, different function
         ResolveAccessRow readDelta = new ResolveAccessRow(
-                "memory", "main", cluster, "TABLE_FUNCTION",
+                "memory", "main", "cluster", "TABLE_FUNCTION",
                 List.of(), "", "read_delta", "2099-12-31");
 
         ResolveAccessRow redirectTest1 = new ResolveAccessRow(
@@ -127,12 +104,12 @@ public class ProxyResolveAccessService implements HttpService {
         // --- Functions (TABLE_FUNCTION) ---
         // read_parquet: grants access to all parquet files under the cluster's data path
         ResolveAccessRow readParquet1 = new ResolveAccessRow(
-                "postgres", "schema", cluster, "TABLE_FUNCTION",
+                "postgres", "schema", "cluster", "TABLE_FUNCTION",
                 List.of(), "", "read_parquet", "2099-12-31");
 
         // read_delta: same path prefix, different function
         ResolveAccessRow readDelta1 = new ResolveAccessRow(
-                "postgres", "schema", cluster, "TABLE_FUNCTION",
+                "postgres", "schema", "cluster", "TABLE_FUNCTION",
                 List.of(), "", "read_delta", "2099-12-31");
 
         ResolveResponse response = new ResolveResponse(
