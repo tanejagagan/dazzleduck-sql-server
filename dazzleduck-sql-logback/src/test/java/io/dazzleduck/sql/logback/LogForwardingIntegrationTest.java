@@ -72,6 +72,7 @@ public class LogForwardingIntegrationTest {
                 "ingestion_task_factory_provider.ingestion_queue_table_mapping.0.schema=" + SCHEMA_NAME,
                 "ingestion_task_factory_provider.ingestion_queue_table_mapping.0.catalog=" + CATALOG_NAME,
                 "ingestion_task_factory_provider.ingestion_queue_table_mapping.0.ingestion_queue=" + INGESTION_QUEUE_ID,
+                "ingestion_task_factory_provider.ingestion_queue_table_mapping.0.transformation=SELECT *, 'test-host' AS application_host, CAST(timestamp AS DATE) AS date FROM __this",
                 // Startup script
                 "startup_script_provider.class=io.dazzleduck.sql.flight.ConfigBasedStartupScriptProvider",
                 "startup_script_provider.content=" + startupScript

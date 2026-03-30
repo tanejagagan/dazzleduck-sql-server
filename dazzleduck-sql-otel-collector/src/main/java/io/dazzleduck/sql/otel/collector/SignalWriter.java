@@ -41,7 +41,6 @@ public class SignalWriter implements Closeable {
     private final String outputPath;
     private final ParquetIngestionQueue queue;
     private final String[] partitions;
-    private final String[] projections;
     private final ScheduledExecutorService scheduler;
 
     public SignalWriter(String outputPath, List<String> partitionBy, String transformations,
@@ -50,10 +49,10 @@ public class SignalWriter implements Closeable {
         this.outputPath = outputPath;
         Files.createDirectories(Path.of(outputPath));
         this.partitions = partitionBy.toArray(new String[0]);
-        // ParquetIngestionQueue uses projections as the SELECT clause.
-        // Otel transformations are additive (SELECT *, <expr>), so prepend "*".
-        this.projections = (transformations != null && !transformations.isBlank())
-                ? new String[]{"*", transformations} : new String[0];
+        // Build a transformation SQL for the ParquetIngestionQueue.
+        // Otel transformations are additive (SELECT *, <expr> FROM __this).
+        String queueTransformation = (transformations != null && !transformations.isBlank())
+                ? "SELECT *, " + transformations + " FROM __this" : null;
         this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "otel-signal-scheduler[" + outputPath + "]");
             t.setDaemon(true);
@@ -72,7 +71,8 @@ public class SignalWriter implements Closeable {
                 Duration.ofMillis(maxDelayMs),
                 ingestionTaskFactory,
                 scheduler,
-                Clock.systemUTC()
+                Clock.systemUTC(),
+                queueTransformation
         );
     }
 
@@ -85,7 +85,6 @@ public class SignalWriter implements Closeable {
             long fileSize = Files.size(arrowFile);
             Batch<String> batch = new Batch<>(
                     new String[0],
-                    projections,
                     partitions,
                     arrowFile.toString(),
                     null,
