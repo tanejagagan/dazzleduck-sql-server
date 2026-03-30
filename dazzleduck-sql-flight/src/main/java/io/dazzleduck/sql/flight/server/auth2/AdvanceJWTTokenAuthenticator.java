@@ -6,6 +6,7 @@ import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.common.ConfigConstants;
 import io.dazzleduck.sql.common.auth.JwtClaimsExtractor;
 import io.grpc.Metadata;
+import io.jsonwebtoken.JwtParser;
 import io.jsonwebtoken.Jwts;
 import org.apache.arrow.flight.CallHeaders;
 import org.apache.arrow.flight.CallStatus;

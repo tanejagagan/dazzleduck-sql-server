@@ -13,8 +13,6 @@ import io.helidon.webserver.http.ServerResponse;
 import java.io.IOException;
 import java.util.List;
 
-import static io.dazzleduck.sql.common.auth.JwtClaimsExtractor.parseJwtClaims;
-
 /**
  * Helidon mock service for the {@code GET /resolve} endpoint used in
  * redirect-mode authorization tests.
