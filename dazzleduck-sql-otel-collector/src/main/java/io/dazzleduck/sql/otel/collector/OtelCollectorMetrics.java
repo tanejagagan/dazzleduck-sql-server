@@ -108,12 +108,12 @@ public class OtelCollectorMetrics {
                 .description("Cumulative number of Arrow batches flushed to Parquet")
                 .register(registry);
         Gauge.builder("dazzleduck.otel.writer.pending_batches", writer,
-                        w -> w.getStats().scheduledWriteBatches())
+                        w -> w.getStats().pendingBatches())
                 .tag("signal", signal)
                 .description("Current number of batches queued but not yet written")
                 .register(registry);
         Gauge.builder("dazzleduck.otel.writer.pending_buckets", writer,
-                        w -> w.getStats().scheduledWriteBuckets())
+                        w -> w.getStats().pendingBuckets())
                 .tag("signal", signal)
                 .description("Current number of buckets queued but not yet written")
                 .register(registry);

@@ -52,7 +52,7 @@ public class BulkIngestQueueTest {
             Thread.sleep(5);
             // test schedule write
             var stat = queue.getStats();
-            assertEquals(0 , stat.scheduledWriteBuckets());
+            assertEquals(0 , stat.pendingBuckets());
             for (int i = 0; i < numBatches; i++) {
                 var f = list.get(i);
                 assertTrue(f.isDone());
@@ -80,10 +80,10 @@ public class BulkIngestQueueTest {
             Thread.sleep(10);
             // test schedule write
             var newStat = queue.getStats();
-            assertEquals(0, stat.scheduledWriteBuckets());
+            assertEquals(0, stat.pendingBuckets());
             assertEquals(2, stat.totalWriteBatches());
 
-            assertEquals(1, newStat.scheduledWriteBatches());
+            assertEquals(1, newStat.pendingBatches());
             assertEquals(3, newStat.totalWriteBatches());
             for (int i = 0; i < numBatches; i++) {
                 var f = list.get(i);

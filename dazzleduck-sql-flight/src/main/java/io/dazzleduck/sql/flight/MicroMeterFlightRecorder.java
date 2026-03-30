@@ -10,7 +10,7 @@ import org.slf4j.MarkerFactory;
 
 import java.net.InetAddress;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.LongSupplier;
 
@@ -48,9 +48,14 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
     private final LongAdder completedStatementCount = new LongAdder();
     private final LongAdder completedPreparedStatementCount = new LongAdder();
 
-    // Byte transfer metrics - separate counters for each stream type
+    // Byte transfer metrics
     private final LongAdder statementBytesOut = new LongAdder();
     private final LongAdder preparedStatementBytesOut = new LongAdder();
+    private final LongAdder ingestBytesIn = new LongAdder();
+
+    // Ingest counters
+    private final LongAdder ingestRequestCount = new LongAdder();
+    private final LongAdder ingestErrorCount = new LongAdder();
 
     // Lifecycle metrics
     private final LongAdder statementStartCount = new LongAdder();
@@ -65,9 +70,6 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
     private final LongAdder timeoutStatementCount = new LongAdder();
     private final LongAdder timeoutPreparedStatementCount = new LongAdder();
 
-    // Start time tracking
-    private final AtomicLong startTime = new AtomicLong(0);
-
     /**
      * Creates a new MicroMeterFlightRecorder and registers all metrics with the provided registry.
      *
@@ -76,7 +78,6 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
      */
     public MicroMeterFlightRecorder(MeterRegistry registry, String producerId) {
         this.registry = registry;
-        this.startTime.set(System.currentTimeMillis());
 
         // Register all LongAdders as FunctionCounters.
         // This creates the bridge to Micrometer without duplicating data.
@@ -101,8 +102,11 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
 
         registerAdder("stream_statement_bytes_out", statementBytesOut);
         registerAdder("stream_prepared_statement_bytes_out", preparedStatementBytesOut);
+        registerAdder("ingest_bytes_in", ingestBytesIn);
+        registerAdder("ingest_requests", ingestRequestCount);
+        registerAdder("ingest_errors", ingestErrorCount);
 
-        logger.info("MicroMeterFlightRecorder initialized for producer '{}' with {} real-time metrics", producerId, 16);
+        logger.info("MicroMeterFlightRecorder initialized for producer '{}'", producerId);
     }
 
     /**
@@ -146,16 +150,6 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
                         LongAdder::sum
                 )
                 .description("Real-time counter for " + name)
-                .register(registry);
-    }
-
-    /**
-     * Original counter method - kept for compatibility if needed.
-     * Use registerAdder() for real-time metrics.
-     */
-    private Counter counter(String name, String producerId) {
-        return Counter.builder("dazzleduck.flight." + name + ".count")
-                .tag("producer.id", producerId)
                 .register(registry);
     }
 
@@ -277,19 +271,43 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
      * @param counters   map of counter names to their value suppliers
      */
     @Override
-    public void registerWriteQueue(String identifier, Map<String, LongSupplier> counters) {
+    public void registerWriteQueue(String identifier, Map<String, LongSupplier> counters,
+                                   Map<String, LongSupplier> gauges, Map<String, WriteTimerSuppliers> timers) {
         if (counters == null || counters.isEmpty()) {
             logger.warn("Attempted to register write queue '{}' with null or empty counters", identifier);
             return;
         }
 
-        counters.forEach((name, supplier) -> {
+        counters.forEach((name, supplier) ->
             FunctionCounter.builder("dazzleduck.flight.ingest_queue." + name, supplier, LongSupplier::getAsLong)
                     .tag("identifier", identifier)
                     .description("Write queue counter for " + identifier + "." + name)
-                    .register(registry);
-        });
-        logger.debug("Registered write queue '{}' with {} counters", identifier, counters.size());
+                    .register(registry));
+
+        if (gauges != null) {
+            gauges.forEach((name, supplier) ->
+                Gauge.builder("dazzleduck.flight.ingest_queue." + name, supplier, s -> (double) s.getAsLong())
+                        .tag("identifier", identifier)
+                        .description("Write queue gauge for " + identifier + "." + name)
+                        .register(registry));
+        }
+
+        if (timers != null) {
+            timers.forEach((name, t) ->
+                FunctionTimer.builder("dazzleduck.flight.ingest_queue." + name,
+                                t,
+                                (WriteTimerSuppliers s) -> s.count().getAsLong(),
+                                (WriteTimerSuppliers s) -> (double) s.totalTimeMs().getAsLong(),
+                                TimeUnit.MILLISECONDS)
+                        .tag("identifier", identifier)
+                        .description("Write queue timer for " + identifier + "." + name)
+                        .register(registry));
+        }
+
+        logger.debug("Registered write queue '{}' with {} counters, {} gauges, {} timers",
+                identifier, counters.size(),
+                gauges == null ? 0 : gauges.size(),
+                timers == null ? 0 : timers.size());
     }
 
     // ---------------------------------------------------------------------------
@@ -305,9 +323,31 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
     }
 
     @Override
+    public void recordIngestReceived(long bytes) {
+        ingestRequestCount.increment();
+        if (bytes > 0) {
+            ingestBytesIn.add(bytes);
+        }
+    }
+
+    @Override
+    public void recordIngestError() {
+        ingestErrorCount.increment();
+    }
+
+    @Override
+    public long getIngestRequests() {
+        return ingestRequestCount.sum();
+    }
+
+    @Override
+    public long getIngestErrors() {
+        return ingestErrorCount.sum();
+    }
+
+    @Override
     public double getBytesIn() {
-        // Not currently tracked
-        return 0;
+        return ingestBytesIn.sum();
     }
 
     @Override
