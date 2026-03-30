@@ -17,7 +17,7 @@ import static io.dazzleduck.sql.common.auth.JwtClaimsExtractor.parseJwtClaims;
 public class SyntheticFlightContext implements FlightProducer.CallContext {
     private final CallHeaders callHeaders;
     private final String peerIdentity;
-    private static JwtParser jwtParser;
+    private static final JwtParser jwtParser = Jwts.parser().unsecured().build();;
     private final Map<FlightServerMiddleware.Key<?>, FlightServerMiddleware> middlewareMap;
 
     public SyntheticFlightContext(Map<String, List<String>> headers) {
@@ -33,7 +33,6 @@ public class SyntheticFlightContext implements FlightProducer.CallContext {
                                   @Nullable SubjectAndVerifiedClaims subjectAndVerifiedClaims,
                                   Map<String, List<String>> queryParameters) {
         this.callHeaders = new FlightCallHeaders();
-        jwtParser = Jwts.parser().unsecured().build();
         headers.forEach((k, vs) -> vs.forEach(v -> callHeaders.insert(k, v)));
         queryParameters.forEach((k, vs) -> vs.forEach(v -> callHeaders.insert(k, v)));
 
