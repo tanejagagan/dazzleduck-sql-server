@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MarkerFactory;
 
+import java.net.InetAddress;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
@@ -80,28 +81,52 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
         // Register all LongAdders as FunctionCounters.
         // This creates the bridge to Micrometer without duplicating data.
 
-        registerAdder("cancel_statement", producerId, cancelStatementCount);
-        registerAdder("cancel_prepared_statement", producerId, cancelPreparedStatementCount);
+        registerAdder("cancel_statement", cancelStatementCount);
+        registerAdder("cancel_prepared_statement", cancelPreparedStatementCount);
 
-        registerAdder("stream_statement_completed", producerId, completedStatementCount);
-        registerAdder("stream_prepared_statement_completed", producerId, completedPreparedStatementCount);
+        registerAdder("stream_statement_completed", completedStatementCount);
+        registerAdder("stream_prepared_statement_completed", completedPreparedStatementCount);
 
-        registerAdder("stream_statement", producerId, statementStartCount);
-        registerAdder("stream_prepared_statement", producerId, preparedStatementStartCount);
-        registerAdder("statement_start", producerId, statementStartCount);
-        registerAdder("statement_end", producerId, statementEndCount);
+        registerAdder("stream_statement", statementStartCount);
+        registerAdder("stream_prepared_statement", preparedStatementStartCount);
+        registerAdder("statement_start", statementStartCount);
+        registerAdder("statement_end", statementEndCount);
 
-        registerAdder("stream_statement_error", producerId, statementErrorCount);
-        registerAdder("stream_prepared_statement_error", producerId, preparedStatementErrorCount);
-        registerAdder("statement_error", producerId, statementErrorCount);
+        registerAdder("stream_statement_error", statementErrorCount);
+        registerAdder("stream_prepared_statement_error", preparedStatementErrorCount);
+        registerAdder("statement_error", statementErrorCount);
 
-        registerAdder("stream_statement_timeout", producerId, timeoutStatementCount);
-        registerAdder("stream_prepared_statement_timeout", producerId, timeoutPreparedStatementCount);
+        registerAdder("stream_statement_timeout", timeoutStatementCount);
+        registerAdder("stream_prepared_statement_timeout", timeoutPreparedStatementCount);
 
-        registerAdder("stream_statement_bytes_out", producerId, statementBytesOut);
-        registerAdder("stream_prepared_statement_bytes_out", producerId, preparedStatementBytesOut);
+        registerAdder("stream_statement_bytes_out", statementBytesOut);
+        registerAdder("stream_prepared_statement_bytes_out", preparedStatementBytesOut);
 
         logger.info("MicroMeterFlightRecorder initialized for producer '{}' with {} real-time metrics", producerId, 16);
+    }
+
+    /**
+     * Configures OTel-standard common tags on the registry.
+     * Tags applied: {@code service.name}, {@code host.name}, {@code container.id}, {@code producer.id}.
+     *
+     * @param registry   the registry to configure
+     * @param producerId unique identifier for this producer instance
+     */
+    public static void setupCommonTags(MeterRegistry registry, String producerId) {
+        String hostname = System.getenv("HOSTNAME");
+        if (hostname == null || hostname.isBlank()) {
+            try {
+                hostname = InetAddress.getLocalHost().getHostName();
+            } catch (Exception e) {
+                hostname = "unknown";
+            }
+        }
+        String containerId = System.getenv().getOrDefault("CONTAINER_ID", "unknown");
+        registry.config().commonTags(
+                "service.name",  "dazzleduck-sql-server",
+                "host.name",     hostname,
+                "container.id",  containerId,
+                "producer.id",   producerId);
     }
 
     /**
@@ -109,18 +134,17 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
      * <p>
      * The FunctionCounter reads directly from the LongAdder on each scrape,
      * ensuring monitoring systems see the same values as the UI.
+     * {@code producer.id} is inherited from the registry's common tags.
      *
-     * @param name       metric name suffix (prefixed with "dazzleduck.flight.")
-     * @param producerId producer identifier for tagging
-     * @param adder      the LongAdder to expose
+     * @param name  metric name suffix (prefixed with "dazzleduck.flight.")
+     * @param adder the LongAdder to expose
      */
-    private void registerAdder(String name, String producerId, LongAdder adder) {
+    private void registerAdder(String name, LongAdder adder) {
         FunctionCounter.builder(
                         "dazzleduck.flight." + name + ".count",
                         adder,
                         LongAdder::sum
                 )
-                .tag("producer", producerId)
                 .description("Real-time counter for " + name)
                 .register(registry);
     }
@@ -131,7 +155,7 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
      */
     private Counter counter(String name, String producerId) {
         return Counter.builder("dazzleduck.flight." + name + ".count")
-                .tag("producer", producerId)
+                .tag("producer.id", producerId)
                 .register(registry);
     }
 

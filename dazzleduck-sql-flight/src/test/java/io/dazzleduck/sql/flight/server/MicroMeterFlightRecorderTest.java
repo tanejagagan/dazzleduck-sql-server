@@ -23,12 +23,13 @@ public class MicroMeterFlightRecorderTest {
     @BeforeEach
     void setup() {
         registry = new SimpleMeterRegistry();
+        MicroMeterFlightRecorder.setupCommonTags(registry, "producer1");
         recorder = new MicroMeterFlightRecorder(registry, "producer1");
     }
 
     private FunctionCounter functionCounter(String metric) {
         return registry.find("dazzleduck.flight." + metric + ".count")
-                .tag("producer", "producer1")
+                .tag("producer.id", "producer1")
                 .functionCounter();
     }
 

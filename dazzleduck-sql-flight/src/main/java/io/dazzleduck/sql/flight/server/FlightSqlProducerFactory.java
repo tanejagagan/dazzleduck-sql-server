@@ -507,10 +507,15 @@ public final class FlightSqlProducerFactory {
         private static io.dazzleduck.sql.flight.FlightRecorder buildRecorder(String producerId) {
             try {
                 var registry = new io.micrometer.core.instrument.logging.LoggingMeterRegistry();
+                setupCommonTags(registry, producerId);
                 return new io.dazzleduck.sql.flight.MicroMeterFlightRecorder(registry, producerId);
             } catch (Throwable t) {
                 return new SimpleFlightRecorder();
             }
+        }
+
+        private static void setupCommonTags(io.micrometer.core.instrument.MeterRegistry registry, String producerId) {
+            io.dazzleduck.sql.flight.MicroMeterFlightRecorder.setupCommonTags(registry, producerId);
         }
     }
 }

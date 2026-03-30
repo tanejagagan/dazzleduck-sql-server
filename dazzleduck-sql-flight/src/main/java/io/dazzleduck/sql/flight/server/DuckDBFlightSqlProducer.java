@@ -195,10 +195,15 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
     public static FlightRecorder buildRecorder(String producerId) {
         try {
             var registry = new LoggingMeterRegistry();
+            setupCommonTags(registry, producerId);
             return new MicroMeterFlightRecorder(registry, producerId);
         } catch (Throwable t) {
             return new SimpleFlightRecorder();
         }
+    }
+
+    private static void setupCommonTags(io.micrometer.core.instrument.MeterRegistry registry, String producerId) {
+        MicroMeterFlightRecorder.setupCommonTags(registry, producerId);
     }
 
 
