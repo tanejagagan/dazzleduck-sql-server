@@ -231,8 +231,8 @@ class DuckLakeIngestionIntegrationTest {
     }
 
     private Batch<String> batch(Path file, long batchId, long size) {
-        return new Batch<>(null, null, null,
-                file.toString(), "producer1", batchId, size, "parquet", Instant.now());
+        return new Batch<>(null, null, file.toString(),
+                "producer1", batchId, size, "parquet", Instant.now());
     }
 
     private ParquetIngestionQueue queue(DuckLakeIngestionTaskFactory factory,

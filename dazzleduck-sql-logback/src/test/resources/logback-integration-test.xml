@@ -17,8 +17,6 @@
         <username>admin</username>
         <password>admin</password>
         <ingestionQueue>test-logs</ingestionQueue>
-        <project>*,'test-host' AS application_host,CAST(timestamp AS date) AS date</project>
-        <partitionBy>date</partitionBy>
     </appender>
 
     <!-- Exclude DazzleDuck internal packages to prevent infinite loops -->

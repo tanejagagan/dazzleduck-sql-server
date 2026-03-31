@@ -72,6 +72,7 @@ public class HttpMetricDuckLakeIntegrationTest {
                 "ingestion_task_factory_provider.ingestion_queue_table_mapping.0.schema=" + SCHEMA_NAME,
                 "ingestion_task_factory_provider.ingestion_queue_table_mapping.0.catalog=" + CATALOG_NAME,
                 "ingestion_task_factory_provider.ingestion_queue_table_mapping.0.ingestion_queue=" + INGESTION_QUEUE_ID,
+                "ingestion_task_factory_provider.ingestion_queue_table_mapping.0.transformation=SELECT *, 'localhost' AS application_host, CAST(timestamp AS DATE) AS date FROM __this",
                 // Startup script
                 "startup_script_provider.class=io.dazzleduck.sql.flight.ConfigBasedStartupScriptProvider",
                 "startup_script_provider.content=" + STARTUP_SCRIPT
@@ -102,8 +103,6 @@ public class HttpMetricDuckLakeIntegrationTest {
         // Wait for server-side ingestion processing to complete
         Thread.sleep(500);
 
-        // Note: This test may fail due to projection configuration changes
-        // The projection feature is not being applied correctly in some cases
         TestUtils.isEqual("""
                         select 'records.processed' as name,
                                'counter'           as type,
