@@ -13,20 +13,19 @@ import java.util.Map;
 public class CollectorProperties {
 
     private int grpcPort = 4317;
-    private String logsOutputPath = "./otel-logs";
-    private String tracesOutputPath = "./otel-traces";
-    private String metricsOutputPath = "./otel-metrics";
-    private long minBucketSizeBytes = 1_048_576; // 1 MB
-    private long maxDelayMs = 5000;
+    private SignalIngestionConfig logIngestionConfig =
+            new SignalIngestionConfig("./otel-logs", List.of(), null, 1_048_576L, 5000L);
+    private SignalIngestionConfig traceIngestionConfig =
+            new SignalIngestionConfig("./otel-traces", List.of(), null, 1_048_576L, 5000L);
+    private SignalIngestionConfig metricIngestionConfig =
+            new SignalIngestionConfig("./otel-metrics", List.of(), null, 1_048_576L, 5000L);
     private IngestionHandler logIngestionHandler =
-            new NOOPIngestionTaskFactoryProvider(logsOutputPath).getIngestionTaskFactory();
+            new NOOPIngestionTaskFactoryProvider("./otel-logs").getIngestionTaskFactory();
     private IngestionHandler traceIngestionHandler =
-            new NOOPIngestionTaskFactoryProvider(tracesOutputPath).getIngestionTaskFactory();
+            new NOOPIngestionTaskFactoryProvider("./otel-traces").getIngestionTaskFactory();
     private IngestionHandler metricIngestionHandler =
-            new NOOPIngestionTaskFactoryProvider(metricsOutputPath).getIngestionTaskFactory();
+            new NOOPIngestionTaskFactoryProvider("./otel-metrics").getIngestionTaskFactory();
     private String startupScript = "INSTALL arrow FROM community; LOAD arrow;";
-    private List<String> partitionBy = List.of();
-    private String transformations = null;
     private String serviceName = "open-telemetry-collector";
     private String authentication = "jwt";
     private String secretKey = null;
@@ -43,28 +42,28 @@ public class CollectorProperties {
         this.grpcPort = grpcPort;
     }
 
-    public String getLogsOutputPath() {
-        return logsOutputPath;
+    public SignalIngestionConfig getLogIngestionConfig() {
+        return logIngestionConfig;
     }
 
-    public void setLogsOutputPath(String logsOutputPath) {
-        this.logsOutputPath = logsOutputPath;
+    public void setLogIngestionConfig(SignalIngestionConfig logIngestionConfig) {
+        this.logIngestionConfig = logIngestionConfig;
     }
 
-    public String getTracesOutputPath() {
-        return tracesOutputPath;
+    public SignalIngestionConfig getTraceIngestionConfig() {
+        return traceIngestionConfig;
     }
 
-    public void setTracesOutputPath(String tracesOutputPath) {
-        this.tracesOutputPath = tracesOutputPath;
+    public void setTraceIngestionConfig(SignalIngestionConfig traceIngestionConfig) {
+        this.traceIngestionConfig = traceIngestionConfig;
     }
 
-    public String getMetricsOutputPath() {
-        return metricsOutputPath;
+    public SignalIngestionConfig getMetricIngestionConfig() {
+        return metricIngestionConfig;
     }
 
-    public void setMetricsOutputPath(String metricsOutputPath) {
-        this.metricsOutputPath = metricsOutputPath;
+    public void setMetricIngestionConfig(SignalIngestionConfig metricIngestionConfig) {
+        this.metricIngestionConfig = metricIngestionConfig;
     }
 
     public IngestionHandler getLogIngestionTaskFactory() {
@@ -89,38 +88,6 @@ public class CollectorProperties {
 
     public void setMetricIngestionTaskFactory(IngestionHandler metricIngestionHandler) {
         this.metricIngestionHandler = metricIngestionHandler;
-    }
-
-    public long getMinBucketSizeBytes() {
-        return minBucketSizeBytes;
-    }
-
-    public void setMinBucketSizeBytes(long minBucketSizeBytes) {
-        this.minBucketSizeBytes = minBucketSizeBytes;
-    }
-
-    public long getMaxDelayMs() {
-        return maxDelayMs;
-    }
-
-    public void setMaxDelayMs(long maxDelayMs) {
-        this.maxDelayMs = maxDelayMs;
-    }
-
-    public List<String> getPartitionBy() {
-        return partitionBy;
-    }
-
-    public void setPartitionBy(List<String> partitionBy) {
-        this.partitionBy = partitionBy;
-    }
-
-    public String getTransformations() {
-        return transformations;
-    }
-
-    public void setTransformations(String transformations) {
-        this.transformations = transformations;
     }
 
     public String getServiceName() {

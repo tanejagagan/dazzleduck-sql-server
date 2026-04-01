@@ -96,13 +96,14 @@ class OtelCollectorDuckLakeTest {
 
         CollectorProperties props = new CollectorProperties();
         props.setGrpcPort(freePort());
-        props.setLogsOutputPath(logsDir.toString());
-        props.setTracesOutputPath(tracesDir.toString());
-        props.setMetricsOutputPath(metricsDir.toString());
+        props.setLogIngestionConfig(new io.dazzleduck.sql.otel.collector.config.SignalIngestionConfig(
+                logsDir.toString(), java.util.List.of(), null, 1L, 60_000L));
+        props.setTraceIngestionConfig(new io.dazzleduck.sql.otel.collector.config.SignalIngestionConfig(
+                tracesDir.toString(), java.util.List.of(), null, 1L, 60_000L));
+        props.setMetricIngestionConfig(new io.dazzleduck.sql.otel.collector.config.SignalIngestionConfig(
+                metricsDir.toString(), java.util.List.of(), null, 1L, 60_000L));
         props.setAuthentication("jwt");
         props.setSecretKey(SECRET_KEY_BASE64);
-        props.setMinBucketSizeBytes(1);      // flush on every batch
-        props.setMaxDelayMs(60_000);         // disable timer-based flush
         props.setStartupScript("LOAD arrow;");
         props.setLogIngestionTaskFactory(logFactory);
         props.setTraceIngestionTaskFactory(traceFactory);
