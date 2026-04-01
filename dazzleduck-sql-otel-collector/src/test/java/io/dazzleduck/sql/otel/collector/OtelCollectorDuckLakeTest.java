@@ -3,7 +3,7 @@ package io.dazzleduck.sql.otel.collector;
 import com.google.protobuf.ByteString;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.auth.Validator;
-import io.dazzleduck.sql.commons.ingestion.DuckLakeIngestionTaskFactory;
+import io.dazzleduck.sql.commons.ingestion.DuckLakeIngestionHandler;
 import io.dazzleduck.sql.commons.ingestion.QueueIdToTableMapping;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.dazzleduck.sql.otel.collector.config.CollectorProperties;
@@ -34,8 +34,6 @@ import java.net.ServerSocket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
-import java.sql.SQLException;
-import java.time.Duration;
 import java.util.Calendar;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -89,11 +87,11 @@ class OtelCollectorDuckLakeTest {
         // Each factory maps the last path segment of the output dir to a DuckLake table.
         // SignalWriter sets queueName = outputPath, so DuckLakeIngestionTaskFactory resolves
         // the table via suffix (last segment of the path).
-        var logFactory = new DuckLakeIngestionTaskFactory(Map.of(
+        var logFactory = new DuckLakeIngestionHandler(Map.of(
                 "logs",    new QueueIdToTableMapping("logs",    CATALOG, "main", "logs",    Map.of(), null)));
-        var traceFactory = new DuckLakeIngestionTaskFactory(Map.of(
+        var traceFactory = new DuckLakeIngestionHandler(Map.of(
                 "traces",  new QueueIdToTableMapping("traces",  CATALOG, "main", "spans",   Map.of(), null)));
-        var metricFactory = new DuckLakeIngestionTaskFactory(Map.of(
+        var metricFactory = new DuckLakeIngestionHandler(Map.of(
                 "metrics", new QueueIdToTableMapping("metrics", CATALOG, "main", "metrics", Map.of(), null)));
 
         CollectorProperties props = new CollectorProperties();

@@ -28,8 +28,6 @@ import java.util.List;
  *   <li>caller_file VARCHAR</li>
  *   <li>caller_line INT</li>
  * </ol>
- * The schema is consumed by {@link HttpArrowProducer} which handles Arrow serialization
- * via {@code VectorSchemaRootWriter}. Caller columns are null when captureCallerData is disabled.
  */
 public final class LogToArrowConverter {
 

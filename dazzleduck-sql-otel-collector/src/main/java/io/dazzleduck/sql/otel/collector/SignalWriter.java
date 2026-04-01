@@ -1,7 +1,7 @@
 package io.dazzleduck.sql.otel.collector;
 
 import io.dazzleduck.sql.commons.ingestion.Batch;
-import io.dazzleduck.sql.commons.ingestion.IngestionTaskFactory;
+import io.dazzleduck.sql.commons.ingestion.IngestionHandler;
 import io.dazzleduck.sql.commons.ingestion.ParquetIngestionQueue;
 import io.dazzleduck.sql.commons.ingestion.Stats;
 import org.slf4j.Logger;
@@ -45,7 +45,7 @@ public class SignalWriter implements Closeable {
 
     public SignalWriter(String outputPath, List<String> partitionBy, String transformations,
                         long minBucketSizeBytes, long maxDelayMs,
-                        IngestionTaskFactory ingestionTaskFactory) throws IOException {
+                        IngestionHandler ingestionHandler) throws IOException {
         this.outputPath = outputPath;
         Files.createDirectories(Path.of(outputPath));
         this.partitions = partitionBy.toArray(new String[0]);
@@ -69,7 +69,7 @@ public class SignalWriter implements Closeable {
                 Integer.MAX_VALUE,
                 MAX_PENDING_WRITE,
                 Duration.ofMillis(maxDelayMs),
-                ingestionTaskFactory,
+                ingestionHandler,
                 scheduler,
                 Clock.systemUTC(),
                 queueTransformation

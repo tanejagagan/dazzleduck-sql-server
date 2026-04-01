@@ -3,7 +3,7 @@ package io.dazzleduck.sql.otel.collector.config;
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.commons.config.ConfigBasedProvider;
-import io.dazzleduck.sql.commons.ingestion.IngestionTaskFactory;
+import io.dazzleduck.sql.commons.ingestion.IngestionHandler;
 import io.dazzleduck.sql.commons.ingestion.IngestionTaskFactoryProvider;
 import io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider;
 import org.slf4j.Logger;
@@ -140,19 +140,19 @@ public class CollectorConfig {
         return getString("startup_script", "INSTALL arrow FROM community; LOAD arrow;");
     }
 
-    public IngestionTaskFactory getLogIngestionTaskFactory() {
+    public IngestionHandler getLogIngestionTaskFactory() {
         return loadIngestionTaskFactory("log_ingestion_task_factory_provider", getLogsOutputPath());
     }
 
-    public IngestionTaskFactory getTraceIngestionTaskFactory() {
+    public IngestionHandler getTraceIngestionTaskFactory() {
         return loadIngestionTaskFactory("trace_ingestion_task_factory_provider", getTracesOutputPath());
     }
 
-    public IngestionTaskFactory getMetricIngestionTaskFactory() {
+    public IngestionHandler getMetricIngestionTaskFactory() {
         return loadIngestionTaskFactory("metric_ingestion_task_factory_provider", getMetricsOutputPath());
     }
 
-    private IngestionTaskFactory loadIngestionTaskFactory(String providerKey, String defaultPath) {
+    private IngestionHandler loadIngestionTaskFactory(String providerKey, String defaultPath) {
         try {
             var defaultProvider = new NOOPIngestionTaskFactoryProvider(defaultPath);
             var provider = ConfigBasedProvider.load(

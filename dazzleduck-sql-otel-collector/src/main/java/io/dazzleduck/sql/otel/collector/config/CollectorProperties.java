@@ -1,6 +1,6 @@
 package io.dazzleduck.sql.otel.collector.config;
 
-import io.dazzleduck.sql.commons.ingestion.IngestionTaskFactory;
+import io.dazzleduck.sql.commons.ingestion.IngestionHandler;
 import io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -18,11 +18,11 @@ public class CollectorProperties {
     private String metricsOutputPath = "./otel-metrics";
     private long minBucketSizeBytes = 1_048_576; // 1 MB
     private long maxDelayMs = 5000;
-    private IngestionTaskFactory logIngestionTaskFactory =
+    private IngestionHandler logIngestionHandler =
             new NOOPIngestionTaskFactoryProvider(logsOutputPath).getIngestionTaskFactory();
-    private IngestionTaskFactory traceIngestionTaskFactory =
+    private IngestionHandler traceIngestionHandler =
             new NOOPIngestionTaskFactoryProvider(tracesOutputPath).getIngestionTaskFactory();
-    private IngestionTaskFactory metricIngestionTaskFactory =
+    private IngestionHandler metricIngestionHandler =
             new NOOPIngestionTaskFactoryProvider(metricsOutputPath).getIngestionTaskFactory();
     private String startupScript = "INSTALL arrow FROM community; LOAD arrow;";
     private List<String> partitionBy = List.of();
@@ -67,28 +67,28 @@ public class CollectorProperties {
         this.metricsOutputPath = metricsOutputPath;
     }
 
-    public IngestionTaskFactory getLogIngestionTaskFactory() {
-        return logIngestionTaskFactory;
+    public IngestionHandler getLogIngestionTaskFactory() {
+        return logIngestionHandler;
     }
 
-    public void setLogIngestionTaskFactory(IngestionTaskFactory logIngestionTaskFactory) {
-        this.logIngestionTaskFactory = logIngestionTaskFactory;
+    public void setLogIngestionTaskFactory(IngestionHandler logIngestionHandler) {
+        this.logIngestionHandler = logIngestionHandler;
     }
 
-    public IngestionTaskFactory getTraceIngestionTaskFactory() {
-        return traceIngestionTaskFactory;
+    public IngestionHandler getTraceIngestionTaskFactory() {
+        return traceIngestionHandler;
     }
 
-    public void setTraceIngestionTaskFactory(IngestionTaskFactory traceIngestionTaskFactory) {
-        this.traceIngestionTaskFactory = traceIngestionTaskFactory;
+    public void setTraceIngestionTaskFactory(IngestionHandler traceIngestionHandler) {
+        this.traceIngestionHandler = traceIngestionHandler;
     }
 
-    public IngestionTaskFactory getMetricIngestionTaskFactory() {
-        return metricIngestionTaskFactory;
+    public IngestionHandler getMetricIngestionTaskFactory() {
+        return metricIngestionHandler;
     }
 
-    public void setMetricIngestionTaskFactory(IngestionTaskFactory metricIngestionTaskFactory) {
-        this.metricIngestionTaskFactory = metricIngestionTaskFactory;
+    public void setMetricIngestionTaskFactory(IngestionHandler metricIngestionHandler) {
+        this.metricIngestionHandler = metricIngestionHandler;
     }
 
     public long getMinBucketSizeBytes() {
