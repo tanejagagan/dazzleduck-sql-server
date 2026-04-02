@@ -239,8 +239,6 @@ class CollectorConfigTest {
         CollectorConfig collectorConfig = new CollectorConfig(config);
 
         assertEquals(List.of("date", "application"), collectorConfig.getPartition());
-        assertEquals(List.of("*", "'envoy' AS application_host", "CAST (timestamp AS date) AS date"),
-                collectorConfig.getProject());
     }
 
     @Test

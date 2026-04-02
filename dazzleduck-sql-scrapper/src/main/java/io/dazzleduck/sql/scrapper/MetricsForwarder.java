@@ -76,7 +76,7 @@ public class MetricsForwarder {
             Duration.ofMillis(properties.getFlushIntervalMs()),
             properties.getMaxRetries(),
             properties.getRetryDelayMs(),
-            properties.getProject(),  // transformations
+            properties.getPartition(),
             properties.getMaxInMemorySize(),
             properties.getMaxOnDiskSize(),
             Clock.systemUTC()
