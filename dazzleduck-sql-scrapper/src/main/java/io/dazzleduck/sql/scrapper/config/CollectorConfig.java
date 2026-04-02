@@ -117,7 +117,6 @@ public class CollectorConfig {
      * Values that look like JSON arrays (starting with "[") are parsed as HOCON lists,
      * allowing Docker environment variables like:
      *   collector.partition=["date", "application"]
-     *   collector.project=["*", "'envoy' AS application"]
      */
     private static Config buildConfigFromEnv() {
         StringBuilder hocon = new StringBuilder();
@@ -325,10 +324,6 @@ public class CollectorConfig {
         return getLong("producer.max-on-disk-size", 1024 * 1024 * 1024);
     }
 
-    public List<String> getProject() {
-        return getStringList("project", new ArrayList<>());
-    }
-
     public List<String> getPartition() {
         return getStringList("partition", new ArrayList<>());
     }
@@ -366,7 +361,6 @@ public class CollectorConfig {
         props.setMaxBatchSize(getMaxBatchSize());
         props.setMaxInMemorySize(getMaxInMemorySize());
         props.setMaxOnDiskSize(getMaxOnDiskSize());
-        props.setProject(getProject());
         props.setPartition(getPartition());
         props.setClaims(getClaims());
         return props;
@@ -463,7 +457,6 @@ public class CollectorConfig {
                 ", flushIntervalMs=" + getFlushIntervalMs() +
                 ", maxBufferSize=" + getMaxBufferSize() +
                 ", collectorId='" + getCollectorId() + '\'' +
-                ", project=" + getProject() + '\'' +
                 ", partition=" + getPartition() + '\'' +
                 '}';
     }
