@@ -57,6 +57,11 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
     private final LongAdder ingestRequestCount = new LongAdder();
     private final LongAdder ingestErrorCount = new LongAdder();
 
+    // Queue lifecycle metrics
+    private final LongAdder queueCreatedCount = new LongAdder();
+    private final LongAdder queueRefreshedCount = new LongAdder();
+    private final LongAdder queueDeletedCount = new LongAdder();
+
     // Lifecycle metrics
     private final LongAdder statementStartCount = new LongAdder();
     private final LongAdder preparedStatementStartCount = new LongAdder();
@@ -105,6 +110,9 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
         registerAdder("ingest_bytes_in", ingestBytesIn);
         registerAdder("ingest_requests", ingestRequestCount);
         registerAdder("ingest_errors", ingestErrorCount);
+        registerAdder("queue_created", queueCreatedCount);
+        registerAdder("queue_refreshed", queueRefreshedCount);
+        registerAdder("queue_deleted", queueDeletedCount);
 
         logger.info("MicroMeterFlightRecorder initialized for producer '{}'", producerId);
     }
@@ -368,6 +376,24 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
     @Override
     public long getCancelledPreparedStatements() {
         return cancelPreparedStatementCount.sum();
+    }
+
+    @Override
+    public void recordQueueCreated(String queueId) {
+        queueCreatedCount.increment();
+        logger.debug("Queue created: '{}'", queueId);
+    }
+
+    @Override
+    public void recordQueueRefreshed(String queueId) {
+        queueRefreshedCount.increment();
+        logger.debug("Queue refreshed: '{}'", queueId);
+    }
+
+    @Override
+    public void recordQueueDeleted(String queueId) {
+        queueDeletedCount.increment();
+        logger.debug("Queue deleted: '{}'", queueId);
     }
 
     // ---------------------------------------------------------------------------

@@ -271,7 +271,7 @@ public class IngestionResilienceTest {
                 warehousePath,
                 AccessMode.COMPLETE,
                 DuckDBFlightSqlProducer.newTempDir(),
-                new NOOPIngestionTaskFactoryProvider(warehousePath + File.pathSeparator + "ingestion").getIngestionTaskFactory(),
+                new NOOPIngestionTaskFactoryProvider(warehousePath + File.pathSeparator + "ingestion").getIngestionHandler(),
                 Executors.newSingleThreadScheduledExecutor(),
                 Duration.ofMinutes(2),
                 Clock.systemDefaultZone(),

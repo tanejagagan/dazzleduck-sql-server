@@ -18,7 +18,6 @@ import org.duckdb.DuckDBConnection;
 import org.junit.jupiter.api.*;
 
 import java.io.File;
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
@@ -66,7 +65,8 @@ public class FlightPendingWriteTest {
                 1024 * 1024 * 1024L,   // maxBucketSize
                 2048,                  // maxBatches
                 1L,                    // maxPendingWrite - set to 1 byte to trigger limit
-                Duration.ofSeconds(2)
+                Duration.ofSeconds(2),
+                Duration.ofMinutes(2)    // configRefreshDelay
         );
 
         String producerId = UUID.randomUUID().toString();
@@ -78,7 +78,7 @@ public class FlightPendingWriteTest {
                 warehousePath.toString(),
                 AccessMode.COMPLETE,
                 DuckDBFlightSqlProducer.newTempDir(),
-                new NOOPIngestionTaskFactoryProvider(warehousePath + File.separator + "ingestion").getIngestionTaskFactory(),
+                new NOOPIngestionTaskFactoryProvider(warehousePath + File.separator + "ingestion").getIngestionHandler(),
                 Executors.newSingleThreadScheduledExecutor(),
                 Duration.ofMinutes(2),
                 Clock.systemDefaultZone(),

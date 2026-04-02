@@ -3,7 +3,6 @@ package io.dazzleduck.sql.flight.server;
 import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
-import io.dazzleduck.sql.commons.ingestion.IngestionTaskFactoryProvider;
 import io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider;
 import io.dazzleduck.sql.commons.util.MutableClock;
 import io.dazzleduck.sql.flight.SimpleFlightRecorder;
@@ -171,7 +170,7 @@ public class DuckDBSqlProducerTimeoutTest {
                 "change me",
                 serverAllocator, warehousePath, AccessMode.COMPLETE,
                 DuckDBFlightSqlProducer.newTempDir(),
-                new NOOPIngestionTaskFactoryProvider(warehousePath + File.pathSeparator + "ingestion").getIngestionTaskFactory(),
+                new NOOPIngestionTaskFactoryProvider(warehousePath + File.pathSeparator + "ingestion").getIngestionHandler(),
                 executor,
                 Duration.ofSeconds(5),
                 mutableClock,

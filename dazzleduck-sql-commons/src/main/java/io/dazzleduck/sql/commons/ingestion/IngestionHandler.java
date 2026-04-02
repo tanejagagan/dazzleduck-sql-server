@@ -8,4 +8,18 @@ public interface IngestionHandler {
     default String getTransformation(String queueId) {
         return null;
     }
+
+    default String[] getPartitionBy() {
+        return new String[0];
+    }
+
+    /**
+     *
+     * @return Indicate if partition-by-header is supported or not. If this is set to false and client sends partition by header
+     * then this will result in error send to client indicating partition-by header is not supported
+     *
+     */
+    default boolean supportPartitionByHeader(){
+        return true;
+    }
 }

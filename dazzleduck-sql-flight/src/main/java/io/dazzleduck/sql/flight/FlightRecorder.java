@@ -87,6 +87,31 @@ public interface FlightRecorder {
 
     void recordIngestError();
 
+    // ---------------------------------------------------------------------------
+    // Queue Lifecycle Metrics
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Records the creation of a new ingestion queue.
+     *
+     * @param queueId unique identifier for the queue
+     */
+    void recordQueueCreated(String queueId);
+
+    /**
+     * Records the refresh of an existing ingestion queue (when config is reloaded).
+     *
+     * @param queueId unique identifier for the queue
+     */
+    void recordQueueRefreshed(String queueId);
+
+    /**
+     * Records the deletion of an ingestion queue (when target path becomes null).
+     *
+     * @param queueId unique identifier for the queue
+     */
+    void recordQueueDeleted(String queueId);
+
     long getIngestRequests();
 
     long getIngestErrors();

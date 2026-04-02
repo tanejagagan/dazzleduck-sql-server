@@ -89,7 +89,7 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
 
     @Override
     public void write(WriteTask<String, IngestionResult> writeTask) {
-        logger.info("Ingestion queue '{}' received batch with {} files, outputPath={}",
+        logger.debug("Ingestion queue '{}' received batch with {} files, outputPath={}",
                 queueId, writeTask.bucket().batches().size(), outputPath);
         try {
             IngestionResult ingestionResult = tryWrite(writeTask);

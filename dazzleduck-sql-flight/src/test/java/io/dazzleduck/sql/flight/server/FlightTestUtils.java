@@ -96,7 +96,7 @@ public interface FlightTestUtils {
                     "change me",
                     allocator, warehousePath,
                     Path.of(System.getProperty("java.io.tmpdir"), UUID.randomUUID().toString()),
-                    new NOOPIngestionTaskFactoryProvider(warehousePath + File.pathSeparator + "ingestion").getIngestionTaskFactory(),
+                    new NOOPIngestionTaskFactoryProvider(warehousePath + File.pathSeparator + "ingestion").getIngestionHandler(),
                     Executors.newSingleThreadScheduledExecutor(), Duration.ofMinutes(2), Clock.systemDefaultZone(),
                     DuckDBFlightSqlProducer.buildRecorder(producerId),
                     QueryOptimizer.NOOP_QUERY_OPTIMIZER,  DuckDBFlightSqlProducer.DEFAULT_INGESTION_CONFIG),

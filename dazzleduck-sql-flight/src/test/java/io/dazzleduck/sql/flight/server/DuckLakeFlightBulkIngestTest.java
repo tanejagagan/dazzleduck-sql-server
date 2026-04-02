@@ -6,6 +6,7 @@ import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.ingestion.DuckLakeIngestionHandler;
 import io.dazzleduck.sql.commons.ingestion.QueueIdToTableMapping;
 import io.dazzleduck.sql.flight.MicroMeterFlightRecorder;
+import io.dazzleduck.sql.flight.server.IngestionConfig;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
 import io.dazzleduck.sql.flight.stream.ArrowStreamReaderWrapper;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -34,6 +35,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * Flight-level integration tests for bulk ingestion backed by DuckLakeIngestionHandler.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 public class DuckLakeFlightBulkIngestTest {
 
     private static final String USER = "admin";
@@ -53,6 +55,7 @@ public class DuckLakeFlightBulkIngestTest {
     private FlightServer server;
     private FlightSqlClient client;
     private Path tempDir;
+    private DuckDBFlightSqlProducer producer;
 
     @BeforeAll
     void setup() throws Exception {
@@ -81,7 +84,7 @@ public class DuckLakeFlightBulkIngestTest {
 
         Location serverLocation = FlightTestUtils.findNextLocation();
         String producerId = UUID.randomUUID().toString();
-        var producer = new DuckDBFlightSqlProducer(
+        producer = new DuckDBFlightSqlProducer(
                 serverLocation,
                 producerId,
                 "test-secret",
@@ -112,7 +115,6 @@ public class DuckLakeFlightBulkIngestTest {
     void teardown() throws Exception {
         if (client != null) client.close();
         if (server != null) server.close();
-        if (allocator != null) allocator.close();
         try (Connection conn = ConnectionPool.getConnection()) {
             ConnectionPool.execute(conn, "DETACH " + DUCKLAKE_CATALOG);
         }
@@ -120,6 +122,7 @@ public class DuckLakeFlightBulkIngestTest {
 
     @Test
     @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    @Order(0)
     void ingestToKnownQueue_shouldLandDataInDuckLake() throws Exception {
         String query = "SELECT i AS id FROM range(1, 6) t(i)";
 
@@ -145,6 +148,7 @@ public class DuckLakeFlightBulkIngestTest {
 
     @Test
     @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    @Order(1)
     void ingestToUnknownQueue_shouldReturnInvalidArgument() throws Exception {
         try (DuckDBConnection conn = ConnectionPool.getConnection();
              ArrowReader reader = ConnectionPool.getReader(conn, allocator, "SELECT 1 AS id", 1000)) {
@@ -165,4 +169,322 @@ public class DuckLakeFlightBulkIngestTest {
                     "Error message should mention the queue name and 'not found'. Actual: " + ex.getMessage());
         }
     }
+
+    // ---------------------------------------------------------------------------
+    // Queue Lifecycle Tests
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Test queue deletion behavior when the mapping is removed from the handler.
+     * This creates a new producer with 0 refresh delay so refresh happens immediately.
+     */
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    @Order(2)
+    void queueDeletion_whenMappingRemoved_shouldBecomeTombstone() throws Exception {
+        // Create a new producer with 0 refresh delay for immediate refresh
+        var mapping = new QueueIdToTableMapping(KNOWN_QUEUE, DUCKLAKE_CATALOG, "main", "events", Map.of(), null);
+        var deletionTestHandler = new DuckLakeIngestionHandler(Map.of(KNOWN_QUEUE, mapping));
+
+        Location testLocation = FlightTestUtils.findNextLocation();
+        String testProducerId = UUID.randomUUID().toString();
+        var testIngestionConfig = new IngestionConfig(
+                1024 * 1024,                      // minBucketSize
+                1024 * 1024 * 1024L,              // maxBucketSize
+                2048,                                 // maxBatches
+                256 * 1024 * 1024L,                // maxPendingWrite
+                Duration.ofSeconds(2),                  // maxDelay
+                Duration.ZERO                          // configRefreshDelay - immediate refresh!
+        );
+
+        var testProducer = new DuckDBFlightSqlProducer(
+                        testLocation,
+                        testProducerId,
+                        "test-secret",
+                        allocator,
+                        tempDir.toString(),
+                        AccessMode.COMPLETE,
+                        DuckDBFlightSqlProducer.newTempDir(),
+                        deletionTestHandler,
+                        Executors.newSingleThreadScheduledExecutor(),
+                        Duration.ofMinutes(2),
+                        Clock.systemDefaultZone(),
+                        new MicroMeterFlightRecorder(new SimpleMeterRegistry(), testProducerId),
+                        testIngestionConfig);
+        var testServer = FlightServer.builder(allocator, testLocation, testProducer)
+                        .headerAuthenticator(AuthUtils.getTestAuthenticator())
+                        .build()
+                        .start();
+        var testClient = new FlightSqlClient(FlightClient.builder(allocator, testLocation)
+                        .intercept(AuthUtils.createClientMiddlewareFactory(USER, PASSWORD,
+                                Map.of(Headers.HEADER_DATABASE, CATALOG_NAME, Headers.HEADER_SCHEMA, SCHEMA_NAME))).build());
+
+
+
+            // Step 1: Verify initial ingestion works
+            String query = "SELECT i AS id FROM range(1, 6) t(i)";
+            try (DuckDBConnection conn = ConnectionPool.getConnection();
+                 ArrowReader reader = ConnectionPool.getReader(conn, allocator, query, 1000)) {
+
+                var streamReader = new ArrowStreamReaderWrapper(reader, allocator);
+                var options = new FlightSqlClient.ExecuteIngestOptions(
+                        "",
+                        FlightSql.CommandStatementIngest.TableDefinitionOptions.newBuilder().build(),
+                        false, CATALOG_NAME, SCHEMA_NAME,
+                        Map.of(Headers.QUERY_PARAMETER_INGESTION_QUEUE, KNOWN_QUEUE));
+
+                testClient.executeIngest(streamReader, options);
+            }
+
+            try (Connection conn = ConnectionPool.getConnection()) {
+                Long count = ConnectionPool.collectFirst(conn,
+                        "SELECT COUNT(*) FROM %s.main.events".formatted(DUCKLAKE_CATALOG), Long.class);
+                assertEquals(10L, count, "Expected 5 rows after initial ingestion");
+            }
+
+            // Step 2: Remove the mapping (simulate queue deletion)
+            var emptyHandler = new DuckLakeIngestionHandler(Map.of());
+            // Replace the handler via reflection to simulate deletion
+            var ingestionHandlerField = DuckDBFlightSqlProducer.class.getDeclaredField("ingestionHandler");
+            ingestionHandlerField.setAccessible(true);
+            ingestionHandlerField.set(testProducer, emptyHandler);
+
+            // Step 3: Trigger refresh by calling getOrCreateIngestionQueue
+            // Since configRefreshDelay is 0, this will immediately refresh
+            var queue = testProducer.getOrCreateIngestionQueue(KNOWN_QUEUE);
+            assertNull(queue, "Queue should be null after mapping is removed (tombstone)");
+
+            // Step 4: Verify subsequent ingestion fails
+            try (DuckDBConnection conn = ConnectionPool.getConnection();
+                 ArrowReader reader = ConnectionPool.getReader(conn, allocator, "SELECT 1 AS id", 1000)) {
+
+                var streamReader = new ArrowStreamReaderWrapper(reader, allocator);
+                var options = new FlightSqlClient.ExecuteIngestOptions(
+                        "",
+                        FlightSql.CommandStatementIngest.TableDefinitionOptions.newBuilder().build(),
+                        false, CATALOG_NAME, SCHEMA_NAME,
+                        Map.of(Headers.QUERY_PARAMETER_INGESTION_QUEUE, KNOWN_QUEUE));
+
+                FlightRuntimeException ex = assertThrows(FlightRuntimeException.class,
+                        () -> testClient.executeIngest(streamReader, options));
+
+                assertEquals(FlightStatusCode.INVALID_ARGUMENT, ex.status().code(),
+                        "Expected INVALID_ARGUMENT after queue deletion");
+                assertTrue(ex.getMessage().contains(KNOWN_QUEUE),
+                        "Error message should mention queue name");
+            }
+
+    }
+
+    /**
+     * Test queue addition behavior when a new mapping is added to the handler.
+     * This creates a new producer with 0 refresh delay so refresh happens immediately.
+     */
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    @Order(3)
+    void queueAddition_whenMappingAdded_shouldBecomeAvailable() throws Exception {
+        // Create a new producer with 0 refresh delay for immediate refresh
+        var emptyHandler = new DuckLakeIngestionHandler(Map.of());
+
+        Location testLocation = FlightTestUtils.findNextLocation();
+        String testProducerId = UUID.randomUUID().toString();
+        var testIngestionConfig = new IngestionConfig(
+                1024 * 1024,                      // minBucketSize
+                1024 * 1024 * 1024L,              // maxBucketSize
+                2048,                                 // maxBatches
+                256 * 1024 * 1024L,                // maxPendingWrite
+                Duration.ofSeconds(2),                  // maxDelay
+                Duration.ZERO                          // configRefreshDelay - immediate refresh!
+        );
+
+        var testProducer = new DuckDBFlightSqlProducer(
+                        testLocation,
+                        testProducerId,
+                        "test-secret",
+                        allocator,
+                        tempDir.toString(),
+                        AccessMode.COMPLETE,
+                        DuckDBFlightSqlProducer.newTempDir(),
+                        emptyHandler,
+                        Executors.newSingleThreadScheduledExecutor(),
+                        Duration.ofMinutes(2),
+                        Clock.systemDefaultZone(),
+                        new MicroMeterFlightRecorder(new SimpleMeterRegistry(), testProducerId),
+                        testIngestionConfig);
+        var testServer = FlightServer.builder(allocator, testLocation, testProducer)
+                        .headerAuthenticator(AuthUtils.getTestAuthenticator())
+                        .build()
+                        .start();
+        var testClient = new FlightSqlClient(FlightClient.builder(allocator, testLocation)
+                        .intercept(AuthUtils.createClientMiddlewareFactory(USER, PASSWORD,
+                                Map.of(Headers.HEADER_DATABASE, CATALOG_NAME, Headers.HEADER_SCHEMA, SCHEMA_NAME)))
+                        .build());
+
+
+            // Step 1: Verify ingestion fails for unknown queue
+            try (DuckDBConnection conn = ConnectionPool.getConnection();
+                 ArrowReader reader = ConnectionPool.getReader(conn, allocator, "SELECT 1 AS id", 1000)) {
+
+                var streamReader = new ArrowStreamReaderWrapper(reader, allocator);
+                var options = new FlightSqlClient.ExecuteIngestOptions(
+                        "",
+                        FlightSql.CommandStatementIngest.TableDefinitionOptions.newBuilder().build(),
+                        false, CATALOG_NAME, SCHEMA_NAME,
+                        Map.of(Headers.QUERY_PARAMETER_INGESTION_QUEUE, "new_queue"));
+
+                FlightRuntimeException ex = assertThrows(FlightRuntimeException.class,
+                        () -> testClient.executeIngest(streamReader, options));
+
+                assertEquals(FlightStatusCode.INVALID_ARGUMENT, ex.status().code(),
+                        "Expected INVALID_ARGUMENT for newly added queue before refresh");
+            }
+
+            // Step 2: Add the mapping (simulate queue addition)
+            var newMapping = new QueueIdToTableMapping("new_queue", DUCKLAKE_CATALOG, "main", "events", Map.of(), null);
+            var updatedHandler = new DuckLakeIngestionHandler(Map.of("new_queue", newMapping));
+            // Replace the handler via reflection to simulate addition
+            var ingestionHandlerField = DuckDBFlightSqlProducer.class.getDeclaredField("ingestionHandler");
+            ingestionHandlerField.setAccessible(true);
+            ingestionHandlerField.set(testProducer, updatedHandler);
+
+            // Step 3: Trigger refresh by calling getOrCreateIngestionQueue
+            // Since configRefreshDelay is 0, this will immediately refresh
+            var queue = testProducer.getOrCreateIngestionQueue("new_queue");
+            assertNotNull(queue, "Queue should be created after mapping is added");
+
+            // Step 4: Verify ingestion now works
+            String query = "SELECT i AS id FROM range(1, 6) t(i)";
+            try (DuckDBConnection conn = ConnectionPool.getConnection();
+                 ArrowReader reader = ConnectionPool.getReader(conn, allocator, query, 1000)) {
+
+                var streamReader = new ArrowStreamReaderWrapper(reader, allocator);
+                var options = new FlightSqlClient.ExecuteIngestOptions(
+                        "",
+                        FlightSql.CommandStatementIngest.TableDefinitionOptions.newBuilder().build(),
+                        false, CATALOG_NAME, SCHEMA_NAME,
+                        Map.of(Headers.QUERY_PARAMETER_INGESTION_QUEUE, "new_queue"));
+
+                testClient.executeIngest(streamReader, options);
+            }
+
+            try (Connection conn = ConnectionPool.getConnection()) {
+                Long count = ConnectionPool.collectFirst(conn,
+                        "SELECT COUNT(*) FROM %s.main.events".formatted(DUCKLAKE_CATALOG), Long.class);
+                assertEquals(15L, count, "Expected 5 rows after queue addition and ingestion");
+            }
+    }
+
+    /**
+     * Test transformation change behavior when the transformation is updated in the handler.
+     * This creates a new producer with 0 refresh delay so refresh happens immediately.
+     */
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    @Order(4)
+    void transformationChange_whenUpdated_shouldApplyNewTransformation() throws Exception {
+        // Create a new producer with 0 refresh delay for immediate refresh
+        var initialMapping = new QueueIdToTableMapping(KNOWN_QUEUE, DUCKLAKE_CATALOG, "main", "events",
+                Map.of("col1", "1"),  // Initial transformation
+                "select id * 100 as 'id' from __this");
+        var transformHandler = new DuckLakeIngestionHandler(Map.of(KNOWN_QUEUE, initialMapping));
+
+        Location testLocation = FlightTestUtils.findNextLocation();
+        String testProducerId = UUID.randomUUID().toString();
+        var testIngestionConfig = new IngestionConfig(
+                1024 * 1024,                      // minBucketSize
+                1024 * 1024 * 1024L,              // maxBucketSize
+                2048,                                 // maxBatches
+                256 * 1024 * 1024L,                // maxPendingWrite
+                Duration.ofSeconds(2),                  // maxDelay
+                Duration.ZERO                          // configRefreshDelay - immediate refresh!
+        );
+
+        var testProducer = new DuckDBFlightSqlProducer(
+                        testLocation,
+                        testProducerId,
+                        "test-secret",
+                        allocator,
+                        tempDir.toString(),
+                        AccessMode.COMPLETE,
+                        DuckDBFlightSqlProducer.newTempDir(),
+                        transformHandler,
+                        Executors.newSingleThreadScheduledExecutor(),
+                        Duration.ofMinutes(2),
+                        Clock.systemDefaultZone(),
+                        new MicroMeterFlightRecorder(new SimpleMeterRegistry(), testProducerId),
+                        testIngestionConfig);
+        var testServer = FlightServer.builder(allocator, testLocation, testProducer)
+                        .headerAuthenticator(AuthUtils.getTestAuthenticator())
+                .build()
+                .start();
+        var testClient = new FlightSqlClient(FlightClient.builder(allocator, testLocation)
+                        .intercept(AuthUtils.createClientMiddlewareFactory(USER, PASSWORD,
+                                Map.of(Headers.HEADER_DATABASE, CATALOG_NAME, Headers.HEADER_SCHEMA, SCHEMA_NAME)))
+                        .build());
+
+
+            // Step 1: Ingest data with initial transformation
+            String query = "SELECT i AS id, i AS col1 FROM range(1, 6) t(i)";
+            try (DuckDBConnection conn = ConnectionPool.getConnection();
+                 ArrowReader reader = ConnectionPool.getReader(conn, allocator, query, 1000)) {
+
+                var streamReader = new ArrowStreamReaderWrapper(reader, allocator);
+                var options = new FlightSqlClient.ExecuteIngestOptions(
+                        "",
+                        FlightSql.CommandStatementIngest.TableDefinitionOptions.newBuilder().build(),
+                        false, CATALOG_NAME, SCHEMA_NAME,
+                        Map.of(Headers.QUERY_PARAMETER_INGESTION_QUEUE, KNOWN_QUEUE));
+
+                testClient.executeIngest(streamReader, options);
+            }
+
+            try (Connection conn = ConnectionPool.getConnection()) {
+                // With initial transformation "replace(col1, '1' as 'transformed')",
+                // the values 1,2,3,4,5 should all be replaced with 'transformed'
+                Long transformedCount = ConnectionPool.collectFirst(conn,
+                        "SELECT COUNT(*) FROM %s.main.events WHERE id%%100 = 0".formatted(DUCKLAKE_CATALOG), Long.class);
+                assertEquals(5L, transformedCount, "Expected 5 rows with initial transformation applied");
+            }
+
+            // Step 2: Update the transformation (simulate transformation change)
+            var updatedMapping = new QueueIdToTableMapping(KNOWN_QUEUE, DUCKLAKE_CATALOG, "main", "events",
+                    Map.of("col1", "2"),  // Updated transformation
+                    "select id * 100000 as 'id' from __this");
+            var updatedHandler = new DuckLakeIngestionHandler(Map.of(KNOWN_QUEUE, updatedMapping));
+            // Replace the handler via reflection to simulate transformation change
+            var ingestionHandlerField = DuckDBFlightSqlProducer.class.getDeclaredField("ingestionHandler");
+            ingestionHandlerField.setAccessible(true);
+            ingestionHandlerField.set(testProducer, updatedHandler);
+
+            // Step 3: Trigger refresh by calling getOrCreateIngestionQueue
+            // Since configRefreshDelay is 0, this will immediately refresh
+            var queue = testProducer.getOrCreateIngestionQueue(KNOWN_QUEUE);
+            assertNotNull(queue, "Queue should still exist after transformation update");
+
+            // Step 4: Ingest more data with updated transformation
+            String query2 = "SELECT i AS id, i AS col1 FROM range(6, 11) t(i)";
+            try (DuckDBConnection conn = ConnectionPool.getConnection();
+                 ArrowReader reader = ConnectionPool.getReader(conn, allocator, query2, 1000)) {
+
+                var streamReader = new ArrowStreamReaderWrapper(reader, allocator);
+                var options = new FlightSqlClient.ExecuteIngestOptions(
+                        "",
+                        FlightSql.CommandStatementIngest.TableDefinitionOptions.newBuilder().build(),
+                        false, CATALOG_NAME, SCHEMA_NAME,
+                        Map.of(Headers.QUERY_PARAMETER_INGESTION_QUEUE, KNOWN_QUEUE));
+
+                testClient.executeIngest(streamReader, options);
+            }
+
+            try (Connection conn = ConnectionPool.getConnection()) {
+                // With updated transformation:
+                // Values 6,7,8,9,10 should be replaced with 'new_transformed'
+                // Values 1,2,3,4,5 should remain 'old_transformed'
+                Long newTransformedCount = ConnectionPool.collectFirst(conn,
+                        "SELECT COUNT(*) FROM %s.main.events WHERE id%%100000 = 0".formatted(DUCKLAKE_CATALOG), Long.class);
+                assertEquals(5L, newTransformedCount, "Expected 5 new rows with updated transformation applied");
+            }
+        }
 }
+

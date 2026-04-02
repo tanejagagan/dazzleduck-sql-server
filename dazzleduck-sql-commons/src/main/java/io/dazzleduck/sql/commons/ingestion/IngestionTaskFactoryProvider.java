@@ -7,11 +7,11 @@ public interface IngestionTaskFactoryProvider extends ConfigBasedProvider {
 
     void setConfig(Config config);
 
-    IngestionHandler getIngestionTaskFactory();
+    IngestionHandler getIngestionHandler();
 
     /**
      * Validates provider configuration eagerly at server startup.
-     * Called after {@link #getIngestionTaskFactory()} so the factory is already built.
+     * Called after {@link #getIngestionHandler()} so the factory is already built.
      * Implementations should throw {@link IllegalArgumentException} on misconfiguration.
      */
     default void validate() {}

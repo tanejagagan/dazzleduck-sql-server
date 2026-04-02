@@ -51,6 +51,7 @@ import java.sql.*;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.TemporalAmount;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -74,7 +75,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             1024 * 1024 * 1024L,
             2048,
             256 * 1024 * 1024L,
-            Duration.ofSeconds(2));
+            Duration.ofSeconds(2), Duration.ofMinutes(2));
 
     public static AccessMode getAccessMode(com.typesafe.config.Config appConfig) {
         return AccessMode.valueOf(appConfig.getString(ConfigConstants.ACCESS_MODE_KEY).toUpperCase());
@@ -176,7 +177,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
 
     @Override
     public List<Stats> getIngestionDetails() {
-        return ingestionQueueMap.values().stream().map(x -> x.getStats()).toList();
+        return ingestionQueueMap.values().stream().map(x -> x.queue.getStats()).toList();
     }
 
     @Override
@@ -239,7 +240,29 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
     private final SqlInfoBuilder sqlInfoBuilder;
 
     private final IngestionConfig bulkIngestionConfig;
-    private final ConcurrentHashMap<String, ParquetIngestionQueue> ingestionQueueMap =
+
+    /**
+     * Wrapper for ingestion queue with lifecycle tracking metadata.
+     * <p>
+     * This class tracks queue lifecycle including creation time and the last
+     * applied transformation. The transformation is stored in an AtomicReference
+     * to ensure thread-safe updates when transformations are refreshed concurrently.
+     *
+     * @see #getOrCreateIngestionQueue(String)
+     */
+    private static class QueueEntry {
+        final ParquetIngestionQueue queue;
+        final Instant createdAt;
+        final java.util.concurrent.atomic.AtomicReference<String> lastTransformation;
+
+        QueueEntry(ParquetIngestionQueue queue, Instant createdAt, String initialTransformation) {
+            this.queue = queue;
+            this.createdAt = createdAt;
+            this.lastTransformation = new java.util.concurrent.atomic.AtomicReference<>(initialTransformation);
+        }
+    }
+
+    private final ConcurrentHashMap<String, QueueEntry> ingestionQueueMap =
             new ConcurrentHashMap<>();
 
     private final IngestionHandler ingestionHandler;
@@ -425,20 +448,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                     FlightSql.SqlInfo.FLIGHT_SQL_SERVER_INGEST_TRANSACTIONS_SUPPORTED_VALUE,
                     FlightSql.SqlInfo.SQL_TRANSACTIONS_SUPPORTED_VALUE
             );
-
-            scheduledExecutorService.scheduleWithFixedDelay(() -> {
-                try {
-                    ingestionQueueMap.forEach((queueId, queue) -> {
-                        try {
-                            queue.setTransformation(ingestionHandler.getTransformation(queueId));
-                        } catch (Exception e) {
-                            logger.atWarn().setCause(e).log("Failed to refresh transformation for queue '{}'", queueId);
-                        }
-                    });
-                } catch (Exception e) {
-                    logger.atError().setCause(e).log("Error refreshing ingestion transformations");
-                }
-            }, 2, 2, TimeUnit.MINUTES);
 
             scheduledExecutorService.scheduleWithFixedDelay(() -> {
                 try {
@@ -782,35 +791,97 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
 
     /**
      * Gets an existing ParquetIngestionQueue for the given queue, or creates a new one if absent.
-     * Uses computeIfAbsent to ensure thread-safe access to the ingestion queue map.
-     * @param queueId queue id
-     * @param path the relative path for the ingestion queue
-     * @return the BulkIngestQueue for the specified queue
+     * <p>
+     * <b>Queue Lifecycle Management:</b>
+     * <ul>
+     *   <li><b>Creation:</b> If no entry exists, or a stale null entry (no target path) has expired,
+     *       a new queue is created with the current target path and transformation from the
+     *       {@code ingestionHandler}. Metrics are recorded via {@code recordQueueCreated()}.</li>
+     *
+     *   <li><b>Refresh:</b> If an entry exists but is stale ({@code createdAt + configRefreshDelay < now}),
+     *       the target path is re-fetched. If still valid, the transformation is updated if changed.
+     *       Metrics are recorded via {@code recordQueueRefreshed()}.</li>
+     *
+     *   <li><b>Deletion:</b> If the target path becomes null during refresh, the entry is marked as
+     *       deleted by setting queue to null. This creates a "tombstone" that blocks queue recreation
+     *       for {@code configRefreshDelay} duration, preventing rapid retry loops. Metrics are recorded
+     *       via {@code recordQueueDeleted()}.</li>
+     *
+     *   <li><b>Reuse:</b> Fresh entries ({@code createdAt + configRefreshDelay >= now}) are returned
+     *       without modification.</li>
+     * </ul>
+     * <p>
+     * <b>Thread Safety:</b> Uses {@code ConcurrentHashMap.compute()} for atomic updates.
+     * Transformations are stored in {@code AtomicReference} for safe concurrent access.
+     *
+     * @param queueId unique identifier for the ingestion queue
+     * @return the ParquetIngestionQueue for the specified queue, or null if deleted
      */
-    protected BulkIngestQueue<String, IngestionResult> getOrCreateIngestionQueue(String queueId, String path) {
-        return ingestionQueueMap.computeIfAbsent(queueId, p -> {
-            String transformation = ingestionHandler.getTransformation(p);
-            var queue = new ParquetIngestionQueue(producerId, TEMP_WRITE_FORMAT, path, p,
-                    bulkIngestionConfig.minBucketSize(),
-                    bulkIngestionConfig.maxBucketSize(),
-                    bulkIngestionConfig.maxBatches(),
-                    bulkIngestionConfig.maxPendingWrite(),
-                    bulkIngestionConfig.maxDelay(),
-                    ingestionHandler,
-                    Executors.newSingleThreadScheduledExecutor(),
-                    Clock.systemDefaultZone(),
-                    transformation);
-            recorder.registerWriteQueue(p,
-                    Map.of("write_batches",  queue::getTotalWriteBatches,
-                           "write_buckets",  queue::getTotalWriteBuckets,
-                           "bytes_written",  queue::getTotalWriteBytes),
-                    Map.of("pending_batches", queue::getPendingBatches,
-                           "pending_buckets", queue::getPendingBuckets),
-                    Map.of("write_latency",  new FlightRecorder.WriteTimerSuppliers(
-                                                 queue::getTotalWriteBuckets,
-                                                 queue::getTimeSpentWriting)));
-            return queue;
-        });
+    protected ParquetIngestionQueue getOrCreateIngestionQueue(String queueId) {
+        return ingestionQueueMap.compute(queueId, (localQueueId, oldQueueEntry) -> {
+            // No old entry or stale null entry - create new
+            if(oldQueueEntry == null || (oldQueueEntry.queue == null
+                    && oldQueueEntry.createdAt.plus(bulkIngestionConfig.configRefreshDelay()).isBefore(Instant.now()))) {
+                String targetPath = ingestionHandler.getTargetPath(localQueueId);
+                if(targetPath == null) {
+                    // Create tombstone entry - prevents rapid retry loops
+                    if(oldQueueEntry == null) {
+                        recorder.recordQueueDeleted(localQueueId);
+                    }
+                    return new QueueEntry(null, clock.instant(), null);
+                }
+                String transformation = ingestionHandler.getTransformation(localQueueId);
+                var queue = createQueue(producerId, localQueueId, targetPath, ingestionHandler,
+                        bulkIngestionConfig, recorder);
+                recorder.recordQueueCreated(localQueueId);
+                return new QueueEntry(queue, clock.instant(), transformation);
+            }
+            // Stale entry - refresh configuration
+            else if(oldQueueEntry.createdAt.plus(bulkIngestionConfig.configRefreshDelay()).isBefore(Instant.now())) {
+                String targetPath = ingestionHandler.getTargetPath(localQueueId);
+                // Deleted - create tombstone entry
+                if(targetPath == null) {
+                    recorder.recordQueueDeleted(localQueueId);
+                    return new QueueEntry(null, clock.instant(), null);
+                }
+                var newTransformation = ingestionHandler.getTransformation(localQueueId);
+                var oldTransformation = oldQueueEntry.lastTransformation.get();
+                if(!Objects.equals(oldTransformation, newTransformation)) {
+                    oldQueueEntry.queue.setTransformation(newTransformation);
+                    oldQueueEntry.lastTransformation.set(newTransformation);
+                }
+                recorder.recordQueueRefreshed(localQueueId);
+                return oldQueueEntry;
+            } else {
+                // Fresh entry - reuse as-is
+                return oldQueueEntry;
+            }
+        }).queue;
+    }
+
+    public static ParquetIngestionQueue createQueue(String producerId, String localQueueId, String path, IngestionHandler ingestionHandler,
+                                                    IngestionConfig bulkIngestionConfig, FlightRecorder flightRecorder) {
+        String transformation = ingestionHandler.getTransformation(localQueueId);
+        var queue = new ParquetIngestionQueue(producerId, TEMP_WRITE_FORMAT, path, localQueueId,
+                bulkIngestionConfig.minBucketSize(),
+                bulkIngestionConfig.maxBucketSize(),
+                bulkIngestionConfig.maxBatches(),
+                bulkIngestionConfig.maxPendingWrite(),
+                bulkIngestionConfig.maxDelay(),
+                ingestionHandler,
+                Executors.newSingleThreadScheduledExecutor(),
+                Clock.systemDefaultZone(),
+                transformation);
+        flightRecorder.registerWriteQueue(localQueueId,
+                Map.of("write_batches", queue::getTotalWriteBatches,
+                        "write_buckets", queue::getTotalWriteBuckets,
+                        "bytes_written", queue::getTotalWriteBytes),
+                Map.of("pending_batches", queue::getPendingBatches,
+                        "pending_buckets", queue::getPendingBuckets),
+                Map.of("write_latency", new FlightRecorder.WriteTimerSuppliers(
+                        queue::getTotalWriteBuckets,
+                        queue::getTimeSpentWriting)));
+        return queue;
     }
 
     @Override
@@ -820,12 +891,11 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             FlightStream flightStream,
             StreamListener<PutResult> ackStream) {
         IngestionParameters ingestionParameters = IngestionParameters.getIngestionParameters(command);
-        String path = ingestionHandler.getTargetPath(ingestionParameters.ingestionQueue());
-        if (path == null) {
+        var ingestionQueue = getOrCreateIngestionQueue(ingestionParameters.ingestionQueue());
+        if( ingestionQueue == null) {
             return () -> ErrorHandling.handleThrowable(ackStream,
                     new IllegalArgumentException("Ingestion queue '" + ingestionParameters.ingestionQueue() + "' not found. No target path is configured for this queue."));
         }
-        var ingestionQueue = getOrCreateIngestionQueue(ingestionParameters.ingestionQueue(), path);
         return ingestFromReader(FlightStreamReader.of(flightStream, allocator), ingestionQueue, ingestionParameters, ackStream);
     }
 
@@ -835,12 +905,11 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             IngestionParameters ingestionParameters,
             InputStream inputStream,
             StreamListener<PutResult> ackStream) {
-        String path = ingestionHandler.getTargetPath(ingestionParameters.ingestionQueue());
-        if (path == null) {
+        var ingestionQueue = getOrCreateIngestionQueue(ingestionParameters.ingestionQueue());
+        if( ingestionQueue == null) {
             return () -> ErrorHandling.handleThrowable(ackStream,
                     new IllegalArgumentException("Ingestion queue '" + ingestionParameters.ingestionQueue() + "' not found. No target path is configured for this queue."));
         }
-        var ingestionQueue = getOrCreateIngestionQueue(ingestionParameters.ingestionQueue(), path);
         return ingestFromReader(new ArrowStreamReader(inputStream, allocator), ingestionQueue, ingestionParameters, ackStream);
     }
 
@@ -1097,7 +1166,10 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         for (var entry : ingestionQueueMap.entrySet()) {
             try {
                 logger.atDebug().log("Closing ingestion queue for queue: {}", entry.getKey());
-                entry.getValue().close();
+                var queue = entry.getValue().queue;
+                if (queue != null) {
+                    queue.close();
+                }
             } catch (Exception e) {
                 logger.atWarn().setCause(e).log("Failed to close ingestion queue for queue: {}", entry.getKey());
             }
