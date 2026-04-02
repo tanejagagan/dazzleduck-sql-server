@@ -69,7 +69,7 @@ public class FlightSqlBulkIngestionAuthorizationTest {
                 allocator,
                 warehousePath,
                 DuckDBFlightSqlProducer.newTempDir(),
-                new NOOPIngestionTaskFactoryProvider(ingestionDir).getIngestionTaskFactory(),
+                new NOOPIngestionTaskFactoryProvider(ingestionDir).getIngestionHandler(),
                 Executors.newSingleThreadScheduledExecutor(),
                 Duration.ofMinutes(2),
                 Clock.systemDefaultZone(),

@@ -67,6 +67,7 @@ public class FlightSqlProducerFactoryTest {
         configMap.put("ingestion.max_batches", 2048);
         configMap.put("ingestion.max_pending_write", 268435456L);
         configMap.put("ingestion.max_delay_ms", 2000L);
+        configMap.put("ingestion.queue_config_refresh_delay_ms", 120000L);
         configMap.put(ConfigConstants.QUERY_TIMEOUT_MS_KEY, 120000L);
         configMap.put("ingestion_task_factory_provider.class", "io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider");
         configMap.put("ingestion_task_factory_provider.ingestion_path", warehousePath.toString());
@@ -99,6 +100,7 @@ public class FlightSqlProducerFactoryTest {
         configMap.put("ingestion.max_batches", 2048);
         configMap.put("ingestion.max_pending_write", 268435456L);
         configMap.put("ingestion.max_delay_ms", 2000L);
+        configMap.put("ingestion.queue_config_refresh_delay_ms", 120000L);
         configMap.put(ConfigConstants.QUERY_TIMEOUT_MS_KEY, 120000L);
         configMap.put("ingestion_task_factory_provider.class", "io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider");
         configMap.put("ingestion_task_factory_provider.ingestion_path", warehousePath.toString());
@@ -132,6 +134,7 @@ public class FlightSqlProducerFactoryTest {
         configMap.put("ingestion.max_batches", 2048);
         configMap.put("ingestion.max_pending_write", 268435456L);
         configMap.put("ingestion.max_delay_ms", 2000L);
+        configMap.put("ingestion.queue_config_refresh_delay_ms", 120000L);
         configMap.put(ConfigConstants.QUERY_TIMEOUT_MS_KEY, 120000L);
         configMap.put("ingestion_task_factory_provider.class", "io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider");
         configMap.put("ingestion_task_factory_provider.ingestion_path", warehousePath.toString());
@@ -166,6 +169,7 @@ public class FlightSqlProducerFactoryTest {
         configMap.put("ingestion.max_batches", 2048);
         configMap.put("ingestion.max_pending_write", 268435456L);
         configMap.put("ingestion.max_delay_ms", 2000L);
+        configMap.put("ingestion.queue_config_refresh_delay_ms", 120000L);
         configMap.put(ConfigConstants.QUERY_TIMEOUT_MS_KEY, 120000L);
         configMap.put("ingestion_task_factory_provider.class", "io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider");
         configMap.put("ingestion_task_factory_provider.ingestion_path", warehousePath.toString());
@@ -199,6 +203,7 @@ public class FlightSqlProducerFactoryTest {
         configMap.put("ingestion.max_batches", 2048);
         configMap.put("ingestion.max_pending_write", 268435456L);
         configMap.put("ingestion.max_delay_ms", 2000L);
+        configMap.put("ingestion.queue_config_refresh_delay_ms", 120000L);
         configMap.put(ConfigConstants.QUERY_TIMEOUT_MS_KEY, 120000L);
         configMap.put("ingestion_task_factory_provider.class", "io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider");
         configMap.put("ingestion_task_factory_provider.ingestion_path", warehousePath.toString());
@@ -231,6 +236,7 @@ public class FlightSqlProducerFactoryTest {
         configMap.put("ingestion.max_batches", 2048);
         configMap.put("ingestion.max_pending_write", 268435456L);
         configMap.put("ingestion.max_delay_ms", 2000L);
+        configMap.put("ingestion.queue_config_refresh_delay_ms", 120000L);
         configMap.put("ingestion_task_factory_provider.class", "io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider");
         configMap.put("ingestion_task_factory_provider.ingestion_path", warehousePath.toString());
 
@@ -262,6 +268,7 @@ public class FlightSqlProducerFactoryTest {
         configMap.put("ingestion.max_batches", 2048);
         configMap.put("ingestion.max_pending_write", 268435456L);
         configMap.put("ingestion.max_delay_ms", 5000L);
+        configMap.put("ingestion.queue_config_refresh_delay_ms", 120000L);
         configMap.put(ConfigConstants.QUERY_TIMEOUT_MS_KEY, 120000L);
         configMap.put("ingestion_task_factory_provider.class", "io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider");
         configMap.put("ingestion_task_factory_provider.ingestion_path", warehousePath.toString());
@@ -290,6 +297,7 @@ public class FlightSqlProducerFactoryTest {
         configMap.put("ingestion.max_batches", 2048);
         configMap.put("ingestion.max_pending_write", 268435456L);
         configMap.put("ingestion.max_delay_ms", 2000L);
+        configMap.put("ingestion.queue_config_refresh_delay_ms", 120000L);
         configMap.put("ingestion_task_factory_provider.class", "io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider");
         configMap.put("ingestion_task_factory_provider.ingestion_path", warehousePath.toString());
 
@@ -312,6 +320,7 @@ public class FlightSqlProducerFactoryTest {
         configMap.put("ingestion.max_batches", 2048);
         configMap.put("ingestion.max_pending_write", 268435456L);
         configMap.put("ingestion.max_delay_ms", 2000L);
+        configMap.put("ingestion.queue_config_refresh_delay_ms", 120000L);
         configMap.put("ingestion_task_factory_provider.class", "io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider");
         configMap.put("ingestion_task_factory_provider.ingestion_path", warehousePath.toString());
 
@@ -336,6 +345,7 @@ public class FlightSqlProducerFactoryTest {
         configMap.put("ingestion.max_batches", 2048);
         configMap.put("ingestion.max_pending_write", 268435456L);
         configMap.put("ingestion.max_delay_ms", 2000L);
+        configMap.put("ingestion.queue_config_refresh_delay_ms", 120000L);
         configMap.put(ConfigConstants.QUERY_TIMEOUT_MS_KEY, 120000L);
         configMap.put("ingestion_task_factory_provider.class", "io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider");
         configMap.put("ingestion_task_factory_provider.ingestion_path", warehousePath.toString());
@@ -371,6 +381,7 @@ public class FlightSqlProducerFactoryTest {
         configMap.put("ingestion.max_batches", 2048);
         configMap.put("ingestion.max_pending_write", 268435456L);
         configMap.put("ingestion.max_delay_ms", 2000L);
+        configMap.put("ingestion.queue_config_refresh_delay_ms", 120000L);
         configMap.put(ConfigConstants.QUERY_TIMEOUT_MS_KEY, 120000L);
         configMap.put("ingestion_task_factory_provider.class", "io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider");
         configMap.put("ingestion_task_factory_provider.ingestion_path", warehousePath.toString());
@@ -405,6 +416,7 @@ public class FlightSqlProducerFactoryTest {
         configMap.put("ingestion.max_batches", 2048);
         configMap.put("ingestion.max_pending_write", 268435456L);
         configMap.put("ingestion.max_delay_ms", 2000L);
+        configMap.put("ingestion.queue_config_refresh_delay_ms", 120000L);
         configMap.put(ConfigConstants.QUERY_TIMEOUT_MS_KEY, 120000L);
         configMap.put("ingestion_task_factory_provider.class", "io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider");
         configMap.put("ingestion_task_factory_provider.ingestion_path", warehousePath.toString());
@@ -439,6 +451,7 @@ public class FlightSqlProducerFactoryTest {
         configMap.put("ingestion.max_batches", 2048);
         configMap.put("ingestion.max_pending_write", 268435456L);
         configMap.put("ingestion.max_delay_ms", 2000L);
+        configMap.put("ingestion.queue_config_refresh_delay_ms", 120000L);
         configMap.put(ConfigConstants.QUERY_TIMEOUT_MS_KEY, 120000L);
         configMap.put("ingestion_task_factory_provider.class", "io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider");
         configMap.put("ingestion_task_factory_provider.ingestion_path", warehousePath.toString());
@@ -473,13 +486,14 @@ public class FlightSqlProducerFactoryTest {
         configMap.put("ingestion.max_batches", 2048);
         configMap.put("ingestion.max_pending_write", 268435456L);
         configMap.put("ingestion.max_delay_ms", 2000L);
+        configMap.put("ingestion.queue_config_refresh_delay_ms", 120000L);
         configMap.put(ConfigConstants.QUERY_TIMEOUT_MS_KEY, 120000L);
         configMap.put("ingestion_task_factory_provider.class", "io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider");
         configMap.put("ingestion_task_factory_provider.ingestion_path", warehousePath.toString());
 
         Config config = ConfigFactory.parseMap(configMap);
 
-        IngestionConfig customIngestionConfig = new IngestionConfig(4096, Long.MAX_VALUE, Integer.MAX_VALUE, Long.MAX_VALUE, Duration.ofMillis(1000));
+        IngestionConfig customIngestionConfig = new IngestionConfig(4096, Long.MAX_VALUE, Integer.MAX_VALUE, Long.MAX_VALUE, Duration.ofMillis(1000), Duration.ofMinutes(2));
 
         DuckDBFlightSqlProducer producer = FlightSqlProducerFactory.builder(config)
                 .withIngestionConfig(customIngestionConfig)
@@ -507,6 +521,7 @@ public class FlightSqlProducerFactoryTest {
         configMap.put("ingestion.max_batches", 2048);
         configMap.put("ingestion.max_pending_write", 268435456L);
         configMap.put("ingestion.max_delay_ms", 2000L);
+        configMap.put("ingestion.queue_config_refresh_delay_ms", 120000L);
         configMap.put(ConfigConstants.QUERY_TIMEOUT_MS_KEY, 120000L);
         configMap.put("ingestion_task_factory_provider.class", "io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider");
         configMap.put("ingestion_task_factory_provider.ingestion_path", warehousePath.toString());
@@ -547,6 +562,7 @@ public class FlightSqlProducerFactoryTest {
         configMap.put("ingestion.max_batches", 2048);
         configMap.put("ingestion.max_pending_write", 268435456L);
         configMap.put("ingestion.max_delay_ms", 2000L);
+        configMap.put("ingestion.queue_config_refresh_delay_ms", 120000L);
         configMap.put(ConfigConstants.QUERY_TIMEOUT_MS_KEY, 120000L);
         configMap.put("ingestion_task_factory_provider.class", "io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider");
         configMap.put("ingestion_task_factory_provider.ingestion_path", warehousePath.toString());

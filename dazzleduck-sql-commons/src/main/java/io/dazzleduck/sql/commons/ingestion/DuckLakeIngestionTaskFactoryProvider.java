@@ -25,7 +25,7 @@ public class DuckLakeIngestionTaskFactoryProvider implements IngestionTaskFactor
     }
 
     @Override
-    public IngestionHandler getIngestionTaskFactory() {
+    public IngestionHandler getIngestionHandler() {
         Map<String, QueueIdToTableMapping> pathToTableMappings = loadMappings(config);
         return new DuckLakeIngestionHandler(pathToTableMappings);
     }

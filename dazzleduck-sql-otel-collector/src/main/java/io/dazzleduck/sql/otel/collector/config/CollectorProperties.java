@@ -20,11 +20,11 @@ public class CollectorProperties {
     private SignalIngestionConfig metricIngestionConfig =
             new SignalIngestionConfig("./otel-metrics", List.of(), null, 1_048_576L, 5000L);
     private IngestionHandler logIngestionHandler =
-            new NOOPIngestionTaskFactoryProvider("./otel-logs").getIngestionTaskFactory();
+            new NOOPIngestionTaskFactoryProvider("./otel-logs").getIngestionHandler();
     private IngestionHandler traceIngestionHandler =
-            new NOOPIngestionTaskFactoryProvider("./otel-traces").getIngestionTaskFactory();
+            new NOOPIngestionTaskFactoryProvider("./otel-traces").getIngestionHandler();
     private IngestionHandler metricIngestionHandler =
-            new NOOPIngestionTaskFactoryProvider("./otel-metrics").getIngestionTaskFactory();
+            new NOOPIngestionTaskFactoryProvider("./otel-metrics").getIngestionHandler();
     private String startupScript = "INSTALL arrow FROM community; LOAD arrow;";
     private String serviceName = "open-telemetry-collector";
     private String authentication = "jwt";

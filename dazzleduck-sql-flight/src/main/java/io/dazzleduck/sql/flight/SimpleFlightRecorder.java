@@ -40,6 +40,11 @@ public class SimpleFlightRecorder implements FlightRecorder {
     private final LongAdder ingestRequests = new LongAdder();
     private final LongAdder ingestErrors = new LongAdder();
 
+    // Queue lifecycle counters
+    private final LongAdder queueCreatedCount = new LongAdder();
+    private final LongAdder queueRefreshedCount = new LongAdder();
+    private final LongAdder queueDeletedCount = new LongAdder();
+
     @Override
     public void recordStatementCancel(CacheKey key, StatementContext<?> ctx) {
         statementCancelCount.increment();
@@ -184,5 +189,20 @@ public class SimpleFlightRecorder implements FlightRecorder {
     @Override
     public long getCancelledPreparedStatements() {
         return preparedStatementCancelCount.sum();
+    }
+
+    @Override
+    public void recordQueueCreated(String queueId) {
+        queueCreatedCount.increment();
+    }
+
+    @Override
+    public void recordQueueRefreshed(String queueId) {
+        queueRefreshedCount.increment();
+    }
+
+    @Override
+    public void recordQueueDeleted(String queueId) {
+        queueDeletedCount.increment();
     }
 }

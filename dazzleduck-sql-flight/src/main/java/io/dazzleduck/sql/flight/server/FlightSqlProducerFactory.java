@@ -486,7 +486,7 @@ public final class FlightSqlProducerFactory {
                 config,
                 ConfigConstants.INGESTION_CONFIG_PREFIX
             );
-            IngestionHandler factory = provider.getIngestionTaskFactory();
+            IngestionHandler factory = provider.getIngestionHandler();
             provider.validate();
             return factory;
         }

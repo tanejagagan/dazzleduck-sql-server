@@ -192,7 +192,7 @@ public class DuckDBFlightSqlProducerTest {
                 warehousePath,
                 AccessMode.COMPLETE,
                 DuckDBFlightSqlProducer.newTempDir(),
-                new NOOPIngestionTaskFactoryProvider(ingestionDir).getIngestionTaskFactory(),
+                new NOOPIngestionTaskFactoryProvider(ingestionDir).getIngestionHandler(),
                 Executors.newSingleThreadScheduledExecutor(),
                 Duration.ofMinutes(2),
                 Clock.systemDefaultZone(), recorder, DuckDBFlightSqlProducer.DEFAULT_INGESTION_CONFIG);

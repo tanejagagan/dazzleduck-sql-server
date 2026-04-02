@@ -27,7 +27,7 @@ public class NOOPIngestionTaskFactoryProvider implements IngestionTaskFactoryPro
     }
 
     @Override
-    public IngestionHandler getIngestionTaskFactory() {
+    public IngestionHandler getIngestionHandler() {
         return new IngestionHandler() {
             @Override
             public PostIngestionTask createPostIngestionTask(IngestionResult ingestionResult) {

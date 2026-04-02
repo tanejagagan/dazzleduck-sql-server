@@ -169,10 +169,10 @@ public class CollectorConfig {
                     config.getConfig(CONFIG_PREFIX), providerKey,
                     (IngestionTaskFactoryProvider) defaultProvider);
             provider.validate();
-            return provider.getIngestionTaskFactory();
+            return provider.getIngestionHandler();
         } catch (Exception e) {
             log.warn("Failed to load {}, using NOOP: {}", providerKey, e.getMessage());
-            return new NOOPIngestionTaskFactoryProvider(defaultPath).getIngestionTaskFactory();
+            return new NOOPIngestionTaskFactoryProvider(defaultPath).getIngestionHandler();
         }
     }
 
