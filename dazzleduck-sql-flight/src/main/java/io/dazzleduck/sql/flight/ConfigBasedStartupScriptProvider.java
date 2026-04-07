@@ -27,7 +27,7 @@ public class ConfigBasedStartupScriptProvider implements StartupScriptProvider {
         if (startUpFile != null) {
             Path path = Paths.get(startUpFile);
             if (Files.isRegularFile(path)) {
-                sb.append(Files.readString(path).trim());
+                sb.append(StartupScriptProvider.replaceEnvVariable(Files.readString(path).trim()));
                 sb.append("\n");
             }
         }
