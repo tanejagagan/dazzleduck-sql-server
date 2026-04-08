@@ -41,9 +41,33 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
     private final Duration httpClientTimeout;
     private final long maxMem;
     private final long maxDisk;
+    private final boolean staticJwt;
 
     private volatile String jwt = null;
     private volatile Instant jwtExpiry = Instant.EPOCH;
+
+    /**
+     * Constructor for use when a JWT token has already been obtained externally.
+     * Login will be skipped entirely; the provided token is used as-is for all requests.
+     * Auth-retry re-login is also disabled — if the token is rejected, the call fails immediately.
+     */
+    public HttpArrowProducer(
+            Schema schema,
+            String baseUrl,
+            String jwt,
+            String ingestionQueue,
+            Duration httpClientTimeout,
+            long minBatchSize,
+            long maxBatchSize,
+            Duration maxSendInterval,
+            int retryCount,
+            long retryIntervalMillis,
+            java.util.List<String> partitionBy,
+            long maxInMemorySize,
+            long maxOnDiskSize
+    ) {
+        this(schema, baseUrl, null, null, Map.of(), ingestionQueue, httpClientTimeout, minBatchSize, maxBatchSize, maxSendInterval, retryCount, retryIntervalMillis, partitionBy, maxInMemorySize, maxOnDiskSize, CompressionUtil.CodecType.ZSTD, Clock.systemUTC(), jwt);
+    }
 
     public HttpArrowProducer(
             Schema schema,
@@ -124,21 +148,38 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
             CompressionUtil.CodecType compressionType,
             Clock clock
     ) {
+        this(schema, baseUrl, username, password, claims, ingestionQueue, httpClientTimeout, minBatchSize, maxBatchSize, maxSendInterval, retryCount, retryIntervalMillis, partitionBy, maxInMemorySize, maxOnDiskSize, compressionType, clock, null);
+    }
+
+    public HttpArrowProducer(
+            Schema schema,
+            String baseUrl,
+            String username,
+            String password,
+            Map<String, String> claims,
+            String ingestionQueue,
+            Duration httpClientTimeout,
+            long minBatchSize,
+            long maxBatchSize,
+            Duration maxSendInterval,
+            int retryCount,
+            long retryIntervalMillis,
+            java.util.List<String> partitionBy,
+            long maxInMemorySize,
+            long maxOnDiskSize,
+            CompressionUtil.CodecType compressionType,
+            Clock clock,
+            String preconfiguredJwt
+    ) {
         super(minBatchSize, maxBatchSize, maxSendInterval, schema, clock, retryCount, retryIntervalMillis, partitionBy, compressionType);
 
-        // Issue #3: Parameter validation
         Objects.requireNonNull(baseUrl, "baseUrl must not be null");
-        Objects.requireNonNull(username, "username must not be null");
-        Objects.requireNonNull(password, "password must not be null");
         Objects.requireNonNull(claims, "claims must not be null");
         Objects.requireNonNull(ingestionQueue, "ingestionQueue must not be null");
         Objects.requireNonNull(httpClientTimeout, "httpClientTimeout must not be null");
 
         if (baseUrl.trim().isEmpty()) {
             throw new IllegalArgumentException("baseUrl must not be empty");
-        }
-        if (username.trim().isEmpty()) {
-            throw new IllegalArgumentException("username must not be empty");
         }
         if (ingestionQueue.trim().isEmpty()) {
             throw new IllegalArgumentException("ingestionQueue must not be empty");
@@ -147,16 +188,32 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
             throw new IllegalArgumentException("httpClientTimeout must be positive");
         }
 
+        if (preconfiguredJwt != null) {
+            // Static JWT mode: login credentials are not needed
+            this.staticJwt = true;
+            this.jwt = preconfiguredJwt;
+            this.jwtExpiry = Instant.MAX;
+            this.username = null;
+            this.password = null;
+        } else {
+            // Login mode: username and password are required
+            Objects.requireNonNull(username, "username must not be null");
+            Objects.requireNonNull(password, "password must not be null");
+            if (username.trim().isEmpty()) {
+                throw new IllegalArgumentException("username must not be empty");
+            }
+            this.staticJwt = false;
+            this.username = username;
+            this.password = password;
+        }
+
         this.baseUrl = baseUrl;
-        this.username = username;
-        this.password = password;
         this.claims = claims;
         this.ingestionQueue = ingestionQueue;
         this.httpClientTimeout = httpClientTimeout;
         this.maxMem = maxInMemorySize;
         this.maxDisk = maxOnDiskSize;
 
-        // Issue #1: Configure HttpClient with proper settings
         this.executorService = Executors.newCachedThreadPool(r -> {
             Thread t = new Thread(r, "http-sender-client");
             t.setDaemon(true);
@@ -168,8 +225,8 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
                 .connectTimeout(httpClientTimeout)
                 .build();
 
-        logger.info("Initializing HttpSender with baseUrl={}, ingestionQueue={}, httpClientTimeout={}",
-                    baseUrl, ingestionQueue, httpClientTimeout);
+        logger.info("Initializing HttpSender with baseUrl={}, ingestionQueue={}, httpClientTimeout={}, staticJwt={}",
+                    baseUrl, ingestionQueue, httpClientTimeout, staticJwt);
     }
 
     @Override
@@ -241,8 +298,11 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
         }
     }
 
-    // Issue #8: Fixed race condition - synchronized access to jwt
     private String getJwt() throws IOException, InterruptedException {
+        if (staticJwt) {
+            return jwt;
+        }
+
         // Check outside synchronized block first (performance optimization)
         String currentJwt = jwt;
         Instant currentExpiry = jwtExpiry;
@@ -256,7 +316,7 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
                 if (currentJwt == null || clock.instant().isAfter(currentExpiry.minus(REFRESH_SKEW))) {
                     logger.debug("JWT refresh needed");
                     login();
-                    currentJwt = jwt; // Get the newly refreshed token
+                    currentJwt = jwt;
                 }
             }
         }
@@ -290,6 +350,10 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
                 resp = post(payload);
 
                 if (resp.statusCode() == 401 || resp.statusCode() == 403) {
+                    if (staticJwt) {
+                        logger.error("Preconfigured JWT was rejected with status {} for {}", resp.statusCode(), buildIngestUrl());
+                        break;
+                    }
                     if (authRetries >= MAX_AUTH_RETRIES) {
                         logger.error("Max auth retries ({}) exceeded for {}", MAX_AUTH_RETRIES, buildIngestUrl());
                         break;

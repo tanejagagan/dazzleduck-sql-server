@@ -92,25 +92,39 @@ public final class MicrometerForwarder implements Closeable {
         }
 
         if (started.compareAndSet(false, true)) {
-            // Create HttpArrowProducer
-            this.httpProducer = new HttpArrowProducer(
-                    ArrowMetricSchema.SCHEMA,
-                    config.baseUrl(),
-                    config.username(),
-                    config.password(),
-                    config.claims(),
-                    config.ingestionQueue(),
-                    config.httpClientTimeout(),
-                    config.minBatchSize(),
-                    config.maxBatchSize(),
-                    config.maxSendInterval(),
-                    config.retryCount(),
-                    config.retryIntervalMillis(),
-                    config.partitionBy(),
-                    config.maxInMemorySize(),
-                    config.maxOnDiskSize(),
-                    java.time.Clock.systemUTC()
-            );
+            // Create HttpArrowProducer — use static JWT constructor if a token is preconfigured
+            this.httpProducer = config.jwt() != null
+                    ? new HttpArrowProducer(
+                            ArrowMetricSchema.SCHEMA,
+                            config.baseUrl(),
+                            config.jwt(),
+                            config.ingestionQueue(),
+                            config.httpClientTimeout(),
+                            config.minBatchSize(),
+                            config.maxBatchSize(),
+                            config.maxSendInterval(),
+                            config.retryCount(),
+                            config.retryIntervalMillis(),
+                            config.partitionBy(),
+                            config.maxInMemorySize(),
+                            config.maxOnDiskSize())
+                    : new HttpArrowProducer(
+                            ArrowMetricSchema.SCHEMA,
+                            config.baseUrl(),
+                            config.username(),
+                            config.password(),
+                            config.claims(),
+                            config.ingestionQueue(),
+                            config.httpClientTimeout(),
+                            config.minBatchSize(),
+                            config.maxBatchSize(),
+                            config.maxSendInterval(),
+                            config.retryCount(),
+                            config.retryIntervalMillis(),
+                            config.partitionBy(),
+                            config.maxInMemorySize(),
+                            config.maxOnDiskSize(),
+                            java.time.Clock.systemUTC());
 
             // Create ArrowMicroMeterRegistry
             this.arrowRegistry = new ArrowMicroMeterRegistry(

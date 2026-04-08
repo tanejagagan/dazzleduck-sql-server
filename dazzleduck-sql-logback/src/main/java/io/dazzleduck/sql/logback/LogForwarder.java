@@ -31,25 +31,39 @@ public final class LogForwarder implements Closeable {
     public LogForwarder(LogForwarderConfig config) {
         this.converter = new LogToArrowConverter();
 
-        // Create HttpArrowProducer
-        this.httpProducer = new HttpArrowProducer(
-                converter.getSchema(),
-                config.baseUrl(),
-                config.username(),
-                config.password(),
-                config.claims(),
-                config.ingestionQueue(),
-                config.httpClientTimeout(),
-                config.minBatchSize(),
-                config.maxBatchSize(),
-                config.maxSendInterval(),
-                config.retryCount(),
-                config.retryIntervalMillis(),
-                config.partitionBy(),
-                config.maxInMemorySize(),
-                config.maxOnDiskSize(),
-                Clock.systemUTC()
-        );
+        // Create HttpArrowProducer — use static JWT constructor if a token is preconfigured
+        this.httpProducer = config.jwt() != null
+                ? new HttpArrowProducer(
+                        converter.getSchema(),
+                        config.baseUrl(),
+                        config.jwt(),
+                        config.ingestionQueue(),
+                        config.httpClientTimeout(),
+                        config.minBatchSize(),
+                        config.maxBatchSize(),
+                        config.maxSendInterval(),
+                        config.retryCount(),
+                        config.retryIntervalMillis(),
+                        config.partitionBy(),
+                        config.maxInMemorySize(),
+                        config.maxOnDiskSize())
+                : new HttpArrowProducer(
+                        converter.getSchema(),
+                        config.baseUrl(),
+                        config.username(),
+                        config.password(),
+                        config.claims(),
+                        config.ingestionQueue(),
+                        config.httpClientTimeout(),
+                        config.minBatchSize(),
+                        config.maxBatchSize(),
+                        config.maxSendInterval(),
+                        config.retryCount(),
+                        config.retryIntervalMillis(),
+                        config.partitionBy(),
+                        config.maxInMemorySize(),
+                        config.maxOnDiskSize(),
+                        Clock.systemUTC());
 
         logger.info("LogForwarder started with baseUrl={}, ingestionQueue={}",
                 config.baseUrl(), config.ingestionQueue());

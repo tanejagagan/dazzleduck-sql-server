@@ -514,7 +514,7 @@ public enum ConnectionPool {
      * Handles semicolons followed by newlines or end of string.
      */
     private static String[] splitStatements(String script) {
-        return Arrays.stream(script.split(";"))
+        return Arrays.stream(script.split("; *\n|;$"))
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
                 .toArray(String[]::new);
