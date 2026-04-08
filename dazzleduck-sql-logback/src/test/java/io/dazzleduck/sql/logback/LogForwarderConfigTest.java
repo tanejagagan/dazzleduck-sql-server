@@ -113,4 +113,54 @@ class LogForwarderConfigTest {
         assertEquals("http://test:8080", config.baseUrl());
         assertEquals("u", config.username());
     }
+
+    @Test
+    void builder_defaultJwtIsNull() {
+        LogForwarderConfig config = LogForwarderConfig.builder().build();
+        assertNull(config.jwt());
+    }
+
+    @Test
+    void builder_shouldSetJwt() {
+        LogForwarderConfig config = LogForwarderConfig.builder()
+                .baseUrl("http://test:8081")
+                .jwt("Bearer my-token")
+                .ingestionQueue("logs")
+                .build();
+
+        assertEquals("Bearer my-token", config.jwt());
+    }
+
+    @Test
+    void builder_jwtAndUsernamePasswordAreMutuallyExclusive() {
+        // jwt set — username/password not required
+        assertDoesNotThrow(() -> LogForwarderConfig.builder()
+                .baseUrl("http://test:8081")
+                .jwt("Bearer token")
+                .ingestionQueue("logs")
+                .build());
+
+        // neither jwt nor username/password set — should fail
+        assertThrows(NullPointerException.class, () -> new LogForwarderConfig(
+                "http://test:8081",
+                null, null, null,   // username, password, jwt all null
+                java.util.Map.of(),
+                "logs",
+                Duration.ofSeconds(5),
+                1000,
+                Duration.ofSeconds(1),
+                1024, 2048,
+                Duration.ofSeconds(1),
+                1024, 2048,
+                3, 1000,
+                java.util.List.of(), java.util.List.of(),
+                true, false));
+    }
+
+    @Test
+    void builder_shouldRejectNullJwt() {
+        assertThrows(NullPointerException.class, () ->
+                LogForwarderConfig.builder().jwt(null)
+        );
+    }
 }

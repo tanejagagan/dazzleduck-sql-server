@@ -12,6 +12,7 @@ public final class LogForwarderConfig {
     private final String baseUrl;
     private final String username;
     private final String password;
+    private final String jwt;
     private final Map<String, String> claims;
     private final String ingestionQueue;
     private final Duration httpClientTimeout;
@@ -39,6 +40,7 @@ public final class LogForwarderConfig {
             String baseUrl,
             String username,
             String password,
+            String jwt,
             Map<String, String> claims,
             String ingestionQueue,
             Duration httpClientTimeout,
@@ -56,16 +58,19 @@ public final class LogForwarderConfig {
             boolean enabled,
             boolean captureCallerData) {
         Objects.requireNonNull(baseUrl, "baseUrl must not be null");
-        Objects.requireNonNull(username, "username must not be null");
-        Objects.requireNonNull(password, "password must not be null");
         Objects.requireNonNull(ingestionQueue, "ingestionQueue must not be null");
         Objects.requireNonNull(httpClientTimeout, "httpClientTimeout must not be null");
         Objects.requireNonNull(pollInterval, "pollInterval must not be null");
         Objects.requireNonNull(maxSendInterval, "maxSendInterval must not be null");
+        if (jwt == null) {
+            Objects.requireNonNull(username, "username must not be null when jwt is not provided");
+            Objects.requireNonNull(password, "password must not be null when jwt is not provided");
+        }
 
         this.baseUrl = baseUrl;
         this.username = username;
         this.password = password;
+        this.jwt = jwt;
         this.claims = claims;
         this.ingestionQueue = ingestionQueue;
         this.httpClientTimeout = httpClientTimeout;
@@ -94,6 +99,10 @@ public final class LogForwarderConfig {
 
     public String password() {
         return password;
+    }
+
+    public String jwt() {
+        return jwt;
     }
 
     public Map<String, String> claims() {
@@ -177,6 +186,7 @@ public final class LogForwarderConfig {
                Objects.equals(baseUrl, that.baseUrl) &&
                Objects.equals(username, that.username) &&
                Objects.equals(password, that.password) &&
+               Objects.equals(jwt, that.jwt) &&
                Objects.equals(ingestionQueue, that.ingestionQueue) &&
                Objects.equals(httpClientTimeout, that.httpClientTimeout) &&
                Objects.equals(pollInterval, that.pollInterval) &&
@@ -187,7 +197,7 @@ public final class LogForwarderConfig {
 
     @Override
     public int hashCode() {
-        return Objects.hash(baseUrl, username, password, ingestionQueue, httpClientTimeout,
+        return Objects.hash(baseUrl, username, password, jwt, ingestionQueue, httpClientTimeout,
                 maxBufferSize, pollInterval, minBatchSize, maxBatchSize, maxSendInterval,
                 maxInMemorySize, maxOnDiskSize, retryCount, retryIntervalMillis,
                 project, partitionBy, enabled, captureCallerData);
@@ -199,6 +209,7 @@ public final class LogForwarderConfig {
                "baseUrl=" + baseUrl +
                ", username=" + username +
                ", password=***" +
+               ", jwt=" + (jwt != null ? "***" : "null") +
                ", claims=" + claims +
                ", ingestionQueue=" + ingestionQueue +
                ", httpClientTimeout=" + httpClientTimeout +
@@ -226,6 +237,7 @@ public final class LogForwarderConfig {
         private String baseUrl = "http://localhost:8081";
         private String username = "admin";
         private String password = "admin";
+        private String jwt = null;
         private Map<String, String> claims = Map.of();
         private String ingestionQueue = "log";
         private Duration httpClientTimeout = Duration.ofSeconds(30); // Increased from 3s to 30s for ingestion
@@ -258,6 +270,11 @@ public final class LogForwarderConfig {
 
         public Builder password(String password) {
             this.password = Objects.requireNonNull(password);
+            return this;
+        }
+
+        public Builder jwt(String jwt) {
+            this.jwt = Objects.requireNonNull(jwt);
             return this;
         }
 
@@ -353,6 +370,7 @@ public final class LogForwarderConfig {
                     baseUrl,
                     username,
                     password,
+                    jwt,
                     claims,
                     ingestionQueue,
                     httpClientTimeout,

@@ -13,12 +13,16 @@ import org.apache.arrow.vector.types.pojo.Schema;
 import org.duckdb.DuckDBConnection;
 import org.junit.jupiter.api.*;
 
-
 import java.io.ByteArrayOutputStream;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -257,6 +261,141 @@ public class HttpArrowProducerTest {
         });
 
         spillSender.close();
+    }
+
+    // --- Preconfigured JWT tests ---
+
+    /**
+     * Obtain a real JWT via login, then pass it as a preconfigured token.
+     * The producer must ingest data successfully without calling login again.
+     */
+    @Test
+    void testPreconfiguredJwtIngestsSuccessfully() throws Exception {
+        String file = "static-jwt-success-" + System.nanoTime();
+        Files.createDirectories(Path.of(ingestionPath, file));
+
+        String jwt = fetchJwt(baseUrl, "admin", "admin");
+
+        try (HttpArrowProducer producer = new HttpArrowProducer(
+                schema,
+                baseUrl,
+                jwt,
+                file,
+                Duration.ofSeconds(10),
+                100_000,
+                200_000,
+                Duration.ofMillis(200),
+                3,
+                1000,
+                List.of(),
+                100_000,
+                500_000
+        )) {
+            producer.enqueue(arrowBytes("select * from generate_series(4)"));
+        }
+
+        verifyFile(file, 4);
+    }
+
+    /**
+     * With a preconfigured JWT, the login endpoint must never be called — even across multiple batches.
+     */
+    @Test
+    void testPreconfiguredJwtDoesNotCallLogin() throws Exception {
+        try (MockIngestionServer mock = new MockIngestionServer(0, Path.of(ingestionPath))) {
+            mock.start();
+            String token = "pre-issued-token-" + System.nanoTime();
+            mock.addValidToken(token);
+
+            try (HttpArrowProducer producer = new HttpArrowProducer(
+                    schema,
+                    mock.getBaseUrl(),
+                    "Bearer " + token,
+                    "no-login-test",
+                    Duration.ofSeconds(10),
+                    100_000,
+                    200_000,
+                    Duration.ofMillis(200),
+                    3,
+                    1000,
+                    List.of(),
+                    100_000,
+                    500_000
+            )) {
+                producer.enqueue(arrowBytes("select 1 as val"));
+                producer.enqueue(arrowBytes("select 2 as val"));
+            }
+
+            assertEquals(0, mock.getLoginCallCount(), "Login must not be called when JWT is preconfigured");
+            assertTrue(mock.getTotalFilesWritten() > 0, "Data should have been ingested");
+        }
+    }
+
+    /**
+     * An invalid preconfigured JWT must fail immediately without attempting login.
+     */
+    @Test
+    void testPreconfiguredJwtInvalidDoesNotRetryLogin() throws Exception {
+        try (MockIngestionServer mock = new MockIngestionServer(0, Path.of(ingestionPath))) {
+            mock.start();
+
+            try (HttpArrowProducer producer = new HttpArrowProducer(
+                    schema,
+                    mock.getBaseUrl(),
+                    "Bearer invalid-token-xyz",
+                    "invalid-jwt-test",
+                    Duration.ofSeconds(10),
+                    100_000,
+                    200_000,
+                    Duration.ofMillis(200),
+                    1,
+                    100,
+                    List.of(),
+                    100_000,
+                    500_000
+            )) {
+                producer.enqueue(arrowBytes("select 1 as val"));
+            }
+
+            assertEquals(0, mock.getLoginCallCount(), "Login must not be attempted when using a preconfigured JWT");
+        }
+    }
+
+    /**
+     * Null JWT in the static-JWT constructor should throw NullPointerException.
+     */
+    @Test
+    void testPreconfiguredJwtNullThrows() {
+        assertThrows(NullPointerException.class, () -> new HttpArrowProducer(
+                schema,
+                baseUrl,
+                (String) null,   // jwt
+                "some-queue",
+                Duration.ofSeconds(5),
+                100_000,
+                200_000,
+                Duration.ofMillis(200),
+                1,
+                100,
+                List.of(),
+                100_000,
+                500_000
+        ));
+    }
+
+    /** Helper: perform a login HTTP request and return the full "Bearer <token>" value. */
+    private static String fetchJwt(String baseUrl, String username, String password) throws Exception {
+        var httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+        var body = String.format("{\"username\":\"%s\",\"password\":\"%s\"}", username, password);
+        HttpRequest req = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/v1/login"))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .build();
+        HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, resp.statusCode(), "Login should succeed");
+        var json = new com.fasterxml.jackson.databind.ObjectMapper().readTree(resp.body());
+        return json.get("tokenType").asText() + " " + json.get("accessToken").asText();
     }
 
     @Test

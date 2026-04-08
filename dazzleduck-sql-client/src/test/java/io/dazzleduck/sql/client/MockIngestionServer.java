@@ -59,6 +59,7 @@ public class MockIngestionServer implements AutoCloseable {
     // Track ingested data for verification in tests
     private final AtomicLong totalBytesIngested = new AtomicLong(0);
     private final AtomicLong totalFilesWritten = new AtomicLong(0);
+    private final AtomicLong loginCallCount = new AtomicLong(0);
 
     // Store valid JWT tokens
     private final Set<String> validTokens = ConcurrentHashMap.newKeySet();
@@ -174,11 +175,27 @@ public class MockIngestionServer implements AutoCloseable {
     }
 
     /**
+     * Returns the number of times the login endpoint was called.
+     */
+    public long getLoginCallCount() {
+        return loginCallCount.get();
+    }
+
+    /**
+     * Pre-registers a token as valid so it can be used without going through login.
+     * Useful for testing preconfigured JWT scenarios.
+     */
+    public void addValidToken(String token) {
+        validTokens.add(token);
+    }
+
+    /**
      * Resets the ingestion statistics.
      */
     public void resetStats() {
         totalBytesIngested.set(0);
         totalFilesWritten.set(0);
+        loginCallCount.set(0);
     }
 
     /**
@@ -194,6 +211,8 @@ public class MockIngestionServer implements AutoCloseable {
             }
 
             try {
+                loginCallCount.incrementAndGet();
+
                 // Parse login request
                 byte[] requestBody = exchange.getRequestBody().readAllBytes();
                 Map<String, Object> loginRequest = mapper.readValue(requestBody, Map.class);

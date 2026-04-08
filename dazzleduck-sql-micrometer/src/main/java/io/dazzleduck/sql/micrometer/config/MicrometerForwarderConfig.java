@@ -15,6 +15,7 @@ public record MicrometerForwarderConfig(
         String baseUrl,
         String username,
         String password,
+        String jwt,
         Map<String,String> claims,
         String ingestionQueue,
         Duration httpClientTimeout,
@@ -37,12 +38,14 @@ public record MicrometerForwarderConfig(
 ) {
     public MicrometerForwarderConfig {
         Objects.requireNonNull(baseUrl, "baseUrl must not be null");
-        Objects.requireNonNull(username, "username must not be null");
-        Objects.requireNonNull(password, "password must not be null");
         Objects.requireNonNull(ingestionQueue, "ingestionQueue must not be null");
         Objects.requireNonNull(httpClientTimeout, "httpClientTimeout must not be null");
         Objects.requireNonNull(stepInterval, "stepInterval must not be null");
         Objects.requireNonNull(maxSendInterval, "maxSendInterval must not be null");
+        if (jwt == null) {
+            Objects.requireNonNull(username, "username must not be null when jwt is not provided");
+            Objects.requireNonNull(password, "password must not be null when jwt is not provided");
+        }
         partitionBy = List.copyOf(partitionBy);
     }
 
@@ -54,6 +57,7 @@ public record MicrometerForwarderConfig(
         private String baseUrl = "http://localhost:8081";
         private String username = "admin";
         private String password = "admin";
+        private String jwt = null;
         private Map<String,String> claims = Map.of();
         private String ingestionQueue = "metrics";
         private Duration httpClientTimeout = Duration.ofSeconds(3);
@@ -83,6 +87,11 @@ public record MicrometerForwarderConfig(
 
         public Builder password(String password) {
             this.password = Objects.requireNonNull(password);
+            return this;
+        }
+
+        public Builder jwt(String jwt) {
+            this.jwt = Objects.requireNonNull(jwt);
             return this;
         }
 
@@ -162,6 +171,7 @@ public record MicrometerForwarderConfig(
                     baseUrl,
                     username,
                     password,
+                    jwt,
                     claims,
                     ingestionQueue,
                     httpClientTimeout,

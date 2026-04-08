@@ -192,8 +192,9 @@ Counter counter = Counter.builder("api.calls")
 | `applicationName` | Human-readable application name | `DefaultApplication` |
 | `applicationHost` | Hostname of the application | auto-detected |
 | `baseUrl` | Target server URL | `http://localhost:8081` |
-| `username` | Authentication username | `admin` |
-| `password` | Authentication password | `admin` |
+| `username` | Authentication username (login mode) | `admin` |
+| `password` | Authentication password (login mode) | `admin` |
+| `jwt` | Preconfigured `Bearer <token>` (skips login; mutually exclusive with username/password) | _(none)_ |
 | `targetPath` | Server endpoint path | `metrics` |
 | `stepInterval` | How often metrics are published | `10 seconds` |
 | `httpClientTimeout` | HTTP request timeout | `3 seconds` |
@@ -209,11 +210,66 @@ Counter counter = Counter.builder("api.calls")
 | `partitionBy` | Partition columns for storage | `[]` |
 | `enabled` | Enable/disable forwarding | `true` |
 
+## Authentication
+
+The forwarder supports two mutually exclusive authentication modes.
+
+### Username / Password (default)
+
+The forwarder logs in to `/v1/login` on startup and caches the JWT. The token is
+refreshed automatically before it expires.
+
+```java
+MicrometerForwarderConfig config = MicrometerForwarderConfig.builder()
+        .baseUrl("http://localhost:8081")
+        .username("admin")
+        .password("admin")
+        .ingestionQueue("metrics")
+        .stepInterval(Duration.ofSeconds(10))
+        .build();
+```
+
+### Preconfigured JWT
+
+When your deployment already provides a token (e.g. a sidecar injects it via an
+environment variable, or an external auth service issues it), pass the full
+`Bearer <token>` string directly. Login is skipped entirely and the token is used
+as-is for every request. If the server rejects it the call fails immediately —
+there is no re-login attempt.
+
+```java
+MicrometerForwarderConfig config = MicrometerForwarderConfig.builder()
+        .baseUrl("http://localhost:8081")
+        .jwt("Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...")
+        .ingestionQueue("metrics")
+        .stepInterval(Duration.ofSeconds(10))
+        .build();
+
+MicrometerForwarder forwarder = MicrometerForwarder.createAndStart(config);
+```
+
+`jwt` and `username`/`password` are mutually exclusive. Setting `jwt` overrides
+the login flow; `username` and `password` are ignored when `jwt` is present.
+
+Via `application.conf`:
+
+```hocon
+dazzleduck_micrometer {
+  http {
+    base_url        = "http://localhost:8081"
+    jwt             = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+    ingestion_queue = "metrics"
+  }
+}
+```
+
+---
+
 ## JWT Claims
 
 Claims are key-value pairs sent to the server during login. The server embeds them in the JWT token, which is then used for row-level security and query filtering on subsequent requests.
 
-Use claims when the server is configured with `access_mode = RESTRICTED` and you need to scope metric ingestion to a specific database, schema, or table.
+Use claims when the server is configured with `access_mode = RESTRICTED` and you need to scope metric ingestion to a specific database, schema, or table. Claims apply only in username/password mode — when using a preconfigured JWT the token already encodes any required claims.
 
 ### Supported Claim Keys
 

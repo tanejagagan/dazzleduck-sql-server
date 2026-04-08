@@ -184,6 +184,55 @@ Or via `argLine`:
 
 ---
 
+## Authentication
+
+The appender supports two mutually exclusive authentication modes.
+
+### Username / Password (default)
+
+The appender logs in to `/v1/login` on startup and caches the JWT. The token is
+refreshed automatically before it expires.
+
+```xml
+<appender name="LOG_FORWARDER" class="io.dazzleduck.sql.logback.LogForwardingAppender">
+    <baseUrl>http://localhost:8081</baseUrl>
+    <username>admin</username>
+    <password>admin</password>
+    <ingestionQueue>app-logs</ingestionQueue>
+</appender>
+```
+
+### Preconfigured JWT
+
+When your deployment already provides a token (e.g. a sidecar injects it via an
+environment variable, or an external auth service issues it), pass the full
+`Bearer <token>` string directly. Login is skipped entirely and the token is used
+as-is for every request. If the server rejects it the call fails immediately —
+there is no re-login attempt.
+
+```xml
+<appender name="LOG_FORWARDER" class="io.dazzleduck.sql.logback.LogForwardingAppender">
+    <baseUrl>http://localhost:8081</baseUrl>
+    <jwt>Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...</jwt>
+    <ingestionQueue>app-logs</ingestionQueue>
+</appender>
+```
+
+`jwt` and `username`/`password` are mutually exclusive. Setting `jwt` overrides
+the login flow; `username` and `password` are ignored when `jwt` is present.
+
+Programmatic equivalent:
+
+```java
+LogForwarderConfig config = LogForwarderConfig.builder()
+        .baseUrl("http://localhost:8081")
+        .jwt("Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...")
+        .ingestionQueue("app-logs")
+        .build();
+```
+
+---
+
 ## Appender XML Reference
 
 All properties that can appear inside the `<appender>` element:
@@ -191,9 +240,10 @@ All properties that can appear inside the `<appender>` element:
 | Element | Description | Default |
 |---------|-------------|---------|
 | `baseUrl` | DazzleDuck server URL | `http://localhost:8081` |
-| `username` | Authentication username | `admin` |
-| `password` | Authentication password | `admin` |
-| `claims` | Custom JWT claims for row-level security | `{}` |
+| `username` | Authentication username (login mode) | `admin` |
+| `password` | Authentication password (login mode) | `admin` |
+| `jwt` | Preconfigured `Bearer <token>` (skips login; mutually exclusive with username/password) | _(none)_ |
+| `claims` | Custom JWT claims for row-level security (login mode only) | `{}` |
 | `ingestionQueue` | Target ingestion queue name | `log` |
 | `minBatchSize` | Min bytes to accumulate before sending | `1024` |
 | `partitionBy` | Comma-separated partition column names | _(none)_ |
