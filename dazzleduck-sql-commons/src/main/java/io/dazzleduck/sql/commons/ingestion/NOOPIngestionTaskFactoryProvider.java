@@ -38,6 +38,11 @@ public class NOOPIngestionTaskFactoryProvider implements IngestionTaskFactoryPro
             public String getTargetPath(String queueId) {
                 return Path.of(ingestionPath).resolve(queueId).toString();
             }
+
+            @Override
+            public String[] getPartitionBy(String queueId) {
+                return new String[0];
+            }
         };
 
     }

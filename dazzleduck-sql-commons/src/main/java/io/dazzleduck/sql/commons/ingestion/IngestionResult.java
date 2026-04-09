@@ -14,5 +14,8 @@ import java.util.Map;
  * @param maxProducerIds Id of the producer
  * @param filesCreated This will be populated when the  files are written in the s3
  */
-public record IngestionResult(String queueName, long ingestionBatchId, String applicationId, Map<String, Long> maxProducerIds, long rowCount, List<String> filesCreated) {
+public record IngestionResult(String queueName, long ingestionBatchId, String applicationId, Map<String, Long> maxProducerIds, long rowCount, List<String> filesCreated, String query) {
+    IngestionResult(String queueName, long ingestionBatchId, String applicationId, Map<String, Long> maxProducerIds, long rowCount, List<String> filesCreated) {
+        this(queueName, ingestionBatchId, applicationId, maxProducerIds, rowCount, filesCreated, null);
+    }
 }

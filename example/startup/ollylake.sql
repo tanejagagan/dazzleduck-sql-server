@@ -25,13 +25,20 @@ ALTER TABLE ollylake.main.metric SET PARTITIONED BY (date);
 
 -- Create log table for Logback logs
 CREATE TABLE IF NOT EXISTS ollylake.main.log (
-    s_no BIGINT,
+    sequence_number BIGINT,
     timestamp TIMESTAMP,
     level VARCHAR,
     logger VARCHAR,
     thread VARCHAR,
     message VARCHAR,
     mdc MAP(VARCHAR, VARCHAR),
+    throwable VARCHAR,
+    marker VARCHAR[],
+    key_value_pairs MAP(VARCHAR, VARCHAR),
+    caller_class VARCHAR,
+    caller_method VARCHAR,
+    caller_file VARCHAR,
+    caller_line INTEGER,
     date DATE
 );
 ALTER TABLE ollylake.main.log SET PARTITIONED BY (date);
