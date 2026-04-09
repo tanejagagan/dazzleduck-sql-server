@@ -28,8 +28,9 @@ class LogEntryTest {
         event.setThreadName("test-thread");
         event.setTimeStamp(1705312200000L); // 2024-01-15T10:30:00Z
 
-        LogEntry entry = LogEntry.from(event, false);
+        LogEntry entry = LogEntry.from(event, 1L, false);
 
+        assertEquals(1L, entry.sequenceNumber());
         assertEquals(Instant.ofEpochMilli(1705312200000L), entry.timestamp());
         assertEquals("ERROR", entry.level());
         assertEquals("com.example.TestLogger", entry.logger());
