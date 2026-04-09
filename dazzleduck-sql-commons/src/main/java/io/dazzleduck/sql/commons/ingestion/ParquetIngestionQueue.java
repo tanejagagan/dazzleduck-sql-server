@@ -97,6 +97,8 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
             postIngestionTask.execute();
             writeTask.bucket().futures().forEach(action -> action.complete(ingestionResult));
         } catch (Exception e) {
+            var sql = constructWriteQuery(writeTask);
+            logger.atError().setCause(e).log("Failed to write to queue {} sql {}", queueId, sql);
             writeTask.bucket().futures().forEach(action -> action.completeExceptionally(e));
         } finally {
             cleanupInputFiles(writeTask);
@@ -141,11 +143,15 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
         }
     }
 
-    private IngestionResult tryWrite(WriteTask<String, IngestionResult> writeTask) throws Exception {
+    private String constructWriteQuery(WriteTask<String, IngestionResult> writeTask) {
         var batches = writeTask.bucket().batches();
         // All Arrow files
         var arrowFiles = batches.stream().map(Batch::record).map("'%s'"::formatted).collect(Collectors.joining(","));
-        String partitionByClause = getClause(batches.get(0).partitionBy(), ", PARTITION_BY(%s)");
+        String[] batchPartitionBy = batches.get(0).partitionBy();
+        String[] effectivePartitionBy = (batchPartitionBy != null && batchPartitionBy.length > 0)
+                ? batchPartitionBy
+                : postIngestionHandler.getPartitionBy(queueId);
+        String partitionByClause = getClause(effectivePartitionBy, ", PARTITION_BY(%s)");
         String sortOrderClause = getClause(batches.get(0).sortOrder(), "ORDER BY %s ");
         // Last format
         var outputFormat = batches.isEmpty() ? "" : batches.get(batches.size() - 1).format();
@@ -174,6 +180,11 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
                     TO '%s'
                     (FORMAT %s %s, RETURN_FILES, APPEND);
                 """.formatted(querySql, fullFilePath, outputFormat, partitionByClause);
+        return sql;
+    }
+
+    private IngestionResult tryWrite(WriteTask<String, IngestionResult> writeTask) throws Exception {
+        var sql = constructWriteQuery(writeTask);
         logger.debug("Executing COPY SQL: {}", sql);
         List<String> files = new ArrayList<>();
         long count = 0;
@@ -213,6 +224,6 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
         return new IngestionResult(this.queueId, writeTask.taskId(), this.applicationId,
                 writeTask.bucket().getProducerMaxBatchId(),
                 count,
-                files);
+                files, sql);
     }
 }

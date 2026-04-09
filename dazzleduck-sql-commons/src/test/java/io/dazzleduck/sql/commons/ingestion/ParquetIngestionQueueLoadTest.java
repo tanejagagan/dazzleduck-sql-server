@@ -264,6 +264,11 @@ public class ParquetIngestionQueueLoadTest {
             public String getTargetPath(String queueId) {
                 return config.outputPath();
             }
+
+            @Override
+            public String[] getPartitionBy(String queueId) {
+                return new String[0];
+            }
         };
 
         var queue = new ParquetIngestionQueue(
