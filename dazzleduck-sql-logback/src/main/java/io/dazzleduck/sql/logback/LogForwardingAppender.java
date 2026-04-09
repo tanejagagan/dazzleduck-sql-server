@@ -77,10 +77,38 @@ public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
     private String username = "admin";
     private String password = "admin";
     private Map<String, String> claims = Collections.emptyMap();
+    private String jwt;
     private String ingestionQueue = "log";
     private long minBatchSize = 1024; // 1 KB default for logs (smaller than metrics)
     private List<String> project = Collections.emptyList();
     private List<String> partitionBy = Collections.emptyList();
+
+    /**
+     * Check if forwarding is enabled.
+     *
+     * @return true if enabled
+     */
+    public static boolean isEnabled() {
+        return enabled;
+    }
+
+    /**
+     * Set whether forwarding is enabled.
+     *
+     * @param enabled true to enable forwarding
+     */
+    public static void setEnabled(boolean enabled) {
+        LogForwardingAppender.enabled = enabled;
+    }
+
+    /**
+     * Reset the global static state. Primarily for testing.
+     * Note: per-instance forwarders are cleaned up via {@link #stop()}.
+     */
+    static void resetGlobalState() {
+        enabled = true;
+        sequenceCounter.set(0);
+    }
 
     /**
      * Path to a dedicated TypeSafe Config (.conf) file for this appender.
@@ -102,6 +130,10 @@ public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
 
     public void setPassword(String password) {
         this.password = password;
+    }
+
+    public void setJwt(String jwt) {
+        this.jwt = jwt;
     }
 
     /**
@@ -162,24 +194,6 @@ public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
         this.captureCallerData = captureCallerData;
     }
 
-    /**
-     * Check if forwarding is enabled.
-     *
-     * @return true if enabled
-     */
-    public static boolean isEnabled() {
-        return enabled;
-    }
-
-    /**
-     * Set whether forwarding is enabled.
-     *
-     * @param enabled true to enable forwarding
-     */
-    public static void setEnabled(boolean enabled) {
-        LogForwardingAppender.enabled = enabled;
-    }
-
     @Override
     public void start() {
         try {
@@ -199,17 +213,31 @@ public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
                 // Inline-properties mode: build config from individual XML properties
                 addInfo("Initializing LogForwardingAppender with baseUrl=" + baseUrl +
                         ", ingestionQueue=" + ingestionQueue);
-                LogForwarderConfig config = LogForwarderConfig.builder()
-                        .baseUrl(baseUrl)
-                        .username(username)
-                        .password(password)
-                        .claims(claims)
-                        .ingestionQueue(ingestionQueue)
-                        .minBatchSize(minBatchSize)
-                        .project(project)
-                        .partitionBy(partitionBy)
-                        .captureCallerData(captureCallerData)
-                        .build();
+                LogForwarderConfig config;
+                if (jwt == null || jwt.isEmpty()) {
+                    config = LogForwarderConfig.builder()
+                            .baseUrl(baseUrl)
+                            .username(username)
+                            .password(password)
+                            .claims(claims)
+                            .ingestionQueue(ingestionQueue)
+                            .minBatchSize(minBatchSize)
+                            .project(project)
+                            .partitionBy(partitionBy)
+                            .captureCallerData(captureCallerData)
+                            .build();
+                } else {
+                    config = LogForwarderConfig.builder()
+                            .baseUrl(baseUrl)
+                            .jwt(jwt)
+                            .ingestionQueue(ingestionQueue)
+                            .minBatchSize(minBatchSize)
+                            .project(project)
+                            .partitionBy(partitionBy)
+                            .captureCallerData(captureCallerData)
+                            .build();
+                }
+
                 forwarder = new LogForwarder(config);
                 addInfo("LogForwardingAppender successfully initialized");
             }
@@ -276,15 +304,6 @@ public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
             }
         }
         return false;
-    }
-
-    /**
-     * Reset the global static state. Primarily for testing.
-     * Note: per-instance forwarders are cleaned up via {@link #stop()}.
-     */
-    static void resetGlobalState() {
-        enabled = true;
-        sequenceCounter.set(0);
     }
 
 }
