@@ -280,7 +280,7 @@ public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
         }
 
         long seq = sequenceCounter.incrementAndGet();
-        LogEntry entry = LogEntry.from(event, captureCallerData);
+        LogEntry entry = LogEntry.from(event, seq, captureCallerData);
 
         // Add directly to forwarder - it handles batching via ArrowProducer
         try {

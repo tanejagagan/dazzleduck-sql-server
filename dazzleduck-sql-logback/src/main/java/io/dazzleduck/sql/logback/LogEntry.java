@@ -95,10 +95,11 @@ public final class LogEntry {
      * Factory method to create a LogEntry from a Logback event.
      *
      * @param event             The Logback logging event
+     * @param sequenceNumber    The sequence number for this log entry (from appender counter)
      * @param captureCallerData Whether to capture call-site caller data (expensive: triggers stack walk)
      * @return A new LogEntry instance
      */
-    public static LogEntry from(ILoggingEvent event, boolean captureCallerData) {
+    public static LogEntry from(ILoggingEvent event, long sequenceNumber, boolean captureCallerData) {
         // Throwable
         String throwableStr = null;
         if (event.getThrowableProxy() != null) {
@@ -141,7 +142,7 @@ public final class LogEntry {
         }
 
         return new LogEntry(
-                event.getSequenceNumber(),
+                sequenceNumber,
                 Instant.ofEpochMilli(event.getTimeStamp()),
                 event.getLevel().toString(),
                 event.getLoggerName(),
