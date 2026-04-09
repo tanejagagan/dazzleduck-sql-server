@@ -27,20 +27,17 @@ services:
         mkdir -p /workspace/warehouse/metadata/ollylake /workspace/warehouse/data/ollylake/main/metric && \
         exec /app/entrypoint.sh "$$@"
     command:
-      - "--conf"
-      - "dazzleduck_server.startup_script_provider.class=io.dazzleduck.sql.flight.LocalStartupConfigProvider"
-      - "--conf"
-      - "dazzleduck_server.startup_script_provider.script_location=/startup/ollylake.sql"
-      - "--conf"
-      - "dazzleduck_server.ingestion_task_factory_provider.class=io.dazzleduck.sql.commons.ingestion.DuckLakeIngestionTaskFactoryProvider"
-      - "--conf"
-      - "dazzleduck_server.ingestion_task_factory_provider.ingestion_queue_table_mapping.0.ingestion_queue=metric"
-      - "--conf"
-      - "dazzleduck_server.ingestion_task_factory_provider.ingestion_queue_table_mapping.0.table=metric"
-      - "--conf"
-      - "dazzleduck_server.ingestion_task_factory_provider.ingestion_queue_table_mapping.0.schema=main"
-      - "--conf"
-      - "dazzleduck_server.ingestion_task_factory_provider.ingestion_queue_table_mapping.0.catalog=ollylake"
+      - --conf
+      - dazzleduck_server.startup_script_provider.class=io.dazzleduck.sql.flight.LocalStartupConfigProvider
+      - --conf
+      - dazzleduck_server.startup_script_provider.script_location=/startup/ollylake.sql
+      - --conf
+      - dazzleduck_server.ingestion_task_factory_provider.class=io.dazzleduck.sql.commons.ingestion.DuckLakeIngestionTaskFactoryProvider
+      - --conf
+      - 'dazzleduck_server.ingestion_task_factory_provider.ingestion_queue_table_mapping=[{transformation: "SELECT *,CAST(timestamp AS DATE) AS date FROM __this", ingestion_queue: metric, table: metric, schema: main, catalog: ollylake}]'
+      - --conf
+      - dazzleduck_server.jwt_token.verify_signature=false
+
     networks:
       - dazzleduck-net
     healthcheck:

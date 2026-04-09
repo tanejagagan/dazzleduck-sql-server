@@ -187,4 +187,47 @@ class DuckLakeIngestionHandlerTest {
         assertInstanceOf(DuckLakePostIngestionTask.class,
                 factory.createPostIngestionTask(new IngestionResult("metrics", 1L, "app", Map.of(), 0L, List.of())));
     }
+
+    // -----------------------------------------------------------------------
+    // getPartitionBy() - partitioned table
+    // -----------------------------------------------------------------------
+
+    @Test
+    void shouldReturnPartitionColumnsForPartitionedTable() throws Exception {
+        String partitionedTable = "partitioned_events";
+        try (Connection conn = ConnectionPool.getConnection()) {
+            ConnectionPool.executeBatchInTxn(conn, new String[]{
+                    "CREATE TABLE %s.%s.%s (id BIGINT, value VARCHAR, date DATE, level VARCHAR)".formatted(CATALOG, SCHEMA, partitionedTable),
+                    "ALTER TABLE %s.%s.%s SET PARTITIONED BY (date, level)".formatted(CATALOG, SCHEMA, partitionedTable)
+            });
+        }
+
+        var mapping = new QueueIdToTableMapping(partitionedTable, CATALOG, SCHEMA, partitionedTable, Map.of(), null);
+        var factory = new DuckLakeIngestionHandler(Map.of(partitionedTable, mapping));
+        String[] partitionColumns = factory.getPartitionBy(partitionedTable);
+        assertNotNull(partitionColumns, "Expected non-null partition columns array");
+        assertEquals(2, partitionColumns.length, "Expected exactly 2 partition columns");
+        assertEquals("date", partitionColumns[0], "Expected first partition column to be 'date'");
+        assertEquals("level", partitionColumns[1], "Expected second partition column to be 'level'");
+    }
+
+    // -----------------------------------------------------------------------
+    // getPartitionBy() - non-partitioned table
+    // -----------------------------------------------------------------------
+
+    @Test
+    void shouldReturnEmptyArrayForNonPartitionedTable() throws Exception {
+        String nonPartitionedTable = "non_partitioned_events";
+        try (Connection conn = ConnectionPool.getConnection()) {
+            ConnectionPool.execute(conn,
+                    "CREATE TABLE %s.%s.%s (id BIGINT, value VARCHAR)".formatted(CATALOG, SCHEMA, nonPartitionedTable));
+        }
+
+        var mapping = new QueueIdToTableMapping(nonPartitionedTable, CATALOG, SCHEMA, nonPartitionedTable, Map.of(), null);
+        var factory = new DuckLakeIngestionHandler(Map.of(nonPartitionedTable, mapping));
+
+        String[] partitionColumns = factory.getPartitionBy(nonPartitionedTable);
+        assertNotNull(partitionColumns, "Expected non-null partition columns array");
+        assertEquals(0, partitionColumns.length, "Expected empty array for non-partitioned table");
+    }
 }

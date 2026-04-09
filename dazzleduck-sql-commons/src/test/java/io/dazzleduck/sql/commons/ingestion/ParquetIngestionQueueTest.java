@@ -184,6 +184,11 @@ public class ParquetIngestionQueueTest {
             public String getTargetPath(String queueId) {
                 return targetPath.toString();
             }
+
+            @Override
+            public String[] getPartitionBy(String queueId) {
+                return new String[0];
+            }
         };
 
         try (var queue = new ParquetIngestionQueue(
@@ -569,6 +574,11 @@ public class ParquetIngestionQueueTest {
             @Override
             public String getTargetPath(String queueId) {
                 return null;
+            }
+
+            @Override
+            public String[] getPartitionBy(String queueId) {
+                return new String[0];
             }
         };
     }

@@ -59,6 +59,10 @@ public class Demo {
     private static final String[] ACTIONS = {"LOGIN", "LOGOUT", "VIEW", "UPDATE", "DELETE"};
     private static final String[] ENDPOINTS = {"/api/users", "/api/orders", "/api/products"};
 
+    // OpenTelemetry standard MDC fields
+    private static String hostName;
+    private static String applicationId;
+
     public static void main(String[] args) {
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             running.set(false);
@@ -67,6 +71,12 @@ public class Demo {
         }));
 
         String baseUrl = System.getenv().getOrDefault("DAZZLEDUCK_BASE_URL", "http://localhost:8081");
+        try {
+            hostName = System.getenv().getOrDefault("HOSTNAME", java.net.InetAddress.getLocalHost().getHostName());
+        } catch (Exception e) {
+            hostName = "unknown-host";
+        }
+        applicationId = System.getenv().getOrDefault("APPLICATION_ID", "logback-demo");
         System.out.println("Demo started - forwarding logs to " + baseUrl);
 
         // Report ingested log count every 30 seconds
@@ -181,6 +191,9 @@ public class Demo {
         String requestId = "REQ-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
         String user = USERS[random.nextInt(USERS.length)];
 
+        // OpenTelemetry standard MDC fields
+        MDC.put("host.name", hostName);
+        MDC.put("application.id", applicationId);
         MDC.put("request_id", requestId);
         MDC.put("user_id", user);
         MDC.put("log_count", String.valueOf(count));

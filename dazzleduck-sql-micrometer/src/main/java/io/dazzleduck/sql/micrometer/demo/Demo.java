@@ -65,6 +65,10 @@ public class Demo {
     private static final String[] STATUS_CODES = {"200", "201", "400", "404", "500"};
     private static final String[] REGIONS = {"us-east", "us-west", "eu-west", "ap-south"};
 
+    // OpenTelemetry standard tags
+    private static String hostName;
+    private static String applicationId;
+
     public static void main(String[] args) {
         System.out.println("=== Micrometer Metrics Forwarder Demo ===");
         System.out.println("Generating metrics every 500ms. Press Ctrl+C to stop.\n");
@@ -74,16 +78,19 @@ public class Demo {
         String username = System.getenv().getOrDefault("DAZZLEDUCK_USERNAME", "admin");
         String password = System.getenv().getOrDefault("DAZZLEDUCK_PASSWORD", "admin");
         String ingestionQueue = System.getenv().getOrDefault("DAZZLEDUCK_INGESTION_QUEUE", "metric");
-        String partitionByEnv = System.getenv().getOrDefault("DAZZLEDUCK_PARTITION_BY", "date");
 
-        // Parse comma-separated values
-        List<String> partitionBy = List.of(partitionByEnv.split(","));
+        // OpenTelemetry standard tags
+        try {
+            hostName = System.getenv().getOrDefault("HOSTNAME", java.net.InetAddress.getLocalHost().getHostName());
+        } catch (Exception e) {
+            hostName = "unknown-host";
+        }
+        applicationId = System.getenv().getOrDefault("APPLICATION_ID", "micrometer-demo");
 
         System.out.println("Configuration:");
         System.out.println("  Base URL: " + baseUrl);
         System.out.println("  Username: " + username);
         System.out.println("  Ingestion Queue: " + ingestionQueue);
-        System.out.println("  Partition By: " + partitionBy);
         System.out.println();
 
         // Build configuration
@@ -92,7 +99,6 @@ public class Demo {
                 .username(username)
                 .password(password)
                 .ingestionQueue(ingestionQueue)
-                .partitionBy(partitionBy)
                 .stepInterval(Duration.ofSeconds(5))  // Publish metrics every 5 seconds
                 .maxSendInterval(Duration.ofSeconds(2))
                 .minBatchSize(1024)  // 1 KB for demo
@@ -102,51 +108,43 @@ public class Demo {
         // Create and start forwarder
         MicrometerForwarder forwarder = MicrometerForwarder.createAndStart(config);
         MeterRegistry registry = forwarder.getRegistry();
+        registry.config().commonTags("host.name", hostName,
+                "application.id", applicationId,  "application.name", "demo");
 
-        // Register shutdown hook
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            System.out.println("\nShutting down...");
-            running.set(false);
-            queryScheduler.shutdown();
-        }));
+        // Note: Common tags can be set at registry level using registry.config().commonTags()
+        // Example (if supported by the registry implementation):
+        // registry.config().commonTags("env", "production", "service", "order-service");
 
         // Start background query task every 5 seconds
         queryScheduler.scheduleAtFixedRate(() -> runCountQuery(baseUrl), 5, 5, TimeUnit.SECONDS);
 
-        // Create metrics
+        // Create metrics with OpenTelemetry standard tags - tags are added by wrapper registry
         Counter requestCounter = Counter.builder("http.requests.total")
                 .description("Total HTTP requests")
-                .tag("application", "demo")
                 .register(registry);
 
         Counter errorCounter = Counter.builder("http.errors.total")
                 .description("Total HTTP errors")
-                .tag("application", "demo")
                 .register(registry);
 
         Timer requestTimer = Timer.builder("http.request.duration")
                 .description("HTTP request duration")
-                .tag("application", "demo")
                 .register(registry);
 
         Gauge.builder("system.cpu.usage", () -> random.nextDouble() * 100)
                 .description("CPU usage percentage")
-                .tag("application", "demo")
                 .register(registry);
 
         Gauge.builder("system.memory.usage", () -> random.nextDouble() * 100)
                 .description("Memory usage percentage")
-                .tag("application", "demo")
                 .register(registry);
 
         Gauge.builder("system.active.connections", () -> (double) (random.nextInt(500) + 50))
                 .description("Active connections")
-                .tag("application", "demo")
                 .register(registry);
 
         DistributionSummary responseSizes = DistributionSummary.builder("http.response.size")
                 .description("HTTP response size in bytes")
-                .tag("application", "demo")
                 .register(registry);
 
         System.out.println("Demo started - generating metrics...\n");
