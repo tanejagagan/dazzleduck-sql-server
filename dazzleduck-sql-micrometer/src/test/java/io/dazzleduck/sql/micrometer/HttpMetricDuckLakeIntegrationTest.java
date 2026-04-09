@@ -94,14 +94,14 @@ public class HttpMetricDuckLakeIntegrationTest {
                 timer.record(100, TimeUnit.MILLISECONDS);
                 counter.increment();
             }
-                Thread.sleep(100);
+            Thread.sleep(100);
 
         } finally {
             registry.close();
         }
 
         // Wait for server-side ingestion processing to complete
-        Thread.sleep(500);
+        Thread.sleep(1000);
 
         TestUtils.isEqual("""
                         select 'records.processed' as name,

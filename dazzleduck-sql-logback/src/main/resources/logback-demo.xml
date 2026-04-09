@@ -14,8 +14,6 @@
         <username>${DAZZLEDUCK_USERNAME:-admin}</username>
         <password>${DAZZLEDUCK_PASSWORD:-admin}</password>
         <ingestionQueue>${DAZZLEDUCK_INGESTION_QUEUE:-log}</ingestionQueue>
-        <project>*,CAST(timestamp AS date) AS date</project>
-        <partitionBy>date</partitionBy>
     </appender>
 
     <!-- Exclude DazzleDuck internal packages to prevent infinite loops -->

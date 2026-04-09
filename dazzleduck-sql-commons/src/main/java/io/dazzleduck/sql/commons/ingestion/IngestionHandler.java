@@ -9,9 +9,9 @@ public interface IngestionHandler {
         return null;
     }
 
-    default String[] getPartitionBy() {
-        return new String[0];
-    }
+
+
+    String[] getPartitionBy(String queueId);
 
     /**
      *

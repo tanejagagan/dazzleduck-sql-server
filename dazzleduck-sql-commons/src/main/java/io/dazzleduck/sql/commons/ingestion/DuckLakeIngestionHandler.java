@@ -5,7 +5,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -36,20 +38,24 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
 
     private final Map<String, String> queueIdToPathMapping;
 
+    private final Map<String, String[]> queueIdToPartitionMapping;
+
 
 
     public DuckLakeIngestionHandler(Map<String, QueueIdToTableMapping> queueIdToTableMappingMap
     ) {
         this.queueIdsToTableMappings = queueIdToTableMappingMap;
-        var map  =  new HashMap<String, String>();
+        var pathMap = new HashMap<String, String>();
+        var partitionMap = new HashMap<String, String[]>();
         queueIdToTableMappingMap.values().forEach(m -> {
             var queueId = m.ingestionQueue();
             var path = getPathFromCatalog(m.catalog(), m.schema(), m.table());
-            map.put(queueId, path);
-
-    });
-        this.queueIdToPathMapping = map;
-
+            var partitionColumns = getPartitionColumns(m.catalog(), m.schema(), m.table());
+            pathMap.put(queueId, path);
+            partitionMap.put(queueId, partitionColumns);
+        });
+        this.queueIdToPathMapping = pathMap;
+        this.queueIdToPartitionMapping = partitionMap;
     }
 
     private String getPathFromCatalog(String catalogName, String schema, String table) {
@@ -60,6 +66,48 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
         } catch (SQLException e) {
             throw new RuntimeException("Failed to get path for table %s.%s.%s".formatted(catalogName, schema, table), e);
         }
+    }
+
+    private String[] getPartitionColumns(String catalogName, String schema, String table) {
+        String metadataDatabase = "__ducklake_metadata_" + catalogName;
+        String query = """
+                SELECT
+                    c.column_name,
+                    pc.transform,
+                    pc.partition_key_index
+                FROM %1$s.ducklake_table t
+                JOIN %1$s.ducklake_partition_info pi
+                    ON t.table_id = pi.table_id
+                JOIN %1$s.ducklake_partition_column pc
+                    ON pi.partition_id = pc.partition_id
+                JOIN %1$s.ducklake_column c
+                    ON pc.column_id = c.column_id
+                    AND c.table_id = t.table_id
+                WHERE t.table_name = '%2$s'
+                  AND t.end_snapshot IS NULL
+                  AND pi.end_snapshot IS NULL
+                  AND c.end_snapshot IS NULL
+                ORDER BY pc.partition_key_index ASC
+                """.formatted(metadataDatabase, table);
+        try (var connection = ConnectionPool.getConnection()) {
+            Iterable<String> columns = ConnectionPool.collectAll(connection, query,
+                    rs -> rs.getString("column_name"));
+            List<String> columnList = new ArrayList<>();
+            columns.forEach(columnList::add);
+            return columnList.toArray(new String[0]);
+        } catch (SQLException e) {
+            logger.atDebug().setCause(e).log("Failed to get partition columns for table {}.{}.{}", catalogName, schema, table);
+            return new String[0];
+        }
+    }
+
+    @Override
+    public String[] getPartitionBy(String queueId) {
+        String[] cols = queueIdToPartitionMapping.get(queueId);
+        if (cols == null) {
+            cols = queueIdToPartitionMapping.get(extractSuffix(queueId));
+        }
+        return cols != null ? cols : new String[0];
     }
 
     @Override
