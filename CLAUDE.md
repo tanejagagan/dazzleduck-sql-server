@@ -151,7 +151,29 @@ dazzleduck-sql-server/
 **Authorization:**
 - `SqlAuthorizer.java` - Main authorization interface
 - `JwtClaimBasedAuthorizer.java` - JWT claim-based row-level security
-- `AccessMode.java` - COMPLETE vs RESTRICTED modes
+- `AccessMode.java` - COMPLETE vs RESTRICTED vs READ_ONLY modes
+- `SelectOnlyAuthorizer.java` - Read-only authorizer for SELECT-only access
+
+**Access Modes:**
+Three access modes control query permissions and external access:
+
+| Mode | Description | Authorizer | External Access |
+|-------|-------------|-------------|----------------|
+| **COMPLETE** | Full access to all SQL operations | `NOOP_AUTHORIZER` (no restrictions) | Enabled by default |
+| **READ_ONLY** | Only SELECT queries allowed | `SELECT_ONLY_AUTHORIZER` (blocks INSERT/UPDATE/DELETE/CREATE/DROP/ALTER/TRUNCATE) | Controlled by startup script (`enable_external_access`) |
+| **RESTRICTED** | Only SELECT on one table specified in JWT claims | `JWT_AUTHORIZER` (requires database/schema/table in JWT claims) | Controlled by startup script (`enable_external_access`) |
+
+**External Access Control:**
+External access refers to DuckDB's ability to access external tables and functions (e.g., `read_parquet`, `read_json`, `httpfs`):
+
+- **COMPLETE mode**: All external tables and functions are accessible by default
+- **READ_ONLY/RESTRICTED modes**: External access must be explicitly enabled in startup script:
+  ```sql
+  SET enable_external_access = true;  -- Enable external access
+  SET enable_external_access = false; -- Disable external access (default for read-only modes)
+  ```
+
+This security feature prevents read-only users from accessing arbitrary external data sources while still allowing them to query authorized tables.
 
 ### dazzleduck-sql-common
 **Shared utilities**

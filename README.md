@@ -168,6 +168,83 @@ See: https://github.com/prmoore77/sqlalchemy-sqlflite-adbc-dialect
 
 
 
+
+## Security and Access Modes
+
+DazzleDuck SQL Server supports three access modes that control query permissions and external access capabilities:
+
+### Access Modes
+
+| Mode | Description | Query Types Allowed | External Access |
+|-------|-------------|---------------------|-----------------|
+| **COMPLETE** | Full access to all SQL operations | All (INSERT, UPDATE, DELETE, CREATE, DROP, etc.) | Enabled by default |
+| **READ_ONLY** | Only SELECT queries allowed | SELECT, UNION, CTE, subqueries, joins, aggregates | Controlled by startup script |
+| **RESTRICTED** | Only SELECT on one table (requires JWT claims) | SELECT on specific table only | Controlled by startup script |
+
+### Configuring Access Mode
+
+Set the access mode in `application.conf` or via command-line:
+
+```hocon
+dazzleduck_server {
+    access_mode = COMPLETE  # Options: COMPLETE, READ_ONLY, RESTRICTED
+}
+```
+
+### External Access Control
+
+External access refers to DuckDB's ability to access external tables and functions:
+- `read_parquet`, `read_json`, `read_csv` - External file access
+- `httpfs`, `httpsfs` - HTTP/HTTPS file system access
+- `s3fs`, `gcsfs` - Cloud storage access
+
+**By access mode:**
+
+- **COMPLETE mode**: All external tables and functions are accessible by default
+- **READ_ONLY/RESTRICTED modes**: External access must be explicitly enabled in startup script
+
+```sql
+-- Disable external access (recommended for read-only modes)
+SET enable_external_access = false;
+
+-- Enable external access (use with caution in read-only modes)
+SET enable_external_access = true;
+```
+
+This security feature prevents read-only users from accessing arbitrary external data sources while still allowing them to query authorized tables. Configure external access in the startup script:
+
+```hocon
+startup_script_provider {
+    class = "io.dazzleduck.sql.flight.ConfigBasedStartupScriptProvider"
+    content = """
+        INSTALL arrow FROM community;
+        LOAD arrow;
+
+        -- Disable external access for read-only security
+        SET enable_external_access = false;
+        """
+}
+```
+
+### JWT Claims for RESTRICTED Mode
+
+When using `RESTRICTED` access mode, queries must include these JWT claims in headers:
+
+| Claim | Header Name | Description |
+|--------|--------------|-------------|
+| `database` | `database` | Target database name |
+| `schema` | `schema` | Target schema name |
+| `table` | `table` | Target table name |
+
+Example:
+```bash
+curl -H "database: mydb" \
+     -H "schema: myschema" \
+     -H "table: mytable" \
+     -H "Authorization: Bearer <jwt-token>" \
+     "http://localhost:8081/v1/query?q=SELECT%20*%20FROM%20mytable"
+```
+
 ## Enabling Authentication in HTTP Mode.
 Authentication is supported with jwt. Client need to invoke login api with username/password this api would return jwt  token. This jwt token can be used for all subsequent invocation
 - Run the server with authentication enabled

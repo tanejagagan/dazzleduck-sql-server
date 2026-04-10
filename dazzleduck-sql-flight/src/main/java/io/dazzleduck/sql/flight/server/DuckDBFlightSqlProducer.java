@@ -367,8 +367,10 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         this.recorder = recorder;
         if (AccessMode.RESTRICTED == accessMode) {
             this.sqlAuthorizer = SqlAuthorizer.JWT_AUTHORIZER;
-        } else {
+        } else if(AccessMode.COMPLETE == accessMode ) {
             this.sqlAuthorizer = SqlAuthorizer.NOOP_AUTHORIZER;
+        } else {
+            this.sqlAuthorizer = SqlAuthorizer.SELECT_ONLY_AUTHORIZER;
         }
 
         this.ingestionHandler = ingestionHandler;

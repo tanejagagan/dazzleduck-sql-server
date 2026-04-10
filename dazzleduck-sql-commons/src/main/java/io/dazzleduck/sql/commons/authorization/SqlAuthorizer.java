@@ -19,6 +19,8 @@ public interface SqlAuthorizer {
 
     SqlAuthorizer JWT_AUTHORIZER = JwtClaimBasedAuthorizer.INSTANCE;
 
+    SqlAuthorizer SELECT_ONLY_AUTHORIZER = SelectOnlyAuthorizer.INSTANCE;
+
     static JsonNode addFilterToTableFunction(JsonNode query, JsonNode toAdd) {
         var statement = Transformations.getFirstStatementNode(query);
         var selectOrig = Transformations.getSelectForTableFunction(statement);
