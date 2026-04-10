@@ -29,12 +29,12 @@ import static com.google.protobuf.ByteString.copyFrom;
 public class RestrictedFlightSqlProducer extends DuckDBFlightSqlProducer {
 
     private final QueryOptimizer queryOptimizer;
-    public RestrictedFlightSqlProducer(Location serverLocation, String producerId, String secretKey, BufferAllocator allocator, String warehousePath, Path tempDir, IngestionHandler postIngestionHandler, ScheduledExecutorService scheduledExecutorService, Duration queryTimeout, Clock clock, FlightRecorder recorder, QueryOptimizer queryOptimizer, IngestionConfig ingestionConfig) {
-        this(serverLocation, producerId, secretKey, allocator, warehousePath, tempDir, postIngestionHandler, scheduledExecutorService, queryTimeout, clock, recorder, queryOptimizer, ingestionConfig, List.of());
+    public RestrictedFlightSqlProducer(Location serverLocation, String producerId, String secretKey, BufferAllocator allocator, String warehousePath, AccessMode accessMode, Path tempDir, IngestionHandler postIngestionHandler, ScheduledExecutorService scheduledExecutorService, Duration queryTimeout, Clock clock, FlightRecorder recorder, QueryOptimizer queryOptimizer, IngestionConfig ingestionConfig) {
+        this(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionHandler, scheduledExecutorService, queryTimeout, clock, recorder, queryOptimizer, ingestionConfig, List.of());
     }
 
-    public RestrictedFlightSqlProducer(Location serverLocation, String producerId, String secretKey, BufferAllocator allocator, String warehousePath, Path tempDir, IngestionHandler postIngestionHandler, ScheduledExecutorService scheduledExecutorService, Duration queryTimeout, Clock clock, FlightRecorder recorder, QueryOptimizer queryOptimizer, IngestionConfig ingestionConfig, List<Location> dataProcessorLocations) {
-        super(serverLocation, producerId, secretKey, allocator, warehousePath, AccessMode.RESTRICTED, tempDir, postIngestionHandler, scheduledExecutorService, queryTimeout, clock, recorder, ingestionConfig, dataProcessorLocations);
+    public RestrictedFlightSqlProducer(Location serverLocation, String producerId, String secretKey, BufferAllocator allocator, String warehousePath,  AccessMode accessMode,  Path tempDir, IngestionHandler postIngestionHandler, ScheduledExecutorService scheduledExecutorService, Duration queryTimeout, Clock clock, FlightRecorder recorder, QueryOptimizer queryOptimizer, IngestionConfig ingestionConfig, List<Location> dataProcessorLocations) {
+        super(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionHandler, scheduledExecutorService, queryTimeout, clock, recorder, ingestionConfig, dataProcessorLocations);
         this.queryOptimizer = queryOptimizer;
     }
 

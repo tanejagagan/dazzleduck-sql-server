@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.common.ConfigConstants;
 import io.dazzleduck.sql.commons.util.CommandLineConfigUtil;
+import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.dazzleduck.sql.flight.optimizer.QueryOptimizer;
@@ -94,13 +95,59 @@ public interface FlightTestUtils {
             new RestrictedFlightSqlProducer(serverLocation,
                     producerId,
                     "change me",
-                    allocator, warehousePath,
+                    allocator, warehousePath, AccessMode.RESTRICTED,
                     Path.of(System.getProperty("java.io.tmpdir"), UUID.randomUUID().toString()),
                     new NOOPIngestionTaskFactoryProvider(warehousePath + File.pathSeparator + "ingestion").getIngestionHandler(),
                     Executors.newSingleThreadScheduledExecutor(), Duration.ofMinutes(2), Clock.systemDefaultZone(),
                     DuckDBFlightSqlProducer.buildRecorder(producerId),
                     QueryOptimizer.NOOP_QUERY_OPTIMIZER,  DuckDBFlightSqlProducer.DEFAULT_INGESTION_CONFIG),
                 serverLocation, additionalClientHeaders, testAuthenticator);
+    }
+
+    default ServerClient createReadOnlyServerClient(Location serverLocation) throws IOException, NoSuchAlgorithmException {
+        return createReadOnlyServerClient(serverLocation, Map.of());
+    }
+
+    default ServerClient createReadOnlyServerClient(Location serverLocation,
+                                                      Map<String, String> additionalClientHeaders) throws IOException, NoSuchAlgorithmException {
+
+        var producerId = UUID.randomUUID().toString();
+        var warehousePath = Files.createTempDirectory("duckdb_warehouse_" + FlightSqlSelectOnlyTest.class.getName()).toString();
+        var clientAllocator = new RootAllocator();
+        var serverAllocator = new RootAllocator();
+
+        var readOnlyFlightServer = FlightServer.builder(
+                        serverAllocator,
+                        serverLocation, new RestrictedFlightSqlProducer(
+                                serverLocation,
+                                producerId,
+                                "change me",
+                                serverAllocator,
+                                warehousePath,
+                                AccessMode.READ_ONLY,
+                                Path.of(System.getProperty("java.io.tmpdir"), UUID.randomUUID().toString()),
+                                new NOOPIngestionTaskFactoryProvider(warehousePath + File.pathSeparator + "ingestion").getIngestionHandler(),
+                                Executors.newSingleThreadScheduledExecutor(),
+                                Duration.ofMinutes(2),
+                                Clock.systemDefaultZone(),
+                                DuckDBFlightSqlProducer.buildRecorder(producerId),
+                                QueryOptimizer.NOOP_QUERY_OPTIMIZER,
+                                DuckDBFlightSqlProducer.DEFAULT_INGESTION_CONFIG))
+                .middleware(AdvanceServerCallHeaderAuthMiddleware.KEY,
+                        new AdvanceServerCallHeaderAuthMiddleware.Factory(getTestJWTTokenAuthenticator()))
+                .build()
+                .start();
+
+        var allHeader = new HashMap<String, String>();
+        allHeader.putAll(Map.of(Headers.HEADER_DATABASE, testCatalog(),
+                Headers.HEADER_SCHEMA, testSchema()));
+        allHeader.putAll(additionalClientHeaders);
+        var readOnlySqlClient = new FlightSqlClient(FlightClient.builder(clientAllocator, serverLocation)
+                .intercept(AuthUtils.createClientMiddlewareFactory(testUser(),
+                        testUserPassword(),
+                        allHeader))
+                .build());
+        return new ServerClient(readOnlyFlightServer, readOnlySqlClient, clientAllocator, warehousePath);
     }
 
     static AdvanceJWTTokenAuthenticator getTestJWTTokenAuthenticator() throws NoSuchAlgorithmException {

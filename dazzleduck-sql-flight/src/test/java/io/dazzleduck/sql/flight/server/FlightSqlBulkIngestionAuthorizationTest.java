@@ -3,6 +3,7 @@ package io.dazzleduck.sql.flight.server;
 import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.commons.ConnectionPool;
+import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.authorization.AccessType;
 import io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider;
 import io.dazzleduck.sql.flight.MicroMeterFlightRecorder;
@@ -68,6 +69,7 @@ public class FlightSqlBulkIngestionAuthorizationTest {
                 "change me",
                 allocator,
                 warehousePath,
+                AccessMode.RESTRICTED,
                 DuckDBFlightSqlProducer.newTempDir(),
                 new NOOPIngestionTaskFactoryProvider(ingestionDir).getIngestionHandler(),
                 Executors.newSingleThreadScheduledExecutor(),

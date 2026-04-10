@@ -413,13 +413,14 @@ public final class FlightSqlProducerFactory {
                 : buildRecorder(producerId);
 
             // Create appropriate producer based on access mode
-            if (accessMode == AccessMode.RESTRICTED) {
+            if (accessMode == AccessMode.RESTRICTED || accessMode == AccessMode.READ_ONLY) {
                 return new RestrictedFlightSqlProducer(
                     location,
                     producerId,
                     secretKey,
                     finalAllocator,
                     warehousePath,
+                    accessMode,
                     tempWriteDir,
                         ingestionHandler,
                     finalExecutorService,

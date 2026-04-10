@@ -1,5 +1,5 @@
 package io.dazzleduck.sql.commons.authorization;
 
 public enum AccessMode {
-    COMPLETE, RESTRICTED
+    COMPLETE, RESTRICTED, READ_ONLY
 }
