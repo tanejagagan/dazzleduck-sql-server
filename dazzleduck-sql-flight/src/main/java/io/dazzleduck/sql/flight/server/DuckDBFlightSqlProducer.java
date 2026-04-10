@@ -203,15 +203,15 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
     public static FlightRecorder buildRecorder(String producerId) {
         try {
             var registry = new LoggingMeterRegistry();
-            setupCommonTags(registry, producerId);
+            setupCommonTags(registry, producerId, "dazzleduck-sql-server");
             return new MicroMeterFlightRecorder(registry, producerId);
         } catch (Throwable t) {
             return new SimpleFlightRecorder();
         }
     }
 
-    private static void setupCommonTags(io.micrometer.core.instrument.MeterRegistry registry, String producerId) {
-        MicroMeterFlightRecorder.setupCommonTags(registry, producerId);
+    private static void setupCommonTags(io.micrometer.core.instrument.MeterRegistry registry, String producerId, String serviceName) {
+        MicroMeterFlightRecorder.setupCommonTags(registry, producerId, serviceName);
     }
 
 

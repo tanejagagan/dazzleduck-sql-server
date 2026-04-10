@@ -115,6 +115,11 @@ public final class LogForwarderConfigFactory {
                         .collect(Collectors.toMap(e -> e.getKey(), e -> e.getValue().toString()))
                 : Map.of();
 
+        Map<String, String> resourceMdc = config.hasPath(ConfigConstants.RESOURCE_MDC_KEY)
+                ? config.getObject(ConfigConstants.RESOURCE_MDC_KEY).unwrapped().entrySet().stream()
+                        .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().toString()))
+                : Map.of();
+
         return LogForwarderConfig.builder()
                 .baseUrl(http.getString(ConfigConstants.BASE_URL_KEY))
                 .username(http.getString(ConfigConstants.USERNAME_KEY))
@@ -135,6 +140,7 @@ public final class LogForwarderConfigFactory {
                 .partitionBy(config.getStringList(ConfigConstants.PARTITION_BY_KEY))
                 .enabled(config.getBoolean(ConfigConstants.ENABLED_KEY))
                 .captureCallerData(config.getBoolean(ConfigConstants.CAPTURE_CALLER_DATA_KEY))
+                .resourceMdc(resourceMdc)
                 .build();
     }
 }

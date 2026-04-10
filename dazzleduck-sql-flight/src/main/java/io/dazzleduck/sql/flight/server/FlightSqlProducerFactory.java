@@ -103,6 +103,7 @@ public final class FlightSqlProducerFactory {
         private String producerId;
         private String secretKey;
         private String warehousePath;
+        private String serviceName;
         private Path tempWriteDir;
         private AccessMode accessMode;
         private BufferAllocator allocator;
@@ -132,6 +133,7 @@ public final class FlightSqlProducerFactory {
             this.warehousePath = ConfigConstants.getWarehousePath(config);
             this.secretKey = config.getString(ConfigConstants.SECRET_KEY_KEY);
             this.producerId = config.getString(ConfigConstants.PRODUCER_ID_KEY);
+            this.serviceName = config.getString(ConfigConstants.FLIGHT_SQL_SERVICE_NAME_KEY);
 
             // Access mode
             this.accessMode = DuckDBFlightSqlProducer.getAccessMode(config);
@@ -410,7 +412,7 @@ public final class FlightSqlProducerFactory {
             // Use provided flight recorder or create default
             FlightRecorder finalRecorder = flightRecorder != null
                 ? flightRecorder
-                : buildRecorder(producerId);
+                : buildRecorder();
 
             // Create appropriate producer based on access mode
             if (accessMode == AccessMode.RESTRICTED) {
@@ -504,18 +506,18 @@ public final class FlightSqlProducerFactory {
             return IngestionConfig.fromConfig(config.getConfig(ConfigConstants.INGESTION_KEY));
         }
 
-        private static io.dazzleduck.sql.flight.FlightRecorder buildRecorder(String producerId) {
+        private io.dazzleduck.sql.flight.FlightRecorder buildRecorder() {
             try {
                 var registry = new io.micrometer.core.instrument.logging.LoggingMeterRegistry();
-                setupCommonTags(registry, producerId);
+                setupCommonTags(registry, producerId, serviceName);
                 return new io.dazzleduck.sql.flight.MicroMeterFlightRecorder(registry, producerId);
             } catch (Throwable t) {
                 return new SimpleFlightRecorder();
             }
         }
 
-        private static void setupCommonTags(io.micrometer.core.instrument.MeterRegistry registry, String producerId) {
-            io.dazzleduck.sql.flight.MicroMeterFlightRecorder.setupCommonTags(registry, producerId);
+        private static void setupCommonTags(io.micrometer.core.instrument.MeterRegistry registry, String producerId, String serviceName) {
+            io.dazzleduck.sql.flight.MicroMeterFlightRecorder.setupCommonTags(registry, producerId, serviceName);
         }
     }
 }

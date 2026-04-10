@@ -35,6 +35,7 @@ public final class LogForwarderConfig {
     // Feature flags
     private final boolean enabled;
     private final boolean captureCallerData;
+    private final Map<String, String> resourceMdc;
 
     public LogForwarderConfig(
             String baseUrl,
@@ -56,7 +57,8 @@ public final class LogForwarderConfig {
             List<String> project,
             List<String> partitionBy,
             boolean enabled,
-            boolean captureCallerData) {
+            boolean captureCallerData,
+            Map<String, String> resourceMdc) {
         Objects.requireNonNull(baseUrl, "baseUrl must not be null");
         Objects.requireNonNull(ingestionQueue, "ingestionQueue must not be null");
         Objects.requireNonNull(httpClientTimeout, "httpClientTimeout must not be null");
@@ -87,6 +89,7 @@ public final class LogForwarderConfig {
         this.partitionBy = Collections.unmodifiableList(new ArrayList<>(partitionBy));
         this.enabled = enabled;
         this.captureCallerData = captureCallerData;
+        this.resourceMdc = resourceMdc != null ? Collections.unmodifiableMap(new LinkedHashMap<>(resourceMdc)) : Collections.emptyMap();
     }
 
     public String baseUrl() {
@@ -169,6 +172,10 @@ public final class LogForwarderConfig {
         return captureCallerData;
     }
 
+    public Map<String, String> resourceMdc() {
+        return resourceMdc;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
@@ -192,7 +199,8 @@ public final class LogForwarderConfig {
                Objects.equals(pollInterval, that.pollInterval) &&
                Objects.equals(maxSendInterval, that.maxSendInterval) &&
                Objects.equals(project, that.project) &&
-               Objects.equals(partitionBy, that.partitionBy);
+               Objects.equals(partitionBy, that.partitionBy) &&
+               Objects.equals(resourceMdc, that.resourceMdc);
     }
 
     @Override
@@ -200,7 +208,7 @@ public final class LogForwarderConfig {
         return Objects.hash(baseUrl, username, password, jwt, ingestionQueue, httpClientTimeout,
                 maxBufferSize, pollInterval, minBatchSize, maxBatchSize, maxSendInterval,
                 maxInMemorySize, maxOnDiskSize, retryCount, retryIntervalMillis,
-                project, partitionBy, enabled, captureCallerData);
+                project, partitionBy, enabled, captureCallerData, resourceMdc);
     }
 
     @Override
@@ -226,6 +234,7 @@ public final class LogForwarderConfig {
                ", partitionBy=" + partitionBy +
                ", enabled=" + enabled +
                ", captureCallerData=" + captureCallerData +
+               ", resourceMdc=" + resourceMdc +
                "]";
     }
 
@@ -254,6 +263,7 @@ public final class LogForwarderConfig {
         private List<String> partitionBy = Collections.emptyList();
         private boolean enabled = true;
         private boolean captureCallerData = false;
+        private Map<String, String> resourceMdc = Map.of();
 
         private Builder() {
         }
@@ -360,6 +370,11 @@ public final class LogForwarderConfig {
             return this;
         }
 
+        public Builder resourceMdc(Map<String, String> resourceMdc) {
+            this.resourceMdc = Objects.requireNonNull(resourceMdc);
+            return this;
+        }
+
         public Builder claims(Map<String, String> claims) {
             this.claims = Objects.requireNonNull(claims);
             return this;
@@ -386,7 +401,8 @@ public final class LogForwarderConfig {
                     project,
                     partitionBy,
                     enabled,
-                    captureCallerData
+                    captureCallerData,
+                    resourceMdc
             );
         }
     }

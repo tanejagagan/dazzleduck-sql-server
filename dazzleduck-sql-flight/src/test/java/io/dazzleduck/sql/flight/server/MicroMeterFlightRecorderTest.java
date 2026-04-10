@@ -23,7 +23,7 @@ public class MicroMeterFlightRecorderTest {
     @BeforeEach
     void setup() {
         registry = new SimpleMeterRegistry();
-        MicroMeterFlightRecorder.setupCommonTags(registry, "producer1");
+        MicroMeterFlightRecorder.setupCommonTags(registry, "producer1", "dazzleduck-sql-server");
         recorder = new MicroMeterFlightRecorder(registry, "producer1");
     }
 
