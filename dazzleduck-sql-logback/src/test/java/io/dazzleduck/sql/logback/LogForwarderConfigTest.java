@@ -154,7 +154,7 @@ class LogForwarderConfigTest {
                 1024, 2048,
                 3, 1000,
                 java.util.List.of(), java.util.List.of(),
-                true, false));
+                true, false, null));
     }
 
     @Test
