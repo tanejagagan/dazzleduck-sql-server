@@ -413,7 +413,7 @@ public final class FlightSqlProducerFactory {
                 : buildRecorder(producerId);
 
             // Create appropriate producer based on access mode
-            if (accessMode == AccessMode.RESTRICTED || accessMode == AccessMode.READ_ONLY) {
+            if (accessMode == AccessMode.RESTRICTED ) {
                 return new RestrictedFlightSqlProducer(
                     location,
                     producerId,
@@ -430,6 +430,24 @@ public final class FlightSqlProducerFactory {
                     queryOptimizer,
                     ingestionConfig,
                     dataProcessorLocations
+                );
+            } else if (accessMode == AccessMode.READ_ONLY ) {
+                return new SelectOnlyFlightSqlProducer(
+                        location,
+                        producerId,
+                        secretKey,
+                        finalAllocator,
+                        warehousePath,
+                        accessMode,
+                        tempWriteDir,
+                        ingestionHandler,
+                        finalExecutorService,
+                        queryTimeout,
+                        clock,
+                        finalRecorder,
+                        queryOptimizer,
+                        ingestionConfig,
+                        dataProcessorLocations
                 );
             } else {
                 return new DuckDBFlightSqlProducer(

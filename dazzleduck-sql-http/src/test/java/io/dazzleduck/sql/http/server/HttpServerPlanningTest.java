@@ -172,7 +172,7 @@ public class HttpServerPlanningTest extends HttpServerTestBase {
         var cancelFuture = CompletableFuture.supplyAsync(() -> {
             try {
                 Thread.sleep(2000);
-                var cancelBody = objectMapper.writeValueAsBytes(new QueryRequest(plannedQuery, id));
+                var cancelBody = objectMapper.writeValueAsBytes(new QueryRequest(plannedQuery, id, null));
                 var cancelReq = HttpRequest.newBuilder(URI.create(baseUrl + "/v1/cancel"))
                         .POST(HttpRequest.BodyPublishers.ofByteArray(cancelBody))
                         .header("Content-Type", "application/json")
