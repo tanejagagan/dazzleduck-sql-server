@@ -201,9 +201,13 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
     }
 
     public static FlightRecorder buildRecorder(String producerId) {
+        return buildRecorder(producerId, "dazzleduck-sql-server");
+    }
+
+    public static FlightRecorder buildRecorder(String producerId, String serviceName) {
         try {
             var registry = new LoggingMeterRegistry();
-            setupCommonTags(registry, producerId, "dazzleduck-sql-server");
+            setupCommonTags(registry, producerId, serviceName);
             return new MicroMeterFlightRecorder(registry, producerId);
         } catch (Throwable t) {
             return new SimpleFlightRecorder();
