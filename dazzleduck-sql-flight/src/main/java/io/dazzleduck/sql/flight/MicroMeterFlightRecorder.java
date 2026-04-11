@@ -123,8 +123,9 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
      *
      * @param registry   the registry to configure
      * @param producerId unique identifier for this producer instance
+     * @param serviceName the service name to use for metrics (default: "dazzleduck-sql-server")
      */
-    public static void setupCommonTags(MeterRegistry registry, String producerId) {
+    public static void setupCommonTags(MeterRegistry registry, String producerId, String serviceName) {
         String hostname = System.getenv("HOSTNAME");
         if (hostname == null || hostname.isBlank()) {
             try {
@@ -135,7 +136,7 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
         }
         String containerId = System.getenv().getOrDefault("CONTAINER_ID", "unknown");
         registry.config().commonTags(
-                "service.name",  "dazzleduck-sql-server",
+                "service.name",  serviceName,
                 "host.name",     hostname,
                 "container.id",  containerId,
                 "producer.id",   producerId);
