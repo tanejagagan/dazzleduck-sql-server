@@ -10,6 +10,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.crypto.SecretKey;
+import io.dazzleduck.sql.common.SslUtils;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -29,7 +30,7 @@ public class JwtServerInterceptor implements ServerInterceptor {
     private static final String BASIC_PREFIX = "Basic ";
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
-    private static final HttpClient HTTP_CLIENT = HttpClient.newHttpClient();
+    private static final HttpClient HTTP_CLIENT = SslUtils.trustAllHttpClient();
 
     private final SecretKey secretKey;
     private final JwtParser jwtParser;

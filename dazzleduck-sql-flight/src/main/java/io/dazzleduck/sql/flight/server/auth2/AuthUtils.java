@@ -11,6 +11,7 @@ import org.apache.arrow.flight.FlightClientMiddleware;
 import org.apache.arrow.flight.auth2.Auth2Constants;
 import org.apache.arrow.flight.auth2.CallHeaderAuthenticator;
 
+import io.dazzleduck.sql.common.SslUtils;
 import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
 import java.security.NoSuchAlgorithmException;
@@ -19,7 +20,7 @@ import java.util.Map;
 
 public class AuthUtils {
     private static final ObjectMapper objectMapper = new ObjectMapper();
-    private static final HttpClient httpClient = HttpClient.newHttpClient();
+    private static final HttpClient httpClient = SslUtils.trustAllHttpClient();
 
     private static String generateBasicAuthHeader(String username, String password) {
         byte[] up = Base64.getEncoder().encode((username + ":" + password).getBytes(StandardCharsets.UTF_8));
