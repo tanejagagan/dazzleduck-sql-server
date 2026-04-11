@@ -17,7 +17,7 @@ import java.util.Map;
  *   <li>Data export and analysis without modification</li>
  * </ul>
  *
- * <h3>Authorized Operations</h3>
+ * <h2>Authorized Operations</h2>
  * <ul>
  *   <li><b>SELECT</b> - All SELECT queries are allowed</li>
  *   <li><b>SELECT with subqueries</b> - Nested SELECT statements are allowed</li>
@@ -26,7 +26,7 @@ import java.util.Map;
  *   <li><b>SELECT from table functions</b> - read_parquet, read_delta, etc. are allowed</li>
  * </ul>
  *
- * <h3>Blocked Operations</h3>
+ * <h2>Blocked Operations</h2>
  * <p>Note: DuckDB's JSON serialization ({@code json_serialize_sql()}) cannot serialize DML/DDL
  * operations (INSERT, UPDATE, DELETE, CREATE, DROP, etc.). These operations return error nodes
  * with error_type "not implemented" and message "Only SELECT statements can be serialized to json!".
@@ -44,7 +44,7 @@ import java.util.Map;
  *   <li><b>Any other DDL/DML</b> - Other modifications are blocked</li>
  * </ul>
  *
- * <h3>External Access Control</h3>
+ * <h2>External Access Control</h2>
  * <p>When using READ_ONLY access mode, external access to tables and functions
  * ({@code read_parquet}, {@code httpfs}, {@code s3fs}, etc.) can be controlled
  * by the startup script using {@code SET enable_external_access = false}.</p>
