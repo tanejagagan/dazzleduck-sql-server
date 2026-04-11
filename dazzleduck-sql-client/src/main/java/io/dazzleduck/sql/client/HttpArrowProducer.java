@@ -9,6 +9,7 @@ import org.apache.arrow.vector.types.pojo.Schema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import io.dazzleduck.sql.common.SslUtils;
+import javax.net.ssl.SSLParameters;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
