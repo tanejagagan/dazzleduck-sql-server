@@ -1,6 +1,7 @@
 package io.dazzleduck.sql.http.server;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.authorization.SqlAuthorizer;
 import io.dazzleduck.sql.http.server.model.QueryRequest;
@@ -67,7 +68,7 @@ public abstract class AbstractQueryBasedService implements HttpService, Controll
         if (query.contains("id")) {
             try {
                 long id = Long.parseLong(query.get("id"));
-                queryRequest = new QueryRequest(q, id);
+                queryRequest = new QueryRequest(q, id, null);
             } catch (NumberFormatException e) {
                 response.status(Status.BAD_REQUEST_400);
                 response.send("Invalid id parameter: must be a valid number");

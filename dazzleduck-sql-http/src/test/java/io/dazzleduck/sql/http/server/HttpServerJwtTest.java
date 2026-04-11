@@ -124,7 +124,7 @@ public class HttpServerJwtTest extends HttpServerTestBase {
         var cancelFuture = CompletableFuture.supplyAsync(() -> {
             try {
                 Thread.sleep(500);
-                var body = objectMapper.writeValueAsBytes(new QueryRequest(LONG_RUNNING_QUERY, 11L));
+                var body = objectMapper.writeValueAsBytes(new QueryRequest(LONG_RUNNING_QUERY, 11L, null));
                 var cancel = HttpRequest.newBuilder(URI.create(baseUrl + "/v1/cancel"))
                         .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                         .header("Accept", HeaderValues.ACCEPT_JSON.values())
@@ -150,7 +150,7 @@ public class HttpServerJwtTest extends HttpServerTestBase {
         var jwt = login();
         String auth = jwt.tokenType() + " " + jwt.accessToken();
 
-        var body = objectMapper.writeValueAsBytes(new QueryRequest(LONG_RUNNING_QUERY, 12L));
+        var body = objectMapper.writeValueAsBytes(new QueryRequest(LONG_RUNNING_QUERY, 12L, null));
         var query = HttpRequest.newBuilder(URI.create(baseUrl + "/v1/query"))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
                 .header("Accept", HeaderValues.ACCEPT_JSON.values())
@@ -161,7 +161,7 @@ public class HttpServerJwtTest extends HttpServerTestBase {
         var cancelFuture = CompletableFuture.supplyAsync(() -> {
             try {
                 Thread.sleep(500);
-                var cancelBody = objectMapper.writeValueAsBytes(new QueryRequest(LONG_RUNNING_QUERY, 12L));
+                var cancelBody = objectMapper.writeValueAsBytes(new QueryRequest(LONG_RUNNING_QUERY, 12L, null));
                 var cancel = HttpRequest.newBuilder(URI.create(baseUrl + "/v1/cancel"))
                         .POST(HttpRequest.BodyPublishers.ofByteArray(cancelBody))
                         .header("Accept", HeaderValues.ACCEPT_JSON.values())

@@ -3,13 +3,13 @@ package io.dazzleduck.sql.flight.server;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.google.protobuf.ByteString;
-import io.dazzleduck.sql.commons.authorization.UnauthorizedException;
 import io.dazzleduck.sql.commons.Transformations;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
+import io.dazzleduck.sql.commons.authorization.UnauthorizedException;
 import io.dazzleduck.sql.commons.ingestion.IngestionHandler;
-import io.dazzleduck.sql.flight.ingestion.IngestionParameters;
 import io.dazzleduck.sql.commons.planner.SplitPlanner;
 import io.dazzleduck.sql.flight.FlightRecorder;
+import io.dazzleduck.sql.flight.ingestion.IngestionParameters;
 import io.dazzleduck.sql.flight.optimizer.QueryOptimizer;
 import org.apache.arrow.flight.*;
 import org.apache.arrow.flight.sql.impl.FlightSql;
@@ -26,14 +26,14 @@ import java.util.concurrent.ScheduledExecutorService;
 
 import static com.google.protobuf.ByteString.copyFrom;
 
-public class RestrictedFlightSqlProducer extends DuckDBFlightSqlProducer {
+public class SelectOnlyFlightSqlProducer extends DuckDBFlightSqlProducer {
 
     private final QueryOptimizer queryOptimizer;
-    public RestrictedFlightSqlProducer(Location serverLocation, String producerId, String secretKey, BufferAllocator allocator, String warehousePath, AccessMode accessMode, Path tempDir, IngestionHandler postIngestionHandler, ScheduledExecutorService scheduledExecutorService, Duration queryTimeout, Clock clock, FlightRecorder recorder, QueryOptimizer queryOptimizer, IngestionConfig ingestionConfig) {
+    public SelectOnlyFlightSqlProducer(Location serverLocation, String producerId, String secretKey, BufferAllocator allocator, String warehousePath, AccessMode accessMode, Path tempDir, IngestionHandler postIngestionHandler, ScheduledExecutorService scheduledExecutorService, Duration queryTimeout, Clock clock, FlightRecorder recorder, QueryOptimizer queryOptimizer, IngestionConfig ingestionConfig) {
         this(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionHandler, scheduledExecutorService, queryTimeout, clock, recorder, queryOptimizer, ingestionConfig, List.of());
     }
 
-    public RestrictedFlightSqlProducer(Location serverLocation, String producerId, String secretKey, BufferAllocator allocator, String warehousePath,  AccessMode accessMode,  Path tempDir, IngestionHandler postIngestionHandler, ScheduledExecutorService scheduledExecutorService, Duration queryTimeout, Clock clock, FlightRecorder recorder, QueryOptimizer queryOptimizer, IngestionConfig ingestionConfig, List<Location> dataProcessorLocations) {
+    public SelectOnlyFlightSqlProducer(Location serverLocation, String producerId, String secretKey, BufferAllocator allocator, String warehousePath, AccessMode accessMode, Path tempDir, IngestionHandler postIngestionHandler, ScheduledExecutorService scheduledExecutorService, Duration queryTimeout, Clock clock, FlightRecorder recorder, QueryOptimizer queryOptimizer, IngestionConfig ingestionConfig, List<Location> dataProcessorLocations) {
         super(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionHandler, scheduledExecutorService, queryTimeout, clock, recorder, ingestionConfig, dataProcessorLocations);
         this.queryOptimizer = queryOptimizer;
     }
@@ -140,15 +140,7 @@ public class RestrictedFlightSqlProducer extends DuckDBFlightSqlProducer {
             CallContext context,
             FlightStream flightStream,
             StreamListener<PutResult> ackStream) {
-        var queue = IngestionParameters.getIngestionParameters(command).ingestionQueue();
-        var user = context.peerIdentity();
-        var verifiedClaims = getVerifiedClaims(context);
-        if (!getSqlAuthorizer().hasWriteAccess(user, queue, verifiedClaims)) {
-            ErrorHandling.handleUnauthorized(ackStream,
-                    new UnauthorizedException("No write access to ingestion_queue:" + queue));
-            return () -> {};
-        }
-        return super.acceptPutStatementBulkIngest(command, context, flightStream, ackStream);
+        return throwNotSupported("Bulk Ingestion is not supported in restricted mode");
     }
 
     /**
@@ -471,43 +463,7 @@ public class RestrictedFlightSqlProducer extends DuckDBFlightSqlProducer {
         throwNotSupported("Renewing flight endpoints is not supported in restricted mode");
     }
 
-    protected final boolean parallelize(CallContext context) {
-        return getSplitSize(context) > 0;
-    }
 
-    @Override
-    protected FlightInfo getFlightInfoStatementFromQuery(final String query, final CallContext context, final FlightDescriptor descriptor) {
-        var parallelize = parallelize(context);
-        JsonNode tree = null;
-        try {
-            tree = Transformations.parseToTree(query);
-            if (tree.get("error").asBoolean()) {
-                ErrorHandling.handleQueryCompilationError(tree);
-            }
-        } catch (Throwable s) {
-            ErrorHandling.handleThrowable(s);
-        }
-
-        try {
-            tree = authorize(context, tree);
-        } catch (UnauthorizedException e) {
-            ErrorHandling.handleUnauthorized(e);
-        } catch (Throwable e) {
-            ErrorHandling.handleThrowable(e);
-        }
-
-
-        if (parallelize) {
-            return getFlightInfoStatementSplittable(tree, context, descriptor);
-        } else {
-            try {
-                var newSql = Transformations.parseToSql(tree);
-                return super.getFlightInfoStatement(newSql, context, descriptor);
-            } catch (SQLException e) {
-                throw ErrorHandling.handleSqlException(e);
-            }
-        }
-    }
 
     private JsonNode authorize(CallContext callContext, JsonNode sql) throws UnauthorizedException {
         var sqlAuthorizer = getSqlAuthorizer();
@@ -529,29 +485,6 @@ public class RestrictedFlightSqlProducer extends DuckDBFlightSqlProducer {
         return authorize(callContext, tree);
     }
 
-    private FlightInfo getFlightInfoStatementSplittable(JsonNode tree,
-                                                        final CallContext context,
-                                                        final FlightDescriptor descriptor) {
-        try {
-            var splitSize = getSplitSize(context);
-            var splits = SplitPlanner.getSplitTreeAndSize(tree, splitSize);
-            var list = splits.stream().map(split -> {
-                try {
-                    var sql = Transformations.parseToSql(split.tree());
-                    StatementHandle handle = newStatementHandle(sql, split.size());
-                    final ByteString serializedHandle =
-                            copyFrom(handle.serialize());
-                    return FlightSql.TicketStatementQuery.newBuilder().setStatementHandle(serializedHandle).build();
-                } catch (Exception e) {
-                    throw new RuntimeException(e);
-                }
-            }).toList();
-            return getFlightInfoForSchema(list, descriptor, null, getDataProcessorLocations());
-        } catch (Throwable throwable) {
-            ErrorHandling.handleThrowable(throwable);
-            return null;
-        }
-    }
 
     @Override
     protected void getStreamStatement(
@@ -587,4 +520,25 @@ public class RestrictedFlightSqlProducer extends DuckDBFlightSqlProducer {
         }
     }
 
+    @Override
+    protected FlightInfo getFlightInfoStatementFromQuery(final String query, final CallContext context, final FlightDescriptor descriptor) {
+        JsonNode tree = null;
+        try {
+            tree = Transformations.parseToTree(query);
+            if (tree.get("error").asBoolean()) {
+                ErrorHandling.handleQueryCompilationError(tree);
+            }
+        } catch (Throwable s) {
+            ErrorHandling.handleThrowable(s);
+        }
+
+        try {
+            authorize(context, tree);
+        } catch (UnauthorizedException e) {
+            ErrorHandling.handleUnauthorized(e);
+        } catch (Throwable e) {
+            ErrorHandling.handleThrowable(e);
+        }
+        return super.getFlightInfoStatement(query, context, descriptor);
+    }
 }

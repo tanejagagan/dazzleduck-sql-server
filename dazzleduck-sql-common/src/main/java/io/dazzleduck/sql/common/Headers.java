@@ -28,7 +28,6 @@ public class Headers {
     public static final String HEADER_DATA_PARTITION = "x-dd-partition";
     public static final String HEADER_DATA_FORMAT = "x-dd-format";
     public static final String HEADER_PRODUCER_ID = "x-dd-producer-id";
-    public static final String HEADER_QUERY_ID = "x-dd-query-id";
     public static final String HEADER_PRODUCER_BATCH_ID = "x-dd-producer-batch-id";
     public static final String HEADER_SORT_ORDER = "x-dd-sort-order";
 

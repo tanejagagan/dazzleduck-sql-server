@@ -218,6 +218,10 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         MicroMeterFlightRecorder.setupCommonTags(registry, producerId, serviceName);
     }
 
+    public AccessMode getAccessMode() {
+        return accessMode;
+    }
+
 
     public record DatabaseSchema ( String database, String schema) {}
     public record CacheKey(String peerIdentity, long id){}
@@ -1361,8 +1365,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         return getFlightInfoForSchema(
                 ticket, descriptor, null);
     }
-
-
 
     <T extends Message> FlightInfo getFlightInfoForSchema(
             final List<T> requests, final FlightDescriptor descriptor,
