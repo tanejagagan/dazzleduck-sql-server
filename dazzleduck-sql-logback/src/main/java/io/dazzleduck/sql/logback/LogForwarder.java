@@ -7,6 +7,8 @@ import org.slf4j.LoggerFactory;
 
 import java.io.Closeable;
 import java.time.Clock;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -20,6 +22,7 @@ public final class LogForwarder implements Closeable {
 
     private final LogToArrowConverter converter;
     private final HttpArrowProducer httpProducer;
+    private final Map<String, String> resourceMdc;
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
@@ -30,6 +33,7 @@ public final class LogForwarder implements Closeable {
      */
     public LogForwarder(LogForwarderConfig config) {
         this.converter = new LogToArrowConverter();
+        this.resourceMdc = config.resourceMdc();
 
         // Create HttpArrowProducer — use static JWT constructor if a token is preconfigured
         this.httpProducer = config.jwt() != null
@@ -109,7 +113,11 @@ public final class LogForwarder implements Closeable {
         fields[3] = entry.logger();
         fields[4] = entry.thread();
         fields[5] = entry.message();
-        fields[6] = entry.mdc().isEmpty() ? null : entry.mdc();
+
+        // Merge event MDC with resource MDC from config
+        Map<String, String> mergedMdc = mergeMdc(entry.mdc(), resourceMdc);
+        fields[6] = mergedMdc.isEmpty() ? null : mergedMdc;
+
         fields[7] = entry.throwable();
         fields[8] = entry.markers().isEmpty() ? null : entry.markers();
         fields[9] = entry.keyValuePairs().isEmpty() ? null : entry.keyValuePairs();
@@ -119,6 +127,28 @@ public final class LogForwarder implements Closeable {
         fields[12] = cd != null ? cd.file() : null;
         fields[13] = cd != null ? cd.line() : null;
         return new JavaRow(fields);
+    }
+
+    /**
+     * Merge event MDC with resource MDC from config.
+     * Resource MDC values are applied as defaults but can be overridden by event MDC.
+     *
+     * @param eventMdc  MDC from the logging event
+     * @param resourceMdc MDC from config
+     * @return merged MDC map
+     */
+    private Map<String, String> mergeMdc(Map<String, String> eventMdc, Map<String, String> resourceMdc) {
+        if (resourceMdc.isEmpty()) {
+            return eventMdc;
+        }
+        if (eventMdc.isEmpty()) {
+            return resourceMdc;
+        }
+
+        // Merge both maps with event MDC taking precedence
+        Map<String, String> merged = new HashMap<>(resourceMdc);
+        merged.putAll(eventMdc);
+        return merged;
     }
 
     /**

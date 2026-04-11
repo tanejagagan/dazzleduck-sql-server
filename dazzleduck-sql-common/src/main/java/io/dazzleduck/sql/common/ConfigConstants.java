@@ -30,6 +30,7 @@ public class ConfigConstants {
     public static final String FLIGHT_SQL_HOST_KEY = "flight_sql.host";
     public static final String FLIGHT_SQL_PORT_KEY = "flight_sql.port";
     public static final String FLIGHT_SQL_DATA_PROCESSOR_LOCATIONS_KEY = "flight_sql.data_processor_locations";
+    public static final String FLIGHT_SQL_SERVICE_NAME_KEY = "flight_sql.service_name";
 
     // Server configuration keys
     public static final String KEYSTORE_KEY = "keystore";
@@ -98,6 +99,7 @@ public class ConfigConstants {
     // Feature flags
     public static final String ENABLED_KEY = "enabled";
     public static final String CAPTURE_CALLER_DATA_KEY = "capture_caller_data";
+    public static final String RESOURCE_MDC_KEY = "resource_mdc";
 
     // Metrics specific
     public static final String STEP_INTERVAL_MS_KEY = "step_interval_ms";
