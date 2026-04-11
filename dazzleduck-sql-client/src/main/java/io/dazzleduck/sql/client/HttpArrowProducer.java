@@ -8,20 +8,13 @@ import org.apache.arrow.vector.compression.CompressionUtil;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLParameters;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.X509TrustManager;
+import io.dazzleduck.sql.common.SslUtils;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
-import java.security.KeyManagementException;
-import java.security.NoSuchAlgorithmException;
-import java.security.SecureRandom;
-import java.security.cert.X509Certificate;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -234,7 +227,7 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
         this.client = HttpClient.newBuilder()
                 .executor(executorService)
                 .connectTimeout(httpClientTimeout)
-                .sslContext(createTrustAllSslContext())
+                .sslContext(SslUtils.trustAllSslContext())
                 .sslParameters(sslParameters)
                 .build();
 
@@ -474,20 +467,6 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
 
         HttpRequest req = requestBuilder.build();
         return getClient().send(req, HttpResponse.BodyHandlers.ofString());
-    }
-
-    private static SSLContext createTrustAllSslContext() {
-        try {
-            SSLContext ctx = SSLContext.getInstance("TLS");
-            ctx.init(null, new TrustManager[]{new X509TrustManager() {
-                public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
-                public void checkClientTrusted(X509Certificate[] certs, String authType) {}
-                public void checkServerTrusted(X509Certificate[] certs, String authType) {}
-            }}, new SecureRandom());
-            return ctx;
-        } catch (NoSuchAlgorithmException | KeyManagementException e) {
-            throw new RuntimeException("Failed to create trust-all SSLContext", e);
-        }
     }
 
     // Issue #1: Override close() to cleanup HttpClient resources

@@ -8,6 +8,7 @@ import io.helidon.webserver.http.ServerResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.dazzleduck.sql.common.SslUtils;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -26,7 +27,7 @@ public class ProxyLoginService implements HttpService {
     private static final String HEADER_CONTENT_TYPE = "Content-Type";
     private static final String CONTENT_TYPE_JSON = "application/json";
 
-    private final HttpClient client = HttpClient.newHttpClient();
+    private final HttpClient client = SslUtils.trustAllHttpClient();
     private final String target;
     private static final Logger logger = LoggerFactory.getLogger(ProxyLoginService.class);
     public ProxyLoginService(String target) {
