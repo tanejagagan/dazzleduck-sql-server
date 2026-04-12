@@ -129,9 +129,11 @@ public interface FlightTestUtils {
                                 new NOOPIngestionTaskFactoryProvider(warehousePath + File.pathSeparator + "ingestion").getIngestionHandler(),
                                 Executors.newSingleThreadScheduledExecutor(),
                                 Duration.ofMinutes(2),
+                                Duration.ofMinutes(2),
                                 Clock.systemDefaultZone(),
                                 DuckDBFlightSqlProducer.buildRecorder(producerId),
-                                DuckDBFlightSqlProducer.DEFAULT_INGESTION_CONFIG))
+                                DuckDBFlightSqlProducer.DEFAULT_INGESTION_CONFIG,
+                                List.of()))
                 .middleware(AdvanceServerCallHeaderAuthMiddleware.KEY,
                         new AdvanceServerCallHeaderAuthMiddleware.Factory(getTestJWTTokenAuthenticator()))
                 .build()

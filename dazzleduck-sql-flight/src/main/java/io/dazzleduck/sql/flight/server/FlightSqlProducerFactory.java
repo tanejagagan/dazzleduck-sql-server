@@ -472,6 +472,7 @@ public final class FlightSqlProducerFactory {
                         ingestionHandler,
                         finalExecutorService,
                         queryTimeout,
+                        maxQueryTimeout,
                         clock,
                         finalRecorder,
                         ingestionConfig,
