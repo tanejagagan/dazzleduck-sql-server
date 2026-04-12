@@ -35,7 +35,7 @@ public class SqlAuthorizerLimitTest {
         }
 
         long limitValue = 100;
-        JsonNode authorized = authorizer.authorize("user", "db", "schema", query, Map.of(), limitValue);
+        JsonNode authorized = authorizer.authorize("user", "db", "schema", query, Map.of(), limitValue, -1);
 
         // Verify limit is applied correctly
         JsonNode statement = authorized.get(ExpressionConstants.FIELD_STATEMENTS).get(0).get(ExpressionConstants.FIELD_NODE);

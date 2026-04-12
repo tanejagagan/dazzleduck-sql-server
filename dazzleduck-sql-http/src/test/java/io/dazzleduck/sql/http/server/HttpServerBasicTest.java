@@ -387,4 +387,23 @@ public class HttpServerBasicTest extends HttpServerTestBase {
             assertTrue(reader.loadNextBatch());
         }
     }
+
+    /**
+     * The limit header 'x-dd-limit' must be rejected by the HTTP server
+     * (which uses DuckDBFlightSqlProducer by default) with HTTP 400.
+     */
+    @Test
+    public void testLimitHeaderRejected() throws IOException, InterruptedException {
+        var query = "SELECT 1";
+        var urlEncode = URLEncoder.encode(query, StandardCharsets.UTF_8);
+        var request = authenticatedRequestBuilder(URI.create(baseUrl + "/v1/query?q=%s".formatted(urlEncode)))
+                .GET()
+                .header(HEADER_DATA_LIMIT, "5")
+                .build();
+
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        assertEquals(400, response.statusCode());
+        assertTrue(response.body().contains("is not supported by this producer"),
+                "Expected error message to mention 'not supported', got: " + response.body());
+    }
 }

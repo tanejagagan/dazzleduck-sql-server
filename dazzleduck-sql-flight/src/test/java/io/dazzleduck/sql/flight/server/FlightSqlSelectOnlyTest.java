@@ -1,9 +1,10 @@
 package io.dazzleduck.sql.flight.server;
 
+import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
-import org.apache.arrow.flight.FlightRuntimeException;
-import org.apache.arrow.flight.Location;
+import org.apache.arrow.flight.*;
+import org.apache.arrow.flight.sql.FlightSqlClient;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -42,6 +43,10 @@ public class FlightSqlSelectOnlyTest {
         serverLocation = FlightTestUtils.findNextLocation();
         var flightTestUtils = FlightTestUtils.createForDatabaseSchema(TEST_USER, "password", TEST_CATALOG, TEST_SCHEMA);
         serverClient = flightTestUtils.createReadOnlyServerClient(serverLocation);
+
+        ConnectionPool.executeBatch(new String[]{
+                "CREATE TABLE t_select_only AS SELECT * FROM range(100)"
+        });
     }
 
     @AfterAll
@@ -49,9 +54,45 @@ public class FlightSqlSelectOnlyTest {
         if (serverClient != null) {
             serverClient.close();
         }
+        ConnectionPool.execute("DROP TABLE IF EXISTS t_select_only");
     }
 
     // ===== SELECT Operations (Should be ALLOWED) =====
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testLimitHeader() throws Exception {
+        FlightCallHeaders headers = new FlightCallHeaders();
+        headers.insert(Headers.HEADER_DATA_LIMIT, "5");
+        HeaderCallOption opt = new HeaderCallOption(headers);
+
+        FlightInfo info = serverClient.flightSqlClient().execute("SELECT * FROM t_select_only", opt);
+        try (FlightStream stream = serverClient.flightSqlClient().getStream(info.getEndpoints().get(0).getTicket())) {
+            int count = 0;
+            while (stream.next()) {
+                count += stream.getRoot().getRowCount();
+            }
+            assertEquals(5, count);
+        }
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testLimitAndOffsetHeader() throws Exception {
+        FlightCallHeaders headers = new FlightCallHeaders();
+        headers.insert(Headers.HEADER_DATA_LIMIT, "5");
+        headers.insert(Headers.HEADER_DATA_OFFSET, "90");
+        HeaderCallOption opt = new HeaderCallOption(headers);
+
+        FlightInfo info = serverClient.flightSqlClient().execute("SELECT * FROM t_select_only", opt);
+        try (FlightStream stream = serverClient.flightSqlClient().getStream(info.getEndpoints().get(0).getTicket())) {
+            int count = 0;
+            while (stream.next()) {
+                count += stream.getRoot().getRowCount();
+            }
+            assertEquals(5, count);
+        }
+    }
 
     @Test
     @Timeout(value = 30, unit = TimeUnit.SECONDS)
@@ -389,5 +430,59 @@ public class FlightSqlSelectOnlyTest {
         // SELECT with ORDER BY should work
         String query = "SELECT * FROM generate_series(10) AS t(value) ORDER BY value DESC";
         FlightTestUtils.testQuery(query, query, serverClient.flightSqlClient(), serverClient.clientAllocator());
+    }
+
+    // ===== EXPLAIN Support Tests =====
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testExplainSelect() throws Exception {
+        String query = "EXPLAIN SELECT 1";
+        FlightTestUtils.testQuerySuccess(query, serverClient.flightSqlClient(), serverClient.clientAllocator());
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testExplainSelectWithWhere() throws Exception {
+        String query = "EXPLAIN SELECT 1 WHERE 1=1";
+        FlightTestUtils.testQuerySuccess(query, serverClient.flightSqlClient(), serverClient.clientAllocator());
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testExplainSelectWithJoin() throws Exception {
+        String query = "EXPLAIN SELECT 1 t1_col, 2 t2_col FROM (SELECT 1) t1 JOIN (SELECT 2) t2 ON TRUE";
+        FlightTestUtils.testQuerySuccess(query, serverClient.flightSqlClient(), serverClient.clientAllocator());
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testExplainAnalyzeSelect() throws Exception {
+        String query = "EXPLAIN ANALYZE SELECT 1";
+        FlightTestUtils.testQuerySuccess(query, serverClient.flightSqlClient(), serverClient.clientAllocator());
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testExplainAnalyzeSelectWithJoin() throws Exception {
+        String query = "EXPLAIN ANALYZE SELECT 1 FROM (SELECT 1) JOIN (SELECT 2) ON TRUE";
+        FlightTestUtils.testQuerySuccess(query, serverClient.flightSqlClient(), serverClient.clientAllocator());
+    }
+
+    // ===== hasWriteAccess Test =====
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testHasWriteAccessDenied() throws Exception {
+        // In READ_ONLY mode, hasWriteAccess should return false
+        // This test verifies the authorizer correctly denies write access
+        String query = "SELECT 1";
+
+        // The query should work (it's a SELECT)
+        FlightTestUtils.testQuery(query, serverClient.flightSqlClient(), serverClient.clientAllocator());
+
+        // But any write operation should fail
+        assertThrows(FlightRuntimeException.class, () ->
+            serverClient.flightSqlClient().execute("INSERT INTO (VALUES (1)) VALUES (1)"));
     }
 }

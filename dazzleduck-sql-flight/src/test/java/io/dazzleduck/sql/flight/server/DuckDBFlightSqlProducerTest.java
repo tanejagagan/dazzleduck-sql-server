@@ -808,4 +808,20 @@ public class DuckDBFlightSqlProducerTest {
             assertEquals(FlightStatusCode.INVALID_ARGUMENT, ex.status().code());
         }
     }
+
+    /**
+     * The limit header 'x-dd-limit' must be rejected by the base {@link DuckDBFlightSqlProducer}
+     * with an INVALID_ARGUMENT error.
+     */
+    @Test
+    public void testLimitHeaderRejected() {
+        FlightCallHeaders headers = new FlightCallHeaders();
+        headers.insert(Headers.HEADER_DATA_LIMIT, "5");
+        HeaderCallOption opt = new HeaderCallOption(headers);
+
+        FlightRuntimeException ex = assertThrows(FlightRuntimeException.class, () ->
+                sqlClient.execute("SELECT 1", opt));
+        assertTrue(ex.getMessage().contains("is not supported by this producer"),
+                "Expected error message to mention 'not supported', got: " + ex.getMessage());
+    }
 }

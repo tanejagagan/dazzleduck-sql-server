@@ -118,7 +118,7 @@ public interface FlightTestUtils {
 
         var readOnlyFlightServer = FlightServer.builder(
                         serverAllocator,
-                        serverLocation, new RestrictedFlightSqlProducer(
+                        serverLocation, new SelectOnlyFlightSqlProducer(
                                 serverLocation,
                                 producerId,
                                 "change me",
@@ -131,7 +131,6 @@ public interface FlightTestUtils {
                                 Duration.ofMinutes(2),
                                 Clock.systemDefaultZone(),
                                 DuckDBFlightSqlProducer.buildRecorder(producerId),
-                                QueryOptimizer.NOOP_QUERY_OPTIMIZER,
                                 DuckDBFlightSqlProducer.DEFAULT_INGESTION_CONFIG))
                 .middleware(AdvanceServerCallHeaderAuthMiddleware.KEY,
                         new AdvanceServerCallHeaderAuthMiddleware.Factory(getTestJWTTokenAuthenticator()))
@@ -195,6 +194,15 @@ public interface FlightTestUtils {
         },  clientAllocator);
     }
 
+    static void testQuerySuccess( String query, FlightSqlClient sqlClient, BufferAllocator clientAllocator) throws Exception {
+        final FlightInfo flightInfo = sqlClient.execute(query);
+        try( var stream =  sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket())) {
+            while (stream.next()){
+                System.out.println(stream.getRoot().contentToTSVString());
+            };
+        }
+    }
+
     static void testStream(String expectedQuery, Supplier<FlightStream> streamSupplier, BufferAllocator clientAllocator) throws Exception {
         try (final FlightStream stream = streamSupplier.get()) {
             TestUtils.isEqual(expectedQuery, clientAllocator, FlightStreamReader.of(stream, clientAllocator));
@@ -209,6 +217,7 @@ public interface FlightTestUtils {
             }
         }
     }
+
 
 
     public static Location findNextLocation(){

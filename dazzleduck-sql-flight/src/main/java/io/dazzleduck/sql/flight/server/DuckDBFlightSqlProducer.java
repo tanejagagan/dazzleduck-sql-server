@@ -692,10 +692,15 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
      * Extension point for subclasses to transform or authorize a query before execution.
      * Called only when the statement handle has no pre-computed checksum (i.e., the query
      * was not pre-authorized at planning time).
-     * Default implementation returns the query unchanged.
+     * Default implementation returns the query unchanged, but rejects the limit header if present.
      */
     protected String transformQuery(CallContext context, Connection connection, String query)
             throws UnauthorizedException, JsonProcessingException, SQLException {
+        if (getLimit(context) > 0) {
+            throw CallStatus.INVALID_ARGUMENT
+                    .withDescription("Limit header '" + Headers.HEADER_DATA_LIMIT + "' is not supported by this producer")
+                    .toRuntimeException();
+        }
         return query;
     }
 
@@ -706,6 +711,14 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
      */
     protected OptionalResultSetSupplier createResultSetSupplier(Statement statement, String query) {
         return OptionalResultSetSupplier.of(statement, query);
+    }
+
+    protected static long getLimit(CallContext callContext) {
+        return ContextUtils.getValue(callContext, Headers.HEADER_DATA_LIMIT, -1L, Long.class);
+    }
+
+    protected static long getOffset(CallContext callContext) {
+        return ContextUtils.getValue(callContext, Headers.HEADER_DATA_OFFSET, -1L, Long.class);
     }
 
     /**
@@ -1390,6 +1403,12 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
     protected FlightInfo getFlightInfoStatement(String query,
                                       final CallContext context,
                                       final FlightDescriptor descriptor) {
+        try {
+            var connection = getConnection(context, getAccessMode());
+            query = transformQuery(context, connection, query);
+        } catch (Exception e) {
+            throw CallStatus.INTERNAL.withCause(e).withDescription("Failed to transform query: " + e.getMessage()).toRuntimeException();
+        }
         StatementHandle handle = newStatementHandle(query);
         final ByteString serializedHandle =
                 copyFrom(handle.serialize());
