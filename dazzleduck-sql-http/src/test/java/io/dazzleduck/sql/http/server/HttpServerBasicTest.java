@@ -43,7 +43,7 @@ public class HttpServerBasicTest extends HttpServerTestBase {
         initWarehouse();
         initClient();
         initPort();
-        startServer();
+        startServer("--conf", "dazzleduck_server.max_query_timeout_ms=10000");
         installArrowExtension();
     }
 
@@ -277,6 +277,68 @@ public class HttpServerBasicTest extends HttpServerTestBase {
         return "ingestion";
     }
 
+    // -----------------------------------------------------------------------
+    // Query-timeout tests
+    // -----------------------------------------------------------------------
+
+    /**
+     * A per-request timeout of 1 s (via {@code x-dd-query-timeout} header) must cancel
+     * the long-running query. The HTTP response should be a non-200 error status.
+     */
+    @Test
+    @Timeout(value = 15, unit = TimeUnit.SECONDS)
+    public void testPerRequestQueryTimeout() throws IOException, InterruptedException {
+        var urlEncode = URLEncoder.encode(LONG_RUNNING_QUERY, StandardCharsets.UTF_8);
+        var request = authenticatedRequestBuilder(URI.create(baseUrl + "/v1/query?q=" + urlEncode))
+                .GET()
+                .header(HEADER_QUERY_TIMEOUT, "1")
+                .build();
+
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        assertNotEquals(200, response.statusCode(),
+                "Expected a non-200 status when the per-request 1 s timeout fires");
+    }
+
+    /**
+     * A negative value for {@code x-dd-query-timeout} must be rejected before the query
+     * reaches streamResultSet with HTTP 400 Bad Request.
+     */
+    @Test
+    @Timeout(value = 10, unit = TimeUnit.SECONDS)
+    public void testNegativeQueryTimeoutRejected() throws IOException, InterruptedException {
+        var urlEncode = URLEncoder.encode(LONG_RUNNING_QUERY, StandardCharsets.UTF_8);
+        var request = authenticatedRequestBuilder(URI.create(baseUrl + "/v1/query?q=" + urlEncode))
+                .GET()
+                .header(HEADER_QUERY_TIMEOUT, "-1")
+                .build();
+
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        assertEquals(400, response.statusCode(),
+                "Expected HTTP 400 for a negative timeout value");
+        assertTrue(response.body().contains("non-negative"),
+                "Response body should mention 'non-negative', got: " + response.body());
+    }
+
+    /**
+     * Requesting a timeout larger than the server maximum (10 s, configured in {@code @BeforeAll})
+     * must be rejected before the query reaches streamResultSet with HTTP 400 Bad Request.
+     */
+    @Test
+    @Timeout(value = 10, unit = TimeUnit.SECONDS)
+    public void testMaxQueryTimeoutExceeded() throws IOException, InterruptedException {
+        var urlEncode = URLEncoder.encode(LONG_RUNNING_QUERY, StandardCharsets.UTF_8);
+        var request = authenticatedRequestBuilder(URI.create(baseUrl + "/v1/query?q=" + urlEncode))
+                .GET()
+                .header(HEADER_QUERY_TIMEOUT, "15") // 15 s > max 10 s
+                .build();
+
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        assertEquals(400, response.statusCode(),
+                "Expected HTTP 400 when requested timeout exceeds server maximum");
+        assertTrue(response.body().contains("exceeds server maximum"),
+                "Response body should describe the rejection reason, got: " + response.body());
+    }
+
     @Test
     public void testError() throws IOException, InterruptedException {
         var query = "select fr";
@@ -324,5 +386,24 @@ public class HttpServerBasicTest extends HttpServerTestBase {
              var reader = new ArrowStreamReader(inputStream, allocator)) {
             assertTrue(reader.loadNextBatch());
         }
+    }
+
+    /**
+     * The limit header 'x-dd-limit' must be rejected by the HTTP server
+     * (which uses DuckDBFlightSqlProducer by default) with HTTP 400.
+     */
+    @Test
+    public void testLimitHeaderRejected() throws IOException, InterruptedException {
+        var query = "SELECT 1";
+        var urlEncode = URLEncoder.encode(query, StandardCharsets.UTF_8);
+        var request = authenticatedRequestBuilder(URI.create(baseUrl + "/v1/query?q=%s".formatted(urlEncode)))
+                .GET()
+                .header(HEADER_DATA_LIMIT, "5")
+                .build();
+
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        assertEquals(400, response.statusCode());
+        assertTrue(response.body().contains("is not supported by this producer"),
+                "Expected error message to mention 'not supported', got: " + response.body());
     }
 }

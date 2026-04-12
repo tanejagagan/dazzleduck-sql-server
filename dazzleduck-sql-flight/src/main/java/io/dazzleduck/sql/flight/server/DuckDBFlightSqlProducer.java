@@ -1,6 +1,7 @@
 package io.dazzleduck.sql.flight.server;
 
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.RemovalListener;
@@ -11,6 +12,7 @@ import io.dazzleduck.sql.common.ConfigConstants;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.authorization.SqlAuthorizer;
+import io.dazzleduck.sql.commons.authorization.UnauthorizedException;
 import io.dazzleduck.sql.commons.ingestion.*;
 import io.dazzleduck.sql.flight.FlightRecorder;
 import io.dazzleduck.sql.flight.MicroMeterFlightRecorder;
@@ -279,28 +281,11 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
 
     private final ScheduledExecutorService scheduledExecutorService;
 
-    private final Duration queryTimeout;
+    private final Duration defaultQueryTimeout;
+
+    private final Duration maxQueryTimeout;
 
     private final Clock clock;
-
-    private final long CANCEL_TASK_INTERVAL_SECOND = 10;
-
-    private final StreamListener<CancelStatus> streamListener = new StreamListener<>() {
-        @Override
-        public void onNext(CancelStatus val) {
-            logger.atDebug().log("Cancel status: {}", val);
-        }
-
-        @Override
-        public void onError(Throwable t) {
-            logger.atError().setCause(t).log("Error during cancel operation");
-        }
-
-        @Override
-        public void onCompleted() {
-            logger.atDebug().log("Cancel operation completed");
-        }
-    };
 
 
     public static Path newTempDir() {
@@ -327,7 +312,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                                    Duration queryTimeout,
                                    IngestionConfig ingestionConfig) {
         this(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, ingestionHandler,
-                scheduledExecutorService, queryTimeout, Clock.systemDefaultZone(),
+                scheduledExecutorService, queryTimeout, Duration.ZERO, Clock.systemDefaultZone(),
                 buildRecorder(producerId), ingestionConfig, List.of());
 
     }
@@ -345,7 +330,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                                    FlightRecorder recorder,
                                    IngestionConfig bulkIngestionConfig) {
         this(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, ingestionHandler,
-                scheduledExecutorService, queryTimeout, clock, recorder, bulkIngestionConfig, List.of());
+                scheduledExecutorService, queryTimeout, Duration.ZERO, clock, recorder, bulkIngestionConfig, List.of());
     }
 
     public DuckDBFlightSqlProducer(Location serverLocation,
@@ -357,7 +342,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                                    Path tempDir,
                                    IngestionHandler ingestionHandler,
                                    ScheduledExecutorService scheduledExecutorService,
-                                   Duration queryTimeout,
+                                   Duration defaultQueryTimeout,
+                                   Duration maxQueryTimeout,
                                    Clock clock,
                                    FlightRecorder recorder,
                                    IngestionConfig bulkIngestionConfig,
@@ -371,7 +357,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         this.accessMode = accessMode;
         this.tempDir = tempDir;
         this.scheduledExecutorService = scheduledExecutorService;
-        this.queryTimeout = queryTimeout;
+        this.defaultQueryTimeout = defaultQueryTimeout;
+        this.maxQueryTimeout = maxQueryTimeout;
         this.recorder = recorder;
         if (AccessMode.RESTRICTED == accessMode) {
             this.sqlAuthorizer = SqlAuthorizer.JWT_AUTHORIZER;
@@ -459,26 +446,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                     FlightSql.SqlInfo.SQL_TRANSACTIONS_SUPPORTED_VALUE
             );
 
-            scheduledExecutorService.scheduleWithFixedDelay(() -> {
-                try {
-                    var now = clock.instant();
-                    preparedStatementLoadingCache.asMap().forEach((key, ctx) -> {
-                        if (ctx.startTime().plus(queryTimeout).isBefore(now)) {
-                            recorder.recordPreparedStatementTimeout(key, ctx);
-                            cancel(key.id, streamListener, key.peerIdentity);
-                        }
-                    });
-
-                    statementLoadingCache.asMap().forEach((key, ctx) -> {
-                        if (ctx.startTime().plus(queryTimeout).isBefore(now)) {
-                            recorder.recordStatementTimeout(key, ctx);
-                            cancel(key.id, streamListener, key.peerIdentity);
-                        }
-                    });
-                } catch (Exception e) {
-                    logger.atError().setCause(e).log("Error checking query timeouts");
-                }
-            }, 0, CANCEL_TASK_INTERVAL_SECOND, TimeUnit.SECONDS);
         } catch (SQLException e) {
             throw new RuntimeException(e);
         }
@@ -659,6 +626,12 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             ErrorHandling.handleContextNotFound();
             return; // Never reached if handleContextNotFound throws, but prevents NPE if it doesn't
         }
+        try {
+            statementContext.getStatement().setQueryTimeout(getEffectiveQueryTimeoutSeconds(context));
+        } catch (SQLException e) {
+            ErrorHandling.handleThrowable(listener, e);
+            return;
+        }
         ResultSetStreamUtil.streamResultSet(executorService, statementContext, key, OptionalResultSetSupplier.of(statementContext.getStatement()),
             allocator, getBatchSize(context),
             listener, () -> {}, recorder);
@@ -675,9 +648,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
     }
 
     /**
-     * Template method for streaming statement results.
-     * Subclasses can override this method to customize statement execution behavior
-     * (e.g., adding authorization checks or query transformation).
+     * Template method for streaming statement results. Uses {@link #transformQuery} and
+     * {@link #createResultSetSupplier} as extension points for subclasses.
      *
      * @param statementHandle The statement handle containing query information
      * @param context Per-call context
@@ -688,21 +660,25 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             final CallContext context,
             final ServerStreamListener listener) {
         try {
-            var connection = getConnection(context, accessMode);
+            var connection = getConnection(context, getAccessMode());
             String query = statementHandle.query();
             if (statementHandle.queryChecksum() != null
                     && statementHandle.signatureMismatch(secretKey)) {
                 ErrorHandling.handleSignatureMismatch(listener);
                 return;
             }
+            if (statementHandle.queryChecksum() == null) {
+                query = transformQuery(context, connection, query);
+            }
             Statement statement = connection.createStatement();
+            statement.setQueryTimeout(getEffectiveQueryTimeoutSeconds(context));
             var statementContext = new StatementContext<>(connection, statement, query);
             var key = new CacheKey(context.peerIdentity(), statementHandle.queryId());
             statementLoadingCache.put(key, statementContext);
             ResultSetStreamUtil.streamResultSet(executorService,
                     statementContext,
                     key,
-                    OptionalResultSetSupplier.of(statement, query),
+                    createResultSetSupplier(statement, query),
                     allocator,
                     getBatchSize(context),
                     listener,
@@ -710,6 +686,76 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         } catch (Throwable e) {
             ErrorHandling.handleThrowable(listener, e);
         }
+    }
+
+    /**
+     * Extension point for subclasses to transform or authorize a query before execution.
+     * Called only when the statement handle has no pre-computed checksum (i.e., the query
+     * was not pre-authorized at planning time).
+     * Default implementation returns the query unchanged, but rejects the limit header if present.
+     */
+    protected String transformQuery(CallContext context, Connection connection, String query)
+            throws UnauthorizedException, JsonProcessingException, SQLException {
+        if (getLimit(context) > 0) {
+            throw CallStatus.INVALID_ARGUMENT
+                    .withDescription("Limit header '" + Headers.HEADER_DATA_LIMIT + "' is not supported by this producer")
+                    .toRuntimeException();
+        }
+        return query;
+    }
+
+    /**
+     * Extension point for subclasses to supply a custom {@link OptionalResultSetSupplier},
+     * e.g., one that includes a {@link io.dazzleduck.sql.flight.optimizer.QueryOptimizer}.
+     * Default implementation uses no optimizer.
+     */
+    protected OptionalResultSetSupplier createResultSetSupplier(Statement statement, String query) {
+        return OptionalResultSetSupplier.of(statement, query);
+    }
+
+    protected static long getLimit(CallContext callContext) {
+        return ContextUtils.getValue(callContext, Headers.HEADER_DATA_LIMIT, -1L, Long.class);
+    }
+
+    protected static long getOffset(CallContext callContext) {
+        return ContextUtils.getValue(callContext, Headers.HEADER_DATA_OFFSET, -1L, Long.class);
+    }
+
+    /**
+     * Resolves the effective query timeout in seconds for the current request.
+     *
+     * <p>Resolution order:
+     * <ol>
+     *   <li>Client-supplied value from the {@value Headers#HEADER_QUERY_TIMEOUT} header (seconds).
+     *   <li>Server default ({@code defaultQueryTimeout}) when the client provides no value.
+     * </ol>
+     *
+     * <p>If {@code maxQueryTimeout} is non-zero and the resolved timeout exceeds it, an
+     * {@code INVALID_ARGUMENT} Flight error is thrown immediately.
+     *
+     * @param context the per-call context carrying request headers
+     * @return effective timeout in seconds; 0 means no timeout
+     * @throws FlightRuntimeException if the requested timeout exceeds the server maximum
+     */
+    protected int getEffectiveQueryTimeoutSeconds(CallContext context) {
+        int requestedSeconds = ContextUtils.getValue(context, Headers.HEADER_QUERY_TIMEOUT, 0, Integer.class);
+        if (requestedSeconds < 0) {
+            throw CallStatus.INVALID_ARGUMENT
+                    .withDescription("Query timeout must be non-negative, got: " + requestedSeconds)
+                    .toRuntimeException();
+        }
+        if (requestedSeconds > 0) {
+            // Client explicitly requested a timeout — enforce the server maximum cap.
+            if (!maxQueryTimeout.isZero() && requestedSeconds > maxQueryTimeout.toSeconds()) {
+                throw CallStatus.INVALID_ARGUMENT
+                        .withDescription("Requested query timeout " + requestedSeconds
+                                + "s exceeds server maximum of " + maxQueryTimeout.toSeconds() + "s")
+                        .toRuntimeException();
+            }
+            return requestedSeconds;
+        }
+        // No client-supplied timeout — use the server default (not subject to the max cap).
+        return (int) defaultQueryTimeout.toSeconds();
     }
 
 
@@ -1357,6 +1403,12 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
     protected FlightInfo getFlightInfoStatement(String query,
                                       final CallContext context,
                                       final FlightDescriptor descriptor) {
+        try {
+            var connection = getConnection(context, getAccessMode());
+            query = transformQuery(context, connection, query);
+        } catch (Exception e) {
+            throw CallStatus.INTERNAL.withCause(e).withDescription("Failed to transform query: " + e.getMessage()).toRuntimeException();
+        }
         StatementHandle handle = newStatementHandle(query);
         final ByteString serializedHandle =
                 copyFrom(handle.serialize());

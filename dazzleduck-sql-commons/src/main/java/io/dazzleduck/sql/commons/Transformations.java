@@ -728,7 +728,13 @@ public class Transformations {
     }
 
     public static JsonNode getSelectForBaseTable(JsonNode statementNode) {
+        if (statementNode == null) {
+            return null;
+        }
         var fromTable = statementNode.get(FIELD_FROM_TABLE);
+        if (fromTable == null) {
+            return null;
+        }
         switch (fromTable.get(FIELD_TYPE).asText()) {
             case NODE_TYPE_BASE_TABLE -> {
                 return statementNode;
@@ -1061,6 +1067,32 @@ public class Transformations {
             }
         }
     }
+    public static JsonNode addLimit(JsonNode query, long limit, long offset) {
+        if (limit < 0 && offset < 0) {
+            return query;
+        }
+        var statement = getFirstStatementNode(query);
+        var select = (ObjectNode) getSelectForBaseTable(statement);
+        if (select == null) {
+            return query;
+        }
+
+        ArrayNode modifiers = (ArrayNode) select.get(FIELD_MODIFIERS);
+        if (modifiers == null) {
+            modifiers = select.putArray(FIELD_MODIFIERS);
+        } else {
+            for (int i = 0; i < modifiers.size(); i++) {
+                if (modifiers.get(i).get(FIELD_TYPE).asText().equals(LIMIT_MODIFIER_TYPE)) {
+                    modifiers.remove(i);
+                    break;
+                }
+            }
+        }
+
+        modifiers.add(ExpressionFactory.limitModifier(limit, offset));
+        return query;
+    }
+
     private static String escapeSpecialChar(String sql) {
         return sql.replaceAll("'", "''");
     }

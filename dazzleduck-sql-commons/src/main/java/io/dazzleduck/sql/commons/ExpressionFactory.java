@@ -233,6 +233,25 @@ public class ExpressionFactory {
     }
 
     /**
+     * Creates a LIMIT clause modifier.
+     *
+     * <p>This is used to add LIMIT and OFFSET to a query.
+     *
+     * @param limit the maximum number of rows to return
+     * @param offset the number of rows to skip (can be negative to disable)
+     * @return JsonNode representing the LIMIT clause
+     */
+    public static JsonNode limitModifier(long limit, long offset) {
+        ObjectNode result = JsonNodeFactory.instance.objectNode();
+        result.put(FIELD_TYPE, LIMIT_MODIFIER_TYPE);
+        result.set(FIELD_LIMIT, constant(limit));
+        if (offset >= 0) {
+            result.set(FIELD_OFFSET, constant(offset));
+        }
+        return result;
+    }
+
+    /**
      * Creates a constant value expression.
      *
      * <p><b>Supported types:</b> String, Integer, Long, Double, Float, Boolean, null
