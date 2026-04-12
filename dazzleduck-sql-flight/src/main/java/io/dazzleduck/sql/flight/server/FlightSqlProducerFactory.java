@@ -111,6 +111,7 @@ public final class FlightSqlProducerFactory {
         private QueryOptimizer queryOptimizer;
         private ScheduledExecutorService scheduledExecutorService;
         private Duration queryTimeout;
+        private Duration maxQueryTimeout;
         private Clock clock;
         private IngestionConfig ingestionConfig;
         private FlightRecorder flightRecorder;
@@ -150,6 +151,12 @@ public final class FlightSqlProducerFactory {
                 throw new IllegalArgumentException("Required configuration missing: " + ConfigConstants.QUERY_TIMEOUT_MS_KEY);
             }
             this.queryTimeout = Duration.ofMillis(config.getLong(ConfigConstants.QUERY_TIMEOUT_MS_KEY));
+
+            // Max query timeout (required)
+            if (!config.hasPath(ConfigConstants.MAX_QUERY_TIMEOUT_MS_KEY)) {
+                throw new IllegalArgumentException("Required configuration missing: " + ConfigConstants.MAX_QUERY_TIMEOUT_MS_KEY);
+            }
+            this.maxQueryTimeout = Duration.ofMillis(config.getLong(ConfigConstants.MAX_QUERY_TIMEOUT_MS_KEY));
 
             // Ingestion config
             this.ingestionConfig = loadIngestionConfig(config);
@@ -204,6 +211,13 @@ public final class FlightSqlProducerFactory {
          */
         public Duration getQueryTimeout() {
             return queryTimeout;
+        }
+
+        /**
+         * @return the configured max query timeout (Duration.ZERO means no cap)
+         */
+        public Duration getMaxQueryTimeout() {
+            return maxQueryTimeout;
         }
 
         /**
@@ -358,6 +372,18 @@ public final class FlightSqlProducerFactory {
         }
 
         /**
+         * Sets the maximum query timeout a client may request.
+         * Use {@code Duration.ZERO} to disable the cap.
+         *
+         * @param maxTimeout the maximum query timeout duration
+         * @return this builder
+         */
+        public ProducerBuilder withMaxQueryTimeout(Duration maxTimeout) {
+            this.maxQueryTimeout = maxTimeout;
+            return this;
+        }
+
+        /**
          * Sets a custom clock for time-based operations.
          *
          * @param clock the clock to use
@@ -424,9 +450,10 @@ public final class FlightSqlProducerFactory {
                     warehousePath,
                     accessMode,
                     tempWriteDir,
-                        ingestionHandler,
+                    ingestionHandler,
                     finalExecutorService,
                     queryTimeout,
+                    maxQueryTimeout,
                     clock,
                     finalRecorder,
                     queryOptimizer,
@@ -445,6 +472,7 @@ public final class FlightSqlProducerFactory {
                         ingestionHandler,
                         finalExecutorService,
                         queryTimeout,
+                        maxQueryTimeout,
                         clock,
                         finalRecorder,
                         queryOptimizer,
@@ -460,9 +488,10 @@ public final class FlightSqlProducerFactory {
                     warehousePath,
                     accessMode,
                     tempWriteDir,
-                        ingestionHandler,
+                    ingestionHandler,
                     finalExecutorService,
                     queryTimeout,
+                    maxQueryTimeout,
                     clock,
                     finalRecorder,
                     ingestionConfig,

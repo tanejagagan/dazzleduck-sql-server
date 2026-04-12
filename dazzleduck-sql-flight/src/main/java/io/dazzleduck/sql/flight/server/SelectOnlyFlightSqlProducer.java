@@ -30,11 +30,15 @@ public class SelectOnlyFlightSqlProducer extends DuckDBFlightSqlProducer {
 
     private final QueryOptimizer queryOptimizer;
     public SelectOnlyFlightSqlProducer(Location serverLocation, String producerId, String secretKey, BufferAllocator allocator, String warehousePath, AccessMode accessMode, Path tempDir, IngestionHandler postIngestionHandler, ScheduledExecutorService scheduledExecutorService, Duration queryTimeout, Clock clock, FlightRecorder recorder, QueryOptimizer queryOptimizer, IngestionConfig ingestionConfig) {
-        this(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionHandler, scheduledExecutorService, queryTimeout, clock, recorder, queryOptimizer, ingestionConfig, List.of());
+        this(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionHandler, scheduledExecutorService, queryTimeout, Duration.ZERO, clock, recorder, queryOptimizer, ingestionConfig, List.of());
     }
 
     public SelectOnlyFlightSqlProducer(Location serverLocation, String producerId, String secretKey, BufferAllocator allocator, String warehousePath, AccessMode accessMode, Path tempDir, IngestionHandler postIngestionHandler, ScheduledExecutorService scheduledExecutorService, Duration queryTimeout, Clock clock, FlightRecorder recorder, QueryOptimizer queryOptimizer, IngestionConfig ingestionConfig, List<Location> dataProcessorLocations) {
-        super(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionHandler, scheduledExecutorService, queryTimeout, clock, recorder, ingestionConfig, dataProcessorLocations);
+        this(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionHandler, scheduledExecutorService, queryTimeout, Duration.ZERO, clock, recorder, queryOptimizer, ingestionConfig, dataProcessorLocations);
+    }
+
+    public SelectOnlyFlightSqlProducer(Location serverLocation, String producerId, String secretKey, BufferAllocator allocator, String warehousePath, AccessMode accessMode, Path tempDir, IngestionHandler postIngestionHandler, ScheduledExecutorService scheduledExecutorService, Duration queryTimeout, Duration maxQueryTimeout, Clock clock, FlightRecorder recorder, QueryOptimizer queryOptimizer, IngestionConfig ingestionConfig, List<Location> dataProcessorLocations) {
+        super(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionHandler, scheduledExecutorService, queryTimeout, maxQueryTimeout, clock, recorder, ingestionConfig, dataProcessorLocations);
         this.queryOptimizer = queryOptimizer;
     }
 
@@ -487,37 +491,14 @@ public class SelectOnlyFlightSqlProducer extends DuckDBFlightSqlProducer {
 
 
     @Override
-    protected void getStreamStatement(
-            StatementHandle statementHandle,
-            final CallContext context,
-            final ServerStreamListener listener) {
-        try {
-            var connection = getConnection(context, getAccessMode());
-            String query = statementHandle.query();
-            if (statementHandle.queryChecksum() != null
-                    && statementHandle.signatureMismatch(secretKey)) {
-                ErrorHandling.handleSignatureMismatch(listener);
-                return;
-            }
+    protected String transformQuery(CallContext context, Connection connection, String query)
+            throws UnauthorizedException, JsonProcessingException, SQLException {
+        return authorize(context, query, connection);
+    }
 
-            if (statementHandle.queryChecksum() == null) {
-                query = authorize(context, query, connection);
-            }
-            Statement statement = connection.createStatement();
-            var statementContext = new StatementContext<>(connection, statement, query);
-            var key = new CacheKey(context.peerIdentity(), statementHandle.queryId());
-            statementLoadingCache.put(key, statementContext);
-            ResultSetStreamUtil.streamResultSet(executorService,
-                    statementContext,
-                    key,
-                    OptionalResultSetSupplier.of(statement, query, queryOptimizer),
-                    allocator,
-                    getBatchSize(context),
-                    listener,
-                    () -> statementLoadingCache.invalidate(key), recorder);
-        } catch (Throwable e) {
-            ErrorHandling.handleThrowable(listener, e);
-        }
+    @Override
+    protected OptionalResultSetSupplier createResultSetSupplier(Statement statement, String query) {
+        return OptionalResultSetSupplier.of(statement, query, queryOptimizer);
     }
 
     @Override

@@ -250,6 +250,16 @@ public class ExpressionFactory {
      * @return JsonNode representing the constant
      * @throws IllegalArgumentException if value type is not supported
      */
+    public static JsonNode limitModifier(long limit, long offset) {
+        ObjectNode result = JsonNodeFactory.instance.objectNode();
+        result.put(FIELD_TYPE, LIMIT_MODIFIER_TYPE);
+        result.set(FIELD_LIMIT, constant(limit));
+        if (offset >= 0) {
+            result.set(FIELD_OFFSET, constant(offset));
+        }
+        return result;
+    }
+
     public static JsonNode constant(Object value) {
         ObjectNode result = withClassType(CONSTANT_CLASS, CONSTANT_TYPE);
         JsonNode valueNode = constantValueNode(value);

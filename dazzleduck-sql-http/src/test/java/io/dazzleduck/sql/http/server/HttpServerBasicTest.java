@@ -43,7 +43,7 @@ public class HttpServerBasicTest extends HttpServerTestBase {
         initWarehouse();
         initClient();
         initPort();
-        startServer();
+        startServer("--conf", "dazzleduck_server.max_query_timeout_ms=10000");
         installArrowExtension();
     }
 
@@ -275,6 +275,68 @@ public class HttpServerBasicTest extends HttpServerTestBase {
 
     private String getIngestionPath() {
         return "ingestion";
+    }
+
+    // -----------------------------------------------------------------------
+    // Query-timeout tests
+    // -----------------------------------------------------------------------
+
+    /**
+     * A per-request timeout of 1 s (via {@code x-dd-query-timeout} header) must cancel
+     * the long-running query. The HTTP response should be a non-200 error status.
+     */
+    @Test
+    @Timeout(value = 15, unit = TimeUnit.SECONDS)
+    public void testPerRequestQueryTimeout() throws IOException, InterruptedException {
+        var urlEncode = URLEncoder.encode(LONG_RUNNING_QUERY, StandardCharsets.UTF_8);
+        var request = authenticatedRequestBuilder(URI.create(baseUrl + "/v1/query?q=" + urlEncode))
+                .GET()
+                .header(HEADER_QUERY_TIMEOUT, "1")
+                .build();
+
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        assertNotEquals(200, response.statusCode(),
+                "Expected a non-200 status when the per-request 1 s timeout fires");
+    }
+
+    /**
+     * A negative value for {@code x-dd-query-timeout} must be rejected before the query
+     * reaches streamResultSet with HTTP 400 Bad Request.
+     */
+    @Test
+    @Timeout(value = 10, unit = TimeUnit.SECONDS)
+    public void testNegativeQueryTimeoutRejected() throws IOException, InterruptedException {
+        var urlEncode = URLEncoder.encode(LONG_RUNNING_QUERY, StandardCharsets.UTF_8);
+        var request = authenticatedRequestBuilder(URI.create(baseUrl + "/v1/query?q=" + urlEncode))
+                .GET()
+                .header(HEADER_QUERY_TIMEOUT, "-1")
+                .build();
+
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        assertEquals(400, response.statusCode(),
+                "Expected HTTP 400 for a negative timeout value");
+        assertTrue(response.body().contains("non-negative"),
+                "Response body should mention 'non-negative', got: " + response.body());
+    }
+
+    /**
+     * Requesting a timeout larger than the server maximum (10 s, configured in {@code @BeforeAll})
+     * must be rejected before the query reaches streamResultSet with HTTP 400 Bad Request.
+     */
+    @Test
+    @Timeout(value = 10, unit = TimeUnit.SECONDS)
+    public void testMaxQueryTimeoutExceeded() throws IOException, InterruptedException {
+        var urlEncode = URLEncoder.encode(LONG_RUNNING_QUERY, StandardCharsets.UTF_8);
+        var request = authenticatedRequestBuilder(URI.create(baseUrl + "/v1/query?q=" + urlEncode))
+                .GET()
+                .header(HEADER_QUERY_TIMEOUT, "15") // 15 s > max 10 s
+                .build();
+
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        assertEquals(400, response.statusCode(),
+                "Expected HTTP 400 when requested timeout exceeds server maximum");
+        assertTrue(response.body().contains("exceeds server maximum"),
+                "Response body should describe the rejection reason, got: " + response.body());
     }
 
     @Test

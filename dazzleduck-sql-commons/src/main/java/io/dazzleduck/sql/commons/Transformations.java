@@ -1061,6 +1061,29 @@ public class Transformations {
             }
         }
     }
+    public static JsonNode addLimit(JsonNode query, long limit, long offset) {
+        var statement = getFirstStatementNode(query);
+        var select = (ObjectNode) getSelectForBaseTable(statement);
+        if (select == null) {
+            return query;
+        }
+
+        ArrayNode modifiers = (ArrayNode) select.get(FIELD_MODIFIERS);
+        if (modifiers == null) {
+            modifiers = select.putArray(FIELD_MODIFIERS);
+        } else {
+            for (int i = 0; i < modifiers.size(); i++) {
+                if (modifiers.get(i).get(FIELD_TYPE).asText().equals(LIMIT_MODIFIER_TYPE)) {
+                    modifiers.remove(i);
+                    break;
+                }
+            }
+        }
+
+        modifiers.add(ExpressionFactory.limitModifier(limit, offset));
+        return query;
+    }
+
     private static String escapeSpecialChar(String sql) {
         return sql.replaceAll("'", "''");
     }

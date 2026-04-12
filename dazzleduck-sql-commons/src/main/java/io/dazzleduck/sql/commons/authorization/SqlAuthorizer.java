@@ -75,6 +75,12 @@ public interface SqlAuthorizer {
                        Map<String, String> verifiedClaims
     ) throws UnauthorizedException;
 
+    default JsonNode authorize(String user, String database, String schema, JsonNode query,
+                       Map<String, String> verifiedClaims, long limit) throws UnauthorizedException {
+        var authorized = authorize(user, database, schema, query, verifiedClaims);
+        return Transformations.addLimit(authorized, limit, -1);
+    }
+
     boolean hasWriteAccess(String user, String ingestionQueue, Map<String, String> verifiedClaims);
 
     static boolean hasAccessToPath(String authorizedPath, String queriedPath) {

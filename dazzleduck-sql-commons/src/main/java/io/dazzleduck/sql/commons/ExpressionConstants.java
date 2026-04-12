@@ -24,6 +24,7 @@ public class ExpressionConstants {
     public static final String CONJUNCTION_TYPE_AND = "CONJUNCTION_AND";
     public static final String CONJUNCTION_TYPE_OR = "CONJUNCTION_OR";
     public static final String SELECT_NODE_TYPE = "SELECT_NODE";
+    public static final String LIMIT_MODIFIER_TYPE = "LIMIT_MODIFIER";
     public static final String FUNCTION_CLASS = "FUNCTION";
     public static final String FUNCTION_TYPE = "FUNCTION";
 
@@ -73,6 +74,9 @@ public class ExpressionConstants {
     public static final String FIELD_ORDER_BYS = "order_bys";
     public static final String FIELD_IS_NULL = "is_null";
     public static final String FIELD_QUERY_LOCATION = "query_location";
+    public static final String FIELD_MODIFIERS = "modifiers";
+    public static final String FIELD_LIMIT = "limit";
+    public static final String FIELD_OFFSET = "offset";
 
     // Type ID constants for data types
     public static final String TYPE_VARCHAR = "VARCHAR";
