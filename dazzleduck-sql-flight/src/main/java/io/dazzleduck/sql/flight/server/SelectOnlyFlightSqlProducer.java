@@ -29,8 +29,8 @@ import java.util.concurrent.ScheduledExecutorService;
 import static com.google.protobuf.ByteString.copyFrom;
 
 public class SelectOnlyFlightSqlProducer extends DuckDBFlightSqlProducer {
-    public SelectOnlyFlightSqlProducer(Location serverLocation, String producerId, String secretKey, BufferAllocator allocator, String warehousePath, AccessMode accessMode, Path tempDir, IngestionHandler postIngestionHandler, ScheduledExecutorService scheduledExecutorService, Duration queryTimeout, Clock clock, FlightRecorder recorder, IngestionConfig ingestionConfig) {
-        super(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionHandler, scheduledExecutorService, queryTimeout, Duration.ZERO, clock, recorder, ingestionConfig, List.of());
+    public SelectOnlyFlightSqlProducer(Location serverLocation, String producerId, String secretKey, BufferAllocator allocator, String warehousePath, AccessMode accessMode, Path tempDir, IngestionHandler postIngestionHandler, ScheduledExecutorService scheduledExecutorService, Duration queryTimeout, Duration maxQueryTimeout, Clock clock, FlightRecorder recorder, IngestionConfig ingestionConfig, List<Location> dataProcessorLocations) {
+        super(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionHandler, scheduledExecutorService, queryTimeout, maxQueryTimeout, clock, recorder, ingestionConfig, dataProcessorLocations);
     }
 
     private static final java.util.regex.Pattern EXPLAIN_PATTERN = java.util.regex.Pattern.compile("^\\s*(EXPLAIN\\s+(ANALYZE\\s+)?)", java.util.regex.Pattern.CASE_INSENSITIVE);

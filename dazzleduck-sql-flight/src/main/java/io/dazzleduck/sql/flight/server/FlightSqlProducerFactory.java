@@ -474,7 +474,8 @@ public final class FlightSqlProducerFactory {
                         queryTimeout,
                         clock,
                         finalRecorder,
-                        ingestionConfig
+                        ingestionConfig,
+                        dataProcessorLocations
                 );
             } else {
                 return new DuckDBFlightSqlProducer(
