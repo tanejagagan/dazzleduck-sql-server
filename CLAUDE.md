@@ -879,6 +879,41 @@ Long fetchSize = ContextUtils.getValue(context, "fetch_size", 10000L, Long.class
 String database = ContextUtils.getValue(context, "database", "main", String.class);
 ```
 
+### SslUtils (`dazzleduck-sql-common`)
+Environment-aware SSL/TLS utilities. All HTTP clients in the codebase go through these methods so
+the trust policy is configured in one place.
+
+**Environment variable:** `DD_TRUST_SELF_SIGNED_CERTS`
+
+- If set (any non-empty value) → trust-all mode: certificates are not validated and hostname
+  verification is disabled. Use this in dev/test environments with self-signed certificates.
+- If unset (default) → strict mode: JVM default SSL context with full certificate and hostname validation.
+
+```java
+import io.dazzleduck.sql.common.SslUtils;
+
+// Env-aware HttpClient — use for simple clients with no custom builder params
+HttpClient client = SslUtils.httpClient();
+
+// Env-aware SSLContext — use when building a custom HttpClient (e.g. with executor/timeout)
+HttpClient client = HttpClient.newBuilder()
+        .executor(executorService)
+        .connectTimeout(timeout)
+        .sslContext(SslUtils.sslContext())
+        .build();
+
+// Explicit trust-all (avoid in new code — prefer the env-aware methods above)
+HttpClient trustAll = SslUtils.trustAllHttpClient();
+SSLContext trustAllCtx = SslUtils.trustAllSslContext();
+```
+
+**Usage:**
+```bash
+# Enable self-signed cert trust (development / testing only)
+export DD_TRUST_SELF_SIGNED_CERTS=true
+./mvnw exec:java -pl dazzleduck-sql-runtime ...
+```
+
 ### CryptoUtils (`dazzleduck-sql-common`)
 Cryptographic utilities:
 

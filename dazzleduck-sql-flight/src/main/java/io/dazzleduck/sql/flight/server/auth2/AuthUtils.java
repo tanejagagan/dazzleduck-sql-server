@@ -20,7 +20,7 @@ import java.util.Map;
 
 public class AuthUtils {
     private static final ObjectMapper objectMapper = new ObjectMapper();
-    private static final HttpClient httpClient = SslUtils.trustAllHttpClient();
+    private static final HttpClient httpClient = SslUtils.httpClient();
 
     private static String generateBasicAuthHeader(String username, String password) {
         byte[] up = Base64.getEncoder().encode((username + ":" + password).getBytes(StandardCharsets.UTF_8));
