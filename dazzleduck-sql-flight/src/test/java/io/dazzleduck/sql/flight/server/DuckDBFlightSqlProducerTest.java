@@ -25,6 +25,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.dazzleduck.sql.flight.SimpleFlightRecorder;
 import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -36,6 +37,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
@@ -195,7 +198,9 @@ public class DuckDBFlightSqlProducerTest {
                 new NOOPIngestionTaskFactoryProvider(ingestionDir).getIngestionHandler(),
                 Executors.newSingleThreadScheduledExecutor(),
                 Duration.ofMinutes(2),
-                Clock.systemDefaultZone(), recorder, DuckDBFlightSqlProducer.DEFAULT_INGESTION_CONFIG);
+                Duration.ofSeconds(10),
+                Clock.systemDefaultZone(), recorder, DuckDBFlightSqlProducer.DEFAULT_INGESTION_CONFIG,
+                List.of());
 
         flightServer = FlightServer.builder(
                         serverAllocator,
@@ -687,5 +692,136 @@ public class DuckDBFlightSqlProducerTest {
 
     static String getIngestionDir() {
         return warehousePath + File.separator + "ingestion";
+    }
+
+    // -----------------------------------------------------------------------
+    // Query-timeout tests
+    // -----------------------------------------------------------------------
+
+    /**
+     * Unit test for {@link ResultSetStreamUtil}: sets a 1-second DuckDB native timeout
+     * directly on a {@link Statement} and verifies that {@code streamResultSet} propagates
+     * the resulting {@link SQLException} as an error to the listener.
+     */
+    @Test
+    @Timeout(value = 15, unit = TimeUnit.SECONDS)
+    public void testQueryTimeoutInStreamResultSet() throws Exception {
+        try (DuckDBConnection connection = ConnectionPool.getConnection();
+             Statement statement = connection.createStatement()) {
+
+            statement.setQueryTimeout(1);
+            ResultSetSupplier supplier = () -> (org.duckdb.DuckDBResultSet) statement.executeQuery(LONG_RUNNING_QUERY);
+
+            CompletableFuture<Void> future = new CompletableFuture<>();
+            DirectOutputStreamListener listener = new DirectOutputStreamListener(ByteArrayOutputStream::new, future);
+
+            ResultSetStreamUtil.streamResultSet(
+                    producer.executorService, supplier, serverAllocator, 1000, listener, () -> {}, new SimpleFlightRecorder());
+
+            assertThrows(ExecutionException.class, () -> future.get(10, TimeUnit.SECONDS),
+                    "streamResultSet should complete exceptionally when DuckDB query timeout fires");
+        }
+    }
+
+    /**
+     * A per-request timeout of 1 s (via {@code x-dd-query-timeout} header) must cancel the
+     * long-running query inside {@link ResultSetStreamUtil#streamResultSet} and propagate the
+     * error back to the Flight client.
+     */
+    @Test
+    @Timeout(value = 15, unit = TimeUnit.SECONDS)
+    public void testPerRequestQueryTimeout() {
+        FlightCallHeaders headers = new FlightCallHeaders();
+        headers.insert(Headers.HEADER_QUERY_TIMEOUT, "1");
+        HeaderCallOption opt = new HeaderCallOption(headers);
+
+        FlightInfo info = sqlClient.execute(LONG_RUNNING_QUERY);
+        try (FlightStream stream = sqlClient.getStream(info.getEndpoints().get(0).getTicket(), opt)) {
+            assertThrows(Exception.class, stream::next,
+                    "Expected query to be cancelled by the 1 s per-request timeout");
+        } catch (Exception ignored) {
+            // stream.close() may throw after the timeout — that's fine
+        }
+    }
+
+    /**
+     * A per-request timeout of 1 s (via {@code x-dd-query-timeout} header) must cancel the
+     * long-running query inside {@link ResultSetStreamUtil#streamResultSet} for prepared
+     * statements and propagate the error back to the Flight client.
+     */
+    @Test
+    @Timeout(value = 15, unit = TimeUnit.SECONDS)
+    public void testPerRequestQueryTimeoutPreparedStatement() throws Exception {
+        FlightCallHeaders headers = new FlightCallHeaders();
+        headers.insert(Headers.HEADER_QUERY_TIMEOUT, "1");
+        HeaderCallOption opt = new HeaderCallOption(headers);
+
+        try (FlightSqlClient.PreparedStatement preparedStatement = sqlClient.prepare(LONG_RUNNING_QUERY);
+             FlightStream stream = sqlClient.getStream(preparedStatement.execute().getEndpoints().get(0).getTicket(), opt)) {
+            assertThrows(Exception.class, stream::next,
+                    "Expected query to be cancelled by the 1 s per-request timeout");
+        } catch (Exception ignored) {
+            // stream.close() may throw after the timeout — that's fine
+        }
+    }
+
+    /**
+     * A negative value for {@code x-dd-query-timeout} must be rejected immediately with
+     * an INVALID_ARGUMENT Flight error before the query reaches {@code streamResultSet}.
+     */
+    @Test
+    @Timeout(value = 10, unit = TimeUnit.SECONDS)
+    public void testNegativeQueryTimeoutRejected() throws Exception {
+        FlightCallHeaders headers = new FlightCallHeaders();
+        headers.insert(Headers.HEADER_QUERY_TIMEOUT, "-1");
+        HeaderCallOption opt = new HeaderCallOption(headers);
+
+        FlightInfo info = sqlClient.execute(LONG_RUNNING_QUERY);
+        try (FlightStream stream = sqlClient.getStream(info.getEndpoints().get(0).getTicket(), opt)) {
+            FlightRuntimeException ex = assertThrows(FlightRuntimeException.class, stream::next);
+            assertEquals(FlightStatusCode.INVALID_ARGUMENT, ex.status().code());
+            assertTrue(ex.status().description().contains("non-negative"),
+                    "Expected description to contain 'non-negative', got: " + ex.status().description());
+        } catch (FlightRuntimeException ex) {
+            assertEquals(FlightStatusCode.INVALID_ARGUMENT, ex.status().code());
+        }
+    }
+
+    /**
+     * Requesting a timeout larger than the server maximum (10 s) must be rejected
+     * immediately with an INVALID_ARGUMENT error before the query reaches {@code streamResultSet}.
+     */
+    @Test
+    @Timeout(value = 10, unit = TimeUnit.SECONDS)
+    public void testMaxQueryTimeoutExceeded() throws Exception {
+        FlightCallHeaders headers = new FlightCallHeaders();
+        headers.insert(Headers.HEADER_QUERY_TIMEOUT, "15"); // 15 s > server max 10 s
+        HeaderCallOption opt = new HeaderCallOption(headers);
+
+        FlightInfo info = sqlClient.execute(LONG_RUNNING_QUERY);
+        try (FlightStream stream = sqlClient.getStream(info.getEndpoints().get(0).getTicket(), opt)) {
+            FlightRuntimeException ex = assertThrows(FlightRuntimeException.class, stream::next);
+            assertEquals(FlightStatusCode.INVALID_ARGUMENT, ex.status().code());
+            assertTrue(ex.status().description().contains("exceeds server maximum"),
+                    "Expected description to contain 'exceeds server maximum', got: " + ex.status().description());
+        } catch (FlightRuntimeException ex) {
+            assertEquals(FlightStatusCode.INVALID_ARGUMENT, ex.status().code());
+        }
+    }
+
+    /**
+     * The limit header 'x-dd-limit' must be rejected by the base {@link DuckDBFlightSqlProducer}
+     * with an INVALID_ARGUMENT error.
+     */
+    @Test
+    public void testLimitHeaderRejected() {
+        FlightCallHeaders headers = new FlightCallHeaders();
+        headers.insert(Headers.HEADER_DATA_LIMIT, "5");
+        HeaderCallOption opt = new HeaderCallOption(headers);
+
+        FlightRuntimeException ex = assertThrows(FlightRuntimeException.class, () ->
+                sqlClient.execute("SELECT 1", opt));
+        assertTrue(ex.getMessage().contains("is not supported by this producer"),
+                "Expected error message to mention 'not supported', got: " + ex.getMessage());
     }
 }

@@ -9,7 +9,6 @@ import io.dazzleduck.sql.commons.ExpressionConstants;
 import io.dazzleduck.sql.commons.ExpressionFactory;
 import io.dazzleduck.sql.commons.Transformations;
 import java.util.function.Function;
-
 import java.sql.SQLException;
 import java.util.Map;
 
@@ -75,6 +74,12 @@ public interface SqlAuthorizer {
                        Map<String, String> verifiedClaims
     ) throws UnauthorizedException;
 
+    default JsonNode authorize(String user, String database, String schema, JsonNode query,
+                       Map<String, String> verifiedClaims, long limit, long offset) throws UnauthorizedException {
+        var authorized = authorize(user, database, schema, query, verifiedClaims);
+        return Transformations.addLimit(authorized, limit, offset);
+    }
+
     boolean hasWriteAccess(String user, String ingestionQueue, Map<String, String> verifiedClaims);
 
     static boolean hasAccessToPath(String authorizedPath, String queriedPath) {
@@ -83,7 +88,7 @@ public interface SqlAuthorizer {
         if (queriedSplits.length < authorizedSplits.length) {
             return false;
         }
-        for(int i = 0 ; i < authorizedSplits.length; i ++){
+        for(int i=0 ; i < authorizedSplits.length; i ++){
             if(!authorizedSplits[i].equals(queriedSplits[i])) {
                 return false;
             }
@@ -103,18 +108,19 @@ public interface SqlAuthorizer {
     }
 
     /**
-     * Returns a copy of {@code tree} with the catalog and schema names set on the FROM table,
-     * but only when the FROM clause is a BASE_TABLE. For TABLE_FUNCTION queries the original
-     * tree is returned unchanged.
+     * Returns a copy of {@code tree} with the catalog and schema names set on the
+     * FROM table, but only when the FROM clause is a BASE_TABLE. For TABLE_FUNCTION queries the
+     * original tree is returned unchanged.
      */
     static JsonNode withUpdatedDatabaseSchema(JsonNode tree, String database, String schema) {
         var copy = tree.deepCopy();
         Function<JsonNode, JsonNode> identity = t -> t;
         var f = identity.andThen(Transformations::getFirstStatementNode).apply(copy);
-        var fromTable = (ObjectNode) f.get(ExpressionConstants.FIELD_FROM_TABLE);
-        if (fromTable == null) {
+        var fromTableNode = f.get(ExpressionConstants.FIELD_FROM_TABLE);
+        if (fromTableNode == null || fromTableNode instanceof NullNode) {
             return tree;
         }
+        var fromTable = (ObjectNode) fromTableNode;
         var typeNode = fromTable.get(ExpressionConstants.FIELD_TYPE);
         if (typeNode != null && typeNode.asText().equals(ExpressionConstants.BASE_TABLE_TYPE)) {
             var existingCatalog = fromTable.get(ExpressionConstants.FIELD_CATALOG_NAME);

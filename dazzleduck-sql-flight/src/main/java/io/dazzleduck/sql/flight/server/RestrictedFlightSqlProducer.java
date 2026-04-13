@@ -3,9 +3,10 @@ package io.dazzleduck.sql.flight.server;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.google.protobuf.ByteString;
-import io.dazzleduck.sql.commons.authorization.UnauthorizedException;
+import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.commons.Transformations;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
+import io.dazzleduck.sql.commons.authorization.UnauthorizedException;
 import io.dazzleduck.sql.commons.ingestion.IngestionHandler;
 import io.dazzleduck.sql.flight.ingestion.IngestionParameters;
 import io.dazzleduck.sql.commons.planner.SplitPlanner;
@@ -30,11 +31,15 @@ public class RestrictedFlightSqlProducer extends DuckDBFlightSqlProducer {
 
     private final QueryOptimizer queryOptimizer;
     public RestrictedFlightSqlProducer(Location serverLocation, String producerId, String secretKey, BufferAllocator allocator, String warehousePath, AccessMode accessMode, Path tempDir, IngestionHandler postIngestionHandler, ScheduledExecutorService scheduledExecutorService, Duration queryTimeout, Clock clock, FlightRecorder recorder, QueryOptimizer queryOptimizer, IngestionConfig ingestionConfig) {
-        this(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionHandler, scheduledExecutorService, queryTimeout, clock, recorder, queryOptimizer, ingestionConfig, List.of());
+        this(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionHandler, scheduledExecutorService, queryTimeout, Duration.ZERO, clock, recorder, queryOptimizer, ingestionConfig, List.of());
     }
 
     public RestrictedFlightSqlProducer(Location serverLocation, String producerId, String secretKey, BufferAllocator allocator, String warehousePath,  AccessMode accessMode,  Path tempDir, IngestionHandler postIngestionHandler, ScheduledExecutorService scheduledExecutorService, Duration queryTimeout, Clock clock, FlightRecorder recorder, QueryOptimizer queryOptimizer, IngestionConfig ingestionConfig, List<Location> dataProcessorLocations) {
-        super(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionHandler, scheduledExecutorService, queryTimeout, clock, recorder, ingestionConfig, dataProcessorLocations);
+        this(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionHandler, scheduledExecutorService, queryTimeout, Duration.ZERO, clock, recorder, queryOptimizer, ingestionConfig, dataProcessorLocations);
+    }
+
+    public RestrictedFlightSqlProducer(Location serverLocation, String producerId, String secretKey, BufferAllocator allocator, String warehousePath, AccessMode accessMode, Path tempDir, IngestionHandler postIngestionHandler, ScheduledExecutorService scheduledExecutorService, Duration queryTimeout, Duration maxQueryTimeout, Clock clock, FlightRecorder recorder, QueryOptimizer queryOptimizer, IngestionConfig ingestionConfig, List<Location> dataProcessorLocations) {
+        super(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionHandler, scheduledExecutorService, queryTimeout, maxQueryTimeout, clock, recorder, ingestionConfig, dataProcessorLocations);
         this.queryOptimizer = queryOptimizer;
     }
 
@@ -477,31 +482,21 @@ public class RestrictedFlightSqlProducer extends DuckDBFlightSqlProducer {
 
     @Override
     protected FlightInfo getFlightInfoStatementFromQuery(final String query, final CallContext context, final FlightDescriptor descriptor) {
-        var parallelize = parallelize(context);
-        JsonNode tree = null;
+        JsonNode authorizedTree = null;
         try {
-            tree = Transformations.parseToTree(query);
-            if (tree.get("error").asBoolean()) {
-                ErrorHandling.handleQueryCompilationError(tree);
-            }
-        } catch (Throwable s) {
-            ErrorHandling.handleThrowable(s);
-        }
-
-        try {
-            tree = authorize(context, tree);
-        } catch (UnauthorizedException e) {
-            ErrorHandling.handleUnauthorized(e);
-        } catch (Throwable e) {
+            var connection = getConnection(context, getAccessMode());
+            authorizedTree = transformQueryToTree(context, connection, query);
+        } catch (Exception e) {
             ErrorHandling.handleThrowable(e);
         }
 
+        var parallelize = parallelize(context);
 
         if (parallelize) {
-            return getFlightInfoStatementSplittable(tree, context, descriptor);
+            return getFlightInfoStatementSplittable(authorizedTree, context, descriptor);
         } else {
             try {
-                var newSql = Transformations.parseToSql(tree);
+                var newSql = Transformations.parseToSql(authorizedTree);
                 return super.getFlightInfoStatement(newSql, context, descriptor);
             } catch (SQLException e) {
                 throw ErrorHandling.handleSqlException(e);
@@ -514,13 +509,7 @@ public class RestrictedFlightSqlProducer extends DuckDBFlightSqlProducer {
         String peerIdentity = callContext.peerIdentity();
         var verifiedClaims = getVerifiedClaims(callContext);
         var databaseSchema = getDatabaseSchema(callContext, AccessMode.RESTRICTED);
-        return sqlAuthorizer.authorize(peerIdentity, databaseSchema.database(), databaseSchema.schema(), sql, verifiedClaims);
-    }
-
-    private String authorize(CallContext callContext, String sql, Connection connection)
-            throws UnauthorizedException, JsonProcessingException, SQLException {
-        var authorizedTree = authorizeTree(callContext, sql, connection);
-        return Transformations.parseToSql(connection, authorizedTree);
+        return sqlAuthorizer.authorize(peerIdentity, databaseSchema.database(), databaseSchema.schema(), sql, verifiedClaims, -1, -1);
     }
 
     private JsonNode authorizeTree(CallContext callContext, String sql, Connection connection)
@@ -554,37 +543,29 @@ public class RestrictedFlightSqlProducer extends DuckDBFlightSqlProducer {
     }
 
     @Override
-    protected void getStreamStatement(
-            StatementHandle statementHandle,
-            final CallContext context,
-            final ServerStreamListener listener) {
-        try {
-            var connection = getConnection(context, getAccessMode());
-            String query = statementHandle.query();
-            if (statementHandle.queryChecksum() != null
-                    && statementHandle.signatureMismatch(secretKey)) {
-                ErrorHandling.handleSignatureMismatch(listener);
-                return;
-            }
+    protected String transformQuery(CallContext context, Connection connection, String query)
+            throws UnauthorizedException, JsonProcessingException, SQLException {
+        var tree = transformQueryToTree(context, connection, query);
+        return Transformations.parseToSql(connection, tree);
+    }
 
-            if (statementHandle.queryChecksum() == null) {
-                query = authorize(context, query, connection);
-            }
-            Statement statement = connection.createStatement();
-            var statementContext = new StatementContext<>(connection, statement, query);
-            var key = new CacheKey(context.peerIdentity(), statementHandle.queryId());
-            statementLoadingCache.put(key, statementContext);
-            ResultSetStreamUtil.streamResultSet(executorService,
-                    statementContext,
-                    key,
-                    OptionalResultSetSupplier.of(statement, query, queryOptimizer),
-                    allocator,
-                    getBatchSize(context),
-                    listener,
-                    () -> statementLoadingCache.invalidate(key), recorder);
-        } catch (Throwable e) {
-            ErrorHandling.handleThrowable(listener, e);
+    protected JsonNode transformQueryToTree(CallContext context, Connection connection, String query)
+            throws UnauthorizedException, JsonProcessingException, SQLException {
+        if (getLimit(context) > 0) {
+            throw CallStatus.INVALID_ARGUMENT
+                    .withDescription("Limit header '" + Headers.HEADER_DATA_LIMIT + "' is not supported by this producer")
+                    .toRuntimeException();
         }
+        var tree = authorizeTree(context, query, connection);
+        if (tree.get("error").asBoolean()) {
+            ErrorHandling.handleQueryCompilationError(tree);
+        }
+        return tree;
+    }
+
+    @Override
+    protected OptionalResultSetSupplier createResultSetSupplier(Statement statement, String query) {
+        return OptionalResultSetSupplier.of(statement, query, queryOptimizer);
     }
 
 }

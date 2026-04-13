@@ -111,6 +111,8 @@ public class ErrorHandling {
             handleSqlException(listener, s);
         } else if (t instanceof IOException io) {
             handleIOException(listener, io);
+        } else if (t instanceof FlightRuntimeException fre) {
+            listener.error(fre);
         } else if (t instanceof Exception e) {
             handleException(listener, e);
         } else {
@@ -165,6 +167,8 @@ public class ErrorHandling {
                     .withDescription(e.getMessage())
                     .withCause(e)
                     .toRuntimeException());
+        } else if (t instanceof FlightRuntimeException fre) {
+            listener.onError(fre);
         } else if (t instanceof Exception e) {
             var exception = CallStatus.INTERNAL
                     .withDescription(e.getMessage())
