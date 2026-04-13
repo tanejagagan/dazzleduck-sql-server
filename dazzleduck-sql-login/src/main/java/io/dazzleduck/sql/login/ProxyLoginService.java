@@ -27,7 +27,7 @@ public class ProxyLoginService implements HttpService {
     private static final String HEADER_CONTENT_TYPE = "Content-Type";
     private static final String CONTENT_TYPE_JSON = "application/json";
 
-    private final HttpClient client = SslUtils.trustAllHttpClient();
+    private final HttpClient client = SslUtils.httpClient();
     private final String target;
     private static final Logger logger = LoggerFactory.getLogger(ProxyLoginService.class);
     public ProxyLoginService(String target) {

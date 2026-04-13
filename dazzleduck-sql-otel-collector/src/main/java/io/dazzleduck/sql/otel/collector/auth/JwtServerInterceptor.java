@@ -30,7 +30,7 @@ public class JwtServerInterceptor implements ServerInterceptor {
     private static final String BASIC_PREFIX = "Basic ";
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
-    private static final HttpClient HTTP_CLIENT = SslUtils.trustAllHttpClient();
+    private static final HttpClient HTTP_CLIENT = SslUtils.httpClient();
 
     private final SecretKey secretKey;
     private final JwtParser jwtParser;

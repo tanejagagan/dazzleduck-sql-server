@@ -245,6 +245,22 @@ curl -H "database: mydb" \
      "http://localhost:8081/v1/query?q=SELECT%20*%20FROM%20mytable"
 ```
 
+## SSL / TLS Configuration
+
+By default, all HTTP clients in DazzleDuck enforce strict certificate and hostname validation using the JVM's default SSL context.
+
+### Self-Signed Certificates (Dev / Test)
+
+If you are running against a server with a self-signed certificate, set the `DD_TRUST_SELF_SIGNED_CERTS` environment variable before starting the process:
+
+```bash
+export DD_TRUST_SELF_SIGNED_CERTS=true
+```
+
+When this variable is set (to any non-empty value), all internal HTTP clients — including `HttpArrowProducer`, `RedirectAuthorizer`, `ProxyLoginService`, `HttpCredentialValidator`, `AuthUtils`, `JwtServerInterceptor`, and `MetricsScraper` — will skip certificate validation and hostname verification.
+
+> **Warning:** Never set `DD_TRUST_SELF_SIGNED_CERTS` in production. Use a properly signed certificate instead.
+
 ## Enabling Authentication in HTTP Mode.
 Authentication is supported with jwt. Client need to invoke login api with username/password this api would return jwt  token. This jwt token can be used for all subsequent invocation
 - Run the server with authentication enabled

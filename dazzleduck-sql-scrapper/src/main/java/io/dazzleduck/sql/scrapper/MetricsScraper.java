@@ -50,7 +50,7 @@ public class MetricsScraper {
 
         this.httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofMillis(properties.getConnectionTimeoutMs()))
-            .sslContext(SslUtils.trustAllSslContext())
+            .sslContext(SslUtils.sslContext())
             .build();
     }
 

@@ -35,7 +35,7 @@ public class RedirectAuthorizer {
 
     private static final Logger logger = LoggerFactory.getLogger(RedirectAuthorizer.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
-    private static final HttpClient HTTP_CLIENT = SslUtils.trustAllHttpClient();
+    private static final HttpClient HTTP_CLIENT = SslUtils.httpClient();
     private static final Duration RESOLVE_RESPONSE_TTL = Duration.ofMinutes(5);
 
     public static final RedirectAuthorizer INSTANCE = new RedirectAuthorizer();

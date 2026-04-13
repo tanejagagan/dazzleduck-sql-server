@@ -228,7 +228,7 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
         this.client = HttpClient.newBuilder()
                 .executor(executorService)
                 .connectTimeout(httpClientTimeout)
-                .sslContext(SslUtils.trustAllSslContext())
+                .sslContext(SslUtils.sslContext())
                 .sslParameters(sslParameters)
                 .build();
 

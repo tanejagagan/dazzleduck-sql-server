@@ -20,7 +20,7 @@ import java.util.Map;
 public class HttpCredentialValidator implements AdvanceBasicCallHeaderAuthenticator.AdvanceCredentialValidator {
 
 
-    private static final HttpClient httpClient = SslUtils.trustAllHttpClient();
+    private static final HttpClient httpClient = SslUtils.httpClient();
     private final List<String> jwtClaims;
     private final ObjectMapper MAPPER = new ObjectMapper();
     private final String loginUrl;
