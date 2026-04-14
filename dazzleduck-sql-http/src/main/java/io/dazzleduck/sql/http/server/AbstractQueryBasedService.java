@@ -29,7 +29,7 @@ public abstract class AbstractQueryBasedService implements HttpService, Controll
             handleInternal(request, response, requestObject);
         } catch (HttpException e) {
             if (e instanceof InternalErrorException) {
-                logger.atError().setCause(e).log("Error");
+                logger.error("Error", e);
             }
             String errorMsg = e.getMessage() != null ? e.getMessage() : "Internal server error";
             var msg = errorMsg.getBytes();
@@ -86,7 +86,7 @@ public abstract class AbstractQueryBasedService implements HttpService, Controll
             var requestObject = MAPPER.readValue(request.content().inputStream(), QueryRequest.class);
             handle(request, response, requestObject);
         } catch (IOException e) {
-            logger.atError().setCause(e).log("Failed to parse request body");
+            logger.error("Failed to parse request body", e);
             String errorMsg = e.getMessage() != null ? e.getMessage() : "Invalid request body";
             response.status(Status.BAD_REQUEST_400);
             response.send(errorMsg);

@@ -6,7 +6,7 @@
     <parent>
         <groupId>io.dazzleduck.sql</groupId>
         <artifactId>dazzleduck-parent</artifactId>
-        <version>0.0.34</version>
+        <version>0.0.35</version>
     </parent>
     <artifactId>dazzleduck-sql-http</artifactId>
     <name>DazzleDuck Project Http Sql</name>
@@ -22,12 +22,12 @@
         <dependency>
             <groupId>io.dazzleduck.sql</groupId>
             <artifactId>dazzleduck-sql-login</artifactId>
-            <version>0.0.34</version>
+            <version>0.0.35</version>
         </dependency>
         <dependency>
             <groupId>io.dazzleduck.sql</groupId>
             <artifactId>dazzleduck-sql-flight</artifactId>
-            <version>0.0.34</version>
+            <version>0.0.35</version>
         </dependency>
         <dependency>
             <groupId>io.helidon.webserver</groupId>
@@ -58,6 +58,11 @@
             <groupId>io.helidon.webserver</groupId>
             <artifactId>helidon-webserver-http2</artifactId>
             <version>${helidon.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.hubspot.jinjava</groupId>
+            <artifactId>jinjava</artifactId>
+            <version>2.7.2</version>
         </dependency>
     </dependencies>
 </project>
