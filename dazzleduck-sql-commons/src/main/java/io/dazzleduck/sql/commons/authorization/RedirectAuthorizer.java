@@ -8,6 +8,7 @@ import io.dazzleduck.sql.commons.Transformations;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.dazzleduck.sql.common.SslUtils;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -34,7 +35,7 @@ public class RedirectAuthorizer {
 
     private static final Logger logger = LoggerFactory.getLogger(RedirectAuthorizer.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
-    private static final HttpClient HTTP_CLIENT = HttpClient.newHttpClient();
+    private static final HttpClient HTTP_CLIENT = SslUtils.httpClient();
     private static final Duration RESOLVE_RESPONSE_TTL = Duration.ofMinutes(5);
 
     public static final RedirectAuthorizer INSTANCE = new RedirectAuthorizer();

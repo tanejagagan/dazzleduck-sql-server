@@ -8,6 +8,8 @@ import org.apache.arrow.vector.compression.CompressionUtil;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import io.dazzleduck.sql.common.SslUtils;
+import javax.net.ssl.SSLParameters;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -220,9 +222,14 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
             return t;
         });
 
+        SSLParameters sslParameters = new SSLParameters();
+        sslParameters.setEndpointIdentificationAlgorithm("");
+
         this.client = HttpClient.newBuilder()
                 .executor(executorService)
                 .connectTimeout(httpClientTimeout)
+                .sslContext(SslUtils.sslContext())
+                .sslParameters(sslParameters)
                 .build();
 
         logger.info("Initializing HttpSender with baseUrl={}, ingestionQueue={}, httpClientTimeout={}, staticJwt={}",

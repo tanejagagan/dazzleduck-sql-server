@@ -3,6 +3,7 @@ package io.dazzleduck.sql.scrapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.dazzleduck.sql.common.SslUtils;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -49,6 +50,7 @@ public class MetricsScraper {
 
         this.httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofMillis(properties.getConnectionTimeoutMs()))
+            .sslContext(SslUtils.sslContext())
             .build();
     }
 

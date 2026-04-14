@@ -8,6 +8,7 @@ import org.apache.arrow.flight.CallHeaders;
 import org.apache.arrow.flight.auth2.Auth2Constants;
 import org.apache.arrow.flight.auth2.CallHeaderAuthenticator;
 
+import io.dazzleduck.sql.common.SslUtils;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -19,7 +20,7 @@ import java.util.Map;
 public class HttpCredentialValidator implements AdvanceBasicCallHeaderAuthenticator.AdvanceCredentialValidator {
 
 
-    private static final HttpClient httpClient = HttpClient.newHttpClient();
+    private static final HttpClient httpClient = SslUtils.httpClient();
     private final List<String> jwtClaims;
     private final ObjectMapper MAPPER = new ObjectMapper();
     private final String loginUrl;
