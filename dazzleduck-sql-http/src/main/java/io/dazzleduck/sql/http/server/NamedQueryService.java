@@ -151,9 +151,15 @@ public class NamedQueryService implements HttpService, ControllerService {
             Map<String, Object> jinjavaContext = new HashMap<>(
                     namedQuery.parameters() != null ? namedQuery.parameters() : Map.of());
             String sql = jinjava.render(queryTemplate.template(), jinjavaContext);
-            sql = applyMode(sql, namedQuery.mode());
             logger.debug("Rendered SQL for named query '{}' (mode={}): {}", namedQuery.name(), namedQuery.mode(), sql);
 
+            if (namedQuery.mode() == QueryMode.GENERATE) {
+                response.headers().set(io.helidon.http.HeaderNames.CONTENT_TYPE, "text/plain");
+                response.send(sql);
+                return;
+            }
+
+            sql = applyMode(sql, namedQuery.mode());
             var callContext = ControllerService.createContext(request);
             var id = StatementHandle.nextStatementId();
             var statementHandle = StatementHandle.newStatementHandle(
@@ -206,7 +212,7 @@ public class NamedQueryService implements HttpService, ControllerService {
         return switch (mode) {
             case EXPLAIN         -> "EXPLAIN " + sql;
             case EXPLAIN_ANALYZE -> "EXPLAIN ANALYZE " + sql;
-            case EXECUTE         -> sql;
+            case EXECUTE, GENERATE -> sql;
         };
     }
 

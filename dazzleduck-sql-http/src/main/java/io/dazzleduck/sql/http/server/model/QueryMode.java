@@ -7,5 +7,7 @@ public enum QueryMode {
     /** Prepend {@code EXPLAIN} — returns the query plan without executing. */
     EXPLAIN,
     /** Prepend {@code EXPLAIN ANALYZE} — executes the query and returns the annotated plan. */
-    EXPLAIN_ANALYZE
+    EXPLAIN_ANALYZE,
+    /** Render the SQL template and return the generated SQL string without executing it. */
+    GENERATE
 }

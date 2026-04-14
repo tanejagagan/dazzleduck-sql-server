@@ -220,6 +220,21 @@ public class NamedQueryServiceTest extends HttpServerTestBase {
     }
 
     @Test
+    @Timeout(value = 10, unit = TimeUnit.SECONDS)
+    void testGenerateMode() throws IOException, InterruptedException {
+        var namedQuery = new NamedQueryRequest("get_series", Map.of("limit", "5"), QueryMode.GENERATE);
+        var body = objectMapper.writeValueAsBytes(namedQuery);
+
+        var request = authenticatedRequestBuilder(URI.create(baseUrl + ENDPOINT))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+                .build();
+
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, response.statusCode(), "GENERATE should return 200");
+        assertEquals("SELECT * FROM generate_series(5) t(v) ORDER BY v", response.body().trim());
+    }
+
+    @Test
     @Timeout(value = 30, unit = TimeUnit.SECONDS)
     void testExplainAnalyzeMode() throws IOException, InterruptedException {
         var namedQuery = new NamedQueryRequest("get_series", Map.of("limit", "5"), QueryMode.EXPLAIN_ANALYZE);

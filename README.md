@@ -226,14 +226,22 @@ An optional `mode` field controls how the SQL is executed:
 
 | Mode | Description |
 |------|-------------|
-| `EXECUTE` (default) | Run the query and return results |
+| `EXECUTE` (default) | Run the query and return results in Arrow format |
 | `EXPLAIN` | Return the query plan without executing |
 | `EXPLAIN_ANALYZE` | Return the query plan with execution statistics |
+| `GENERATE` | Render the SQL template and return the generated SQL as plain text without executing |
 
 ```bash
+# Execute
 curl -X POST http://localhost:8081/v1/named-query \
   -H "Content-Type: application/json" \
-  -d '{"name": "top_sales", "parameters": {"region": "WEST", "limit": "10"}, "mode": "EXPLAIN"}'
+  -d '{"name": "top_sales", "parameters": {"region": "WEST", "limit": "10"}}'
+
+# Inspect the generated SQL before running it
+curl -X POST http://localhost:8081/v1/named-query \
+  -H "Content-Type: application/json" \
+  -d '{"name": "top_sales", "parameters": {"region": "WEST", "limit": "10"}, "mode": "GENERATE"}'
+# Returns: SELECT * FROM sales WHERE region = 'WEST' LIMIT 10
 ```
 
 ### Listing Named Queries
