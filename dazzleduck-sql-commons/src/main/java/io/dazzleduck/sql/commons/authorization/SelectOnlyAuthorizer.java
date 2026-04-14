@@ -12,6 +12,9 @@ import java.util.Map;
  */
 public class SelectOnlyAuthorizer implements SqlAuthorizer {
 
+    public static final String UNSUPPORTED_QUERY_TYPE_MESSAGE =
+            "This query type is not supported. Only SELECT, EXPLAIN, and EXPLAIN ANALYZE queries are allowed.";
+
     public static SqlAuthorizer INSTANCE = new SelectOnlyAuthorizer();
 
     private SelectOnlyAuthorizer() {
@@ -25,9 +28,9 @@ public class SelectOnlyAuthorizer implements SqlAuthorizer {
         }
 
         // If the query tree itself indicates an error, it's not a valid authorized query
+        // (e.g. DuckDB returns {"error":true,...} for non-SELECT statements that cannot be parsed)
         if (query.has("error") && query.get("error").asBoolean()) {
-            throw new UnauthorizedException("Invalid query: " + 
-                (query.has("error_message") ? query.get("error_message").asText() : "unknown error"));
+            throw new UnauthorizedException(UNSUPPORTED_QUERY_TYPE_MESSAGE);
         }
 
         JsonNode statementsNode = query.get(ExpressionConstants.FIELD_STATEMENTS);

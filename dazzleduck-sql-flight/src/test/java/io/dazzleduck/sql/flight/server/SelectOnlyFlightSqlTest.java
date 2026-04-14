@@ -3,6 +3,7 @@ package io.dazzleduck.sql.flight.server;
 import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
+import io.dazzleduck.sql.commons.authorization.SelectOnlyAuthorizer;
 import org.apache.arrow.flight.*;
 import org.apache.arrow.flight.sql.FlightSqlClient;
 import org.junit.jupiter.api.AfterAll;
@@ -22,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * Tests for READ_ONLY mode.
  * Validates that only SELECT queries are allowed and all DML/DDL operations are blocked.
  */
-public class FlightSqlSelectOnlyTest {
+public class SelectOnlyFlightSqlTest {
 
     private static final String TEST_USER = "admin";
     private static final String TEST_CATALOG = "memory";
@@ -372,7 +373,24 @@ public class FlightSqlSelectOnlyTest {
             serverClient.flightSqlClient().execute(query));
     }
 
+    // ===== Error Message Tests =====
 
+    /**
+     * Queries that DuckDB cannot parse to AST (e.g. INSERT, UPDATE, DELETE) must return
+     * the user-friendly message "This query is not supported." rather than an internal
+     * DuckDB error string.
+     */
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testUnsupportedQueryErrorMessage() {
+        // INSERT cannot be serialized by DuckDB's json_serialize_sql and triggers the
+        // error-node path in SelectOnlyAuthorizer — the message must be user-friendly.
+        FlightRuntimeException ex = assertThrows(FlightRuntimeException.class, () ->
+                serverClient.flightSqlClient().execute("INSERT INTO test_table VALUES (1, 'test')"));
+
+        assertEquals(FlightStatusCode.UNAUTHORIZED, ex.status().code());
+        assertEquals(SelectOnlyAuthorizer.UNSUPPORTED_QUERY_TYPE_MESSAGE, ex.status().description());
+    }
 
     // ===== Complex SELECT Operations (Should be ALLOWED) =====
 
