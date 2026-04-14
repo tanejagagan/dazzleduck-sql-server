@@ -47,6 +47,7 @@ public class Main {
     private static final String ENDPOINT_CANCEL = API_VERSION_PREFIX + "/cancel";
     private static final String ENDPOINT_INGEST = API_VERSION_PREFIX + "/ingest";
     private static final String ENDPOINT_UI = API_VERSION_PREFIX + "/ui";
+    private static final String ENDPOINT_NAMED_QUERY = API_VERSION_PREFIX + "/named-query";
 
     // Configuration keys
     private static final String CONFIG_HTTP = ConfigConstants.HTTP_PREFIX;
@@ -320,9 +321,17 @@ public class Main {
                             .register(ENDPOINT_INGEST, new IngestionService(producer))
                             .register(ENDPOINT_UI, new UIService(producer));
 
+                    if (appConfig.hasPath(ConfigConstants.NAMED_QUERY_TABLE_KEY)) {
+                        String namedQueryTable = appConfig.getString(ConfigConstants.NAMED_QUERY_TABLE_KEY);
+                        b.register(ENDPOINT_NAMED_QUERY,
+                                new NamedQueryService(producer, namedQueryTable));
+                        logger.info("Named query endpoint enabled, table: {}", namedQueryTable);
+                    }
+
                     // JWT filter is always applied to all versioned endpoints
                     b.addFilter(new JwtAuthenticationFilter(
-                            List.of(ENDPOINT_QUERY, ENDPOINT_PLAN, ENDPOINT_INGEST, ENDPOINT_CANCEL, ENDPOINT_UI),
+                            List.of(ENDPOINT_QUERY, ENDPOINT_PLAN, ENDPOINT_INGEST, ENDPOINT_CANCEL,
+                                    ENDPOINT_UI, ENDPOINT_NAMED_QUERY),
                             appConfig,
                             secretKey,
                             producer.getSqlAuthorizer()

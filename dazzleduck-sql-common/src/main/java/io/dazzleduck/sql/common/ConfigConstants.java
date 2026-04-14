@@ -67,6 +67,7 @@ public class ConfigConstants {
     // HTTP configuration keys
     public static final String HTTP_PREFIX = "http";
     public static final String ALLOW_ORIGIN_KEY = "allow-origin";
+    public static final String NAMED_QUERY_TABLE_KEY = "named_query_table";
 
     // Application identity keys (for client modules)
     public static final String APPLICATION_ID_KEY = "application_id";

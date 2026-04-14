@@ -89,6 +89,9 @@ All HTTP API endpoints use a `/v1` version prefix for backward compatibility and
 | `/v1/plan` | POST | Generate query execution plan with splits |
 | `/v1/ingest` | POST | Ingest Arrow data to Parquet files |
 | `/v1/cancel` | POST | Cancel a running query |
+| `/v1/named-query` | GET | List named queries (paginated) |
+| `/v1/named-query/{name}` | GET | Get a named query by name |
+| `/v1/named-query` | POST | Execute a named (templated) query |
 | `/v1/ui` | GET | Access web UI dashboard |
 | `/health` | GET | Health check endpoint (unversioned) |
 
@@ -168,6 +171,124 @@ See: https://github.com/prmoore77/sqlalchemy-sqlflite-adbc-dialect
 
 
 
+
+## Named Queries
+
+Named queries allow pre-defined, parameterized SQL templates to be stored in a DuckDB table and executed by name over HTTP. Templates use [Jinja2](https://jinja.palletsprojects.com) syntax via Jinjava.
+
+### Setup
+
+Enable the named query endpoint by setting `named_query_table` in your configuration:
+
+```hocon
+dazzleduck_server {
+    named_query_table = "named_queries"
+}
+```
+
+Create the table in DuckDB:
+
+```sql
+CREATE TABLE named_queries (
+    name                   VARCHAR PRIMARY KEY,
+    template               VARCHAR,
+    validators             VARCHAR[],
+    description            VARCHAR,
+    parameter_descriptions MAP(VARCHAR, VARCHAR)
+);
+```
+
+Insert a template:
+
+```sql
+INSERT INTO named_queries VALUES (
+    'top_sales',
+    'SELECT * FROM sales WHERE region = ''{{ region }}'' LIMIT {{ limit }}',
+    NULL,
+    'Returns top sales rows for a given region',
+    MAP { 'region': 'Sales region name', 'limit': 'Maximum number of rows' }
+);
+```
+
+### Executing a Named Query
+
+```bash
+curl -X POST http://localhost:8081/v1/named-query \
+  -H "Content-Type: application/json" \
+  -d '{"name": "top_sales", "parameters": {"region": "WEST", "limit": "10"}}'
+```
+
+The response is an Arrow IPC stream, identical to `/v1/query`.
+
+#### Query Modes
+
+An optional `mode` field controls how the SQL is executed:
+
+| Mode | Description |
+|------|-------------|
+| `EXECUTE` (default) | Run the query and return results |
+| `EXPLAIN` | Return the query plan without executing |
+| `EXPLAIN_ANALYZE` | Return the query plan with execution statistics |
+
+```bash
+curl -X POST http://localhost:8081/v1/named-query \
+  -H "Content-Type: application/json" \
+  -d '{"name": "top_sales", "parameters": {"region": "WEST", "limit": "10"}, "mode": "EXPLAIN"}'
+```
+
+### Listing Named Queries
+
+```bash
+# First page
+curl http://localhost:8081/v1/named-query?offset=0&limit=20
+
+# Response
+{
+  "items": [
+    {"name": "top_sales", "description": "Returns top sales rows for a given region"}
+  ],
+  "total": 1,
+  "offset": 0,
+  "limit": 20
+}
+```
+
+### Getting a Named Query by Name
+
+```bash
+curl http://localhost:8081/v1/named-query/top_sales
+
+# Response
+{
+  "name": "top_sales",
+  "description": "Returns top sales rows for a given region",
+  "parameterDescriptions": {"region": "Sales region name", "limit": "Maximum number of rows"},
+  "validatorDescriptions": []
+}
+```
+
+### Parameter Validators
+
+Each named query can reference a list of validator class names. Validators are Java classes that implement `NamedQueryParameterValidator` from `dazzleduck-sql-common`:
+
+```java
+public class RegionValidator implements NamedQueryParameterValidator {
+    @Override
+    public void validate(Map<String, String> parameters) throws ParameterValidationException {
+        String region = parameters.get("region");
+        if (region == null || region.isBlank()) {
+            throw new ParameterValidationException("'region' parameter is required");
+        }
+    }
+
+    @Override
+    public String description() {
+        return "Requires a non-blank 'region' parameter";
+    }
+}
+```
+
+All validators run on every request and all failures are collected before returning HTTP 400. Validator instances are cached (up to 500) to avoid repeated reflection overhead.
 
 ## Security and Access Modes
 

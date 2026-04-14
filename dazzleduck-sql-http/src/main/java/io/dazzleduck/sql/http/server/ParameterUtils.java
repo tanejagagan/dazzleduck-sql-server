@@ -24,6 +24,12 @@ public interface ParameterUtils {
         if (fromHeader.isPresent()) {
             return mapFunction.apply(fromHeader.get());
         }
+        try {
+            String fromQuery = request.query().getRaw(parameter);
+            return mapFunction.apply(fromQuery);
+        } catch (java.util.NoSuchElementException ignored) {
+            // parameter not present in query string
+        }
         return defaultValue;
     }
 

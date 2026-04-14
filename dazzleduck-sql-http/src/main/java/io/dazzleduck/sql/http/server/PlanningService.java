@@ -56,12 +56,12 @@ public class PlanningService extends AbstractQueryBasedService implements Parame
             }
 
         } catch (IOException e) {
-            logger.atError().setCause(e).log("IO error during query planning");
+            logger.error("IO error during query planning", e);
             String errorMsg = e.getMessage() != null ? e.getMessage() : "IO error during planning";
             response.status(io.helidon.http.Status.INTERNAL_SERVER_ERROR_500);
             response.send(errorMsg);
         } catch (Exception e) {
-            logger.atError().setCause(e).log("Error during query planning");
+            logger.error("Error during query planning", e);
             String errorMsg = e.getMessage() != null ? e.getMessage() : "Internal server error";
             response.status(io.helidon.http.Status.INTERNAL_SERVER_ERROR_500);
             response.send(errorMsg);

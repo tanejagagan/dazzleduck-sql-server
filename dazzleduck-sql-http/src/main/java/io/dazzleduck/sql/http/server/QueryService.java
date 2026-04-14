@@ -57,48 +57,48 @@ public class QueryService extends AbstractQueryBasedService {
 
             CompletableFuture<Void> future;
             if (wantsTsv) {
-                logger.atDebug().log("TSV output requested for query: {}", query.query());
+                logger.debug("TSV output requested for query: {}", query.query());
                 response.headers().set(HeaderNames.CONTENT_TYPE, ContentTypes.TEXT_TSV_UTF8);
                 future = getStreamStatementDirectTsv(ticket, context, () -> response.outputStream());
             } else {
                 // Get Arrow compression codec from header (defaults to ZSTD)
                 CompressionUtil.CodecType compressionCodec = ParameterUtils.getArrowCompression(request);
-                logger.atDebug().log("Using Arrow compression codec: {}", compressionCodec);
-                logger.atDebug().log("Calling getStreamStatementDirect for query: {}", query.query());
+                logger.debug("Using Arrow compression codec: {}", compressionCodec);
+                logger.debug("Calling getStreamStatementDirect for query: {}", query.query());
                 future = httpFlightAdaptor.getStreamStatementDirect(ticket, context, () -> response.outputStream(), compressionCodec);
             }
 
-            logger.atDebug().log("Waiting for future.get() with timeout {}ms", httpConfig.getQueryTimeoutMs());
+            logger.debug("Waiting for future.get() with timeout {}ms", httpConfig.getQueryTimeoutMs());
             future.get(httpConfig.getQueryTimeoutMs(), TimeUnit.MILLISECONDS);
-            logger.atDebug().log("future.get() completed successfully");
+            logger.debug("future.get() completed successfully");
 
         } catch (IllegalArgumentException e) {
-            logger.atError().setCause(e).log("Invalid Arrow compression header value");
+            logger.error("Invalid Arrow compression header value", e);
             if (!response.isSent()) {
                 response.status(Status.BAD_REQUEST_400);
                 response.send(e.getMessage());
             }
         } catch (TimeoutException e) {
-            logger.atError().log("Query execution timeout after {}ms", httpConfig.getQueryTimeoutMs());
+            logger.error("Query execution timeout after {}ms", httpConfig.getQueryTimeoutMs());
             if (!response.isSent()) {
                 response.status(Status.GATEWAY_TIMEOUT_504);
                 response.send("Query execution timeout");
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            logger.atError().setCause(e).log("Query execution interrupted");
+            logger.error("Query execution interrupted", e);
             if (!response.isSent()) {
                 response.status(Status.INTERNAL_SERVER_ERROR_500);
                 response.send("Query execution interrupted");
             }
         } catch (ExecutionException e) {
             Throwable cause = e.getCause() != null ? e.getCause() : e;
-            logger.atError().setCause(cause).log("Error executing query");
+            logger.error("Error executing query", cause);
             if (!response.isSent()) {
                 handleError(response, cause);
             }
         } catch (Exception e) {
-            logger.atError().setCause(e).log("Error sending query result");
+            logger.error("Error sending query result", e);
             if (!response.isSent()) {
                 handleError(response, e);
             }
