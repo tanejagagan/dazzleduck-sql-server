@@ -112,7 +112,7 @@ public interface FlightTestUtils {
                                                       Map<String, String> additionalClientHeaders) throws IOException, NoSuchAlgorithmException {
 
         var producerId = UUID.randomUUID().toString();
-        var warehousePath = Files.createTempDirectory("duckdb_warehouse_" + FlightSqlSelectOnlyTest.class.getName()).toString();
+        var warehousePath = Files.createTempDirectory("duckdb_warehouse_" + SelectOnlyFlightSqlTest.class.getName()).toString();
         var clientAllocator = new RootAllocator();
         var serverAllocator = new RootAllocator();
 
