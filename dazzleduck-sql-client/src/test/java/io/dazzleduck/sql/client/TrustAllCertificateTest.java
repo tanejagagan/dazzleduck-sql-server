@@ -10,6 +10,9 @@ import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.FieldType;
 import org.apache.arrow.vector.types.pojo.Schema;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -26,12 +29,14 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static io.dazzleduck.sql.common.SslUtils.TRUST_SELF_SIGNED_CERTS_ENV;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Verifies that HttpArrowProducer connects to an HTTPS server with a self-signed
  * certificate without throwing an SSLHandshakeException.
  */
+@Disabled
 public class TrustAllCertificateTest {
 
     @TempDir

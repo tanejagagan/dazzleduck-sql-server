@@ -1,4 +1,4 @@
-package io.dazzleduck.sql.http.server.model;
+package io.dazzleduck.sql.flight.server.namedquery;
 
 import java.util.List;
 import java.util.Map;
@@ -11,6 +11,7 @@ import java.util.Map;
  * {@link io.dazzleduck.sql.common.NamedQueryParameterValidator#description()}.
  */
 public record NamedQueryResponse(
+        long id,
         String name,
         String description,
         Map<String, String> parameterDescriptions,

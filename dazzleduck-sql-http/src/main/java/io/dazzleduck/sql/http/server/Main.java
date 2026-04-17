@@ -8,7 +8,8 @@ import io.dazzleduck.sql.common.ConfigConstants;
 import io.dazzleduck.sql.commons.util.CommandLineConfigUtil;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.flight.server.DuckDBFlightSqlProducer;
-import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
+import io.dazzleduck.sql.flight.server.namedquery.DefaultNamedQueryServiceAdaptor;
+import io.dazzleduck.sql.http.server.model.HttpConfig;
 import io.dazzleduck.sql.login.LoginService;
 import io.dazzleduck.sql.login.ProxyLoginService;
 import io.helidon.common.tls.Tls;
@@ -323,8 +324,9 @@ public class Main {
 
                     if (appConfig.hasPath(ConfigConstants.NAMED_QUERY_TABLE_KEY)) {
                         String namedQueryTable = appConfig.getString(ConfigConstants.NAMED_QUERY_TABLE_KEY);
+                        var adaptor = new DefaultNamedQueryServiceAdaptor(namedQueryTable, producer);
                         b.register(ENDPOINT_NAMED_QUERY,
-                                new NamedQueryService(producer, namedQueryTable));
+                                new NamedQueryService(adaptor, HttpConfig.defaultConfig().getQueryTimeoutMs()));
                         logger.info("Named query endpoint enabled, table: {}", namedQueryTable);
                     }
 

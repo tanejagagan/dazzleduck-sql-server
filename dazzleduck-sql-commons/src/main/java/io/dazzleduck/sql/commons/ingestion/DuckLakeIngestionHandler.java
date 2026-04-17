@@ -68,7 +68,7 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
         }
     }
 
-    private String[] getPartitionColumns(String catalogName, String schema, String table) {
+    public static String[] getPartitionColumns(String catalogName, String schema, String table) {
         String metadataDatabase = "__ducklake_metadata_" + catalogName;
         String query = """
                 SELECT

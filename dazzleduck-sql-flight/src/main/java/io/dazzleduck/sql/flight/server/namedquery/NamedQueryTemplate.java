@@ -1,4 +1,4 @@
-package io.dazzleduck.sql.http.server.model;
+package io.dazzleduck.sql.flight.server.namedquery;
 
 import java.util.Map;
 
@@ -8,7 +8,8 @@ import java.util.Map;
  * <p>Maps directly to a row in the named-query table:
  * <pre>{@code
  *   CREATE TABLE named_queries (
- *       name                   VARCHAR PRIMARY KEY,
+ *       id                     BIGINT PRIMARY KEY,
+ *       name                   VARCHAR UNIQUE,
  *       template               VARCHAR,
  *       validators             VARCHAR[],
  *       description            VARCHAR,
@@ -20,6 +21,7 @@ import java.util.Map;
  * {@code ConnectionPool.collectAll} maps by position.
  */
 public record NamedQueryTemplate(
+        long id,
         String name,
         String template,
         String[] validators,
