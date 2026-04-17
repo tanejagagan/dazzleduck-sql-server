@@ -1,4 +1,4 @@
-package io.dazzleduck.sql.flight.server.namedquery;
+package io.dazzleduck.sql.flight.namedquery;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.protobuf.ByteString;

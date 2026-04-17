@@ -1,4 +1,4 @@
-package io.dazzleduck.sql.flight.server.namedquery;
+package io.dazzleduck.sql.flight.namedquery;
 
 import java.util.List;
 import java.util.Map;

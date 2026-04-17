@@ -1,4 +1,4 @@
-package io.dazzleduck.sql.flight.server.namedquery;
+package io.dazzleduck.sql.flight.namedquery;
 
 import com.google.protobuf.ByteString;
 import com.hubspot.jinjava.Jinjava;
@@ -49,13 +49,13 @@ public class DefaultNamedQueryServiceAdaptor implements NamedQueryServiceAdaptor
         return httpFlightAdaptor;
     }
 
-    private NamedQueryTemplate loadFromDb(String name) throws SQLException, NamedQueryServiceAdaptor.TemplateNotFoundException {
+    private NamedQueryDefinition loadFromDb(String name) throws SQLException, NamedQueryServiceAdaptor.TemplateNotFoundException {
         String safeName = name.replace("'", "''");
-        String sql = ("SELECT id, name, template, validators, description, parameter_descriptions" +
+        String sql = ("SELECT id, name, template, validators, description, parameter_descriptions, preferred_display" +
                       " FROM %s WHERE name = '%s'")
             .formatted(this.name, safeName);
         try (DuckDBConnection connection = ConnectionPool.getConnection()) {
-            var iter = ConnectionPool.collectAll(connection, sql, NamedQueryTemplate.class).iterator();
+            var iter = ConnectionPool.collectAll(connection, sql, NamedQueryDefinition.class).iterator();
             if (!iter.hasNext()) {
                 throw new NamedQueryServiceAdaptor.TemplateNotFoundException("Named query not found: " + name);
             }
@@ -68,7 +68,7 @@ public class DefaultNamedQueryServiceAdaptor implements NamedQueryServiceAdaptor
                                     FlightProducer.CallContext context,
                                     FlightProducer.ServerStreamListener listener) {
         try {
-            NamedQueryTemplate queryTemplate = loadFromDb(name);
+            NamedQueryDefinition queryTemplate = loadFromDb(name);
             runValidators(queryTemplate, parameters);
             Map<String, Object> jinjavaContext = new HashMap<>(parameters != null ? parameters : Map.of());
             String sql = jinjava.render(queryTemplate.template(), jinjavaContext);
@@ -90,7 +90,7 @@ public class DefaultNamedQueryServiceAdaptor implements NamedQueryServiceAdaptor
         }
     }
 
-    private void runValidators(NamedQueryTemplate queryTemplate, Map<String, String> parameters)
+    private void runValidators(NamedQueryDefinition queryTemplate, Map<String, String> parameters)
             throws ParameterValidationException {
         String[] validatorClassNames = queryTemplate.validators();
         if (validatorClassNames == null || validatorClassNames.length == 0) {

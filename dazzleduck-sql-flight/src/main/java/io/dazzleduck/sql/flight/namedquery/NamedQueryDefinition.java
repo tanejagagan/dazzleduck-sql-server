@@ -1,4 +1,4 @@
-package io.dazzleduck.sql.flight.server.namedquery;
+package io.dazzleduck.sql.flight.namedquery;
 
 import java.util.Map;
 
@@ -13,18 +13,20 @@ import java.util.Map;
  *       template               VARCHAR,
  *       validators             VARCHAR[],
  *       description            VARCHAR,
- *       parameter_descriptions MAP(VARCHAR, VARCHAR)
+ *       parameter_descriptions MAP(VARCHAR, VARCHAR),
+ *       preferred_display      VARCHAR
  *   );
  * }</pre>
  *
  * <p>Column order must match the record component order because
  * {@code ConnectionPool.collectAll} maps by position.
  */
-public record NamedQueryTemplate(
+public record NamedQueryDefinition(
         long id,
         String name,
         String template,
         String[] validators,
         String description,
-        Map<String, String> parameterDescriptions) {
+        Map<String, String> parameterDescriptions,
+        String preferredDisplay) {
 }

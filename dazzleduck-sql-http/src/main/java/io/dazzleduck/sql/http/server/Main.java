@@ -8,7 +8,7 @@ import io.dazzleduck.sql.common.ConfigConstants;
 import io.dazzleduck.sql.commons.util.CommandLineConfigUtil;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.flight.server.DuckDBFlightSqlProducer;
-import io.dazzleduck.sql.flight.server.namedquery.DefaultNamedQueryServiceAdaptor;
+import io.dazzleduck.sql.flight.namedquery.DefaultNamedQueryServiceAdaptor;
 import io.dazzleduck.sql.http.server.model.HttpConfig;
 import io.dazzleduck.sql.login.LoginService;
 import io.dazzleduck.sql.login.ProxyLoginService;

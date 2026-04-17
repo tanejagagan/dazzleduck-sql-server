@@ -1,4 +1,4 @@
-package io.dazzleduck.sql.flight.server.namedquery;
+package io.dazzleduck.sql.flight.namedquery;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;

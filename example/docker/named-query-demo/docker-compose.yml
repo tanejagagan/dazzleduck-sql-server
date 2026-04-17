@@ -1,0 +1,48 @@
+# Named Query Demo
+#
+# Run from this directory:
+#   docker-compose up
+#
+# Prerequisites:
+#   Build the Docker image first:
+#   ./mvnw clean package -DskipTests && ./mvnw jib:dockerBuild -pl dazzleduck-sql-runtime
+#
+# Test named queries:
+#   # Login
+#   TOKEN=$(curl -s -X POST http://localhost:8081/v1/login \
+#     -H 'Content-Type: application/json' \
+#     -d '{"username":"admin","password":"admin","claims":{"cluster":"default"}}' \
+#     | jq -r '.accessToken')
+#
+#   # List named queries
+#   curl -s http://localhost:8081/v1/named-query \
+#     -H "Authorization: Bearer $TOKEN" | jq .
+#
+#   # Execute named query
+#   curl -s -X POST http://localhost:8081/v1/named-query \
+#     -H "Authorization: Bearer $TOKEN" \
+#     -H 'Content-Type: application/json' \
+#     -d '{"name":"siem_alert_summary","parameters":{}}' \
+#     --output result.arrows
+
+services:
+  dazzleduck-server:
+    image: dazzleduck/dazzleduck:latest
+    container_name: named-query-demo
+    ports:
+      - "8081:8081"
+      - "59307:59307"
+    command:
+      - --conf
+      - dazzleduck_server.startup_script_provider.script_location=/startup/siem-marketing-named-query.sql
+      - --conf
+      - dazzleduck_server.named_query_table=app.named_queries
+      - --conf
+      - dazzleduck_server.jwt_token.verify_signature=false
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8081/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped

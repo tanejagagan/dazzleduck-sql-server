@@ -2,8 +2,8 @@ package io.dazzleduck.sql.http.server;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.dazzleduck.sql.common.ParameterValidationException;
-import io.dazzleduck.sql.flight.server.namedquery.NamedQueryRequest;
-import io.dazzleduck.sql.flight.server.namedquery.NamedQueryServiceAdaptor;
+import io.dazzleduck.sql.flight.namedquery.NamedQueryRequest;
+import io.dazzleduck.sql.flight.namedquery.NamedQueryServiceAdaptor;
 import io.helidon.http.Status;
 import io.helidon.webserver.http.HttpRules;
 import io.helidon.webserver.http.HttpService;
