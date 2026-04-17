@@ -1406,7 +1406,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         try {
             var connection = getConnection(context, getAccessMode());
             query = transformQuery(context, connection, query);
-        } catch (Exception e) {
+        } catch (UnauthorizedException e) {
+            throw CallStatus.UNAUTHORIZED.withCause(e).withDescription(e.getMessage()).toRuntimeException();
+        } catch (Exception e){
             throw CallStatus.INTERNAL.withCause(e).withDescription("Failed to transform query: " + e.getMessage()).toRuntimeException();
         }
         StatementHandle handle = newStatementHandle(query);

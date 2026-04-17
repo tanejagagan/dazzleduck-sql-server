@@ -3,8 +3,7 @@ package io.dazzleduck.sql.http.server;
 import io.dazzleduck.sql.common.ParameterValidationException;
 import io.dazzleduck.sql.common.NamedQueryParameterValidator;
 import io.dazzleduck.sql.commons.ConnectionPool;
-import io.dazzleduck.sql.http.server.model.NamedQueryRequest;
-import io.dazzleduck.sql.http.server.model.QueryMode;
+import io.dazzleduck.sql.flight.namedquery.NamedQueryRequest;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.ipc.ArrowStreamReader;
@@ -52,23 +51,26 @@ public class NamedQueryServiceTest extends HttpServerTestBase {
         // Create the named-query table and seed it with templates used by the tests
         ConnectionPool.execute(
                 "CREATE TABLE IF NOT EXISTS " + NAMED_QUERIES_TABLE +
-                " (name VARCHAR PRIMARY KEY, template VARCHAR, validators VARCHAR[]," +
+                " (id BIGINT PRIMARY KEY, name VARCHAR UNIQUE, template VARCHAR, validators VARCHAR[]," +
                 "  description VARCHAR, parameter_descriptions MAP(VARCHAR, VARCHAR))");
         ConnectionPool.executeBatch(new String[]{
                 "DELETE FROM " + NAMED_QUERIES_TABLE,
                 "INSERT INTO " + NAMED_QUERIES_TABLE + " VALUES " +
-                "('get_series', 'SELECT * FROM generate_series({{ limit }}) t(v) ORDER BY v'," +
+                "(1, 'get_series', 'SELECT * FROM generate_series({{ limit }}) t(v) ORDER BY v'," +
                 " NULL, 'Returns the first N integers', MAP {'limit': 'upper bound (exclusive)'})",
                 "INSERT INTO " + NAMED_QUERIES_TABLE + " VALUES " +
-                "('filter_series', 'SELECT * FROM generate_series(10) t(v) WHERE v > {{ min }}'," +
+                "(2, 'filter_series', 'SELECT * FROM generate_series(10) t(v) WHERE v > {{ min }}'," +
                 " NULL, 'Filters integers above a threshold', MAP {'min': 'minimum value (exclusive)'})",
                 "INSERT INTO " + NAMED_QUERIES_TABLE + " VALUES " +
-                "('validated_query', 'SELECT * FROM generate_series({{ limit }}) t(v)'," +
+                "(3, 'validated_query', 'SELECT * FROM generate_series({{ limit }}) t(v)'," +
                 " ['" + RejectAllValidatorNamedQuery.class.getName() + "'], 'Always rejected by validator', NULL)",
                 "INSERT INTO " + NAMED_QUERIES_TABLE + " VALUES " +
-                "('multi_validator_query', 'SELECT * FROM generate_series({{ limit }}) t(v)'," +
+                "(4, 'multi_validator_query', 'SELECT * FROM generate_series({{ limit }}) t(v)'," +
                 " ['" + RejectAllValidatorNamedQuery.class.getName() + "', '" + AnotherRejectValidatorNamedQuery.class.getName() + "']," +
-                " 'Rejected by two validators', NULL)"
+                " 'Rejected by two validators', NULL)",
+                "INSERT INTO " + NAMED_QUERIES_TABLE + " VALUES " +
+                "(5, 'invalid_sql', 'SELECT * FROM non_existent_table'," +
+                " NULL, 'Query with invalid SQL', NULL)"
         });
     }
 
@@ -146,7 +148,7 @@ public class NamedQueryServiceTest extends HttpServerTestBase {
     @Test
     @Timeout(value = 10, unit = TimeUnit.SECONDS)
     void testMissingNameReturns400() throws IOException, InterruptedException {
-        var namedQuery = new NamedQueryRequest(null, Map.of(), QueryMode.EXECUTE);
+        var namedQuery = new NamedQueryRequest(null, Map.of());
         var body = objectMapper.writeValueAsBytes(namedQuery);
 
         var request = authenticatedRequestBuilder(URI.create(baseUrl + ENDPOINT))
@@ -155,6 +157,21 @@ public class NamedQueryServiceTest extends HttpServerTestBase {
 
         var response = client.send(request, HttpResponse.BodyHandlers.ofString());
         assertEquals(400, response.statusCode(), "Expected 400 when name is missing");
+    }
+
+    @Test
+    @Timeout(value = 10, unit = TimeUnit.SECONDS)
+    void testIncorrectQueryReturnsError() throws IOException, InterruptedException {
+        var namedQuery = NamedQueryRequest.execute("invalid_sql", Map.of());
+        var body = objectMapper.writeValueAsBytes(namedQuery);
+
+        var request = authenticatedRequestBuilder(URI.create(baseUrl + ENDPOINT))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+                .build();
+
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        // Invalid SQL typically results in Internal Server Error or Bad Request depending on mapping
+        assertTrue(response.statusCode() >= 400, "Expected error status for invalid SQL");
     }
 
     // -------------------------------------------------------------------------
@@ -196,70 +213,12 @@ public class NamedQueryServiceTest extends HttpServerTestBase {
     }
 
     // -------------------------------------------------------------------------
-    // EXPLAIN / EXPLAIN ANALYZE tests
-    // -------------------------------------------------------------------------
-
-    @Test
-    @Timeout(value = 30, unit = TimeUnit.SECONDS)
-    void testExplainMode() throws IOException, InterruptedException {
-        var namedQuery = new NamedQueryRequest("get_series", Map.of("limit", "5"), QueryMode.EXPLAIN);
-        var body = objectMapper.writeValueAsBytes(namedQuery);
-
-        var request = authenticatedRequestBuilder(URI.create(baseUrl + ENDPOINT))
-                .POST(HttpRequest.BodyPublishers.ofByteArray(body))
-                .build();
-
-        var response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
-        assertEquals(200, response.statusCode(), "EXPLAIN should return 200");
-
-        try (var allocator = new RootAllocator();
-             var reader = new ArrowStreamReader(response.body(), allocator)) {
-            // EXPLAIN returns a plan string — just verify we get at least one batch
-            assertTrue(reader.loadNextBatch(), "EXPLAIN should return at least one batch");
-        }
-    }
-
-    @Test
-    @Timeout(value = 10, unit = TimeUnit.SECONDS)
-    void testGenerateMode() throws IOException, InterruptedException {
-        var namedQuery = new NamedQueryRequest("get_series", Map.of("limit", "5"), QueryMode.GENERATE);
-        var body = objectMapper.writeValueAsBytes(namedQuery);
-
-        var request = authenticatedRequestBuilder(URI.create(baseUrl + ENDPOINT))
-                .POST(HttpRequest.BodyPublishers.ofByteArray(body))
-                .build();
-
-        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
-        assertEquals(200, response.statusCode(), "GENERATE should return 200");
-        assertEquals("SELECT * FROM generate_series(5) t(v) ORDER BY v", response.body().trim());
-    }
-
-    @Test
-    @Timeout(value = 30, unit = TimeUnit.SECONDS)
-    void testExplainAnalyzeMode() throws IOException, InterruptedException {
-        var namedQuery = new NamedQueryRequest("get_series", Map.of("limit", "5"), QueryMode.EXPLAIN_ANALYZE);
-        var body = objectMapper.writeValueAsBytes(namedQuery);
-
-        var request = authenticatedRequestBuilder(URI.create(baseUrl + ENDPOINT))
-                .POST(HttpRequest.BodyPublishers.ofByteArray(body))
-                .build();
-
-        var response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
-        assertEquals(200, response.statusCode(), "EXPLAIN ANALYZE should return 200");
-
-        try (var allocator = new RootAllocator();
-             var reader = new ArrowStreamReader(response.body(), allocator)) {
-            assertTrue(reader.loadNextBatch(), "EXPLAIN ANALYZE should return at least one batch");
-        }
-    }
-
-    // -------------------------------------------------------------------------
     // List + single-query tests
     // -------------------------------------------------------------------------
 
     @Test
     @Timeout(value = 10, unit = TimeUnit.SECONDS)
-    void testListReturnsPaginatedItems() throws IOException, InterruptedException {
+    void testListReturnsItems() throws IOException, InterruptedException {
         var request = authenticatedRequestBuilder(URI.create(baseUrl + ENDPOINT + "?offset=0&limit=10"))
                 .GET()
                 .build();
@@ -267,27 +226,24 @@ public class NamedQueryServiceTest extends HttpServerTestBase {
         var response = client.send(request, HttpResponse.BodyHandlers.ofString());
         assertEquals(200, response.statusCode(), "Expected 200 for list endpoint");
 
-        Map<String, Object> page = objectMapper.readValue(response.body(), new TypeReference<>() {});
-        assertEquals(4, ((Number) page.get("total")).intValue(), "Expected total=4");
-        assertEquals(0, ((Number) page.get("offset")).intValue());
-        assertEquals(10, ((Number) page.get("limit")).intValue());
+        List<Map<String, Object>> items = objectMapper.readValue(response.body(), new TypeReference<>() {});
+        assertEquals(5, items.size(), "All 5 queries fit within limit=10");
 
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> items = (List<Map<String, Object>>) page.get("items");
-        assertEquals(4, items.size(), "All 4 queries fit within limit=10");
-
-        // Names sorted alphabetically, only name + description present (no template, no validators)
-        assertEquals("filter_series",         items.get(0).get("name"));
-        assertEquals("get_series",            items.get(1).get("name"));
-        assertEquals("multi_validator_query", items.get(2).get("name"));
-        assertEquals("validated_query",       items.get(3).get("name"));
-        assertFalse(items.get(0).containsKey("template"), "template must not appear in list");
-        assertFalse(items.get(0).containsKey("validatorDescriptions"), "validators must not appear in list");
+        // Sorted by id
+        assertEquals(1, items.get(0).get("id"));
+        assertEquals("get_series",            items.get(0).get("name"));
+        assertEquals(2, items.get(1).get("id"));
+        assertEquals("filter_series",         items.get(1).get("name"));
+        assertEquals(3, items.get(2).get("id"));
+        assertEquals("validated_query",       items.get(2).get("name"));
+        assertEquals(4, items.get(3).get("id"));
+        assertEquals("multi_validator_query", items.get(3).get("name"));
     }
 
     @Test
     @Timeout(value = 10, unit = TimeUnit.SECONDS)
-    void testListPaginationOffset() throws IOException, InterruptedException {
+    void testListPaginationOffsetById() throws IOException, InterruptedException {
+        // offset=2 means id > 2
         var request = authenticatedRequestBuilder(URI.create(baseUrl + ENDPOINT + "?offset=2&limit=2"))
                 .GET()
                 .build();
@@ -295,14 +251,27 @@ public class NamedQueryServiceTest extends HttpServerTestBase {
         var response = client.send(request, HttpResponse.BodyHandlers.ofString());
         assertEquals(200, response.statusCode());
 
-        Map<String, Object> page = objectMapper.readValue(response.body(), new TypeReference<>() {});
-        assertEquals(4, ((Number) page.get("total")).intValue());
+        List<Map<String, Object>> items = objectMapper.readValue(response.body(), new TypeReference<>() {});
+        assertEquals(2, items.size(), "Offset=2 (id > 2), limit=2 should return id=3 and id=4");
+        assertEquals(3, ((Number) items.get(0).get("id")).intValue());
+        assertEquals("validated_query",       items.get(0).get("name"));
+        assertEquals(4, ((Number) items.get(1).get("id")).intValue());
+        assertEquals("multi_validator_query", items.get(1).get("name"));
+    }
 
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> items = (List<Map<String, Object>>) page.get("items");
-        assertEquals(2, items.size(), "Offset=2, limit=2 should return items 3 and 4");
-        assertEquals("multi_validator_query", items.get(0).get("name"));
-        assertEquals("validated_query",       items.get(1).get("name"));
+    @Test
+    @Timeout(value = 10, unit = TimeUnit.SECONDS)
+    void testListWithLargeOffsetReturnsEmpty() throws IOException, InterruptedException {
+        // offset=100 means id > 100
+        var request = authenticatedRequestBuilder(URI.create(baseUrl + ENDPOINT + "?offset=100&limit=10"))
+                .GET()
+                .build();
+
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, response.statusCode());
+
+        List<Map<String, Object>> items = objectMapper.readValue(response.body(), new TypeReference<>() {});
+        assertTrue(items.isEmpty(), "Expected empty list for offset larger than max id");
     }
 
     @Test
@@ -316,6 +285,7 @@ public class NamedQueryServiceTest extends HttpServerTestBase {
         assertEquals(200, response.statusCode(), "Expected 200 for named query by name");
 
         Map<String, Object> info = objectMapper.readValue(response.body(), new TypeReference<>() {});
+        assertEquals(1, ((Number) info.get("id")).intValue());
         assertEquals("get_series",           info.get("name"));
         assertEquals("Returns the first N integers", info.get("description"));
         assertTrue(info.containsKey("parameterDescriptions"), "Full object must include parameterDescriptions");
@@ -334,11 +304,10 @@ public class NamedQueryServiceTest extends HttpServerTestBase {
 
         Map<String, Object> info = objectMapper.readValue(response.body(), new TypeReference<>() {});
         @SuppressWarnings("unchecked")
-        List<String> descs = (List<String>) info.get("validatorDescriptions");
-        assertNotNull(descs);
-        assertEquals(1, descs.size());
-        // RejectAllValidatorNamedQuery.description() is "" → falls back to class name
-        assertNotNull(descs.get(0));
+        List<String> validatorClassNames = (List<String>) info.get("validatorDescriptions");
+        assertNotNull(validatorClassNames);
+        assertEquals(1, validatorClassNames.size());
+        assertEquals(RejectAllValidatorNamedQuery.class.getName(), validatorClassNames.get(0));
     }
 
     @Test
