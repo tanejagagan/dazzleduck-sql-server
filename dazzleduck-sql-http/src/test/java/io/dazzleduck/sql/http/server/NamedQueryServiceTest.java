@@ -52,25 +52,25 @@ public class NamedQueryServiceTest extends HttpServerTestBase {
         ConnectionPool.execute(
                 "CREATE TABLE IF NOT EXISTS " + NAMED_QUERIES_TABLE +
                 " (id BIGINT PRIMARY KEY, name VARCHAR UNIQUE, template VARCHAR, validators VARCHAR[]," +
-                "  description VARCHAR, parameter_descriptions MAP(VARCHAR, VARCHAR))");
+                "  description VARCHAR, parameter_descriptions MAP(VARCHAR, VARCHAR), preferred_display VARCHAR)");
         ConnectionPool.executeBatch(new String[]{
                 "DELETE FROM " + NAMED_QUERIES_TABLE,
                 "INSERT INTO " + NAMED_QUERIES_TABLE + " VALUES " +
                 "(1, 'get_series', 'SELECT * FROM generate_series({{ limit }}) t(v) ORDER BY v'," +
-                " NULL, 'Returns the first N integers', MAP {'limit': 'upper bound (exclusive)'})",
+                " NULL, 'Returns the first N integers', MAP {'limit': 'upper bound (exclusive)'}, NULL)",
                 "INSERT INTO " + NAMED_QUERIES_TABLE + " VALUES " +
                 "(2, 'filter_series', 'SELECT * FROM generate_series(10) t(v) WHERE v > {{ min }}'," +
-                " NULL, 'Filters integers above a threshold', MAP {'min': 'minimum value (exclusive)'})",
+                " NULL, 'Filters integers above a threshold', MAP {'min': 'minimum value (exclusive)'}, NULL)",
                 "INSERT INTO " + NAMED_QUERIES_TABLE + " VALUES " +
                 "(3, 'validated_query', 'SELECT * FROM generate_series({{ limit }}) t(v)'," +
-                " ['" + RejectAllValidatorNamedQuery.class.getName() + "'], 'Always rejected by validator', NULL)",
+                " ['" + RejectAllValidatorNamedQuery.class.getName() + "'], 'Always rejected by validator', NULL, NULL)",
                 "INSERT INTO " + NAMED_QUERIES_TABLE + " VALUES " +
                 "(4, 'multi_validator_query', 'SELECT * FROM generate_series({{ limit }}) t(v)'," +
                 " ['" + RejectAllValidatorNamedQuery.class.getName() + "', '" + AnotherRejectValidatorNamedQuery.class.getName() + "']," +
-                " 'Rejected by two validators', NULL)",
+                " 'Rejected by two validators', NULL, NULL)",
                 "INSERT INTO " + NAMED_QUERIES_TABLE + " VALUES " +
                 "(5, 'invalid_sql', 'SELECT * FROM non_existent_table'," +
-                " NULL, 'Query with invalid SQL', NULL)"
+                " NULL, 'Query with invalid SQL', NULL, NULL)"
         });
     }
 
