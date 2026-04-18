@@ -1,7 +1,11 @@
 # Normalize line endings to LF on commit
 * text=auto eol=lf
 
-# Binaries
+# Shell scripts and SQL must always be LF — critical for Docker entrypoints
+*.sh eol=lf
+*.sql eol=lf
+
+# Binaries — must not have line-ending translation applied
 *.png binary
 *.jpg binary
 *.jpeg binary
@@ -9,3 +13,7 @@
 *.ico binary
 *.jar binary
 *.class binary
+*.duckdb binary
+*.parquet binary
+*.arrow binary
+*.arrows binary
