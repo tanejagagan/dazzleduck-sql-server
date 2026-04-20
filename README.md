@@ -38,36 +38,85 @@ The project includes JDK 11 compatible client libraries:
 - **Client modules** (dazzleduck-sql-client, dazzleduck-sql-client-grpc, dazzleduck-sql-common, dazzleduck-sql-logger, dazzleduck-sql-logback): JDK 11+
 
 ## Getting started with Docker
-- Build the docker image.
+
+### 1. Build the base image (one-time, or when Java/DuckDB version changes)
+
 ```bash
-./mvnw clean package install -DskipTests
-./mvnw package -DskipTests jib:dockerBuild -pl dazzleduck-sql-runtime
+DUCKDB_VERSION=$(./mvnw help:evaluate -Dexpression=duckdb.version -q -DforceStdout)
+
+# Local Docker daemon (development)
+docker build \
+  --platform linux/amd64 \
+  --build-arg DUCKDB_VERSION=$DUCKDB_VERSION \
+  -t dazzleduck/base-jre:21-alpine \
+  -f dazzleduck-sql-runtime/docker/Dockerfile.base \
+  dazzleduck-sql-runtime/docker/
+
+# Multi-platform push to Docker Hub (CI/CD)
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  --build-arg DUCKDB_VERSION=$DUCKDB_VERSION \
+  -t dazzleduck/base-jre:21-alpine \
+  -f dazzleduck-sql-runtime/docker/Dockerfile.base \
+  dazzleduck-sql-runtime/docker/ \
+  --push
 ```
-- Start the container with `example/data` mounted to the container
-  ```bash
-  docker run -ti -p 59307:59307 -p 8081:8081 dazzleduck/dazzleduck:latest --conf warehouse=/data --conf users.0.password="your password"
-  ```
-  This will print the following on the console:
-  ```
-  ============================================================
-  DazzleDuck SQL Server 0.0.16
-  ============================================================
-  Warehouse Path: /data
-  HTTP Server started successfully
-  Listening on: http://0.0.0.0:8081
-  Health check: http://0.0.0.0:8081/health
-  UI dashboard: http://0.0.0.0:8081/v1/ui
-  Flight Server is up: Listening on URI: grpc+tcp://0.0.0.0:59307
-  ```
 
-- The server is running in both Arrow Flight SQL (gRPC) and HTTP REST API modes
-- HTTP API endpoints are available at `/v1/*` (e.g., `/v1/query`, `/v1/login`, `/v1/ingest`)
-- Health check endpoint is available at `/health` (unversioned)
+### 2. Build the application image
 
-## Getting started in the dev setup 
- ```bash
-export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED"
-./mvnw exec:java -pl dazzleduck-sql-runtime -Dexec.mainClass="io.dazzleduck.sql.runtime.Main" -Dexec.args="--conf warehouse=warehouse --conf users.0.password="your password""
+```bash
+# Build all modules and push to Docker Hub (CI/CD)
+./mvnw clean package jib:build -pl dazzleduck-sql-runtime -am -DskipTests
+
+# Build to local Docker daemon only (development)
+./mvnw clean package jib:dockerBuild -pl dazzleduck-sql-runtime -am -DskipTests
+```
+
+### 3. Run the container
+
+```bash
+docker run -ti -p 59307:59307 -p 8081:8081 dazzleduck/dazzleduck:latest \
+  --conf warehouse=/data \
+  --conf users.0.password="your password"
+```
+
+This will print the following on the console:
+```
+============================================================
+DazzleDuck SQL Server 0.0.36
+============================================================
+Warehouse Path: /data
+HTTP Server started successfully
+Listening on: http://0.0.0.0:8081
+Health check: http://0.0.0.0:8081/health
+UI dashboard: http://0.0.0.0:8081/v1/ui
+Flight Server is up: Listening on URI: grpc+tcp://0.0.0.0:59307
+```
+
+The server runs both Arrow Flight SQL (gRPC) on port `59307` and HTTP REST API on port `8081`.
+See `dazzleduck-sql-runtime/docker/README.md` for full Docker build documentation.
+
+## Getting started from the command line (development)
+
+Build the project once, then start the server directly via Maven — no Docker needed:
+
+```bash
+# Build all modules
+./mvnw clean package -DskipTests
+
+# Start the server
+./mvnw exec:java -pl dazzleduck-sql-runtime \
+  -Dexec.args="--conf warehouse=warehouse --conf users.0.password='your password'"
+```
+
+The JVM flags required by Arrow (`--add-opens`) are configured automatically by the exec plugin.
+
+To run a specific main class (e.g. for demos or tooling):
+
+```bash
+./mvnw exec:java -pl dazzleduck-sql-runtime \
+  -Dexec.mainClass="io.dazzleduck.sql.SomeOtherMain" \
+  -Dexec.args="[args...]"
 ```
 
 ### Supported functionality

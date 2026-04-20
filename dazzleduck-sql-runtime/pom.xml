@@ -6,24 +6,48 @@
     <parent>
         <groupId>io.dazzleduck.sql</groupId>
         <artifactId>dazzleduck-parent</artifactId>
-        <version>0.0.36</version>
+        <version>0.0.37</version>
     </parent>
     <name>DazzleDuck Project Runtime</name>
     <artifactId>dazzleduck-sql-runtime</artifactId>
 
     <properties>
         <testcontainer.version>1.21.2</testcontainer.version>
+        <exec.mainClass>io.dazzleduck.sql.runtime.Main</exec.mainClass>
+        <!-- Override with -Djib.architecture=arm64 on Apple Silicon -->
+        <jib.architecture>amd64</jib.architecture>
     </properties>
     <dependencies>
         <dependency>
             <groupId>io.dazzleduck.sql</groupId>
             <artifactId>dazzleduck-sql-flight</artifactId>
-            <version>0.0.36</version>
+            <version>0.0.37</version>
+        </dependency>
+        <!-- provided: DuckDB jar is pre-installed in the base Docker image (dazzleduck/base-jre) -->
+        <dependency>
+            <groupId>org.duckdb</groupId>
+            <artifactId>duckdb_jdbc</artifactId>
+            <version>${duckdb.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <!-- provided: Hadoop excluded from Docker image by default (~48MB saving).
+             Add hadoop-client-runtime + hadoop-client-api to /app/extra to enable Delta Lake. -->
+        <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-client-runtime</artifactId>
+            <version>${hadoop.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-client-api</artifactId>
+            <version>${hadoop.version}</version>
+            <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>io.dazzleduck.sql</groupId>
             <artifactId>dazzleduck-sql-http</artifactId>
-            <version>0.0.36</version>
+            <version>0.0.37</version>
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
@@ -65,6 +89,22 @@
     <build>
         <plugins>
             <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.3.0</version>
+                <configuration>
+                    <mainClass>${exec.mainClass}</mainClass>
+                    <includeProjectDependencies>true</includeProjectDependencies>
+                    <includePluginDependencies>false</includePluginDependencies>
+                    <classpathScope>compile</classpathScope>
+                    <jvmArgs>
+                        <jvmArg>--add-opens=java.base/sun.nio.ch=ALL-UNNAMED</jvmArg>
+                        <jvmArg>--add-opens=java.base/java.nio=ALL-UNNAMED</jvmArg>
+                        <jvmArg>--add-opens=java.base/sun.util.calendar=ALL-UNNAMED</jvmArg>
+                    </jvmArgs>
+                </configuration>
+            </plugin>
+            <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
                 <version>3.3.0</version>
@@ -82,7 +122,13 @@
                 <version>3.5.1</version>
                 <configuration>
                     <from>
-                        <image>eclipse-temurin:21-jre</image>
+                        <image>dazzleduck/base-jre:21-noble-duckdb-${duckdb.version}</image>
+                        <platforms>
+                            <platform>
+                                <os>linux</os>
+                                <architecture>${jib.architecture}</architecture>
+                            </platform>
+                        </platforms>
                     </from>
                     <to>
                         <image>dazzleduck/dazzleduck:latest</image>
@@ -91,7 +137,7 @@
                     <container>
                         <!-- Use entrypoint script instead of mainClass -->
                         <entrypoint>
-                            <shell>bash</shell>
+                            <shell>sh</shell>
                             <option>-c</option>
                             <option>/app/entrypoint.sh "$@"</option>
                             <option>--</option>
@@ -107,7 +153,7 @@
 
                     <extraDirectories>
                         <paths>
-                            <!-- Include logback JARs -->
+                            <!-- Plugin JARs loaded via /app/extra (these modules depend on runtime, so can't be Maven deps) -->
                             <path>
                                 <from>${project.basedir}/../dazzleduck-sql-logback/target</from>
                                 <into>/app/extra</into>
@@ -117,9 +163,9 @@
                                 <excludes>
                                     <exclude>*-sources.jar</exclude>
                                     <exclude>*-javadoc.jar</exclude>
+                                    <exclude>*-tests.jar</exclude>
                                 </excludes>
                             </path>
-                            <!-- Include micrometer JARs -->
                             <path>
                                 <from>${project.basedir}/../dazzleduck-sql-micrometer/target</from>
                                 <into>/app/extra</into>
@@ -129,9 +175,9 @@
                                 <excludes>
                                     <exclude>*-sources.jar</exclude>
                                     <exclude>*-javadoc.jar</exclude>
+                                    <exclude>*-tests.jar</exclude>
                                 </excludes>
                             </path>
-                            <!-- Include client JARs -->
                             <path>
                                 <from>${project.basedir}/../dazzleduck-sql-client/target</from>
                                 <into>/app/extra</into>
@@ -141,9 +187,9 @@
                                 <excludes>
                                     <exclude>*-sources.jar</exclude>
                                     <exclude>*-javadoc.jar</exclude>
+                                    <exclude>*-tests.jar</exclude>
                                 </excludes>
                             </path>
-                            <!-- Include client-grpc JARs -->
                             <path>
                                 <from>${project.basedir}/../dazzleduck-sql-client-grpc/target</from>
                                 <into>/app/extra</into>
@@ -153,36 +199,22 @@
                                 <excludes>
                                     <exclude>*-sources.jar</exclude>
                                     <exclude>*-javadoc.jar</exclude>
+                                    <exclude>*-tests.jar</exclude>
                                 </excludes>
                             </path>
-                            <!-- Include logger JARs -->
-                            <path>
-                                <from>${project.basedir}/../dazzleduck-sql-logback/target</from>
-                                <into>/app/extra</into>
-                                <includes>
-                                    <include>dazzleduck-sql-logback-*.jar</include>
-                                </includes>
-                                <excludes>
-                                    <exclude>*-sources.jar</exclude>
-                                    <exclude>*-javadoc.jar</exclude>
-                                </excludes>
-                            </path>
-                            <!-- Include logback dependencies -->
+                            <!-- Plugin dependencies (deduplication happens at runtime via classpath order) -->
                             <path>
                                 <from>${project.basedir}/../dazzleduck-sql-logback/target/dependency</from>
                                 <into>/app/extra</into>
                             </path>
-                            <!-- Include micrometer dependencies -->
                             <path>
                                 <from>${project.basedir}/../dazzleduck-sql-micrometer/target/dependency</from>
                                 <into>/app/extra</into>
                             </path>
-                            <!-- Include client dependencies -->
                             <path>
                                 <from>${project.basedir}/../dazzleduck-sql-client/target/dependency</from>
                                 <into>/app/extra</into>
                             </path>
-                            <!-- Include client-grpc dependencies -->
                             <path>
                                 <from>${project.basedir}/../dazzleduck-sql-client-grpc/target/dependency</from>
                                 <into>/app/extra</into>
@@ -191,17 +223,11 @@
                             <path>
                                 <from>${project.basedir}/docker</from>
                                 <into>/app</into>
+                                <includes>
+                                    <include>entrypoint.sh</include>
+                                </includes>
                             </path>
-                            <!-- Add startup scripts -->
-                            <path>
-                                <from>${project.basedir}/../example/startup</from>
-                                <into>/startup</into>
-                            </path>
-                            <!-- Add example data -->
-                            <path>
-                                <from>${project.basedir}/../example/data</from>
-                                <into>/data</into>
-                            </path>
+                            <!-- startup/ and data/ are provided by the base image (dazzleduck/base-jre) -->
                         </paths>
                         <permissions>
                             <permission>

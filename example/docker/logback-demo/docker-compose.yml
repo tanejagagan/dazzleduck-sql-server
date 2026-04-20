@@ -40,7 +40,7 @@ services:
     networks:
       - dazzleduck-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8081/health || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8081/health || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 10
