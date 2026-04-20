@@ -1,0 +1,26 @@
+ARG JAVA_VERSION=21
+FROM eclipse-temurin:${JAVA_VERSION}-jre-noble
+
+ARG DUCKDB_VERSION=1.4.4.0
+ARG TARGETARCH
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl zip && \
+    curl -fsSL -o /tmp/duckdb_jdbc.jar \
+      "https://repo1.maven.org/maven2/org/duckdb/duckdb_jdbc/${DUCKDB_VERSION}/duckdb_jdbc-${DUCKDB_VERSION}.jar" && \
+    if [ "$TARGETARCH" = "arm64" ]; then \
+      zip -d /tmp/duckdb_jdbc.jar \
+        libduckdb_java.so_linux_amd64 \
+        libduckdb_java.so_osx_universal \
+        libduckdb_java.so_windows_amd64; \
+    else \
+      zip -d /tmp/duckdb_jdbc.jar \
+        libduckdb_java.so_linux_arm64 \
+        libduckdb_java.so_osx_universal \
+        libduckdb_java.so_windows_amd64; \
+    fi && \
+    mkdir -p /app/libs && \
+    mv /tmp/duckdb_jdbc.jar /app/libs/duckdb_jdbc-${DUCKDB_VERSION}.jar && \
+    apt-get remove -y curl zip && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+
+COPY example/data /data
+COPY example/startup /startup

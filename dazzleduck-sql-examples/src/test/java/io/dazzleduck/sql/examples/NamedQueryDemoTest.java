@@ -41,6 +41,7 @@ class NamedQueryDemoTest {
     @BeforeAll
     static void startCompose() throws Exception {
         compose = new ComposeContainer(ComposeFiles.stripped(COMPOSE_FILE))
+                .withLocalCompose(true)
                 .withExposedService("dazzleduck-server", 8081,
                         Wait.forHttp("/health").withStartupTimeout(Duration.ofSeconds(120)));
         compose.start();
