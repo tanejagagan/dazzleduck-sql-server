@@ -116,6 +116,7 @@ public class RedirectAuthorizer {
                 continue;
             }
             if (cst.type() == Transformations.TableType.BASE_TABLE) {
+                logger.debug("RedirectAuthorizer.findMatchingRow: checking cst={} against row=catalog:{} schema:{} table:{}", cst, row.catalog(), row.schema(), row.tableOrPath());
                 if (cst.catalog().equals(row.catalog())
                         && cst.schema().equals(row.schema())
                         && SqlAuthorizer.hasAccessToTable(cst.catalog(), cst.schema(), row.tableOrPath(), cst)) {
@@ -152,15 +153,19 @@ public class RedirectAuthorizer {
     private ResolveResponse callResolveEndpoint(String user, String bearerToken, String resolveUrl) throws UnauthorizedException {
         ResolveResponseCacheEntry entry = resolveResponseByUser.get(user);
         if (entry != null && !entry.isExpired()) {
+            logger.debug("RedirectAuthorizer: using cached resolve response for user={}, tables={}", user,
+                    entry.resolveResponse().tables() != null ? entry.resolveResponse().tables().stream().map(r -> r.catalog() + "." + r.schema() + "." + r.tableOrPath()).toList() : "null");
             return entry.resolveResponse();
         }
         try {
+            logger.debug("RedirectAuthorizer: calling resolve endpoint url={} user={}", resolveUrl, user);
             var request = HttpRequest.newBuilder()
                     .uri(URI.create(resolveUrl))
                     .header("Authorization", "Bearer " + bearerToken)
                     .GET()
                     .build();
             var response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+            logger.debug("RedirectAuthorizer: resolve response status={} body={}", response.statusCode(), response.body());
             if (response.statusCode() != 200) {
                 throw new UnauthorizedException(
                         "Resolve endpoint returned status " + response.statusCode());
