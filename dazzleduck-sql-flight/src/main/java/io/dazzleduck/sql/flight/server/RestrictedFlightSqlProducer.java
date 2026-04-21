@@ -15,6 +15,8 @@ import io.dazzleduck.sql.flight.optimizer.QueryOptimizer;
 import org.apache.arrow.flight.*;
 import org.apache.arrow.flight.sql.impl.FlightSql;
 import org.apache.arrow.memory.BufferAllocator;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -29,6 +31,7 @@ import static com.google.protobuf.ByteString.copyFrom;
 
 public class RestrictedFlightSqlProducer extends DuckDBFlightSqlProducer {
 
+    private static final Logger logger = LoggerFactory.getLogger(RestrictedFlightSqlProducer.class);
     private final QueryOptimizer queryOptimizer;
     public RestrictedFlightSqlProducer(Location serverLocation, String producerId, String secretKey, BufferAllocator allocator, String warehousePath, AccessMode accessMode, Path tempDir, IngestionHandler postIngestionHandler, ScheduledExecutorService scheduledExecutorService, Duration queryTimeout, Clock clock, FlightRecorder recorder, QueryOptimizer queryOptimizer, IngestionConfig ingestionConfig) {
         this(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionHandler, scheduledExecutorService, queryTimeout, Duration.ZERO, clock, recorder, queryOptimizer, ingestionConfig, List.of());
@@ -509,6 +512,11 @@ public class RestrictedFlightSqlProducer extends DuckDBFlightSqlProducer {
         String peerIdentity = callContext.peerIdentity();
         var verifiedClaims = getVerifiedClaims(callContext);
         var databaseSchema = getDatabaseSchema(callContext, AccessMode.RESTRICTED);
+        logger.debug("RestrictedFlightSqlProducer.authorize: user={} database={} schema={} token-type={} redirect_url={} has-bearer={}",
+                peerIdentity, databaseSchema.database(), databaseSchema.schema(),
+                verifiedClaims.get(io.dazzleduck.sql.common.Headers.HEADER_TOKEN_TYPE),
+                verifiedClaims.get(io.dazzleduck.sql.common.Headers.HEADER_REDIRECT_URL),
+                verifiedClaims.containsKey(io.dazzleduck.sql.common.Headers.HEADER_BEARER_TOKEN));
         return sqlAuthorizer.authorize(peerIdentity, databaseSchema.database(), databaseSchema.schema(), sql, verifiedClaims, -1, -1);
     }
 
