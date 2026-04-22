@@ -362,6 +362,65 @@ public class HttpArrowProducerTest {
     }
 
     /**
+     * Regression test: a network error while using a static JWT must not null out the token.
+     * Before the fix, invalidateJwt() unconditionally set jwt=null even when staticJwt=true,
+     * so the first IOException (e.g. server temporarily down) caused all subsequent sends to
+     * throw NullPointerException at .header("Authorization", getJwt()).
+     */
+    @Test
+    void testPreconfiguredJwtSurvivesNetworkError() throws Exception {
+        // Use a fixed port so we can restart the server on the same address
+        int port;
+        try (var s = new java.net.ServerSocket(0)) { port = s.getLocalPort(); }
+
+        String token = "static-token-" + System.nanoTime();
+        String queue = "survive-network-error-" + System.nanoTime();
+
+        try (MockIngestionServer mock = new MockIngestionServer(port, Path.of(ingestionPath))) {
+            mock.start();
+            mock.addValidToken(token);
+
+            try (HttpArrowProducer producer = new HttpArrowProducer(
+                    schema,
+                    mock.getBaseUrl(),
+                    "Bearer " + token,
+                    queue,
+                    Duration.ofSeconds(3),
+                    100_000,
+                    200_000,
+                    Duration.ofMillis(20),
+                    1,
+                    100,
+                    List.of(),
+                    100_000,
+                    500_000
+            )) {
+                // First send succeeds
+                producer.enqueue(arrowBytes("select 1 as val"));
+                await().atMost(5, TimeUnit.SECONDS).until(() -> mock.getTotalFilesWritten() > 0);
+
+                // Simulate server going down — IOException triggers invalidateJwt().
+                // Sleep needs to exceed maxSendInterval (20ms) so the sender thread wakes
+                // and makes at least one failed attempt before we bring the server back.
+                mock.stop();
+                producer.enqueue(arrowBytes("select 2 as val"));
+                Thread.sleep(60);
+
+                // Server comes back on the same port — static JWT must not have been nulled
+                mock.start();
+                mock.addValidToken(token);
+
+                long filesBeforeRecovery = mock.getTotalFilesWritten();
+                producer.enqueue(arrowBytes("select 3 as val"));
+                await().atMost(10, TimeUnit.SECONDS)
+                       .until(() -> mock.getTotalFilesWritten() > filesBeforeRecovery);
+            }
+
+            assertEquals(0, mock.getLoginCallCount(), "Static JWT must never trigger a login");
+        }
+    }
+
+    /**
      * Null JWT in the static-JWT constructor should throw NullPointerException.
      */
     @Test
