@@ -17,6 +17,8 @@ import java.nio.charset.StandardCharsets;
 import java.security.NoSuchAlgorithmException;
 import java.util.Base64;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class AuthUtils {
     private static final ObjectMapper objectMapper = new ObjectMapper();
@@ -83,10 +85,17 @@ public class AuthUtils {
         };
     }
 
+    private static final Logger logger = LoggerFactory.getLogger(AuthUtils.class);
+
     public static AdvanceBasicCallHeaderAuthenticator.AdvanceCredentialValidator createCredentialValidator(Config config) {
-        return config.hasPath(ConfigConstants.LOGIN_URL_KEY) ?
-                new HttpCredentialValidator(config)
-                : new ConfBasedCredentialValidator(config);
+        if (config.hasPath(ConfigConstants.LOGIN_URL_KEY)) {
+            logger.debug("createCredentialValidator: using HttpCredentialValidator with login_url={}",
+                    config.getString(ConfigConstants.LOGIN_URL_KEY));
+            return new HttpCredentialValidator(config);
+        } else {
+            logger.debug("createCredentialValidator: login_url not set, using ConfBasedCredentialValidator");
+            return new ConfBasedCredentialValidator(config);
+        }
     }
 
     private static final AdvanceBasicCallHeaderAuthenticator.AdvanceCredentialValidator NO_AUTH_CREDENTIAL_VALIDATOR = (username, password, callHeaders) -> {

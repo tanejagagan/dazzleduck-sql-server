@@ -139,7 +139,8 @@ public class AdvanceJWTTokenAuthenticator implements CallHeaderAuthenticator {
             for(var validateKey : validateHeaders) {
                 var incomingHeaderValue = incomingHeader.get(validateKey);
                 var claimFromJwt = payload.get(validateKey, String.class);
-                if (!claimFromJwt.equals(incomingHeaderValue)) {
+                logger.debug("validateBearer: key={} jwtClaim={} incomingHeader={}", validateKey, claimFromJwt, incomingHeaderValue);
+                if (incomingHeaderValue != null && !claimFromJwt.equals(incomingHeaderValue)) {
                     throw FlightRuntimeExceptionFactory.of(new CallStatus(CallStatus.UNAUTHENTICATED.code(), null, "jwt and headers do not match", null));
                 }
             }
@@ -148,6 +149,7 @@ public class AdvanceJWTTokenAuthenticator implements CallHeaderAuthenticator {
             return new AuthResultWithClaims(subject, bearerToken, allClaimsFromJWT);
 
         } catch (Exception e) {
+            logger.error("validateBearer failed: {}", e.getMessage(), e);
             throw CallStatus.UNAUTHENTICATED.toRuntimeException();
         }
     }

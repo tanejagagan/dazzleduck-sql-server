@@ -13,8 +13,6 @@ import io.helidon.http.Status;
 import io.helidon.webserver.http.ServerRequest;
 import io.helidon.webserver.http.ServerResponse;
 import org.apache.arrow.flight.FlightProducer;
-import org.apache.arrow.flight.FlightRuntimeException;
-import org.apache.arrow.flight.FlightStatusCode;
 import org.apache.arrow.flight.sql.impl.FlightSql;
 import org.apache.arrow.vector.compression.CompressionUtil;
 
@@ -95,45 +93,14 @@ public class QueryService extends AbstractQueryBasedService {
             Throwable cause = e.getCause() != null ? e.getCause() : e;
             logger.error("Error executing query", cause);
             if (!response.isSent()) {
-                handleError(response, cause);
+                ControllerService.sendFlightError(response, cause);
             }
         } catch (Exception e) {
             logger.error("Error sending query result", e);
             if (!response.isSent()) {
-                handleError(response, e);
+                ControllerService.sendFlightError(response, e);
             }
         }
-    }
-
-    private void handleError(ServerResponse response, Throwable cause) {
-        String errorMsg = cause.getMessage() != null ? cause.getMessage() : "Internal server error";
-        Status httpStatus = Status.INTERNAL_SERVER_ERROR_500;
-
-        if (cause instanceof FlightRuntimeException flightEx) {
-            FlightStatusCode statusCode = flightEx.status().code();
-            errorMsg = flightEx.status().description() != null
-                    ? flightEx.status().description()
-                    : errorMsg;
-            httpStatus = mapFlightStatusToHttp(statusCode);
-        }
-
-        response.status(httpStatus);
-        response.send(errorMsg);
-    }
-
-    private Status mapFlightStatusToHttp(FlightStatusCode statusCode) {
-        return switch (statusCode) {
-            case OK -> Status.OK_200;
-            case INVALID_ARGUMENT -> Status.BAD_REQUEST_400;
-            case UNAUTHENTICATED -> Status.UNAUTHORIZED_401;
-            case UNAUTHORIZED -> Status.FORBIDDEN_403;
-            case NOT_FOUND -> Status.NOT_FOUND_404;
-            case TIMED_OUT -> Status.GATEWAY_TIMEOUT_504;
-            case ALREADY_EXISTS -> Status.CONFLICT_409;
-            case UNIMPLEMENTED -> Status.NOT_IMPLEMENTED_501;
-            case UNAVAILABLE -> Status.SERVICE_UNAVAILABLE_503;
-            default -> Status.INTERNAL_SERVER_ERROR_500;
-        };
     }
 
     private FlightSql.TicketStatementQuery createTicket(StatementHandle statementHandle) throws JsonProcessingException {

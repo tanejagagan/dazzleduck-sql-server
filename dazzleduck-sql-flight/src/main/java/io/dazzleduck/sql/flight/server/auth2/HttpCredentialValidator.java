@@ -19,7 +19,7 @@ import java.util.Map;
 
 public class HttpCredentialValidator implements AdvanceBasicCallHeaderAuthenticator.AdvanceCredentialValidator {
 
-
+    private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(HttpCredentialValidator.class);
     private static final HttpClient httpClient = SslUtils.httpClient();
     private final List<String> jwtClaims;
     private final ObjectMapper MAPPER = new ObjectMapper();
@@ -49,9 +49,12 @@ public class HttpCredentialValidator implements AdvanceBasicCallHeaderAuthentica
                 .POST(HttpRequest.BodyPublishers.ofString(requestBody))
                 .build();
 
+        logger.debug("HttpCredentialValidator: POST {} user={} claims={}", loginUrl, username, claimMap);
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        logger.debug("HttpCredentialValidator: response status={}", response.statusCode());
 
         if (response.statusCode() != 200) {
+            logger.error("HttpCredentialValidator: login failed status={} body={}", response.statusCode(), response.body());
             throw new RuntimeException("Failed to fetch token: " + response.body());
         }
 

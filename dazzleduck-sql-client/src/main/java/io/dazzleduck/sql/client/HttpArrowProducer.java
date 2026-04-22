@@ -431,6 +431,7 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
      * since the server may have restarted with fresh state.
      */
     private void invalidateJwt() {
+        if (staticJwt) return;
         synchronized (this) {
             jwt = null;
             jwtExpiry = Instant.EPOCH;

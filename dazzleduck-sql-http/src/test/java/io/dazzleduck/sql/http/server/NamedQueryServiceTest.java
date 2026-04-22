@@ -5,6 +5,7 @@ import io.dazzleduck.sql.common.NamedQueryParameterValidator;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.flight.namedquery.NamedQueryRequest;
 import io.dazzleduck.sql.commons.util.TestUtils;
+import io.dazzleduck.sql.http.server.model.ContentTypes;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.ipc.ArrowStreamReader;
 import org.junit.jupiter.api.AfterAll;
@@ -126,6 +127,47 @@ public class NamedQueryServiceTest extends HttpServerTestBase {
         }
     }
 
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    void testHappyPath_arrowResponseHasCorrectContentType() throws IOException, InterruptedException {
+        var namedQuery = NamedQueryRequest.execute("get_series", Map.of("limit", "3"));
+        var body = objectMapper.writeValueAsBytes(namedQuery);
+
+        var request = authenticatedRequestBuilder(URI.create(baseUrl + ENDPOINT))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+                .build();
+
+        var response = client.send(request, HttpResponse.BodyHandlers.discarding());
+        assertEquals(200, response.statusCode());
+        assertTrue(response.headers().firstValue("Content-Type")
+                        .orElse("").contains(ContentTypes.APPLICATION_ARROW),
+                "Arrow path must set Content-Type: application/vnd.apache.arrow.stream");
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    void testHappyPath_tsvResponseBodyAndContentType() throws IOException, InterruptedException {
+        var namedQuery = NamedQueryRequest.execute("get_series", Map.of("limit", "3"));
+        var body = objectMapper.writeValueAsBytes(namedQuery);
+
+        var request = authenticatedRequestBuilder(URI.create(baseUrl + ENDPOINT))
+                .header("Accept", ContentTypes.TEXT_TSV)
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+                .build();
+
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, response.statusCode());
+        assertTrue(response.headers().firstValue("Content-Type")
+                        .orElse("").contains(ContentTypes.TEXT_TSV),
+                "TSV path must set Content-Type: text/tab-separated-values");
+
+        String[] lines = response.body().strip().split("\n");
+        assertTrue(lines.length >= 2, "Expected header row + at least one data row, got: " + response.body());
+        assertEquals("v", lines[0].strip(), "Header row should be the column name");
+        assertEquals("0", lines[1].strip(), "First data row should be 0 (generate_series is 0-based)");
+        assertEquals(4, lines.length - 1, "generate_series(3) produces 4 rows: 0..3 inclusive");
+    }
+
     // -------------------------------------------------------------------------
     // Error cases
     // -------------------------------------------------------------------------
@@ -157,6 +199,20 @@ public class NamedQueryServiceTest extends HttpServerTestBase {
 
         var response = client.send(request, HttpResponse.BodyHandlers.ofString());
         assertEquals(400, response.statusCode(), "Expected 400 when name is missing");
+    }
+
+    @Test
+    @Timeout(value = 10, unit = TimeUnit.SECONDS)
+    void testBlankNameReturns400() throws IOException, InterruptedException {
+        var namedQuery = new NamedQueryRequest("   ", Map.of());
+        var body = objectMapper.writeValueAsBytes(namedQuery);
+
+        var request = authenticatedRequestBuilder(URI.create(baseUrl + ENDPOINT))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+                .build();
+
+        var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        assertEquals(400, response.statusCode(), "Expected 400 when name is blank");
     }
 
     @Test
