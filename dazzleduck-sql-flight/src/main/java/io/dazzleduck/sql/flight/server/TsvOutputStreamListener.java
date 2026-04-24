@@ -138,6 +138,10 @@ public class TsvOutputStreamListener implements FlightProducer.ServerStreamListe
     }
 
     private void writeRows() throws IOException {
+        writeRootToWriter(root, writer);
+    }
+
+    public static void writeRootToWriter(VectorSchemaRoot root, Writer writer) throws IOException {
         List<FieldVector> vectors = root.getFieldVectors();
         int rowCount = root.getRowCount();
         for (int row = 0; row < rowCount; row++) {
@@ -161,7 +165,7 @@ public class TsvOutputStreamListener implements FlightProducer.ServerStreamListe
      * non-TZ timestamps (LocalDateTime), lists (JsonStringArrayList), and
      * structs (JsonStringHashMap).
      */
-    private String formatValue(FieldVector vector, int row) {
+    private static String formatValue(FieldVector vector, int row) {
         if (vector.isNull(row)) return null;
         return switch (vector.getMinorType()) {
             // Date types — getObject() returns Integer (days since epoch)
