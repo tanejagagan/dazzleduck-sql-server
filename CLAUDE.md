@@ -1092,10 +1092,6 @@ static void setup() {
 - `Headers.java` - Header constants
 - `CryptoUtils.java` - Crypto utilities
 
-## Version
-
-Current version: **0.0.21**
-
 ## License
 
 Apache-2.0
