@@ -14,9 +14,18 @@ import io.helidon.webserver.http.ServerRequest;
 import io.helidon.webserver.http.ServerResponse;
 import org.apache.arrow.flight.FlightProducer;
 import org.apache.arrow.flight.sql.impl.FlightSql;
+import org.apache.arrow.memory.RootAllocator;
+import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.compression.CompressionUtil;
+import org.apache.arrow.vector.ipc.ArrowStreamReader;
 
 import java.io.OutputStream;
+import java.io.PipedInputStream;
+import java.io.PipedOutputStream;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -56,13 +65,14 @@ public class QueryService extends AbstractQueryBasedService {
             CompletableFuture<Void> future;
             if (wantsTsv) {
                 logger.debug("TSV output requested for query: {}", query.query());
-                response.headers().set(HeaderNames.CONTENT_TYPE, ContentTypes.TEXT_TSV_UTF8);
+                response.header("Content-Type", ContentTypes.TEXT_TSV_UTF8);
                 future = getStreamStatementDirectTsv(ticket, context, () -> response.outputStream());
             } else {
                 // Get Arrow compression codec from header (defaults to ZSTD)
                 CompressionUtil.CodecType compressionCodec = ParameterUtils.getArrowCompression(request);
                 logger.debug("Using Arrow compression codec: {}", compressionCodec);
                 logger.debug("Calling getStreamStatementDirect for query: {}", query.query());
+                response.header("Content-Type", ContentTypes.APPLICATION_ARROW);
                 future = httpFlightAdaptor.getStreamStatementDirect(ticket, context, () -> response.outputStream(), compressionCodec);
             }
 
@@ -111,24 +121,60 @@ public class QueryService extends AbstractQueryBasedService {
 
     /**
      * Gets the stream for a statement query ticket, writing results as TSV to an OutputStream.
-     *
-     * <p>The first row written is the header row (column names). Each data row is written as
-     * tab-separated values. Null values are written as empty strings.
-     *
-     * @param ticket               the statement query ticket
-     * @param context              the call context
-     * @param outputStreamSupplier supplier that provides the output stream when data is ready to write
-     * @return a CompletableFuture that completes when streaming is done, or exceptionally on error
+     * Uses getStreamStatementDirect (Arrow) internally and converts to TSV via a pipe,
+     * so it works in both standalone and controller modes.
      */
-
     private CompletableFuture<Void> getStreamStatementDirectTsv(
             FlightSql.TicketStatementQuery ticket,
             FlightProducer.CallContext context,
             Supplier<OutputStream> outputStreamSupplier) {
 
         CompletableFuture<Void> future = new CompletableFuture<>();
-        TsvOutputStreamListener listener = new TsvOutputStreamListener(outputStreamSupplier, future);
-        httpFlightAdaptor.getStreamStatement(ticket, context, listener);
+        try {
+            PipedOutputStream pipedOut = new PipedOutputStream();
+            PipedInputStream pipedIn = new PipedInputStream(pipedOut, 1 << 20);
+
+            CompletableFuture<Void> arrowFuture = httpFlightAdaptor.getStreamStatementDirect(
+                    ticket, context, () -> pipedOut, CompressionUtil.CodecType.NO_COMPRESSION);
+
+            arrowFuture.whenComplete((v, ex) -> {
+                if (ex != null) future.completeExceptionally(ex);
+            });
+
+            Thread.ofVirtual().start(() -> {
+                try (RootAllocator allocator = new RootAllocator();
+                     ArrowStreamReader reader = new ArrowStreamReader(pipedIn, allocator);
+                     OutputStream out = outputStreamSupplier.get();
+                     Writer writer = new OutputStreamWriter(out, StandardCharsets.UTF_8)) {
+
+                    VectorSchemaRoot root = reader.getVectorSchemaRoot();
+                    boolean headerWritten = false;
+                    while (reader.loadNextBatch()) {
+                        if (!headerWritten) {
+                            List<String> names = root.getSchema().getFields().stream()
+                                    .map(f -> f.getName()).toList();
+                            writer.write(String.join("\t", names));
+                            writer.write('\n');
+                            headerWritten = true;
+                        }
+                        TsvOutputStreamListener.writeRootToWriter(root, writer);
+                    }
+                    if (!headerWritten && root != null) {
+                        List<String> names = root.getSchema().getFields().stream()
+                                .map(f -> f.getName()).toList();
+                        writer.write(String.join("\t", names));
+                        writer.write('\n');
+                    }
+                    writer.flush();
+                    future.complete(null);
+                } catch (Exception e) {
+                    logger.error("Error converting Arrow to TSV", e);
+                    future.completeExceptionally(e);
+                }
+            });
+        } catch (Exception e) {
+            future.completeExceptionally(e);
+        }
         return future;
     }
 }
