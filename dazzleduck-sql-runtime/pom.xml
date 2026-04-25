@@ -6,7 +6,7 @@
     <parent>
         <groupId>io.dazzleduck.sql</groupId>
         <artifactId>dazzleduck-parent</artifactId>
-        <version>0.1.0</version>
+        <version>0.2.0</version>
     </parent>
     <name>DazzleDuck Project Runtime</name>
     <artifactId>dazzleduck-sql-runtime</artifactId>
@@ -21,7 +21,7 @@
         <dependency>
             <groupId>io.dazzleduck.sql</groupId>
             <artifactId>dazzleduck-sql-flight</artifactId>
-            <version>0.1.0</version>
+            <version>0.2.0</version>
         </dependency>
         <!-- provided: DuckDB jar is pre-installed in the base Docker image (dazzleduck/base-jre) -->
         <dependency>
@@ -47,7 +47,7 @@
         <dependency>
             <groupId>io.dazzleduck.sql</groupId>
             <artifactId>dazzleduck-sql-http</artifactId>
-            <version>0.1.0</version>
+            <version>0.2.0</version>
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>

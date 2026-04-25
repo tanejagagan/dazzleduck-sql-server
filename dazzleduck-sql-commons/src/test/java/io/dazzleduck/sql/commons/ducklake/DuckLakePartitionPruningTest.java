@@ -12,9 +12,11 @@ import java.sql.SQLException;
 
 public class DuckLakePartitionPruningTest {
 
-    // Expected file counts after partition pruning
+    // Expected file counts after partition pruning.
+    // DuckDB 1.5.2+ stores INSERTs as inlined data; ducklake_flush_inlined_data materialises them into
+    // parquet files. The 7 inserts collapse into 4 parquet files (grouped by partition) + 2 manual = 6.
     private static final int EXPECTED_FILES_WITH_FILTER = 2; // Files matching key = 'k52' filter
-    private static final int EXPECTED_FILES_NO_FILTER = 9; // Total files without any filter (7 inserts + 2 manual)
+    private static final int EXPECTED_FILES_NO_FILTER = 6; // Total parquet files after flush (4 from inserts + 2 manual)
 
     @TempDir
     static Path WORKSPACE;
@@ -38,6 +40,9 @@ public class DuckLakePartitionPruningTest {
         DuckLakeTestFixture.addDataFile(DATABASE, workspacePath + "/data/main/" + PARTITIONED_TABLE, PARTITIONED_TABLE, true);
         DuckLakeTestFixture.createTestTable(QUALIFIED_NON_PARTITIONED_TABLE, false);
         DuckLakeTestFixture.addDataFile(DATABASE, workspacePath + "/data/main/" + NON_PARTITIONED_TABLE, NON_PARTITIONED_TABLE, false);
+        // DuckDB 1.5.2+ stores INSERTs as inlined metadata; flush materialises them as parquet files
+        // so that ducklake_data_file reflects all data and partition pruning can apply file-level stats.
+        ConnectionPool.execute("CALL ducklake_flush_inlined_data('" + DATABASE + "')");
     }
 
     @Test

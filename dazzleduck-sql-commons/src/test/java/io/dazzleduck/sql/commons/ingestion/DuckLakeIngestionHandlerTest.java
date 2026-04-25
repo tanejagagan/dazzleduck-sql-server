@@ -28,6 +28,7 @@ class DuckLakeIngestionHandlerTest {
     @BeforeEach
     void setUp() throws Exception {
         Files.createDirectories(tempDir.resolve("data"));
+        ConnectionPool.execute("INSTALL arrow FROM community");
         try (Connection conn = ConnectionPool.getConnection()) {
             ConnectionPool.executeBatchInTxn(conn, new String[]{
                     "LOAD arrow",

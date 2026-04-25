@@ -46,7 +46,7 @@ class DuckLakeIngestionIntegrationTest {
         Files.createDirectories(tempDir.resolve("data"));
         outputDir = tempDir.resolve("output");
         Files.createDirectories(outputDir);
-
+        ConnectionPool.execute("INSTALL arrow FROM community");
         try (Connection conn = ConnectionPool.getConnection()) {
             ConnectionPool.executeBatchInTxn(conn, new String[]{
                     "LOAD arrow",

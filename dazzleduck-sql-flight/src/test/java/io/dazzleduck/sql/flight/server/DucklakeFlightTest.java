@@ -49,6 +49,9 @@ public class DucklakeFlightTest {
         DuckLakeTestFixture.addDataFile(CATALOG, workspace + "/data/main/" + PARTITIONED_TABLE, PARTITIONED_TABLE, true);
         DuckLakeTestFixture.createTestTable(CATALOG + "." + SCHEMA + "." + NON_PARTITIONED_TABLE, false);
         DuckLakeTestFixture.addDataFile(CATALOG, workspace + "/data/main/" + NON_PARTITIONED_TABLE, NON_PARTITIONED_TABLE, false);
+        // DuckDB 1.5.2+ stores INSERTs as inlined metadata; flush materialises them as parquet files
+        // so that partition pruning can apply file-level stats.
+        ConnectionPool.execute("CALL ducklake_flush_inlined_data('" + CATALOG + "')");
     }
 
 
