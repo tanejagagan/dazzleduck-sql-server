@@ -13,7 +13,7 @@ public interface ConfigBasedProvider {
         }
         var innerConfig = config.getConfig(prefixKey);
         if (!innerConfig.hasPath(CLASS_KEY)) {
-            return defaultObject;
+            return returnDefault(defaultObject, innerConfig);
         }
         var clazz = innerConfig.getString(CLASS_KEY);
         var c =  Class.forName(clazz);

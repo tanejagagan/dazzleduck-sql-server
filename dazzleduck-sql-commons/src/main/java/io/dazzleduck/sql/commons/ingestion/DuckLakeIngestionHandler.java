@@ -21,8 +21,8 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
     private static final String TABLE_PATH_QUERY =
             """
             SELECT CASE WHEN s.path_is_relative
-                        THEN concat(rtrim(m."value", '/'), '/', s.path, '/', t.path)
-                        ELSE concat(s.path, '/', t.path)
+                        THEN concat(rtrim(m."value", '/'), '/', rtrim(s.path, '/'), '/', rtrim(t.path, '/'))
+                        ELSE concat(rtrim(s.path, '/'), '/', rtrim(t.path, '/'))
                    END AS path
             FROM %s.ducklake_schema s
             JOIN %s.ducklake_table t ON (s.schema_id = t.schema_id)

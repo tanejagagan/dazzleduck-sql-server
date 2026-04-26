@@ -1067,15 +1067,18 @@ public class Transformations {
             }
         }
     }
+    /**
+     * Applies LIMIT (and optionally OFFSET) to the outermost SELECT node.
+     *
+     * <p>Works for all FROM clause types: BASE_TABLE, TABLE_FUNCTION, SUBQUERY,
+     * SET_OPERATION_NODE. Previously only BASE_TABLE and simple SUBQUERY were
+     * handled; TABLE_FUNCTION queries (e.g. generate_series) were silently skipped.
+     */
     public static JsonNode addLimit(JsonNode query, long limit, long offset) {
         if (limit < 0 && offset < 0) {
             return query;
         }
-        var statement = getFirstStatementNode(query);
-        var select = (ObjectNode) getSelectForBaseTable(statement);
-        if (select == null) {
-            return query;
-        }
+        var select = (ObjectNode) getFirstStatementNode(query);
 
         ArrayNode modifiers = (ArrayNode) select.get(FIELD_MODIFIERS);
         if (modifiers == null) {
