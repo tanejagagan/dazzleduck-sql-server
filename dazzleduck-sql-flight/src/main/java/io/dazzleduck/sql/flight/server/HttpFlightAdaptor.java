@@ -1,6 +1,8 @@
 package io.dazzleduck.sql.flight.server;
 
+import com.google.protobuf.ByteString;
 import io.dazzleduck.sql.flight.ingestion.IngestionParameters;
+import io.dazzleduck.sql.flight.namedquery.NamedQueryServiceAdaptor;
 import org.apache.arrow.flight.FlightDescriptor;
 import org.apache.arrow.flight.FlightInfo;
 import org.apache.arrow.flight.FlightProducer;
@@ -117,6 +119,30 @@ public interface HttpFlightAdaptor {
             Supplier<OutputStream> outputStreamSupplier) {
 
         return getStreamStatementDirect(ticket, context, outputStreamSupplier, CompressionUtil.CodecType.ZSTD);
+    }
+
+    default CompletableFuture<Void> streamTsv(FlightSql.TicketStatementQuery ticket,
+                                               FlightProducer.CallContext context,
+                                               Supplier<OutputStream> outputStreamSupplier) {
+        return TsvOutputStreamListener.pipeArrowToTsv(
+                pipe -> getStreamStatementDirect(ticket, context, pipe,
+                        CompressionUtil.CodecType.NO_COMPRESSION),
+                outputStreamSupplier);
+    }
+
+    default CompletableFuture<Void> streamTsv(String sql, FlightProducer.CallContext context,
+                                               Supplier<OutputStream> outputStreamSupplier) {
+        try {
+            long id = StatementHandle.nextStatementId();
+            var handle = StatementHandle.newStatementHandle(id, sql, getProducerId(), -1);
+            var ticket = FlightSql.TicketStatementQuery.newBuilder()
+                    .setStatementHandle(ByteString.copyFrom(
+                            NamedQueryServiceAdaptor.MAPPER.writeValueAsBytes(handle)))
+                    .build();
+            return streamTsv(ticket, context, outputStreamSupplier);
+        } catch (Exception e) {
+            return CompletableFuture.failedFuture(e);
+        }
     }
 
     /**

@@ -80,6 +80,17 @@ public class HttpMetricDuckLakeIntegrationTest {
         Files.createDirectories(Path.of(server.getWarehousePath(), DUCKLAKE_DATA_DIR));
         Files.createDirectories(Path.of(server.getWarehousePath(), DUCKLAKE_DATA_DIR, SCHEMA_NAME));
         Files.createDirectories(Path.of(server.getWarehousePath(), DUCKLAKE_DATA_DIR, SCHEMA_NAME, TABLE_NAME));
+
+        // Startup diagnostics
+        String meta = "__ducklake_metadata_" + CATALOG_NAME;
+        try {
+            String dbs = ConnectionPool.collectFirst("SELECT string_agg(database_name, ',') FROM duckdb_databases()", String.class);
+            System.err.println("[SETUP DIAG] databases: " + dbs);
+            String path = ConnectionPool.collectFirst("SELECT CASE WHEN s.path_is_relative THEN concat(rtrim(m.\"value\", '/'), '/', rtrim(s.path, '/'), '/', rtrim(t.path, '/')) ELSE concat(rtrim(s.path, '/'), '/', rtrim(t.path, '/')) END AS path FROM %s.ducklake_schema s JOIN %s.ducklake_table t ON (s.schema_id = t.schema_id) CROSS JOIN %s.ducklake_metadata m WHERE m.key = 'data_path' AND s.schema_name = '%s' AND t.table_name = '%s' AND s.end_snapshot IS NULL AND t.end_snapshot IS NULL".formatted(meta, meta, meta, SCHEMA_NAME, TABLE_NAME), String.class);
+            System.err.println("[SETUP DIAG] TABLE_PATH_QUERY at startup: " + path);
+        } catch (Exception ex) {
+            System.err.println("[SETUP DIAG] startup path query failed: " + ex.getMessage());
+        }
     }
 
     @Test
@@ -100,21 +111,57 @@ public class HttpMetricDuckLakeIntegrationTest {
             registry.close();
         }
 
-        // Wait for server-side ingestion processing to complete
-        Thread.sleep(1000);
+        // Poll until the ingested row appears, up to 15 seconds
+        String expected = """
+                select 'records.processed' as name,
+                       'counter'           as type,
+                       10.0                as value,
+                       'localhost'         as application_host
+                """;
+        String actual = """
+                select name, type, value, application_host
+                from %s.%s.%s
+                where name = 'records.processed'
+                """.formatted(CATALOG_NAME, SCHEMA_NAME, TABLE_NAME);
 
-        TestUtils.isEqual("""
-                        select 'records.processed' as name,
-                               'counter'           as type,
-                               10.0                as value,
-                               'localhost'         as application_host
-                        """,
-                """
-                        select name, type, value, application_host
-                        from %s.%s.%s
-                        where name = 'records.processed'
-                        """.formatted(CATALOG_NAME, SCHEMA_NAME, TABLE_NAME)
-        );
+        long deadline = System.currentTimeMillis() + 15_000;
+        while (true) {
+            try {
+                TestUtils.isEqual(expected, actual);
+                break;
+            } catch (AssertionError e) {
+                if (System.currentTimeMillis() >= deadline) {
+                    String meta = "__ducklake_metadata_" + CATALOG_NAME;
+                    try {
+                        Long rowCount = ConnectionPool.collectFirst(
+                                "SELECT count(*) FROM %s.%s.%s".formatted(CATALOG_NAME, SCHEMA_NAME, TABLE_NAME), Long.class);
+                        System.err.println("[DIAG] Row count = " + rowCount);
+                    } catch (Exception ex) { System.err.println("[DIAG] count rows failed: " + ex.getMessage()); }
+                    try {
+                        String path = ConnectionPool.collectFirst(
+                                "SELECT * FROM %s.ducklake_schema".formatted(meta), String.class);
+                        System.err.println("[DIAG] ducklake_schema first row: " + path);
+                    } catch (Exception ex) { System.err.println("[DIAG] ducklake_schema failed: " + ex.getMessage()); }
+                    try {
+                        String dbs = ConnectionPool.collectFirst("SELECT database_name FROM duckdb_databases() WHERE database_name LIKE '%ducklake%'", String.class);
+                        System.err.println("[DIAG] ducklake databases: " + dbs);
+                        String pathResult = ConnectionPool.collectFirst(
+                                "SELECT CASE WHEN s.path_is_relative THEN concat(rtrim(m.\"value\", '/'), '/', rtrim(s.path, '/'), '/', rtrim(t.path, '/')) ELSE concat(rtrim(s.path, '/'), '/', rtrim(t.path, '/')) END AS path FROM %s.ducklake_schema s JOIN %s.ducklake_table t ON (s.schema_id = t.schema_id) CROSS JOIN %s.ducklake_metadata m WHERE m.key = 'data_path' AND s.schema_name = '%s' AND t.table_name = '%s' AND s.end_snapshot IS NULL AND t.end_snapshot IS NULL".formatted(meta, meta, meta, SCHEMA_NAME, TABLE_NAME), String.class);
+                        System.err.println("[DIAG] TABLE_PATH_QUERY result: " + pathResult);
+                    } catch (Exception ex) { System.err.println("[DIAG] path query failed: " + ex.getMessage()); }
+                    // Check what the ingestion handler would return right now
+                    try {
+                        String path = ConnectionPool.collectFirst("SELECT CASE WHEN s.path_is_relative THEN concat(rtrim(m.\"value\", '/'), '/', rtrim(s.path, '/'), '/', rtrim(t.path, '/')) ELSE concat(rtrim(s.path, '/'), '/', rtrim(t.path, '/')) END AS path FROM %s.ducklake_schema s JOIN %s.ducklake_table t ON (s.schema_id = t.schema_id) CROSS JOIN %s.ducklake_metadata m WHERE m.key = 'data_path' AND s.schema_name = 'main' AND t.table_name = 'test_metrics' AND s.end_snapshot IS NULL AND t.end_snapshot IS NULL".formatted(meta, meta, meta), String.class);
+                        System.err.println("[DIAG] At end of test, getPathFromCatalog would return: " + path);
+                    } catch (Exception ex) { System.err.println("[DIAG] path2 failed: " + ex.getMessage()); }
+                    try (var stream = Files.walk(warehouse)) {
+                        stream.filter(Files::isRegularFile).forEach(p -> System.err.println("[DIAG] file: " + p));
+                    } catch (Exception ex) { System.err.println("[DIAG] walk failed: " + ex.getMessage()); }
+                    throw e;
+                }
+                Thread.sleep(200);
+            }
+        }
     }
 
     @AfterAll

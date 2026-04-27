@@ -2,8 +2,10 @@ package io.dazzleduck.sql.flight.server;
 
 import org.apache.arrow.flight.FlightProducer;
 import org.apache.arrow.memory.ArrowBuf;
+import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.*;
 import org.apache.arrow.vector.dictionary.DictionaryProvider;
+import org.apache.arrow.vector.ipc.ArrowStreamReader;
 import org.apache.arrow.vector.ipc.message.IpcOption;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,6 +13,8 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
+import java.io.PipedInputStream;
+import java.io.PipedOutputStream;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -18,6 +22,7 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -139,6 +144,43 @@ public class TsvOutputStreamListener implements FlightProducer.ServerStreamListe
 
     private void writeRows() throws IOException {
         writeRootToWriter(root, writer);
+    }
+
+    /**
+     * Pipes Arrow IPC bytes from {@code arrowStreamFn} through an {@link ArrowStreamReader}
+     * and writes TSV output to {@code outputStreamSupplier}. Reusable by any HTTP service
+     * that needs Arrow-IPC-to-TSV conversion without holding a shared allocator.
+     */
+    public static CompletableFuture<Void> pipeArrowToTsv(
+            Function<Supplier<OutputStream>, CompletableFuture<Void>> arrowStreamFn,
+            Supplier<OutputStream> outputStreamSupplier) {
+        CompletableFuture<Void> tsvFuture = new CompletableFuture<>();
+        try {
+            PipedOutputStream pipe = new PipedOutputStream();
+            PipedInputStream pipeIn = new PipedInputStream(pipe, 1 << 20);
+            Thread.ofVirtual().start(() -> {
+                try (RootAllocator allocator = new RootAllocator();
+                     ArrowStreamReader reader = new ArrowStreamReader(pipeIn, allocator)) {
+                    VectorSchemaRoot root = reader.getVectorSchemaRoot();
+                    TsvOutputStreamListener listener =
+                            new TsvOutputStreamListener(outputStreamSupplier, tsvFuture);
+                    listener.start(root, new DictionaryProvider.MapDictionaryProvider(), IpcOption.DEFAULT);
+                    while (reader.loadNextBatch()) listener.putNext();
+                    listener.completed();
+                } catch (Exception e) {
+                    try { pipeIn.close(); } catch (IOException ignored) {}
+                    if (!tsvFuture.isDone()) tsvFuture.completeExceptionally(e);
+                }
+            });
+            arrowStreamFn.apply(() -> pipe).exceptionally(e -> {
+                try { pipe.close(); } catch (IOException ignored) {}
+                if (!tsvFuture.isDone()) tsvFuture.completeExceptionally(e);
+                return null;
+            });
+        } catch (Exception e) {
+            tsvFuture.completeExceptionally(e);
+        }
+        return tsvFuture;
     }
 
     public static void writeRootToWriter(VectorSchemaRoot root, Writer writer) throws IOException {

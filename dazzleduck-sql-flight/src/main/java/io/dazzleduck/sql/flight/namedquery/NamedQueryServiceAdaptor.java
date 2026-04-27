@@ -6,6 +6,7 @@ import io.dazzleduck.sql.flight.server.DirectOutputStreamListener;
 import io.dazzleduck.sql.flight.server.HttpFlightAdaptor;
 import io.dazzleduck.sql.flight.server.JsonOutputStreamListener;
 import io.dazzleduck.sql.flight.server.StatementHandle;
+import io.dazzleduck.sql.flight.server.TsvOutputStreamListener;
 import org.apache.arrow.flight.FlightProducer;
 import org.apache.arrow.flight.sql.impl.FlightSql;
 import org.apache.arrow.vector.compression.CompressionUtil;
@@ -85,6 +86,15 @@ public interface NamedQueryServiceAdaptor {
         } catch (Exception e) {
             return CompletableFuture.failedFuture(e);
         }
+    }
+
+    default CompletableFuture<Void> streamTsvNamedQuery(String name, Map<String, String> parameters,
+                                                         FlightProducer.CallContext context,
+                                                         Supplier<OutputStream> outputStreamSupplier) {
+        return TsvOutputStreamListener.pipeArrowToTsv(
+                pipe -> getStreamNamedQueryDirect(name, parameters, context, pipe,
+                        CompressionUtil.CodecType.NO_COMPRESSION),
+                outputStreamSupplier);
     }
 
     /** Signals that a named query template could not be found in the DB. */
