@@ -85,6 +85,53 @@ public class RestrictedReadOnlyAuthorizerTest {
         assertEquals(List.of(1, 3), ids);
     }
 
+    /**
+     * When the JWT carries DATABASE + SCHEMA claims, the legacy filter+table path must build
+     * a fully-qualified key so that a same-named table in another schema is NOT covered by the
+     * filter — it gets the deny-all {@code false} from injectFilterCtes.
+     */
+    @Test
+    void filterWithQualifiedTable_sameNameInOtherSchema_isBlocked() throws Exception {
+        conn.createStatement().execute("CREATE SCHEMA IF NOT EXISTS rro_other");
+        conn.createStatement().execute(
+                "CREATE TABLE IF NOT EXISTS rro_other.products (id INT, tenant_id VARCHAR, price INT)");
+        conn.createStatement().execute(
+                "INSERT INTO rro_other.products VALUES (100,'abc',999),(101,'abc',888)");
+        try {
+            // JWT authorizes memory.main.products only; query references rro_other.products.
+            JsonNode tree = Transformations.parseToTree(conn, "SELECT id FROM rro_other.products");
+            JsonNode result = authorizer.authorize("user", "memory", "main", tree,
+                    Map.of(Headers.HEADER_FILTER, "tenant_id = 'abc'",
+                           Headers.HEADER_TABLE, "products",
+                           Headers.HEADER_DATABASE, "memory",
+                           Headers.HEADER_SCHEMA, "main"));
+            String sql = Transformations.parseToSql(conn, result);
+            List<Object> ids = execFirstColumn(sql);
+            assertTrue(ids.isEmpty(),
+                    "rro_other.products must receive false filter (not the memory.main.products filter). Got: " + ids);
+        } finally {
+            conn.createStatement().execute("DROP TABLE IF EXISTS rro_other.products");
+            conn.createStatement().execute("DROP SCHEMA IF EXISTS rro_other");
+        }
+    }
+
+    /**
+     * Counter-test: when the JWT carries DATABASE + SCHEMA, an unqualified reference to the
+     * authorized table still resolves via the suffix-alias in the normalized map.
+     */
+    @Test
+    void filterWithQualifiedTable_bareReference_stillMatches() throws Exception {
+        JsonNode tree = Transformations.parseToTree(conn, "SELECT id FROM products");
+        JsonNode result = authorizer.authorize("user", "memory", "main", tree,
+                Map.of(Headers.HEADER_FILTER, "tenant_id = 'abc'",
+                       Headers.HEADER_TABLE, "products",
+                       Headers.HEADER_DATABASE, "memory",
+                       Headers.HEADER_SCHEMA, "main"));
+        String sql = Transformations.parseToSql(conn, result);
+        List<Object> ids = execFirstColumn(sql);
+        assertEquals(List.of(1, 3), ids);
+    }
+
     // --- write access always denied ---
 
     @Test

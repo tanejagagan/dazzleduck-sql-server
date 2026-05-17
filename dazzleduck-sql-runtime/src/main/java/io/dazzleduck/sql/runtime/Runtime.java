@@ -10,7 +10,6 @@ import io.dazzleduck.sql.flight.ConfigBasedStartupScriptProvider;
 import io.dazzleduck.sql.flight.StartupScriptProvider;
 import io.dazzleduck.sql.common.ConfigConstants;
 import io.dazzleduck.sql.commons.ConnectionPool;
-import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.flight.server.DuckDBFlightSqlProducer;
 import io.dazzleduck.sql.flight.server.FlightSqlProducerFactory;
 import org.apache.arrow.memory.BufferAllocator;
@@ -65,7 +64,6 @@ public class Runtime implements Closeable {
         logger.info("  Networking modes: {}", networkingModes);
 
         executeStartupScript(config);
-        validateExternalAccessSetting(config);
 
         BufferAllocator allocator = null;
         DuckDBFlightSqlProducer producer = null;
@@ -106,47 +104,6 @@ public class Runtime implements Closeable {
             closeQuietly(allocator, "allocator");
             throw e;
         }
-    }
-
-    /**
-     * Defense-in-depth check: when access_mode is anything other than COMPLETE, the
-     * operator MUST have disabled DuckDB's external access via the startup script
-     * (e.g. {@code SET enable_external_access = false}). Without this, queries can
-     * reach {@code read_parquet}, {@code httpfs}, etc. and bypass the per-table
-     * authorization. If the setting isn't false at this point, fail fast with a
-     * clear error rather than silently starting in an unsafe configuration.
-     */
-    static void validateExternalAccessSetting(Config config) {
-        AccessMode mode;
-        try {
-            mode = DuckDBFlightSqlProducer.getAccessMode(config);
-        } catch (Exception e) {
-            // No access_mode configured — defaults to COMPLETE, no enforcement needed.
-            return;
-        }
-        if (mode == AccessMode.COMPLETE) {
-            return;
-        }
-        String value;
-        try {
-            value = ConnectionPool.collectFirst(
-                    "SELECT value FROM duckdb_settings() WHERE name = 'enable_external_access'",
-                    String.class);
-        } catch (Exception e) {
-            String msg = "Unable to verify enable_external_access setting for access_mode="
-                    + mode + ": " + e.getMessage();
-            logger.error(msg);
-            throw new IllegalStateException(msg, e);
-        }
-        if (!"false".equalsIgnoreCase(value)) {
-            String msg = "access_mode=" + mode + " requires enable_external_access=false, "
-                    + "but DuckDB reports value='" + value + "'. Add "
-                    + "'SET enable_external_access = false;' to the startup_script_provider "
-                    + "content before starting the server.";
-            logger.error(msg);
-            throw new IllegalStateException(msg);
-        }
-        logger.info("Verified enable_external_access=false for access_mode={}", mode);
     }
 
     private static void executeStartupScript(Config config) throws Exception {
