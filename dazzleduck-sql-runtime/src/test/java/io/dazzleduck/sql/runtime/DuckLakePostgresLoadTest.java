@@ -113,7 +113,9 @@ public class DuckLakePostgresLoadTest {
                 "LOAD arrow"
         });
 
-        // DuckLake's PostgreSQL backend uses libpq key=value connection string format
+        // DuckLake's PostgreSQL backend uses libpq key=value connection string format.
+        // METADATA_PATH ':memory:' prevents DuckLake from creating a local DuckDB file
+        // named after the libpq connection string in the test's working directory.
         String pgUrl = "host=%s port=%d dbname=ducklake user=duck password=duck".formatted(
                 postgres.getHost(), postgres.getFirstMappedPort());
         Path dataPath = tempDir.resolve("data");
@@ -121,7 +123,7 @@ public class DuckLakePostgresLoadTest {
 
         try (Connection conn = ConnectionPool.getConnection()) {
             ConnectionPool.executeBatchInTxn(conn, new String[]{
-                    "ATTACH 'ducklake:%s' AS %s (DATA_PATH '%s')".formatted(pgUrl, CATALOG, dataPath),
+                    "ATTACH 'ducklake:%s' AS %s (DATA_PATH '%s', METADATA_PATH ':memory:')".formatted(pgUrl, CATALOG, dataPath),
                     ("CREATE TABLE %s.%s.%s (" +
                             "ts TIMESTAMP, level VARCHAR, service VARCHAR, host VARCHAR, " +
                             "message VARCHAR, trace_id VARCHAR, duration_ms BIGINT, status_code INT)")

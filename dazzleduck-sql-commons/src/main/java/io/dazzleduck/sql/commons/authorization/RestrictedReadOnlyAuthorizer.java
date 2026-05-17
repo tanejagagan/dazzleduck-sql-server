@@ -2,6 +2,8 @@ package io.dazzleduck.sql.commons.authorization;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.dazzleduck.sql.common.Headers;
+import io.dazzleduck.sql.commons.ExpressionConstants;
+import io.dazzleduck.sql.commons.Transformations;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -32,6 +34,29 @@ public class RestrictedReadOnlyAuthorizer implements SqlAuthorizer {
     public JsonNode authorize(String user, String database, String schema, JsonNode query,
                               Map<String, String> verifiedClaims) throws UnauthorizedException {
         SelectOnlyAuthorizer.INSTANCE.authorize(user, database, schema, query, verifiedClaims);
+
+        // Multi-statement queries are rejected here: the CTE filter injection only
+        // rewrites the first statement, and DuckDB JDBC's executeQuery returns the
+        // last statement's result — leaving any trailing statements unfiltered.
+        JsonNode statementsNode = query.get(ExpressionConstants.FIELD_STATEMENTS);
+        if (statementsNode != null && statementsNode.isArray() && statementsNode.size() > 1) {
+            throw new UnauthorizedException(
+                    "Multi-statement queries are not allowed in RESTRICT_READ_ONLY mode.");
+        }
+
+        // Block any TABLE_FUNCTION usage (read_parquet, read_json, duckdb_tables,
+        // duckdb_secrets, etc.). The CTE-based filter injection only rewrites BASE_TABLE
+        // references — TABLE_FUNCTION references would pass through unfiltered and could
+        // read external data or leak catalog metadata. RESTRICT_READ_ONLY's claim shape
+        // ("table" only) gives users no way to express function access, so reject outright.
+        // Note: scan the raw AST directly rather than via collectAllTableReferences,
+        // which skips zero-argument TABLE_FUNCTION nodes like duckdb_tables().
+        String foundFunction = findTableFunctionName(query);
+        if (foundFunction != null) {
+            throw new UnauthorizedException(
+                    "Table functions are not allowed in RESTRICT_READ_ONLY mode (found: "
+                            + foundFunction + ")");
+        }
 
         String tableAccessStr = verifiedClaims.get(Headers.HEADER_ACCESS);
         if (tableAccessStr != null && !tableAccessStr.isBlank()) {
@@ -67,5 +92,38 @@ public class RestrictedReadOnlyAuthorizer implements SqlAuthorizer {
     @Override
     public boolean hasWriteAccess(String user, String ingestionQueue, Map<String, String> verifiedClaims) {
         return false;
+    }
+
+    /**
+     * Recursively scans the AST for any node whose {@code type} field equals
+     * {@code "TABLE_FUNCTION"}, returning the function name if found (or {@code null}).
+     * Catches all TABLE_FUNCTION usages regardless of argument count or nesting depth
+     * (subqueries, JOINs, CTE bodies, WHERE-clause subqueries, etc.).
+     */
+    private static String findTableFunctionName(JsonNode node) {
+        if (node == null || node.isNull()) return null;
+        if (node.isArray()) {
+            for (JsonNode child : node) {
+                String found = findTableFunctionName(child);
+                if (found != null) return found;
+            }
+            return null;
+        }
+        if (!node.isObject()) return null;
+        JsonNode typeNode = node.get(ExpressionConstants.FIELD_TYPE);
+        if (typeNode != null && ExpressionConstants.NODE_TYPE_TABLE_FUNCTION.equals(typeNode.asText())) {
+            JsonNode function = node.get(ExpressionConstants.FIELD_FUNCTION);
+            if (function != null) {
+                JsonNode name = function.get(ExpressionConstants.FIELD_FUNCTION_NAME);
+                if (name != null) return name.asText();
+            }
+            return "<unknown>";
+        }
+        var fields = node.fields();
+        while (fields.hasNext()) {
+            String found = findTableFunctionName(fields.next().getValue());
+            if (found != null) return found;
+        }
+        return null;
     }
 }

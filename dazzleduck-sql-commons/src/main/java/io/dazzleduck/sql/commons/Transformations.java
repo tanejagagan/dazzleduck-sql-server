@@ -1236,12 +1236,32 @@ public class Transformations {
     /**
      * Per-table variant of {@link #injectFilterCtes}: each base table gets its own filter
      * expression looked up by table name from {@code tableFilters}.
+     * Keys may be fully-qualified ({@code catalog.schema.table}), partially qualified
+     * ({@code schema.table}), or bare table names. Qualified keys are expanded so that every
+     * shorter suffix form is also registered (e.g. {@code "memory.main.orders"} additionally
+     * registers {@code "main.orders"} and {@code "orders"}), allowing unqualified or partially
+     * qualified AST references to match. A fully-qualified reference to a different catalog or
+     * schema (e.g. {@code other.main.orders}) will NOT match and receives a {@code false} filter.
      * Tables not present in the map receive a {@code false} filter (no rows returned),
      * so the map must cover every table the query touches.
      */
     public static JsonNode injectFilterCtes(JsonNode query, Map<String, JsonNode> tableFilters) {
+        // Normalize: for "catalog.schema.table" or "schema.table" keys, also register every
+        // shorter suffix so that unqualified or partially-qualified AST references still match.
+        // e.g. "memory.main.orders" → also adds "main.orders" and "orders".
+        // The lookup in the private variant uses the fully-qualified dotted key built from the
+        // AST node's catalog/schema/table fields, so "other_catalog.main.orders" will NOT match
+        // a key added for "memory.main.orders" — only exact or suffix-subset matches apply.
+        Map<String, JsonNode> normalized = new LinkedHashMap<>(tableFilters);
+        for (Map.Entry<String, JsonNode> e : tableFilters.entrySet()) {
+            String[] parts = e.getKey().split("\\.", -1);
+            for (int i = 1; i < parts.length; i++) {
+                String suffix = String.join(".", Arrays.copyOfRange(parts, i, parts.length));
+                normalized.putIfAbsent(suffix, e.getValue());
+            }
+        }
         return injectFilterCtes(query,
-                tableName -> tableFilters.getOrDefault(tableName, ExpressionFactory.falseExpression()));
+                qualifiedName -> normalized.getOrDefault(qualifiedName, ExpressionFactory.falseExpression()));
     }
 
     private static JsonNode injectFilterCtes(JsonNode query, Function<String, JsonNode> filterForTable) {
@@ -1252,14 +1272,20 @@ public class Transformations {
         // Ordered map: cteKey → original BASE_TABLE node (schema/catalog preserved for CTE body)
         Map<String, ObjectNode> tablesToWrap = new LinkedHashMap<>();
 
-        // Inject into CTE bodies first so user CTEs reference filtered tables
+        // Inject into CTE bodies first so user CTEs reference filtered tables.
+        // Each CTE body is walked with its own name removed from the visible-CTE set:
+        // in a non-recursive CTE, the CTE cannot reference itself, so a same-named
+        // reference inside the body is a base-table reference and must be filtered.
         JsonNode cteMapNode = statementNode.get("cte_map");
         if (cteMapNode != null) {
             JsonNode mapArray = cteMapNode.get("map");
             if (mapArray != null && mapArray.isArray()) {
                 for (JsonNode entry : mapArray) {
+                    String cteName = entry.get("key").asText();
+                    Set<String> namesVisibleInBody = new HashSet<>(userCteNames);
+                    namesVisibleInBody.remove(cteName);
                     ObjectNode cteBody = (ObjectNode) entry.get("value").get("query").get("node");
-                    renameBaseTablesInStatementNode(cteBody, userCteNames, tablesToWrap);
+                    renameBaseTablesInStatementNode(cteBody, namesVisibleInBody, tablesToWrap);
                 }
             }
         }
@@ -1268,8 +1294,8 @@ public class Transformations {
         if (!tablesToWrap.isEmpty()) {
             ArrayNode newMap = JsonNodeFactory.instance.arrayNode();
             for (Map.Entry<String, ObjectNode> e : tablesToWrap.entrySet()) {
-                String originalTableName = e.getValue().get(FIELD_TABLE_NAME).asText();
-                newMap.add(buildFilterCteEntry(e.getKey(), e.getValue(), filterForTable.apply(originalTableName)));
+                String qualifiedLookupKey = buildQualifiedLookupKey(e.getValue());
+                newMap.add(buildFilterCteEntry(e.getKey(), e.getValue(), filterForTable.apply(qualifiedLookupKey)));
             }
             JsonNode existingMap = statementNode.get("cte_map").get("map");
             if (existingMap != null && existingMap.isArray()) {
@@ -1416,6 +1442,19 @@ public class Transformations {
                 renameBaseTablesInFromNode(fromNode.get(FIELD_RIGHT), userCteNames, tablesToWrap);
             }
         }
+    }
+
+    /** Builds the lookup key used to match against the tableFilters map: "catalog.schema.table",
+     *  omitting empty parts (e.g. "main.orders" when catalog is absent, "orders" when both absent). */
+    private static String buildQualifiedLookupKey(ObjectNode tableNode) {
+        String table = tableNode.get(FIELD_TABLE_NAME).asText();
+        String schema = tableNode.has(FIELD_SCHEMA_NAME) ? tableNode.get(FIELD_SCHEMA_NAME).asText() : "";
+        String catalog = tableNode.has(FIELD_CATALOG_NAME) ? tableNode.get(FIELD_CATALOG_NAME).asText() : "";
+        var sb = new StringBuilder();
+        if (!catalog.isEmpty()) sb.append(catalog).append(".");
+        if (!schema.isEmpty()) sb.append(schema).append(".");
+        sb.append(table);
+        return sb.toString();
     }
 
     private static String buildCteKey(String tableName, String schema, String catalog) {
