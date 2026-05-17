@@ -12,7 +12,9 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -27,12 +29,18 @@ public class TransformationsInjectFilterTest {
         conn.createStatement().execute("INSERT INTO orders VALUES (1,'abc',100),(2,'xyz',200),(3,'abc',300)");
         conn.createStatement().execute("CREATE TABLE items (order_id INT, tenant_id VARCHAR, name VARCHAR)");
         conn.createStatement().execute("INSERT INTO items VALUES (1,'abc','widget'),(2,'xyz','gadget'),(3,'abc','thing')");
+        // Second schema with a same-named table — used for cross-schema security tests
+        conn.createStatement().execute("CREATE SCHEMA other_schema");
+        conn.createStatement().execute("CREATE TABLE other_schema.orders (id INT, tenant_id VARCHAR, amount INT)");
+        conn.createStatement().execute("INSERT INTO other_schema.orders VALUES (10,'abc',999),(11,'xyz',888)");
     }
 
     @AfterAll
     static void tearDown() throws SQLException {
         conn.createStatement().execute("DROP TABLE IF EXISTS orders");
         conn.createStatement().execute("DROP TABLE IF EXISTS items");
+        conn.createStatement().execute("DROP TABLE IF EXISTS other_schema.orders");
+        conn.createStatement().execute("DROP SCHEMA IF EXISTS other_schema");
         conn.close();
     }
 
@@ -250,5 +258,107 @@ public class TransformationsInjectFilterTest {
         String out = Transformations.parseToSql(conn, result);
         List<Object> ids = execFirstColumn(out);
         assertEquals(4, ids.size(), "UNION ALL: 2 rows × 2 arms");
+    }
+
+    // --- per-table map with fully-qualified keys (security tests) ---
+
+    @Test
+    void perTableMap_qualifiedKey_bareReference_matchesFilter() throws SQLException, JsonProcessingException {
+        // JWT authorizes "main.orders" with a filter; query uses bare "orders" — should match
+        Map<String, JsonNode> filters = new LinkedHashMap<>();
+        filters.put("main.orders", filter("tenant_id = 'abc'"));
+
+        String sql = "SELECT id FROM orders";
+        JsonNode tree = Transformations.parseToTree(conn, sql);
+        JsonNode result = Transformations.injectFilterCtes(tree, filters);
+        String out = Transformations.parseToSql(conn, result);
+
+        List<Object> ids = execFirstColumn(out);
+        assertEquals(List.of(1, 3), ids, "Filter from 'main.orders' key must apply to bare 'orders' reference");
+    }
+
+    @Test
+    void perTableMap_qualifiedKey_schemaQualifiedReference_matchesFilter() throws SQLException, JsonProcessingException {
+        // JWT authorizes "main.orders"; query uses "main.orders" — should match
+        Map<String, JsonNode> filters = new LinkedHashMap<>();
+        filters.put("main.orders", filter("tenant_id = 'abc'"));
+
+        String sql = "SELECT id FROM main.orders";
+        JsonNode tree = Transformations.parseToTree(conn, sql);
+        JsonNode result = Transformations.injectFilterCtes(tree, filters);
+        String out = Transformations.parseToSql(conn, result);
+
+        List<Object> ids = execFirstColumn(out);
+        assertEquals(List.of(1, 3), ids);
+    }
+
+    @Test
+    void perTableMap_wrongSchema_returnsNoRows() throws SQLException, JsonProcessingException {
+        // Security: JWT authorizes only "main.orders"; query references "other_schema.orders".
+        // The filter for main.orders must NOT apply to other_schema.orders — it must get false.
+        Map<String, JsonNode> filters = new LinkedHashMap<>();
+        filters.put("main.orders", filter("tenant_id = 'abc'"));
+
+        String sql = "SELECT id FROM other_schema.orders";
+        JsonNode tree = Transformations.parseToTree(conn, sql);
+        JsonNode result = Transformations.injectFilterCtes(tree, filters);
+        String out = Transformations.parseToSql(conn, result);
+
+        List<Object> ids = execFirstColumn(out);
+        assertTrue(ids.isEmpty(), "other_schema.orders must receive false filter, not the main.orders filter");
+    }
+
+    @Test
+    void perTableMap_multiTable_eachGetsOwnFilter() throws SQLException, JsonProcessingException {
+        // Two tables in the map; each reference in the query must get its own filter
+        Map<String, JsonNode> filters = new LinkedHashMap<>();
+        filters.put("main.orders", filter("tenant_id = 'abc'"));
+        filters.put("main.items",  filter("tenant_id = 'abc'"));
+
+        String sql = "SELECT o.id FROM orders o JOIN items i ON o.id = i.order_id";
+        JsonNode tree = Transformations.parseToTree(conn, sql);
+        JsonNode result = Transformations.injectFilterCtes(tree, filters);
+        String out = Transformations.parseToSql(conn, result);
+
+        List<Object> ids = execFirstColumn(out);
+        assertEquals(2, ids.size());
+        assertTrue(ids.contains(1));
+        assertTrue(ids.contains(3));
+    }
+
+    @Test
+    void perTableMap_unauthorizedTable_returnsNoRows() throws SQLException, JsonProcessingException {
+        // Map only covers "orders"; "items" is not listed → must get false filter (no rows leak)
+        Map<String, JsonNode> filters = new LinkedHashMap<>();
+        filters.put("orders", filter("tenant_id = 'abc'"));
+
+        String sql = "SELECT id FROM orders WHERE id IN (SELECT order_id FROM items)";
+        JsonNode tree = Transformations.parseToTree(conn, sql);
+        JsonNode result = Transformations.injectFilterCtes(tree, filters);
+        String out = Transformations.parseToSql(conn, result);
+
+        List<Object> ids = execFirstColumn(out);
+        // items gets false → IN subquery empty → no orders returned
+        assertTrue(ids.isEmpty(), "items not in the map must get false, making the IN subquery empty");
+    }
+
+    @Test
+    void perTableMap_cteNameShadowingTable_filterStillApplied() throws SQLException, JsonProcessingException {
+        // Security exploit: attacker names a CTE the same as the authorized table.
+        // Inside the CTE body, "orders" refers to the BASE TABLE (non-recursive CTEs can't
+        // see themselves). The filter must still be injected on that inner base-table reference.
+        // Without the fix, tablesToWrap stays empty and ALL rows are exposed.
+        Map<String, JsonNode> filters = new LinkedHashMap<>();
+        filters.put("main.orders", filter("tenant_id = 'abc'"));
+
+        String sql = "WITH orders AS (SELECT * FROM orders) SELECT id FROM orders";
+        JsonNode tree = Transformations.parseToTree(conn, sql);
+        JsonNode result = Transformations.injectFilterCtes(tree, filters);
+        String out = Transformations.parseToSql(conn, result);
+
+        List<Object> ids = execFirstColumn(out);
+        // Must only see abc rows (1, 3), not xyz row (2) — filter must not be bypassed
+        assertEquals(List.of(1, 3), ids,
+                "CTE name shadowing the authorized table must not bypass the row filter");
     }
 }

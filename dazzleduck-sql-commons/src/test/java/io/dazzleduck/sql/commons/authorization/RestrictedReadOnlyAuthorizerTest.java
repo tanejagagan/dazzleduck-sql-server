@@ -136,6 +136,41 @@ public class RestrictedReadOnlyAuthorizerTest {
         }
     }
 
+    // ── SECURITY: previously-exploitable inputs must now be rejected ──────────
+
+    /** Multi-statement queries must be rejected at SelectOnlyAuthorizer. */
+    @Test
+    void multiStatement_rejected() throws Exception {
+        String malicious = "SELECT id FROM products WHERE 1=1; SELECT id FROM products";
+        JsonNode tree = Transformations.parseToTree(conn, malicious);
+        String tableAccess = "[[\"table\",\"products\",\"*\",\"tenant_id = 'abc'\"]]";
+        assertThrows(UnauthorizedException.class, () ->
+                authorizer.authorize("user", "memory", "main", tree,
+                        Map.of(Headers.HEADER_ACCESS, tableAccess)));
+    }
+
+    /** TABLE_FUNCTION references (read_parquet, duckdb_tables, etc.) must be rejected. */
+    @Test
+    void tableFunction_rejected() throws Exception {
+        JsonNode tree = Transformations.parseToTree(conn,
+                "SELECT table_name FROM duckdb_tables() WHERE table_name = 'products'");
+        String tableAccess = "[[\"table\",\"products\",\"*\",\"tenant_id = 'abc'\"]]";
+        assertThrows(UnauthorizedException.class, () ->
+                authorizer.authorize("user", "memory", "main", tree,
+                        Map.of(Headers.HEADER_ACCESS, tableAccess)));
+    }
+
+    /** External table functions like read_parquet must also be rejected. */
+    @Test
+    void tableFunction_readParquet_rejected() throws Exception {
+        JsonNode tree = Transformations.parseToTree(conn,
+                "SELECT * FROM read_parquet('/tmp/x.parquet')");
+        String tableAccess = "[[\"table\",\"products\",\"*\",\"tenant_id = 'abc'\"]]";
+        assertThrows(UnauthorizedException.class, () ->
+                authorizer.authorize("user", "memory", "main", tree,
+                        Map.of(Headers.HEADER_ACCESS, tableAccess)));
+    }
+
     @Test
     void join_filterWithoutTableAccess_rejectsSecondTable() throws Exception {
         // filter+table only scopes to 'products'; 'reviews' gets deny-all → JOIN returns nothing
