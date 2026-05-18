@@ -34,6 +34,7 @@
         <module>dazzleduck-sql-flight</module>
         <module>dazzleduck-sql-commons</module>
         <module>dazzleduck-sql-search</module>
+        <module>dazzleduck-sql-otel-collector</module>
         <module>dazzleduck-sql-runtime</module>
         <module>dazzleduck-sql-micrometer</module>
         <module>dazzleduck-sql-login</module>
@@ -41,7 +42,6 @@
         <module>dazzleduck-sql-client-grpc</module>
         <module>dazzleduck-sql-scrapper</module>
         <module>dazzleduck-sql-logback</module>
-        <module>dazzleduck-sql-otel-collector</module>
         <module>dazzleduck-sql-examples</module>
     </modules>
     <properties>
