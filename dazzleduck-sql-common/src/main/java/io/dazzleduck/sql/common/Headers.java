@@ -15,19 +15,26 @@ public class Headers {
             String.class, a -> a
     );
     public static final String HEADER_FETCH_SIZE = "x-dd-fetch-size";
+    // database/schema are intentionally NOT namespaced: standard Arrow Flight SQL /
+    // JDBC connection parameters that interop with external drivers.
     public static final String HEADER_DATABASE = "database";
     public static final String HEADER_SCHEMA = "schema";
-    public static final String HEADER_TABLE = "table";
-    public static final String HEADER_PATH = "path";
+    // The following claims/headers are project-specific authorization metadata and are
+    // prefixed with "x-dd-" to avoid colliding with standard or third-party claim names.
+    public static final String HEADER_TABLE = "x-dd-table";
+    public static final String HEADER_PATH = "x-dd-path";
 
+    // URL query parameter (also used as a JWT claim of the same name); intentionally NOT
+    // namespaced with x-dd-* because it appears in URLs where the prefix is non-idiomatic.
     public static final String QUERY_PARAMETER_INGESTION_QUEUE = "ingestion_queue";
-    public static final String HEADER_FUNCTION = "function";
-    public static final String HEADER_FILTER = "filter";
+    public static final String HEADER_FUNCTION = "x-dd-function";
+    public static final String HEADER_FILTER = "x-dd-filter";
     // Datasource access rules: JSON array [[type, name, projection, filter], ...]
-    // All four elements required. type: "table"|"path"|"function"; use "*" for all columns, "true" for no row filter.
-    // Takes precedence over HEADER_FILTER when present.
-    public static final String HEADER_ACCESS = "access";
-    public static final String HEADER_ACCESS_TYPE = "access-type";
+    // All four elements required. type: "table"|"path"|"function" (these are *values*
+    // inside each tuple, not header names — they stay unprefixed). Use "*" for all
+    // columns, "true" for no row filter. Takes precedence over HEADER_FILTER when present.
+    public static final String HEADER_ACCESS = "x-dd-access";
+    public static final String HEADER_ACCESS_TYPE = "x-dd-access-type";
     public static final String HEADER_SPLIT_SIZE = "x-dd-split-size";
     public static final String HEADER_DATA_PARTITION = "x-dd-partition";
     public static final String HEADER_DATA_FORMAT = "x-dd-format";
@@ -42,11 +49,11 @@ public class Headers {
     public static final String HEADER_ARROW_COMPRESSION = "x-dd-arrow-compression";
 
     // Token type claim for redirect vs inline authorization ("inline" or "redirect")
-    public static final String HEADER_TOKEN_TYPE = "token-type";
+    public static final String HEADER_TOKEN_TYPE = "x-dd-token-type";
     public static final String HEADER_TOKEN_REDIRECT = "redirect";
     public static final String HEADER_TOKEN_INLINE = "inline";
 
-    public static final String HEADER_REDIRECT_URL = "redirect_url";
+    public static final String HEADER_REDIRECT_URL = "x-dd-redirect_url";
 
     // Reserved internal key used to carry the raw bearer token through verifiedClaims
     // so that RedirectAuthorizer can forward it to the resolve endpoint

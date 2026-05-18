@@ -424,13 +424,15 @@ startup_script_provider {
 
 ### JWT Claims for RESTRICTED Mode
 
-When using `RESTRICTED` access mode, the preferred way to specify access is the `access` JWT claim.
+Project-specific JWT claims and HTTP headers use the `x-dd-` prefix to avoid colliding with
+standard claim names. When using `RESTRICTED` access mode, the preferred way to specify access
+is the `x-dd-access` JWT claim.
 
-**`access` claim — format: `[[type, name, projection, filter]]` (exactly one entry)**
+**`x-dd-access` claim — format: `[[type, name, projection, filter]]` (exactly one entry)**
 
 | Element | Values | Description |
 |---------|--------|-------------|
-| `type` | `"table"`, `"path"`, `"function"` | Datasource kind |
+| `type` | `"table"`, `"path"`, `"function"` | Datasource kind (intra-claim discriminator, not a claim name) |
 | `name` | table name / path prefix / function name | The authorized datasource |
 | `projection` | `"*"` | Column restriction (reserved, must be `"*"`) |
 | `filter` | SQL expression or `"true"` | Row-level filter; `"true"` = no restriction |
@@ -438,42 +440,42 @@ When using `RESTRICTED` access mode, the preferred way to specify access is the 
 Examples:
 ```bash
 # BASE_TABLE access with filter
--H 'access: [["table","orders","*","tenant_id='\''abc'\''"]]]'
+-H 'x-dd-access: [["table","orders","*","tenant_id='\''abc'\''"]]]'
 
 # Path-prefix access (TABLE_FUNCTION)
--H 'access: [["path","s3://bucket/tenant1/","*","true"]]'
+-H 'x-dd-access: [["path","s3://bucket/tenant1/","*","true"]]'
 
 # Named function access
--H 'access: [["function","read_parquet","*","tenant_id='\''abc'\''"]]]'
+-H 'x-dd-access: [["function","read_parquet","*","tenant_id='\''abc'\''"]]]'
 ```
 
 **Legacy claims (backward compatible):**
 
 | Claim | Description |
 |-------|-------------|
-| `database` | Target database/catalog name |
-| `schema` | Target schema name |
-| `table` | Authorized table name (BASE_TABLE) |
-| `path` | Authorized path prefix (TABLE_FUNCTION) |
-| `filter` | Optional row filter expression |
+| `database` | Target database/catalog name (unprefixed — Flight SQL / JDBC interop) |
+| `schema` | Target schema name (unprefixed — Flight SQL / JDBC interop) |
+| `x-dd-table` | Authorized table name (BASE_TABLE) |
+| `x-dd-path` | Authorized path prefix (TABLE_FUNCTION) |
+| `x-dd-filter` | Optional row filter expression |
 
 ### JWT Claims for RESTRICT_READ_ONLY Mode
 
 `RESTRICT_READ_ONLY` allows SELECT on any table but **always injects the filter** into every base table via CTEs — including JOIN arms, WHERE subqueries, and EXISTS clauses.
 
-**`access` claim — format: `[[type, name, projection, filter], ...]` (one or more `"table"` entries)**
+**`x-dd-access` claim — format: `[[type, name, projection, filter], ...]` (one or more `"table"` entries)**
 
 ```bash
 # Single table
--H 'access: [["table","orders","*","tenant_id='\''abc'\''"]]]'
+-H 'x-dd-access: [["table","orders","*","tenant_id='\''abc'\''"]]]'
 
 # Multiple tables with different filter columns (CROSS JOIN-safe)
--H 'access: [["table","orders","*","owner_id='\''alice'\''"],["table","items","*","region='\''us'\''"]]]'
+-H 'x-dd-access: [["table","orders","*","owner_id='\''alice'\''"],["table","items","*","region='\''us'\''"]]]'
 ```
 
-**Legacy — `filter` + `table` claims (single table only):**
+**Legacy — `x-dd-filter` + `x-dd-table` claims (single table only):**
 ```bash
--H "table: orders" -H "filter: tenant_id='abc'"
+-H "x-dd-table: orders" -H "x-dd-filter: tenant_id='abc'"
 ```
 The filter is mandatory — requests without `access` or `filter` are rejected.
 

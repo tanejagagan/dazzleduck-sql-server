@@ -102,19 +102,27 @@ Four modes set via `access_mode` config:
 | **RESTRICTED** | SELECT on one datasource scoped by JWT | `RESTRICTED_DATASOURCE_AUTHORIZER` | startup script |
 | **RESTRICT_READ_ONLY** | SELECT any table; per-table CTE filter injected | `RESTRICT_READ_ONLY_AUTHORIZER` | disabled |
 
-**JWT `access` claim — RESTRICTED mode** (exactly one entry, preferred over legacy claims):
+**Project-specific JWT claims and HTTP headers are namespaced with the `x-dd-` prefix**
+to avoid collisions with standard claim names. The mapping is:
+`x-dd-access`, `x-dd-access-type`, `x-dd-table`, `x-dd-filter`, `x-dd-path`,
+`x-dd-function`, `x-dd-token-type`, `x-dd-redirect_url`. Connection-context names
+`database` / `schema` stay unprefixed for Flight SQL / JDBC interop, and the URL
+query parameter `ingestion_queue` also keeps its short form.
+
+**JWT `x-dd-access` claim — RESTRICTED mode** (exactly one entry, preferred over legacy claims):
 ```
-access = [["table",    "orders",       "*", "tenant_id='abc'"]]
-access = [["path",     "s3://bucket/", "*", "true"]]
-access = [["function", "read_parquet", "*", "tenant_id='abc'"]]
+x-dd-access = [["table",    "orders",       "*", "tenant_id='abc'"]]
+x-dd-access = [["path",     "s3://bucket/", "*", "true"]]
+x-dd-access = [["function", "read_parquet", "*", "tenant_id='abc'"]]
 ```
 Format: `[[type, name, projection, filter]]` — `projection` must be `"*"`, `filter` is a SQL WHERE expression.
+The `type` values (`"table"` / `"path"` / `"function"`) are intra-claim discriminators, not claim names — they stay unprefixed.
 
-Legacy separate claims: `table`, `path`, `filter` (backward compatible).
+Legacy separate claims: `x-dd-table`, `x-dd-path`, `x-dd-filter` (backward compatible).
 
-**JWT `access` claim — RESTRICT_READ_ONLY mode** (multiple tables supported):
+**JWT `x-dd-access` claim — RESTRICT_READ_ONLY mode** (multiple tables supported):
 ```
-access = [["table","orders","*","owner_id='alice'"],["table","items","*","region='us'"]]
+x-dd-access = [["table","orders","*","owner_id='alice'"],["table","items","*","region='us'"]]
 ```
 Filter is injected as a CTE for every base table reference (JOINs, subqueries, EXISTS — nothing bypasses it). Only `"table"` type supported; external access disabled.
 
