@@ -13,6 +13,7 @@
 
     <properties>
         <testcontainer.version>1.21.2</testcontainer.version>
+        <dazzleduck.version>0.2.3</dazzleduck.version>
         <exec.mainClass>io.dazzleduck.sql.runtime.Main</exec.mainClass>
         <!-- Override with -Djib.architecture=arm64 on Apple Silicon -->
         <jib.architecture>amd64</jib.architecture>
@@ -23,7 +24,7 @@
         <dependency>
             <groupId>io.dazzleduck.sql</groupId>
             <artifactId>dazzleduck-sql-flight</artifactId>
-            <version>0.2.3</version>
+            <version>${dazzleduck.version}</version>
         </dependency>
         <!-- provided: DuckDB jar is pre-installed in the base Docker image (dazzleduck/base-jre) -->
         <dependency>
@@ -57,7 +58,12 @@
         <dependency>
             <groupId>io.dazzleduck.sql</groupId>
             <artifactId>dazzleduck-sql-http</artifactId>
-            <version>0.2.3</version>
+            <version>${dazzleduck.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.dazzleduck.sql</groupId>
+            <artifactId>dazzleduck-sql-otel-collector</artifactId>
+            <version>${dazzleduck.version}</version>
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
