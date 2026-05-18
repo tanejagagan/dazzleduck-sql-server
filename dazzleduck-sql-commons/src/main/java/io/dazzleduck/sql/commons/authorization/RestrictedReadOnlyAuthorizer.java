@@ -83,9 +83,18 @@ public class RestrictedReadOnlyAuthorizer implements SqlAuthorizer {
                     "RESTRICT_READ_ONLY mode: 'filter' claim requires a 'table' claim; " +
                     "use 'access' for multi-table queries");
         }
-        // filter + table is shorthand for a single-entry access: [[table, "*", filter]]
+        // filter + table is shorthand for a single-entry access: [[table, "*", filter]].
+        // Use the fully-qualified key (database.schema.table) so the AST lookup — which now
+        // builds a qualified key from catalog/schema/table AST fields — finds the filter via
+        // exact match, with suffix aliases (schema.table, table) added by injectFilterCtes.
+        String databaseStr = verifiedClaims.get(Headers.HEADER_DATABASE);
+        String schemaStr = verifiedClaims.get(Headers.HEADER_SCHEMA);
+        String qualifiedKey = (databaseStr != null && !databaseStr.isEmpty()
+                && schemaStr != null && !schemaStr.isEmpty())
+                ? databaseStr + "." + schemaStr + "." + tableStr
+                : tableStr;
         Map<String, JsonNode> tableFilters = new LinkedHashMap<>();
-        tableFilters.put(tableStr, SqlAuthorizer.compileFilterString(filterStr));
+        tableFilters.put(qualifiedKey, SqlAuthorizer.compileFilterString(filterStr));
         return SqlAuthorizer.addFilterViaCtes(query, tableFilters);
     }
 
