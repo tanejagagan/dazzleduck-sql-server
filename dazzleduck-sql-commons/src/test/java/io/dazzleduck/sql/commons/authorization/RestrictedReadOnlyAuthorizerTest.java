@@ -132,6 +132,52 @@ public class RestrictedReadOnlyAuthorizerTest {
         assertEquals(List.of(1, 3), ids);
     }
 
+    /**
+     * Access claim with a BARE table name + header-supplied database/schema must
+     * apply the filter only to the named table in that catalog/schema. Same-named
+     * table in another schema must be blocked.
+     */
+    @Test
+    void accessWithBareTableName_qualifiedByHeaderDbSchema() throws Exception {
+        conn.createStatement().execute("CREATE SCHEMA IF NOT EXISTS rro_bare");
+        conn.createStatement().execute(
+                "CREATE TABLE IF NOT EXISTS rro_bare.products (id INT, tenant_id VARCHAR, price INT)");
+        conn.createStatement().execute(
+                "INSERT INTO rro_bare.products VALUES (200,'abc',1),(201,'xyz',2)");
+        try {
+            String tableAccess = "[[\"table\",\"products\",\"*\",\"tenant_id = 'abc'\"]]";
+            // Connection context: database=memory, schema=main → products = memory.main.products.
+            // Reference to bare 'products' (resolves to memory.main.products) → filter applies.
+            JsonNode tree1 = Transformations.parseToTree(conn, "SELECT id FROM products");
+            JsonNode out1  = authorizer.authorize("user", "memory", "main", tree1,
+                    Map.of(Headers.HEADER_ACCESS, tableAccess));
+            assertEquals(List.of(1, 3), execFirstColumn(Transformations.parseToSql(conn, out1)));
+
+            // Reference to a different schema's same-named table → blocked (false filter).
+            JsonNode tree2 = Transformations.parseToTree(conn, "SELECT id FROM rro_bare.products");
+            JsonNode out2  = authorizer.authorize("user", "memory", "main", tree2,
+                    Map.of(Headers.HEADER_ACCESS, tableAccess));
+            assertTrue(execFirstColumn(Transformations.parseToSql(conn, out2)).isEmpty(),
+                    "rro_bare.products must not be authorized by a bare 'products' grant scoped to memory.main");
+        } finally {
+            conn.createStatement().execute("DROP TABLE IF EXISTS rro_bare.products");
+            conn.createStatement().execute("DROP SCHEMA IF EXISTS rro_bare");
+        }
+    }
+
+    /**
+     * Access claim with a FULLY-QUALIFIED table name continues to work and ignores
+     * header database/schema (the name itself carries the catalog/schema).
+     */
+    @Test
+    void accessWithFullyQualifiedTableName_appliesFilter() throws Exception {
+        String tableAccess = "[[\"table\",\"memory.main.products\",\"*\",\"tenant_id = 'abc'\"]]";
+        JsonNode tree = Transformations.parseToTree(conn, "SELECT id FROM products");
+        JsonNode out  = authorizer.authorize("user", "memory", "main", tree,
+                Map.of(Headers.HEADER_ACCESS, tableAccess));
+        assertEquals(List.of(1, 3), execFirstColumn(Transformations.parseToSql(conn, out)));
+    }
+
     // --- write access always denied ---
 
     @Test

@@ -166,11 +166,51 @@ public interface SqlAuthorizer {
         return authorizedFunction!=null && authorizedFunction.equalsIgnoreCase(function);
     }
 
-    static boolean hasAccessToTable(String database, String schema, String table, Transformations.CatalogSchemaTable queried) {
-        return table.equals(queried.tableOrPath()) &&
-                schema.equals(queried.schema()) &&
-                database.equals(queried.catalog()) &&
-                queried.type() == Transformations.TableType.BASE_TABLE;
+    /**
+     * Resolves an authorized table {@code name} into a fully-qualified
+     * {@link Transformations.CatalogSchemaTable}. Missing prefixes are filled from the
+     * connection's {@code database}/{@code schema} headers:
+     * <ul>
+     *   <li>3-part {@code "catalog.schema.table"}: all parts come from the name</li>
+     *   <li>2-part {@code "schema.table"}: catalog from {@code database}</li>
+     *   <li>1-part {@code "table"}: catalog from {@code database}, schema from {@code schema}</li>
+     * </ul>
+     */
+    static Transformations.CatalogSchemaTable resolveAuthorizedTable(String name, String database, String schema) {
+        int firstDot = name.indexOf('.');
+        int lastDot  = name.lastIndexOf('.');
+        String c, s, t;
+        if (firstDot == -1) {
+            c = database; s = schema; t = name;
+        } else if (firstDot == lastDot) {
+            c = database; s = name.substring(0, firstDot); t = name.substring(firstDot + 1);
+        } else {
+            c = name.substring(0, firstDot); s = name.substring(firstDot + 1, lastDot); t = name.substring(lastDot + 1);
+        }
+        return new Transformations.CatalogSchemaTable(c, s, t, Transformations.TableType.BASE_TABLE);
+    }
+
+    /**
+     * Convenience: returns the fully-qualified {@code "catalog.schema.table"} string form
+     * of an authorized table name resolved against the connection's database/schema headers.
+     * Used by callers (e.g. {@link RestrictedReadOnlyAuthorizer}) that need a string key.
+     */
+    static String qualifyTableName(String name, String database, String schema) {
+        var t = resolveAuthorizedTable(name, database, schema);
+        return t.catalog() + "." + t.schema() + "." + t.tableOrPath();
+    }
+
+    /**
+     * Checks whether the {@code authorized} table grants access to the {@code queried}
+     * BASE_TABLE. Both arguments are already-resolved triples — {@code queried} by
+     * {@link Transformations#collectAllTableReferences}, and {@code authorized} typically
+     * via {@link #resolveAuthorizedTable}.
+     */
+    static boolean hasAccessToTable(Transformations.CatalogSchemaTable authorized, Transformations.CatalogSchemaTable queried) {
+        if (queried.type() != Transformations.TableType.BASE_TABLE) return false;
+        return java.util.Objects.equals(authorized.tableOrPath(), queried.tableOrPath())
+            && java.util.Objects.equals(authorized.schema(), queried.schema())
+            && java.util.Objects.equals(authorized.catalog(), queried.catalog());
     }
 
     /**

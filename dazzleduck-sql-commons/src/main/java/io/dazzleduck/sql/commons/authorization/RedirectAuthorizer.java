@@ -124,9 +124,9 @@ public class RedirectAuthorizer {
             }
             if (cst.type() == Transformations.TableType.BASE_TABLE) {
                 logger.debug("RedirectAuthorizer.findMatchingRow: checking cst={} against row=catalog:{} schema:{} table:{}", cst, row.catalog(), row.schema(), row.tableOrPath());
-                if (cst.catalog().equals(row.catalog())
-                        && cst.schema().equals(row.schema())
-                        && SqlAuthorizer.hasAccessToTable(cst.catalog(), cst.schema(), row.tableOrPath(), cst)) {
+                var authorized = new Transformations.CatalogSchemaTable(
+                        row.catalog(), row.schema(), row.tableOrPath(), Transformations.TableType.BASE_TABLE);
+                if (SqlAuthorizer.hasAccessToTable(authorized, cst)) {
                     return row;
                 }
             } else {

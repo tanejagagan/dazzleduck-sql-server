@@ -89,12 +89,13 @@ public class RestrictedDatasourceOnlyAuthorizer implements SqlAuthorizer {
             var entry = tableAccess.get(0);
             return switch (entry.type()) {
                 case TableAccessEntry.TABLE -> {
+                    var authorized = SqlAuthorizer.resolveAuthorizedTable(entry.name(), database, schema);
                     for (var cst : catalogSchemaTables) {
                         if (cst.type() == Transformations.TableType.TABLE_FUNCTION) {
                             throw new UnauthorizedException(
                                     "Access type 'table' does not allow TABLE_FUNCTION queries");
                         }
-                        if (!SqlAuthorizer.hasAccessToTable(database, schema, entry.name(), cst)) {
+                        if (!SqlAuthorizer.hasAccessToTable(authorized, cst)) {
                             throw new UnauthorizedException("No access to %s".formatted(cst));
                         }
                     }
@@ -136,6 +137,8 @@ public class RestrictedDatasourceOnlyAuthorizer implements SqlAuthorizer {
             throw new UnauthorizedException("No access to %s".formatted(catalogSchemaTables));
         }
 
+        var authorizedTable = table == null ? null
+                : SqlAuthorizer.resolveAuthorizedTable(table, database, schema);
         for (var catalogSchemaTable : catalogSchemaTables) {
             if (catalogSchemaTable.type() == Transformations.TableType.TABLE_FUNCTION &&
                     (path == null || !SqlAuthorizer.hasAccessToPath(path, catalogSchemaTable.tableOrPath())) &&
@@ -143,7 +146,7 @@ public class RestrictedDatasourceOnlyAuthorizer implements SqlAuthorizer {
                 throw new UnauthorizedException("No access to %s".formatted(catalogSchemaTable));
             }
             if (catalogSchemaTable.type() == Transformations.TableType.BASE_TABLE &&
-                    (table == null || !SqlAuthorizer.hasAccessToTable(database, schema, table, catalogSchemaTable))){
+                    (authorizedTable == null || !SqlAuthorizer.hasAccessToTable(authorizedTable, catalogSchemaTable))){
                 throw new UnauthorizedException("No access to %s".formatted(catalogSchemaTable));
             }
         }
