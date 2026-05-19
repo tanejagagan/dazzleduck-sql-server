@@ -292,9 +292,9 @@ MicrometerForwarderConfig config = MicrometerForwarderConfig.builder()
         .username("admin")
         .password("admin")
         .claims(Map.of(
-                "database", "metrics_db",
-                "schema",   "app_metrics",
-                "table",    "events"
+                "database",   "metrics_db",
+                "schema",     "app_metrics",
+                "x-dd-table", "events"
         ))
         .ingestionQueue("metrics")
         .stepInterval(Duration.ofSeconds(10))

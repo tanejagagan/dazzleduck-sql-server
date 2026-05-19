@@ -168,7 +168,7 @@ public class FlightSqlBulkIngestionAuthorizationTest {
 
     private static AdvanceJWTTokenAuthenticator getIngestionTestAuthenticator() throws Exception {
         var config = ConfigFactory.parseString("""
-                jwt_token.claims.generate.headers=[database,schema,access-type,ingestion_queue]
+                jwt_token.claims.generate.headers=[database,schema,x-dd-access-type,ingestion_queue]
                 jwt_token.claims.validate.headers=[database,schema]
                 """).withFallback(ConfigFactory.load().getConfig("dazzleduck_server"));
         return AuthUtils.getTestAuthenticator(config);

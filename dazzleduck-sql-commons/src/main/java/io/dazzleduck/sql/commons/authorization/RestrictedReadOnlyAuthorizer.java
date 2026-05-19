@@ -67,7 +67,12 @@ public class RestrictedReadOnlyAuthorizer implements SqlAuthorizer {
                     throw new UnauthorizedException(
                             "RESTRICT_READ_ONLY mode only supports type 'table' in access; got: '" + entry.type() + "'");
                 }
-                tableFilters.put(entry.name(), entry.filter());
+                // Accept fully-qualified ("catalog.schema.table"), schema-qualified
+                // ("schema.table"), or bare ("table") names. Missing prefixes are filled
+                // in from the connection's database/schema headers so a bare name is
+                // implicitly scoped to the request's catalog/schema — preventing it
+                // from matching same-named tables in other catalogs.
+                tableFilters.put(SqlAuthorizer.qualifyTableName(entry.name(), database, schema), entry.filter());
             }
             return SqlAuthorizer.addFilterViaCtes(query, tableFilters);
         }
