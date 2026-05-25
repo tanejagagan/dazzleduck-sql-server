@@ -59,10 +59,15 @@ public class Headers {
     // so that RedirectAuthorizer can forward it to the resolve endpoint
     public static final String HEADER_BEARER_TOKEN = "x-dd-bearer-token";
 
+    // OTLP collector: overrides the default signal queue (logs/traces/metrics) per-request.
+    public static final String HEADER_INGESTION_QUEUE = "x-dd-ingestion-queue";
+    // JWT claim carrying the target ingestion queue ID; same wire value as HEADER_INGESTION_QUEUE.
+    public static final String CLAIM_INGESTION_QUEUE = "x-dd-ingestion-queue";
+
     public static final Set<String> SUPPORTED_HEADERS = Set.of(HEADER_FETCH_SIZE, HEADER_DATABASE, HEADER_SCHEMA, HEADER_SPLIT_SIZE,
             HEADER_DATA_PARTITION, HEADER_DATA_FORMAT, HEADER_PRODUCER_ID, HEADER_PRODUCER_BATCH_ID, HEADER_SORT_ORDER,
             HEADER_APP_DATA_TRANSFORMATION, HEADER_PATH, HEADER_TABLE, HEADER_FUNCTION, HEADER_FILTER, HEADER_ACCESS,
             HEADER_ACCESS_TYPE, HEADER_ARROW_COMPRESSION, QUERY_PARAMETER_INGESTION_QUEUE,
-            HEADER_QUERY_TIMEOUT, HEADER_DATA_LIMIT, HEADER_DATA_OFFSET);
+            HEADER_QUERY_TIMEOUT, HEADER_DATA_LIMIT, HEADER_DATA_OFFSET, HEADER_INGESTION_QUEUE);
 
 }

@@ -122,7 +122,7 @@ class OtelCollectorConfigDuckLakeTest {
 
         channel = ManagedChannelBuilder.forAddress("localhost", port).usePlaintext().build();
         logsStub = LogsServiceGrpc.newBlockingStub(channel)
-                .withInterceptors(MetadataUtils.newAttachHeadersInterceptor(bearerMeta()));
+                .withInterceptors(MetadataUtils.newAttachHeadersInterceptor(bearerMeta("logs")));
     }
 
     @AfterAll
@@ -209,11 +209,16 @@ class OtelCollectorConfigDuckLakeTest {
         try (var s = new ServerSocket(0)) { s.setReuseAddress(true); return s.getLocalPort(); }
     }
 
-    private static Metadata bearerMeta() {
+    private static Metadata bearerMeta(String queueId) {
         SecretKey key = Validator.fromBase64String(SECRET_KEY_BASE64);
         Calendar exp = Calendar.getInstance();
         exp.add(Calendar.HOUR, 1);
-        String token = Jwts.builder().subject("admin").expiration(exp.getTime()).signWith(key).compact();
+        String token = Jwts.builder()
+                .subject("admin")
+                .claim(io.dazzleduck.sql.common.Headers.CLAIM_INGESTION_QUEUE, queueId)
+                .expiration(exp.getTime())
+                .signWith(key)
+                .compact();
         var meta = new Metadata();
         meta.put(AUTHORIZATION_KEY, "Bearer " + token);
         return meta;

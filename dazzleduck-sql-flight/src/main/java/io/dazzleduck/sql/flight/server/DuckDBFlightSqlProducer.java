@@ -966,16 +966,21 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             IngestionParameters ingestionParameters,
             StreamListener<PutResult> ackStream) {
         return () -> {
+            Path tempFile = null;
             try (reader) {
-                Path tempFile = BulkIngestQueue.writeAndValidateTempArrowFile(tempDir, reader);
+                tempFile = BulkIngestQueue.writeAndValidateTempArrowFile(tempDir, reader);
                 long fileSize = Files.size(tempFile);
                 recorder.recordIngestReceived(fileSize);
                 var batch = ingestionParameters.constructBatch(fileSize, tempFile.toAbsolutePath().toString());
                 var result = ingestionQueue.add(batch);
-                result.get();
+                result.get(10L, TimeUnit.MINUTES);
+                tempFile = null; // queue owns cleanup from this point
                 ackStream.onNext(PutResult.empty());
                 ackStream.onCompleted();
             } catch (Throwable throwable) {
+                if (tempFile != null) {
+                    try { Files.deleteIfExists(tempFile); } catch (IOException ignored) {}
+                }
                 recorder.recordIngestError();
                 ErrorHandling.handleThrowable(ackStream, throwable);
             }
@@ -1213,6 +1218,11 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         ingestionHandler.closeQueues();
 
         allocator.close();
+
+        try (var stream = Files.walk(tempDir)) {
+            stream.sorted(Comparator.reverseOrder())
+                  .forEach(p -> { try { Files.deleteIfExists(p); } catch (IOException ignored) {} });
+        } catch (IOException ignored) {}
     }
 
     public SqlAuthorizer getSqlAuthorizer(){

@@ -2,6 +2,7 @@ package io.dazzleduck.sql.otel.collector;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
+import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.commons.auth.Validator;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.dazzleduck.sql.otel.collector.config.CollectorProperties;
@@ -94,11 +95,16 @@ public class OtelCollectorLoginDelegationTest {
     }
 
     static String generateValidToken() {
+        return generateTokenWithQueueClaim("logs");
+    }
+
+    static String generateTokenWithQueueClaim(String queueId) {
         SecretKey key = Validator.fromBase64String(SECRET_KEY_BASE64);
         Calendar exp = Calendar.getInstance();
         exp.add(Calendar.HOUR, 1);
         return Jwts.builder()
                 .subject(VALID_USER)
+                .claim(Headers.CLAIM_INGESTION_QUEUE, queueId)
                 .expiration(exp.getTime())
                 .signWith(key)
                 .compact();
@@ -213,6 +219,7 @@ public class OtelCollectorLoginDelegationTest {
                         exp.add(Calendar.HOUR, 1);
                         String token = Jwts.builder()
                                 .subject(username)
+                                .claim(Headers.CLAIM_INGESTION_QUEUE, "logs")
                                 .expiration(exp.getTime())
                                 .signWith(key)
                                 .compact();
@@ -283,8 +290,10 @@ public class OtelCollectorLoginDelegationTest {
 
         @Test
         void validCredentials_local_succeeds() {
-            var s = stub.withInterceptors(
-                    MetadataUtils.newAttachHeadersInterceptor(basicAuthMetadata(VALID_USER, VALID_PASS)));
+            // Bearer token with queue claim — local auth validates the credential path end-to-end
+            var meta = new Metadata();
+            meta.put(AUTHORIZATION_KEY, "Bearer " + generateValidToken());
+            var s = stub.withInterceptors(MetadataUtils.newAttachHeadersInterceptor(meta));
             assertDoesNotThrow(() -> s.export(sampleRequest()));
         }
 
@@ -420,7 +429,7 @@ public class OtelCollectorLoginDelegationTest {
                     .usePlaintext()
                     .build();
             var meta = new Metadata();
-            meta.put(AUTHORIZATION_KEY, "Bearer " + generateValidToken());
+            meta.put(AUTHORIZATION_KEY, "Bearer " + generateTokenWithQueueClaim("traces"));
             stub = TraceServiceGrpc.newBlockingStub(channel)
                     .withInterceptors(MetadataUtils.newAttachHeadersInterceptor(meta));
         }
@@ -499,7 +508,7 @@ public class OtelCollectorLoginDelegationTest {
                     .usePlaintext()
                     .build();
             var meta = new Metadata();
-            meta.put(AUTHORIZATION_KEY, "Bearer " + generateValidToken());
+            meta.put(AUTHORIZATION_KEY, "Bearer " + generateTokenWithQueueClaim("metrics"));
             stub = MetricsServiceGrpc.newBlockingStub(channel)
                     .withInterceptors(MetadataUtils.newAttachHeadersInterceptor(meta));
         }

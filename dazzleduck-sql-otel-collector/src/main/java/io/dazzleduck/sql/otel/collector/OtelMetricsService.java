@@ -1,46 +1,46 @@
 package io.dazzleduck.sql.otel.collector;
 
+import io.dazzleduck.sql.otel.collector.auth.JwtServerInterceptor;
 import io.grpc.stub.StreamObserver;
 import io.opentelemetry.proto.collector.metrics.v1.ExportMetricsServiceRequest;
 import io.opentelemetry.proto.collector.metrics.v1.ExportMetricsServiceResponse;
 import io.opentelemetry.proto.collector.metrics.v1.MetricsServiceGrpc;
 import io.opentelemetry.proto.metrics.v1.ResourceMetrics;
 import io.opentelemetry.proto.metrics.v1.ScopeMetrics;
-import org.apache.arrow.memory.RootAllocator;
-import org.apache.arrow.vector.VectorSchemaRoot;
-import org.apache.arrow.vector.ipc.ArrowStreamWriter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.FileOutputStream;
+import java.io.Closeable;
 import java.io.IOException;
-import java.nio.channels.Channels;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.UUID;
+import java.util.Map;
 
 /**
  * gRPC service that receives OTLP metric exports and writes them to Parquet.
+ * Queue routing is driven by the {@code x-dd-ingestion-queue} JWT claim.
  */
-public class OtelMetricsService extends MetricsServiceGrpc.MetricsServiceImplBase {
+public class OtelMetricsService extends MetricsServiceGrpc.MetricsServiceImplBase implements Closeable {
 
     private static final Logger log = LoggerFactory.getLogger(OtelMetricsService.class);
 
-    private final SignalWriter writer;
-    private final Path tempDir;
+    private final Map<String, SignalWriter> writers;
     private final OtelCollectorMetrics metrics;
+    private final OtelServiceBase base;
 
-    public OtelMetricsService(SignalWriter writer, OtelCollectorMetrics metrics) throws IOException {
-        this.writer = writer;
+    public OtelMetricsService(Map<String, SignalWriter> writers, OtelCollectorMetrics metrics) throws IOException {
+        this.writers = writers;
         this.metrics = metrics;
-        this.tempDir = Files.createTempDirectory("otel-metrics-arrow-");
+        this.base = new OtelServiceBase("otel-metrics-arrow-");
     }
 
     @Override
     public void export(ExportMetricsServiceRequest request,
                        StreamObserver<ExportMetricsServiceResponse> responseObserver) {
+        SignalWriter writer = OtelServiceBase.resolveWriter(writers, responseObserver);
+        if (writer == null) return;
+
         List<MetricEntry> entries = new ArrayList<>();
         for (ResourceMetrics resourceMetrics : request.getResourceMetricsList()) {
             var resource = resourceMetrics.hasResource() ? resourceMetrics.getResource() : null;
@@ -51,41 +51,26 @@ public class OtelMetricsService extends MetricsServiceGrpc.MetricsServiceImplBas
                 }
             }
         }
-        log.debug("Received {} metrics", entries.size());
+        int metricCount = entries.size();
+        String queueId = JwtServerInterceptor.QUEUE_CONTEXT_KEY.get();
+        log.debug("Received {} metrics → queue '{}'", metricCount, queueId);
         var sample = metrics.startSample();
 
         try {
-            Path arrowFile = writeArrowFile(entries);
-            writer.addBatch(arrowFile).whenComplete((v, ex) -> {
-                if (ex != null) {
-                    metrics.recordMetricError(sample);
-                    log.error("Failed to persist {} metrics", entries.size(), ex);
-                    responseObserver.onError(ex);
-                } else {
-                    metrics.recordMetricExport(entries.size(), sample);
-                    responseObserver.onNext(ExportMetricsServiceResponse.getDefaultInstance());
-                    responseObserver.onCompleted();
-                }
-            });
+            Path arrowFile = base.writeArrowFile(entries, OtelMetricSchema.SCHEMA, MetricBatchWriter::write);
+            writer.addBatch(arrowFile).whenComplete(
+                    OtelServiceBase.batchCompleteHandler(arrowFile, metricCount, queueId,
+                            sample, metrics,
+                            responseObserver, ExportMetricsServiceResponse.getDefaultInstance()));
         } catch (IOException e) {
-            metrics.recordMetricError(sample);
-            log.error("Failed to write Arrow file for {} metrics", entries.size(), e);
+            metrics.recordError(queueId, sample);
+            log.error("Failed to write Arrow file for {} metrics", metricCount, e);
             responseObserver.onError(e);
         }
     }
 
-    private Path writeArrowFile(List<MetricEntry> entries) throws IOException {
-        Path tempFile = tempDir.resolve("batch_" + UUID.randomUUID() + ".arrow");
-        try (RootAllocator allocator = new RootAllocator();
-             VectorSchemaRoot root = VectorSchemaRoot.create(OtelMetricSchema.SCHEMA, allocator)) {
-            MetricBatchWriter.write(entries, root);
-            try (FileOutputStream fos = new FileOutputStream(tempFile.toFile());
-                 ArrowStreamWriter writer = new ArrowStreamWriter(root, null, Channels.newChannel(fos))) {
-                writer.start();
-                writer.writeBatch();
-                writer.end();
-            }
-        }
-        return tempFile;
+    @Override
+    public void close() {
+        base.close();
     }
 }

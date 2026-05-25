@@ -44,7 +44,7 @@ public class AdvanceJWTTokenAuthenticator implements CallHeaderAuthenticator {
 
     public AdvanceJWTTokenAuthenticator(CallHeaderAuthenticator initialAuthenticator, SecretKey key, Config config) {
         this.key = key;
-        this.verifySignature = config.getBoolean("jwt_token.verify_signature");
+        this.verifySignature = config.getBoolean(ConfigConstants.JWT_TOKEN_VERIFY_SIGNATURE_KEY);
         if (verifySignature) {
             this.jwtParser = Jwts.parser()      // (1)
                     .verifyWith(key)            // or a constant key used to verify all signed JWTs

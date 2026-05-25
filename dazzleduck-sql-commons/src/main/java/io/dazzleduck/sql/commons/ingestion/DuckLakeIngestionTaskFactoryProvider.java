@@ -37,9 +37,9 @@ public class DuckLakeIngestionTaskFactoryProvider implements IngestionTaskFactor
 
     @Override
     public void validate() {
-        if (!config.hasPath("ingestion_queue_table_mapping")) return;
-        config.getConfigList("ingestion_queue_table_mapping").forEach(c -> {
-            String queueId         = c.getString("ingestion_queue");
+        if (!config.hasPath(ConfigConstants.INGESTION_QUEUE_TABLE_MAPPING_KEY)) return;
+        config.getConfigList(ConfigConstants.INGESTION_QUEUE_TABLE_MAPPING_KEY).forEach(c -> {
+            String queueId         = c.getString(ConfigConstants.INGESTION_QUEUE_KEY);
             // Skip entries that don't have DuckLake fields — they are output-path-only entries.
             if (!c.hasPath("catalog") || !c.hasPath("schema") || !c.hasPath("table")) return;
             boolean hasTransform   = c.hasPath(ConfigConstants.TRANSFORMATION_KEY);
@@ -116,10 +116,10 @@ public class DuckLakeIngestionTaskFactoryProvider implements IngestionTaskFactor
     }
 
     private Map<String, QueueIdToTableMapping> loadMappings(Config config) {
-        if (!config.hasPath("ingestion_queue_table_mapping")) return Map.of();
+        if (!config.hasPath(ConfigConstants.INGESTION_QUEUE_TABLE_MAPPING_KEY)) return Map.of();
         Map<String, QueueIdToTableMapping> mappings = new LinkedHashMap<>();
-        config.getConfigList("ingestion_queue_table_mapping").forEach(c -> {
-            String ingestionQueue = c.getString("ingestion_queue");
+        config.getConfigList(ConfigConstants.INGESTION_QUEUE_TABLE_MAPPING_KEY).forEach(c -> {
+            String ingestionQueue = c.getString(ConfigConstants.INGESTION_QUEUE_KEY);
             // Skip entries that don't have the required DuckLake fields.
             if (!c.hasPath("catalog") || !c.hasPath("schema") || !c.hasPath("table")) {
                 logger.debug("Skipping DuckLake mapping for queue '{}': missing catalog/schema/table", ingestionQueue);

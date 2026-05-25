@@ -90,16 +90,19 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
      * since it doesn't affect the write result.
      */
     private void cleanupInputFiles(WriteTask<String, IngestionResult> writeTask) {
-        for (var batch : writeTask.bucket().batches()) {
-            final String filePath = batch.record();
-            CLEANUP_EXECUTOR.execute(() -> {
-                try {
-                    Files.deleteIfExists(Path.of(filePath));
-                } catch (Exception e) {
-                    logger.warn("Failed to delete temporary input file: {}", filePath, e);
-                }
-            });
-        }
+        writeTask.bucket().batches().forEach(this::onBatchAbandoned);
+    }
+
+    @Override
+    protected void onBatchAbandoned(Batch<String> batch) {
+        final String filePath = batch.record();
+        CLEANUP_EXECUTOR.execute(() -> {
+            try {
+                Files.deleteIfExists(Path.of(filePath));
+            } catch (Exception e) {
+                logger.warn("Failed to delete temporary input file: {}", filePath, e);
+            }
+        });
     }
 
     private String getClause(String[] values, String clause){
