@@ -1,6 +1,8 @@
 package io.dazzleduck.sql.otel.collector.auth;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.dazzleduck.sql.common.Headers;
+import io.dazzleduck.sql.common.auth.JwtClaimsExtractor;
 import io.dazzleduck.sql.common.auth.LoginResponse;
 import io.dazzleduck.sql.commons.auth.Validator;
 import io.grpc.*;
@@ -24,6 +26,10 @@ import java.util.Map;
 public class JwtServerInterceptor implements ServerInterceptor {
 
     private static final Logger log = LoggerFactory.getLogger(JwtServerInterceptor.class);
+
+    /** gRPC context key populated from the {@value Headers#CLAIM_INGESTION_QUEUE} JWT claim. */
+    public static final Context.Key<String> QUEUE_CONTEXT_KEY =
+            Context.key(Headers.CLAIM_INGESTION_QUEUE);
     private static final Metadata.Key<String> AUTHORIZATION_KEY =
             Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER);
     private static final String BEARER_PREFIX = "Bearer ";
@@ -34,19 +40,24 @@ public class JwtServerInterceptor implements ServerInterceptor {
 
     private final SecretKey secretKey;
     private final JwtParser jwtParser;
+    private final boolean verifySignature;
     private final Map<String, byte[]> userHashMap;
     private final Duration jwtExpiration;
     private final String loginUrl;
 
     public JwtServerInterceptor(SecretKey secretKey, Map<String, byte[]> userHashMap,
-                                Duration jwtExpiration, String loginUrl) {
+                                Duration jwtExpiration, String loginUrl, boolean verifySignature) {
         this.secretKey = secretKey;
-        this.jwtParser = Jwts.parser()
-                .verifyWith(secretKey)
-                .build();
+        this.verifySignature = verifySignature;
+        this.jwtParser = verifySignature
+                ? Jwts.parser().verifyWith(secretKey).build()
+                : Jwts.parser().unsecured().build();
         this.userHashMap = userHashMap;
         this.jwtExpiration = jwtExpiration;
         this.loginUrl = loginUrl;
+        if (!verifySignature) {
+            log.warn("JWT signature verification is disabled — tokens are not cryptographically validated");
+        }
     }
 
     @Override
@@ -95,6 +106,13 @@ public class JwtServerInterceptor implements ServerInterceptor {
                     super.sendHeaders(responseHeaders);
                 }
             };
+            // Extract queue claim from the newly issued token and propagate to context
+            // so services can route to the correct ingestion queue on this same call.
+            String bearerValue = token.startsWith(BEARER_PREFIX) ? token.substring(BEARER_PREFIX.length()) : token;
+            try {
+                var claims = JwtClaimsExtractor.parseJwtClaims(bearerValue, jwtParser, verifySignature);
+                return startCallWithQueueContext(claims, wrappedCall, headers, next);
+            } catch (Exception ignored) {}
             return next.startCall(wrappedCall, headers);
         } catch (Exception e) {
             log.debug("Basic auth failed: {}", e.getMessage());
@@ -132,13 +150,26 @@ public class JwtServerInterceptor implements ServerInterceptor {
     private <ReqT, RespT> ServerCall.Listener<ReqT> handleBearer(
             String token, ServerCall<ReqT, RespT> call, Metadata headers, ServerCallHandler<ReqT, RespT> next) {
         try {
-            jwtParser.parseSignedClaims(token);
-            return next.startCall(call, headers);
+            var claims = JwtClaimsExtractor.parseJwtClaims(token, jwtParser, verifySignature);
+            return startCallWithQueueContext(claims, call, headers, next);
         } catch (Exception e) {
             log.debug("JWT validation failed: {}", e.getMessage());
             call.close(Status.UNAUTHENTICATED.withDescription("Invalid or expired JWT token"), new Metadata());
             return new ServerCall.Listener<>() {};
         }
+    }
+
+    private <ReqT, RespT> ServerCall.Listener<ReqT> startCallWithQueueContext(
+            io.jsonwebtoken.Claims claims,
+            ServerCall<ReqT, RespT> call,
+            Metadata headers,
+            ServerCallHandler<ReqT, RespT> next) {
+        String queueId = claims.get(Headers.CLAIM_INGESTION_QUEUE, String.class);
+        if (queueId != null) {
+            Context ctx = Context.current().withValue(QUEUE_CONTEXT_KEY, queueId);
+            return Contexts.interceptCall(ctx, call, headers, next);
+        }
+        return next.startCall(call, headers);
     }
 
     private String generateToken(String subject) {

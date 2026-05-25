@@ -63,6 +63,7 @@ public class ConfigConstants {
     public static final String JWT_TOKEN_PREFIX = "jwt_token";
     public static final String JWT_TOKEN_EXPIRATION_KEY = "jwt_token.expiration";
     public static final String JWT_TOKEN_GENERATION_KEY = "jwt_token.generation";
+    public static final String JWT_TOKEN_VERIFY_SIGNATURE_KEY = "jwt_token.verify_signature";
     public static final String JWT_TOKEN_CLAIMS_GENERATE_HEADERS_KEY = "jwt_token.claims.generate.headers";
     public static final String JWT_TOKEN_CLAIMS_VALIDATE_HEADERS_KEY = "jwt_token.claims.validate.headers";
 
@@ -116,6 +117,7 @@ public class ConfigConstants {
     // Metrics specific
     public static final String STEP_INTERVAL_MS_KEY = "step_interval_ms";
     public static final String INGESTION_CONFIG_PREFIX = "ingestion_task_factory_provider";
+    public static final String INGESTION_QUEUE_TABLE_MAPPING_KEY = "ingestion_queue_table_mapping";
 
     public static String getWarehousePath(Config config) {
         return config.getString(WAREHOUSE_CONFIG_KEY);

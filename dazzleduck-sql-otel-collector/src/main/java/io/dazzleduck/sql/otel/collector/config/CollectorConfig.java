@@ -2,6 +2,7 @@ package io.dazzleduck.sql.otel.collector.config;
 
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
+import io.dazzleduck.sql.common.ConfigConstants;
 import io.dazzleduck.sql.common.StartupScriptProvider;
 import io.dazzleduck.sql.commons.config.ConfigBasedProvider;
 import io.dazzleduck.sql.commons.ingestion.IngestionConfig;
@@ -140,6 +141,32 @@ public class CollectorConfig {
     }
 
     /**
+     * Returns the ingestion queue names to create at startup, derived from the
+     * {@code ingestion_queue} fields in
+     * {@code otel_collector.ingestion_task_factory_provider.ingestion_queue_table_mapping}.
+     * Falls back to {@code ["logs", "traces", "metrics"]} when the mapping is absent or empty.
+     */
+    public List<String> getQueues() {
+        String mappingPath = CONFIG_PREFIX + "." + ConfigConstants.INGESTION_CONFIG_PREFIX
+                + "." + ConfigConstants.INGESTION_QUEUE_TABLE_MAPPING_KEY;
+        try {
+            if (config.hasPath(mappingPath)) {
+                List<String> queues = config.getConfigList(mappingPath).stream()
+                        .map(c -> c.getString(ConfigConstants.INGESTION_QUEUE_KEY))
+                        .filter(s -> s != null && !s.isBlank())
+                        .distinct()
+                        .toList();
+                if (!queues.isEmpty()) {
+                    return queues;
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Error reading ingestion_queue_table_mapping: {}", e.getMessage());
+        }
+        return List.of("logs", "traces", "metrics");
+    }
+
+    /**
      * Returns the single unified {@link IngestionHandler} from the top-level
      * {@code ingestion_task_factory_provider} block.
      */
@@ -166,7 +193,7 @@ public class CollectorConfig {
     }
 
     public String getAuthentication() {
-        return getString("authentication", "jwt");
+        return getString("authentication", "jwt"); // "jwt" is the only supported value
     }
 
     public String getSecretKey() {
@@ -192,15 +219,27 @@ public class CollectorConfig {
     }
 
     public Duration getJwtExpiration() {
-        String fullPath = CONFIG_PREFIX + ".jwt_token.expiration";
+        String fullPath = CONFIG_PREFIX + "." + ConfigConstants.JWT_TOKEN_EXPIRATION_KEY;
         try {
             if (config.hasPath(fullPath)) {
                 return config.getDuration(fullPath);
             }
         } catch (Exception e) {
-            log.debug("Error reading jwt_token.expiration: {}", e.getMessage());
+            log.debug("Error reading {}: {}", fullPath, e.getMessage());
         }
         return Duration.ofHours(1);
+    }
+
+    public boolean getVerifySignature() {
+        String fullPath = CONFIG_PREFIX + "." + ConfigConstants.JWT_TOKEN_VERIFY_SIGNATURE_KEY;
+        try {
+            if (config.hasPath(fullPath)) {
+                return config.getBoolean(fullPath);
+            }
+        } catch (Exception e) {
+            log.debug("Error reading {}: {}", fullPath, e.getMessage());
+        }
+        return true;
     }
 
     public CollectorProperties toProperties() {
@@ -215,6 +254,8 @@ public class CollectorConfig {
         props.setServiceName(getServiceName());
         props.setIngestionHandler(getIngestionHandler());
         props.setIngestionConfig(getIngestionConfig());
+        props.setQueues(getQueues());
+        props.setVerifySignature(getVerifySignature());
         return props;
     }
 

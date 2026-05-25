@@ -6,6 +6,7 @@ import org.apache.arrow.vector.ipc.ArrowStreamWriter;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.channels.Channels;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
@@ -31,9 +32,20 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
                 writer.writeBatch();
             }
             writer.end();
+        } catch (Exception e) {
+            Files.deleteIfExists(tempFilePath);
+            if (e instanceof IOException ioe) throw ioe;
+            throw new IOException(e);
         }
         return tempFilePath;
     }
+
+    /**
+     * Called for each batch that is abandoned at shutdown time (i.e. the batch was accepted but
+     * never reached the write phase). Subclasses override this to release batch-level resources
+     * such as temporary files.
+     */
+    protected void onBatchAbandoned(Batch<T> batch) {}
 
     /**
      * Creates a new combined bucket from multiple buckets.
@@ -341,21 +353,18 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
         writeThread.interrupt();
         writeThread.join();
 
-        // Fail any futures in the current bucket
+        // Fail any futures in the current bucket and release their resources
         var exception = new IllegalStateException("Server shutting down before batch could be written");
         if (!currentBucket.isEmpty()) {
-            for (var future : currentBucket.futures()) {
-                future.completeExceptionally(exception);
-            }
+            currentBucket.batches().forEach(this::onBatchAbandoned);
+            currentBucket.futures().forEach(f -> f.completeExceptionally(exception));
         }
 
-
-        // Fail any remaining tasks that weren't processed
+        // Fail any remaining tasks that weren't processed and release their resources
         WriteTask<T, R> remaining;
         while ((remaining = writeQueue.poll()) != null) {
-            for (var future : remaining.bucket().futures()) {
-                future.completeExceptionally(exception);
-            }
+            remaining.bucket().batches().forEach(this::onBatchAbandoned);
+            remaining.bucket().futures().forEach(f -> f.completeExceptionally(exception));
         }
     }
 }

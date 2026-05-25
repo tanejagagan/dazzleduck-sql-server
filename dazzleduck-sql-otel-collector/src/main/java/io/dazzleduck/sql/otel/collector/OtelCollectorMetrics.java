@@ -2,122 +2,51 @@ package io.dazzleduck.sql.otel.collector;
 
 import io.micrometer.core.instrument.FunctionCounter;
 import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 
+import java.io.Closeable;
+import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.LongAdder;
 
 /**
- * Micrometer metrics for the OTLP collector, following the dual-stream pattern:
- * <ul>
- *   <li>LongAdders — real-time source of truth, readable instantly via getXxx() accessors</li>
- *   <li>FunctionCounters/Gauges — bridge to Micrometer for Prometheus, Grafana, etc.</li>
- * </ul>
+ * Micrometer metrics for the OTLP collector. All meters are keyed by queue ID so
+ * each configured ingestion queue gets its own counters and timers.
  *
- * All metrics are tagged with {@code signal=logs|traces|metrics}.
- * Common tags ({@code service.name}, {@code host.name}, {@code container.id}) are set once
- * at startup via {@code registry.config().commonTags()} in {@code OtelCollectorServer}.
+ * <p>Meters are created on first use ({@link #recordExport}/{@link #recordError}) and on
+ * {@link #registerWriter} — no pre-allocation at startup. This means a queue that never
+ * receives traffic produces no meters.
  *
- * Metric names:
+ * <p>All meters carry a {@code queue} tag with the queue ID as the value, plus the common
+ * tags ({@code service.name}, {@code host.name}, {@code container.id}) set once at startup
+ * via {@code registry.config().commonTags()} in {@link OtelCollectorServer}.
+ *
  * <pre>
- *   dazzleduck.otel.export.latency         – end-to-end RPC latency (p50/p95/p99)
- *   dazzleduck.otel.export.requests        – number of export RPC calls received
- *   dazzleduck.otel.export.records         – number of individual records (log records / spans / data points)
- *   dazzleduck.otel.export.errors          – number of failed exports
- *   dazzleduck.otel.writer.bytes_written   – cumulative bytes written to Parquet
- *   dazzleduck.otel.writer.batches_written – cumulative number of batches flushed to Parquet
- *   dazzleduck.otel.writer.pending_batches – current queue depth (batches not yet written)
- *   dazzleduck.otel.writer.pending_buckets – current bucket queue depth
+ *   dazzleduck.otel.export.requests        {queue=&lt;id&gt;}  – RPC calls received
+ *   dazzleduck.otel.export.records         {queue=&lt;id&gt;}  – individual records exported
+ *   dazzleduck.otel.export.errors          {queue=&lt;id&gt;}  – failed exports
+ *   dazzleduck.otel.export.latency         {queue=&lt;id&gt;}  – end-to-end RPC latency (p50/p95/p99)
+ *   dazzleduck.otel.writer.bytes_written   {queue=&lt;id&gt;}  – cumulative bytes written to Parquet
+ *   dazzleduck.otel.writer.batches_written {queue=&lt;id&gt;}  – batches flushed to Parquet
+ *   dazzleduck.otel.writer.pending_batches {queue=&lt;id&gt;}  – queue depth (batches not yet written)
+ *   dazzleduck.otel.writer.pending_buckets {queue=&lt;id&gt;}  – bucket queue depth
  * </pre>
  */
-public class OtelCollectorMetrics {
+public class OtelCollectorMetrics implements Closeable {
 
     private final MeterRegistry registry;
+    private final List<Meter> registeredMeters = new CopyOnWriteArrayList<>();
 
-    // Logs
-    private final LongAdder logRequests   = new LongAdder();
-    private final LongAdder logRecords    = new LongAdder();
-    private final LongAdder logErrors     = new LongAdder();
-    private final Timer     logExportTimer;
+    private final ConcurrentHashMap<String, LongAdder> requestsPerQueue = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, LongAdder> recordsPerQueue  = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, LongAdder> errorsPerQueue   = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Timer>     timersPerQueue   = new ConcurrentHashMap<>();
 
-    // Traces
-    private final LongAdder traceRequests = new LongAdder();
-    private final LongAdder traceSpans    = new LongAdder();
-    private final LongAdder traceErrors   = new LongAdder();
-    private final Timer     traceExportTimer;
-
-    // Metrics
-    private final LongAdder metricRequests   = new LongAdder();
-    private final LongAdder metricDataPoints = new LongAdder();
-    private final LongAdder metricErrors     = new LongAdder();
-    private final Timer     metricExportTimer;
-
-    public OtelCollectorMetrics(MeterRegistry registry,
-                                long logMaxDelayMs, long traceMaxDelayMs, long metricMaxDelayMs) {
+    public OtelCollectorMetrics(MeterRegistry registry) {
         this.registry = registry;
-        registerExportCounters("logs",    logRequests,    logRecords,      logErrors);
-        registerExportCounters("traces",  traceRequests,  traceSpans,      traceErrors);
-        registerExportCounters("metrics", metricRequests, metricDataPoints, metricErrors);
-        logExportTimer    = buildExportTimer("logs",    logMaxDelayMs);
-        traceExportTimer  = buildExportTimer("traces",  traceMaxDelayMs);
-        metricExportTimer = buildExportTimer("metrics", metricMaxDelayMs);
-    }
-
-    private Timer buildExportTimer(String signal, long maxDelayMs) {
-        return Timer.builder("dazzleduck.otel.export.latency")
-                .tag("signal", signal)
-                .tag("max.delay.ms", String.valueOf(maxDelayMs))
-                .description("End-to-end export RPC duration — from request received to onCompleted/onError")
-                .publishPercentiles(0.5, 0.95, 0.99)
-                .register(registry);
-    }
-
-    private void registerExportCounters(String signal,
-                                        LongAdder requests,
-                                        LongAdder records,
-                                        LongAdder errors) {
-        FunctionCounter.builder("dazzleduck.otel.export.requests", requests, LongAdder::sum)
-                .tag("signal", signal)
-                .description("Number of OTLP export RPC calls received")
-                .register(registry);
-        FunctionCounter.builder("dazzleduck.otel.export.records", records, LongAdder::sum)
-                .tag("signal", signal)
-                .description("Number of individual records exported (log records / spans / data points)")
-                .register(registry);
-        FunctionCounter.builder("dazzleduck.otel.export.errors", errors, LongAdder::sum)
-                .tag("signal", signal)
-                .description("Number of failed export requests")
-                .register(registry);
-    }
-
-    /**
-     * Registers writer stats for one signal type as Gauges and FunctionCounters.
-     * Call this after the SignalWriter has been created.
-     *
-     * @param signal one of "logs", "traces", "metrics"
-     * @param writer the corresponding SignalWriter
-     */
-    public void registerWriter(String signal, SignalWriter writer) {
-        FunctionCounter.builder("dazzleduck.otel.writer.bytes_written", writer,
-                        w -> w.getStats().totalWriteBytes())
-                .tag("signal", signal)
-                .description("Cumulative bytes written to Parquet")
-                .register(registry);
-        FunctionCounter.builder("dazzleduck.otel.writer.batches_written", writer,
-                        w -> w.getStats().totalWriteBatches())
-                .tag("signal", signal)
-                .description("Cumulative number of Arrow batches flushed to Parquet")
-                .register(registry);
-        Gauge.builder("dazzleduck.otel.writer.pending_batches", writer,
-                        w -> w.getStats().pendingBatches())
-                .tag("signal", signal)
-                .description("Current number of batches queued but not yet written")
-                .register(registry);
-        Gauge.builder("dazzleduck.otel.writer.pending_buckets", writer,
-                        w -> w.getStats().pendingBuckets())
-                .tag("signal", signal)
-                .description("Current number of buckets queued but not yet written")
-                .register(registry);
     }
 
     // -----------------------------------------------------------------------
@@ -132,54 +61,115 @@ public class OtelCollectorMetrics {
     // Recording methods — called by the three OTLP services
     // -----------------------------------------------------------------------
 
-    public void recordLogExport(int recordCount, Timer.Sample sample) {
-        logRequests.increment();
-        logRecords.add(recordCount);
-        sample.stop(logExportTimer);
+    public void recordExport(String queueId, int count, Timer.Sample sample) {
+        getOrCreateRequests(queueId).increment();
+        getOrCreateRecords(queueId).add(count);
+        sample.stop(getOrCreateTimer(queueId));
     }
 
-    public void recordLogError(Timer.Sample sample) {
-        logErrors.increment();
-        sample.stop(logExportTimer);
-    }
-
-    public void recordTraceExport(int spanCount, Timer.Sample sample) {
-        traceRequests.increment();
-        traceSpans.add(spanCount);
-        sample.stop(traceExportTimer);
-    }
-
-    public void recordTraceError(Timer.Sample sample) {
-        traceErrors.increment();
-        sample.stop(traceExportTimer);
-    }
-
-    public void recordMetricExport(int dataPointCount, Timer.Sample sample) {
-        metricRequests.increment();
-        metricDataPoints.add(dataPointCount);
-        sample.stop(metricExportTimer);
-    }
-
-    public void recordMetricError(Timer.Sample sample) {
-        metricErrors.increment();
-        sample.stop(metricExportTimer);
+    public void recordError(String queueId, Timer.Sample sample) {
+        getOrCreateErrors(queueId).increment();
+        sample.stop(getOrCreateTimer(queueId));
     }
 
     // -----------------------------------------------------------------------
-    // Real-time accessors — return current values without Micrometer buffering
+    // Writer metrics — registered once per queue at startup
     // -----------------------------------------------------------------------
 
-    public long getLogRequests()      { return logRequests.sum(); }
-    public long getLogRecords()       { return logRecords.sum(); }
-    public long getLogErrors()        { return logErrors.sum(); }
+    public void registerWriter(String queueId, SignalWriter writer) {
+        registeredMeters.add(FunctionCounter.builder("dazzleduck.otel.writer.bytes_written", writer,
+                        w -> w.getStats().totalWriteBytes())
+                .tag("queue", queueId)
+                .description("Cumulative bytes written to Parquet")
+                .register(registry));
+        registeredMeters.add(FunctionCounter.builder("dazzleduck.otel.writer.batches_written", writer,
+                        w -> w.getStats().totalWriteBatches())
+                .tag("queue", queueId)
+                .description("Cumulative number of Arrow batches flushed to Parquet")
+                .register(registry));
+        registeredMeters.add(Gauge.builder("dazzleduck.otel.writer.pending_batches", writer,
+                        w -> w.getStats().pendingBatches())
+                .tag("queue", queueId)
+                .description("Current number of batches queued but not yet written")
+                .register(registry));
+        registeredMeters.add(Gauge.builder("dazzleduck.otel.writer.pending_buckets", writer,
+                        w -> w.getStats().pendingBuckets())
+                .tag("queue", queueId)
+                .description("Current number of buckets queued but not yet written")
+                .register(registry));
+    }
 
-    public long getTraceRequests()    { return traceRequests.sum(); }
-    public long getTraceSpans()       { return traceSpans.sum(); }
-    public long getTraceErrors()      { return traceErrors.sum(); }
+    // -----------------------------------------------------------------------
+    // Lazy meter creation — one set of counters + one timer per queue ID
+    // -----------------------------------------------------------------------
 
-    public long getMetricRequests()   { return metricRequests.sum(); }
-    public long getMetricDataPoints() { return metricDataPoints.sum(); }
-    public long getMetricErrors()     { return metricErrors.sum(); }
+    private LongAdder getOrCreateRequests(String queueId) {
+        return requestsPerQueue.computeIfAbsent(queueId, id -> {
+            var adder = new LongAdder();
+            registeredMeters.add(FunctionCounter.builder("dazzleduck.otel.export.requests", adder, LongAdder::sum)
+                    .tag("queue", id)
+                    .description("Number of OTLP export RPC calls received")
+                    .register(registry));
+            return adder;
+        });
+    }
+
+    private LongAdder getOrCreateRecords(String queueId) {
+        return recordsPerQueue.computeIfAbsent(queueId, id -> {
+            var adder = new LongAdder();
+            registeredMeters.add(FunctionCounter.builder("dazzleduck.otel.export.records", adder, LongAdder::sum)
+                    .tag("queue", id)
+                    .description("Number of individual records exported")
+                    .register(registry));
+            return adder;
+        });
+    }
+
+    private LongAdder getOrCreateErrors(String queueId) {
+        return errorsPerQueue.computeIfAbsent(queueId, id -> {
+            var adder = new LongAdder();
+            registeredMeters.add(FunctionCounter.builder("dazzleduck.otel.export.errors", adder, LongAdder::sum)
+                    .tag("queue", id)
+                    .description("Number of failed export requests")
+                    .register(registry));
+            return adder;
+        });
+    }
+
+    private Timer getOrCreateTimer(String queueId) {
+        return timersPerQueue.computeIfAbsent(queueId, id ->
+                Timer.builder("dazzleduck.otel.export.latency")
+                        .tag("queue", id)
+                        .description("End-to-end export RPC duration — from request received to onCompleted/onError")
+                        .publishPercentiles(0.5, 0.95, 0.99)
+                        .register(registry));
+    }
+
+    // -----------------------------------------------------------------------
+    // Real-time accessors (for testing)
+    // -----------------------------------------------------------------------
+
+    public long getRequests(String queueId) {
+        var a = requestsPerQueue.get(queueId);
+        return a != null ? a.sum() : 0L;
+    }
+
+    public long getRecords(String queueId) {
+        var a = recordsPerQueue.get(queueId);
+        return a != null ? a.sum() : 0L;
+    }
+
+    public long getErrors(String queueId) {
+        var a = errorsPerQueue.get(queueId);
+        return a != null ? a.sum() : 0L;
+    }
 
     public MeterRegistry getRegistry() { return registry; }
+
+    /** Removes all registered meters from the registry so SignalWriter references can be GC'd. */
+    @Override
+    public void close() {
+        registeredMeters.forEach(registry::remove);
+        registeredMeters.clear();
+    }
 }

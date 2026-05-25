@@ -111,10 +111,9 @@ class OtelCollectorDuckLakeTest {
 
         channel = ManagedChannelBuilder.forAddress("localhost", props.getGrpcPort())
                 .usePlaintext().build();
-        var interceptor = MetadataUtils.newAttachHeadersInterceptor(bearerMeta());
-        logsStub    = LogsServiceGrpc.newBlockingStub(channel).withInterceptors(interceptor);
-        tracesStub  = TraceServiceGrpc.newBlockingStub(channel).withInterceptors(interceptor);
-        metricsStub = MetricsServiceGrpc.newBlockingStub(channel).withInterceptors(interceptor);
+        logsStub    = LogsServiceGrpc.newBlockingStub(channel).withInterceptors(MetadataUtils.newAttachHeadersInterceptor(bearerMeta("logs")));
+        tracesStub  = TraceServiceGrpc.newBlockingStub(channel).withInterceptors(MetadataUtils.newAttachHeadersInterceptor(bearerMeta("traces")));
+        metricsStub = MetricsServiceGrpc.newBlockingStub(channel).withInterceptors(MetadataUtils.newAttachHeadersInterceptor(bearerMeta("metrics")));
     }
 
     @AfterAll
@@ -221,11 +220,16 @@ class OtelCollectorDuckLakeTest {
         }
     }
 
-    private static Metadata bearerMeta() {
+    private static Metadata bearerMeta(String queueId) {
         SecretKey key = Validator.fromBase64String(SECRET_KEY_BASE64);
         Calendar exp = Calendar.getInstance();
         exp.add(Calendar.HOUR, 1);
-        String token = Jwts.builder().subject("admin").expiration(exp.getTime()).signWith(key).compact();
+        String token = Jwts.builder()
+                .subject("admin")
+                .claim(io.dazzleduck.sql.common.Headers.CLAIM_INGESTION_QUEUE, queueId)
+                .expiration(exp.getTime())
+                .signWith(key)
+                .compact();
         var meta = new Metadata();
         meta.put(AUTHORIZATION_KEY, "Bearer " + token);
         return meta;

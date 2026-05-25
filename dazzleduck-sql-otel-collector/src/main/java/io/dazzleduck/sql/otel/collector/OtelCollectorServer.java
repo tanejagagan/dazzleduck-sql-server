@@ -1,6 +1,5 @@
 package io.dazzleduck.sql.otel.collector;
 
-
 import io.dazzleduck.sql.commons.auth.Validator;
 import io.dazzleduck.sql.otel.collector.auth.JwtServerInterceptor;
 import io.dazzleduck.sql.otel.collector.config.CollectorProperties;
@@ -13,10 +12,17 @@ import org.slf4j.LoggerFactory;
 import java.io.Closeable;
 import java.io.IOException;
 import java.net.InetAddress;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Manages the lifecycle of the OTLP gRPC server and signal writers for logs, traces, and metrics.
+ * Manages the lifecycle of the OTLP gRPC server and signal writers.
+ *
+ * <p>Writers are keyed by queue ID, sourced from
+ * {@code otel_collector.ingestion_task_factory_provider.ingestion_queue_table_mapping}.
+ * Every request must carry the {@code x-dd-ingestion-queue} JWT claim — there is no default
+ * fallback. JWT authentication is the only supported mode.
  */
 public class OtelCollectorServer implements Closeable {
 
@@ -24,58 +30,73 @@ public class OtelCollectorServer implements Closeable {
 
     private final CollectorProperties props;
     private Server grpcServer;
-    private SignalWriter logWriter;
-    private SignalWriter traceWriter;
-    private SignalWriter metricsWriter;
+    private Map<String, SignalWriter> writers;
+    private OtelLogService logService;
+    private OtelTraceService traceService;
+    private OtelMetricsService metricsService;
+    private OtelCollectorMetrics collectorMetrics;
 
     public OtelCollectorServer(CollectorProperties props) {
         this.props = props;
     }
 
     public void start() throws IOException {
-        var handler = props.getIngestionHandler();
-        var ingestionConfig = props.getIngestionConfig();
-        logWriter     = new SignalWriter("logs",    handler, ingestionConfig);
-        traceWriter   = new SignalWriter("traces",  handler, ingestionConfig);
-        metricsWriter = new SignalWriter("metrics", handler, ingestionConfig);
+        try {
+            var handler = props.getIngestionHandler();
+            var ingestionConfig = props.getIngestionConfig();
 
-        setupCommonTags(props.getMeterRegistry(), props.getServiceName());
-        long maxDelayMs = ingestionConfig.maxDelay().toMillis();
-        OtelCollectorMetrics metrics = new OtelCollectorMetrics(props.getMeterRegistry(),
-                maxDelayMs, maxDelayMs, maxDelayMs);
-        metrics.registerWriter("logs",    logWriter);
-        metrics.registerWriter("traces",  traceWriter);
-        metrics.registerWriter("metrics", metricsWriter);
+            var queueIds = props.getQueues();
+            if (queueIds == null || queueIds.isEmpty()) {
+                throw new IllegalStateException("otel_collector.queues must contain at least one queue name");
+            }
+            writers = new LinkedHashMap<>();
+            for (String queueId : queueIds) {
+                writers.put(queueId, new SignalWriter(queueId, handler, ingestionConfig));
+            }
 
-        var builder = NettyServerBuilder
-                .forPort(props.getGrpcPort())
-                .addService(new OtelLogService(logWriter, metrics))
-                .addService(new OtelTraceService(traceWriter, metrics))
-                .addService(new OtelMetricsService(metricsWriter, metrics));
+            setupCommonTags(props.getMeterRegistry(), props.getServiceName());
+            collectorMetrics = new OtelCollectorMetrics(props.getMeterRegistry());
+            writers.forEach(collectorMetrics::registerWriter);
 
-        if (!"jwt".equals(props.getAuthentication())) {
-            throw new IllegalStateException("Unsupported authentication mode: " + props.getAuthentication() + ". Only 'jwt' is supported.");
+            logService     = new OtelLogService(writers, collectorMetrics);
+            traceService   = new OtelTraceService(writers, collectorMetrics);
+            metricsService = new OtelMetricsService(writers, collectorMetrics);
+
+            if (!"jwt".equals(props.getAuthentication())) {
+                throw new IllegalStateException(
+                        "Unsupported authentication mode: '" + props.getAuthentication() + "'. Only 'jwt' is supported.");
+            }
+            if (props.getSecretKey() == null || props.getSecretKey().isEmpty()) {
+                throw new IllegalStateException("otel_collector.secret_key is required");
+            }
+            var secretKey = Validator.fromBase64String(props.getSecretKey());
+            var userHashMap = new java.util.HashMap<String, byte[]>();
+            props.getUsers().forEach((u, p) -> userHashMap.put(u, Validator.hash(p)));
+
+            var builder = NettyServerBuilder
+                    .forPort(props.getGrpcPort())
+                    .addService(logService)
+                    .addService(traceService)
+                    .addService(metricsService);
+            builder.intercept(new JwtServerInterceptor(secretKey, userHashMap,
+                    props.getJwtExpiration(), props.getLoginUrl(), props.isVerifySignature()));
+
+            if (props.getLoginUrl() != null) {
+                log.info("JWT authentication enabled with login delegation to {}", props.getLoginUrl());
+            } else {
+                log.info("JWT authentication enabled for {} user(s)", userHashMap.size());
+            }
+
+            grpcServer = builder.build().start();
+
+            log.info("OTLP gRPC server started on port {} — queues: {}",
+                    props.getGrpcPort(), writers.keySet());
+        } catch (Exception e) {
+            close();
+            if (e instanceof IOException ioe) throw ioe;
+            if (e instanceof RuntimeException re) throw re;
+            throw new IOException("Server startup failed", e);
         }
-        if (props.getSecretKey() == null || props.getSecretKey().isEmpty()) {
-            throw new IllegalStateException("otel_collector.secret_key is required");
-        }
-        var secretKey = Validator.fromBase64String(props.getSecretKey());
-        var userHashMap = new java.util.HashMap<String, byte[]>();
-        props.getUsers().forEach((u, p) -> userHashMap.put(u, Validator.hash(p)));
-        builder.intercept(new JwtServerInterceptor(secretKey, userHashMap, props.getJwtExpiration(), props.getLoginUrl()));
-        if (props.getLoginUrl() != null) {
-            log.info("JWT authentication enabled with login delegation to {}", props.getLoginUrl());
-        } else {
-            log.info("JWT authentication enabled for {} user(s)", userHashMap.size());
-        }
-
-        grpcServer = builder.build().start();
-
-        log.info("OTLP gRPC server started on port {} — logs={}, traces={}, metrics={}",
-                props.getGrpcPort(),
-                props.getIngestionHandler().getTargetPath("logs"),
-                props.getIngestionHandler().getTargetPath("traces"),
-                props.getIngestionHandler().getTargetPath("metrics"));
     }
 
     private static void setupCommonTags(MeterRegistry registry, String serviceName) {
@@ -114,9 +135,19 @@ public class OtelCollectorServer implements Closeable {
                 Thread.currentThread().interrupt();
             }
         }
-        if (logWriter != null) logWriter.close();
-        if (traceWriter != null) traceWriter.close();
-        if (metricsWriter != null) metricsWriter.close();
+        closeQuietly("logService",       logService);
+        closeQuietly("traceService",     traceService);
+        closeQuietly("metricsService",   metricsService);
+        closeQuietly("collectorMetrics", collectorMetrics);
+        if (writers != null) {
+            writers.forEach((id, w) -> closeQuietly("writer[" + id + "]", w));
+        }
         log.info("OtelCollectorServer stopped.");
+    }
+
+    private void closeQuietly(String name, Closeable c) {
+        if (c != null) {
+            try { c.close(); } catch (Exception e) { log.warn("Error closing {}", name, e); }
+        }
     }
 }
