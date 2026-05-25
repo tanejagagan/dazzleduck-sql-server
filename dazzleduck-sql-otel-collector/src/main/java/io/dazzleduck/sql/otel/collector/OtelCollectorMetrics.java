@@ -25,14 +25,14 @@ import java.util.concurrent.atomic.LongAdder;
  * via {@code registry.config().commonTags()} in {@link OtelCollectorServer}.
  *
  * <pre>
- *   dazzleduck.otel.export.requests        {queue=<id>}  – RPC calls received
- *   dazzleduck.otel.export.records         {queue=<id>}  – individual records exported
- *   dazzleduck.otel.export.errors          {queue=<id>}  – failed exports
- *   dazzleduck.otel.export.latency         {queue=<id>}  – end-to-end RPC latency (p50/p95/p99)
- *   dazzleduck.otel.writer.bytes_written   {queue=<id>}  – cumulative bytes written to Parquet
- *   dazzleduck.otel.writer.batches_written {queue=<id>}  – batches flushed to Parquet
- *   dazzleduck.otel.writer.pending_batches {queue=<id>}  – queue depth (batches not yet written)
- *   dazzleduck.otel.writer.pending_buckets {queue=<id>}  – bucket queue depth
+ *   dazzleduck.otel.export.requests        {queue=&lt;id&gt;}  – RPC calls received
+ *   dazzleduck.otel.export.records         {queue=&lt;id&gt;}  – individual records exported
+ *   dazzleduck.otel.export.errors          {queue=&lt;id&gt;}  – failed exports
+ *   dazzleduck.otel.export.latency         {queue=&lt;id&gt;}  – end-to-end RPC latency (p50/p95/p99)
+ *   dazzleduck.otel.writer.bytes_written   {queue=&lt;id&gt;}  – cumulative bytes written to Parquet
+ *   dazzleduck.otel.writer.batches_written {queue=&lt;id&gt;}  – batches flushed to Parquet
+ *   dazzleduck.otel.writer.pending_batches {queue=&lt;id&gt;}  – queue depth (batches not yet written)
+ *   dazzleduck.otel.writer.pending_buckets {queue=&lt;id&gt;}  – bucket queue depth
  * </pre>
  */
 public class OtelCollectorMetrics implements Closeable {
