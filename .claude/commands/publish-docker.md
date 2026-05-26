@@ -1,18 +1,16 @@
 # Publish Docker Image
 
-Builds and publishes a multi-arch Docker image for `dazzleduck/dazzleduck` to Docker Hub.
+Builds and publishes multi-arch Docker images for both `dazzleduck/dazzleduck` and `dazzleduck/dazzleduck-otel-collector` to Docker Hub.
 
 ## Steps
 
 1. Verify working tree is clean (warn if uncommitted changes)
 2. Read current version from `pom.xml`
 3. Run `mvn clean install -DskipTests`
-4. Build and push `arm64` image tagged `<version>-arm64` and `latest-arm64`
-5. Build and push `amd64` image tagged `<version>-amd64` and `latest-amd64`
-6. Create and push multi-arch manifest for `<version>` (amd64 + arm64)
-7. Create and push multi-arch manifest for `latest` (amd64 + arm64)
-8. Verify the published manifest with `docker manifest inspect`
-9. Report the final digest and all tags
+4. Build and push `arm64` + `amd64` images for both targets (4 builds, run in parallel)
+5. Create and push multi-arch manifests for `<version>` and `latest` for both images
+6. Verify the published manifests with `docker manifest inspect`
+7. Report the final digests and all tags
 
 ## Instructions
 
@@ -33,9 +31,9 @@ export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java
 
 Fail fast if this returns non-zero.
 
-### Step 3 — Build and push platform images (run in parallel)
+### Step 3 — Build and push platform images (run all 4 in parallel)
 
-**arm64:**
+**dazzleduck/dazzleduck arm64:**
 ```bash
 export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED"
 ./mvnw package -DskipTests jib:build -pl dazzleduck-sql-runtime \
@@ -43,7 +41,7 @@ export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java
   -Djib.to.image=docker.io/dazzleduck/dazzleduck:<version>-arm64
 ```
 
-**amd64:**
+**dazzleduck/dazzleduck amd64:**
 ```bash
 export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED"
 ./mvnw package -DskipTests jib:build -pl dazzleduck-sql-runtime \
@@ -51,44 +49,80 @@ export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java
   -Djib.to.image=docker.io/dazzleduck/dazzleduck:<version>-amd64
 ```
 
+**dazzleduck/dazzleduck-otel-collector arm64:**
+```bash
+export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED"
+./mvnw package -DskipTests jib:build -pl dazzleduck-sql-otel-collector \
+  -Djib.architecture=arm64 \
+  -Djib.to.image=docker.io/dazzleduck/dazzleduck-otel-collector:<version>-arm64
+```
+
+**dazzleduck/dazzleduck-otel-collector amd64:**
+```bash
+export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED"
+./mvnw package -DskipTests jib:build -pl dazzleduck-sql-otel-collector \
+  -Djib.architecture=amd64 \
+  -Djib.to.image=docker.io/dazzleduck/dazzleduck-otel-collector:<version>-amd64
+```
+
 ### Step 4 — Create and push multi-arch manifests
 
 ```bash
-# versioned tag
+# dazzleduck/dazzleduck
 docker manifest rm docker.io/dazzleduck/dazzleduck:<version> 2>/dev/null
 docker manifest create docker.io/dazzleduck/dazzleduck:<version> \
   docker.io/dazzleduck/dazzleduck:<version>-amd64 \
   docker.io/dazzleduck/dazzleduck:<version>-arm64
 docker manifest push docker.io/dazzleduck/dazzleduck:<version>
 
-# latest tag
 docker manifest rm docker.io/dazzleduck/dazzleduck:latest 2>/dev/null
 docker manifest create docker.io/dazzleduck/dazzleduck:latest \
   docker.io/dazzleduck/dazzleduck:<version>-amd64 \
   docker.io/dazzleduck/dazzleduck:<version>-arm64
 docker manifest push docker.io/dazzleduck/dazzleduck:latest
+
+# dazzleduck/dazzleduck-otel-collector
+docker manifest rm docker.io/dazzleduck/dazzleduck-otel-collector:<version> 2>/dev/null
+docker manifest create docker.io/dazzleduck/dazzleduck-otel-collector:<version> \
+  docker.io/dazzleduck/dazzleduck-otel-collector:<version>-amd64 \
+  docker.io/dazzleduck/dazzleduck-otel-collector:<version>-arm64
+docker manifest push docker.io/dazzleduck/dazzleduck-otel-collector:<version>
+
+docker manifest rm docker.io/dazzleduck/dazzleduck-otel-collector:latest 2>/dev/null
+docker manifest create docker.io/dazzleduck/dazzleduck-otel-collector:latest \
+  docker.io/dazzleduck/dazzleduck-otel-collector:<version>-amd64 \
+  docker.io/dazzleduck/dazzleduck-otel-collector:<version>-arm64
+docker manifest push docker.io/dazzleduck/dazzleduck-otel-collector:latest
 ```
 
 ### Step 5 — Verify
 
 ```bash
 docker manifest inspect docker.io/dazzleduck/dazzleduck:<version>
+docker manifest inspect docker.io/dazzleduck/dazzleduck-otel-collector:<version>
 ```
 
-Confirm both `amd64` and `arm64` platforms appear in the manifest.
+Confirm both `amd64` and `arm64` platforms appear in each manifest.
 
 ### Step 6 — Summary
 
 Print a table:
 
-| Tag | Platforms | Digest |
-|-----|-----------|--------|
-| `dazzleduck/dazzleduck:<version>` | linux/amd64, linux/arm64 | `sha256:...` |
-| `dazzleduck/dazzleduck:latest` | linux/amd64, linux/arm64 | `sha256:...` |
+| Image | Tag | Platforms | Digest |
+|-------|-----|-----------|--------|
+| `dazzleduck/dazzleduck` | `<version>` | linux/amd64, linux/arm64 | `sha256:...` |
+| `dazzleduck/dazzleduck` | `latest` | linux/amd64, linux/arm64 | `sha256:...` |
+| `dazzleduck/dazzleduck-otel-collector` | `<version>` | linux/amd64, linux/arm64 | `sha256:...` |
+| `dazzleduck/dazzleduck-otel-collector` | `latest` | linux/amd64, linux/arm64 | `sha256:...` |
 
 ## Notes
 
 - Jib pushes directly to the registry — Docker daemon is not required for the build step
-- The `latest-arm64` / `latest-amd64` tags are side-effects of the Jib config in `pom.xml`; they are intermediate tags and not the canonical multi-arch entry points
+- The `<version>-arm64` / `<version>-amd64` intermediate tags are pushed by Jib; the canonical multi-arch entry points are `<version>` and `latest`
 - If Docker Hub credentials are missing, run: `docker login docker.io`
-- The `dazzleduck-sql-runtime` module is the Jib target; it transitively bundles Flight SQL, HTTP, and OTel Collector
+- If a build fails with `Could not find artifact org.xerial:sqlite-jdbc:jar:linux-*`, clear the Maven negative cache and retry:
+  ```bash
+  rm -f ~/.m2/repository/org/xerial/sqlite-jdbc/*/sqlite-jdbc-*-linux-*.jar.lastUpdated
+  ```
+- `dazzleduck-sql-runtime` bundles Flight SQL + HTTP + OTel Collector (all-in-one)
+- `dazzleduck-sql-otel-collector` is a lightweight standalone OTel collector image
