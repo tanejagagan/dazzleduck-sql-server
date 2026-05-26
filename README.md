@@ -518,6 +518,32 @@ CREATE SECRET http_auth (
 SELECT * FROM read_arrow(concat('http://localhost:8081/v1/query?q=', url_encode('select 1, 2, 3')));
 ```
 
+## Ingestion Queue Routing
+
+Producers identify their target queue via the `x-dd-ingestion-queue` JWT claim. The claim value must match one of the `ingestion_queue` entries configured in `ingestion_queue_table_mapping` (or the SQLite registry when using `DynamicDuckLakeIngestionTaskFactoryProvider`).
+
+| Claim | Required | Description |
+|-------|----------|-------------|
+| `x-dd-ingestion-queue` | Yes | Queue identifier. The server routes each ingested batch to the writer registered under this name. Requests without this claim are rejected with `INVALID_ARGUMENT`. |
+
+The claim is read from the JWT — it does not need to be sent as a separate request header.
+
+**Generating a token with the ingestion queue claim** (example using the login endpoint):
+
+```bash
+# Login — the server embeds x-dd-ingestion-queue in the returned JWT when
+# the claim is listed in jwt_token.claims.generate.headers
+curl -X POST http://localhost:8081/v1/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin", "password": "admin"}'
+```
+
+For the OTel collector (gRPC), include the JWT as a Bearer token in the `authorization` metadata header:
+
+```
+authorization: Bearer <jwt-containing-x-dd-ingestion-queue>
+```
+
 ## DuckLake Post-Ingestion Provider
 
 After Arrow data is ingested and written as Parquet, DazzleDuck can automatically register those files with a DuckLake catalog table via `ingestion_task_factory_provider` (disabled by default in `reference.conf`).
@@ -526,7 +552,7 @@ Set `class` to `io.dazzleduck.sql.commons.ingestion.DuckLakeIngestionTaskFactory
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `ingestion_queue` | Yes | Queue name sent by the producer via the `ingestion_queue` header |
+| `ingestion_queue` | Yes | Queue name; must match the `x-dd-ingestion-queue` JWT claim sent by the producer |
 | `catalog` | Yes | DuckLake catalog owning the target table |
 | `schema` | Yes | Schema within the catalog |
 | `table` | Yes | Target table name |
