@@ -28,4 +28,6 @@ Thumbs.db
 # Node.js
 package-lock.json
 node_modules/
-.claude
+.claude/*
+!.claude/commands/
+!.claude/commands/**
