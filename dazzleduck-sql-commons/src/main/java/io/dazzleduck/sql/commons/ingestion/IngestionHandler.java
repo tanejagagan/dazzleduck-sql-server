@@ -36,6 +36,13 @@ public interface IngestionHandler {
     default void closeQueues() {}
 
     /**
+     * Returns the set of queue IDs currently known to this handler.
+     * An empty set means "unknown" — callers fall back to static configuration.
+     * Dynamic handlers (e.g. SQLite-backed) override this to return the live registry.
+     */
+    default java.util.Set<String> getKnownQueues() { return java.util.Set.of(); }
+
+    /**
      * Returns the live queue for {@code queueId}, creating or refreshing it as necessary.
      * Returns {@code null} when the queue's target path is gone (tombstone / deleted mapping).
      *

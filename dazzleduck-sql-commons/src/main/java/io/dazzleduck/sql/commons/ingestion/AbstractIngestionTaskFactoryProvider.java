@@ -1,0 +1,80 @@
+package io.dazzleduck.sql.commons.ingestion;
+
+import com.typesafe.config.Config;
+import io.dazzleduck.sql.commons.Transformations;
+
+import java.util.Map;
+
+/**
+ * Base class for {@link IngestionTaskFactoryProvider} implementations.
+ *
+ * <p>Subclasses implement {@link #loadMappings()} to supply the queue-to-table mapping from
+ * any source (HOCON config, SQLite, etc.) and {@link #getIngestionHandler()} to create the
+ * appropriate handler. Validation of transformation SQL is provided here and is source-agnostic.
+ */
+public abstract class AbstractIngestionTaskFactoryProvider implements IngestionTaskFactoryProvider {
+
+    protected Config config;
+
+    @Override
+    public void setConfig(Config config) {
+        this.config = config;
+    }
+
+    /**
+     * Loads the current queue-to-table mappings from the underlying source.
+     * Called by {@link #validate()} and by {@link #getIngestionHandler()} implementations.
+     */
+    protected abstract Map<String, QueueIdToTableMapping> loadMappings();
+
+    /**
+     * Validates transformation SQL for every mapping returned by {@link #loadMappings()}.
+     * Only entries with a non-null {@code transformation} or {@code view} are checked.
+     */
+    @Override
+    public void validate() {
+        loadMappings().values().forEach(mapping -> {
+            if (mapping.transformation() != null) {
+                validateTransformation(mapping.ingestionQueue(), mapping.transformation());
+            }
+            if (mapping.view() != null) {
+                validateViewTransformation(mapping.ingestionQueue(), mapping.view(), mapping.inputTable());
+            }
+        });
+    }
+
+    protected static void validateViewTransformation(String queueId, String fqView, String fqInputTable) {
+        try {
+            String derived = DuckLakeIngestionHandler.resolveViewTransformationStatic(fqView, fqInputTable);
+            validateTransformation(queueId, derived);
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalArgumentException(
+                    "Failed to validate view transformation for queue '%s' (view='%s', input_table='%s'): %s"
+                            .formatted(queueId, fqView, fqInputTable, e.getMessage()), e);
+        }
+    }
+
+    protected static void validateTransformation(String ingestionQueue, String transformation) {
+        try {
+            var ast = Transformations.parseToTree(transformation);
+            var statementNode = Transformations.getFirstStatementNode(ast);
+            var tables = Transformations.getAllTablesOrPathsFromSelect(statementNode, "", "");
+            boolean hasThis = tables.stream()
+                    .anyMatch(t -> Transformations.TableType.BASE_TABLE == t.type()
+                            && "__this".equals(t.tableOrPath()));
+            if (!hasThis) {
+                throw new IllegalArgumentException(
+                        "transformation for queue '%s' must reference '__this' as a table, but found: %s"
+                                .formatted(ingestionQueue,
+                                        tables.stream().map(Transformations.CatalogSchemaTable::tableOrPath).toList()));
+            }
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalArgumentException(
+                    "Invalid transformation SQL for queue '%s': %s".formatted(ingestionQueue, e.getMessage()), e);
+        }
+    }
+}

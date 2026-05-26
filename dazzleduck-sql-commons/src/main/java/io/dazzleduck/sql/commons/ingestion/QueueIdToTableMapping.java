@@ -21,6 +21,7 @@ import java.util.Map;
  */
 public record QueueIdToTableMapping(
         String ingestionQueue,
+        String outputPath,
         String catalog,
         String schema,
         String table,
@@ -43,10 +44,17 @@ public record QueueIdToTableMapping(
         }
     }
 
+    /** Backward-compatible constructor without outputPath (DuckLake-managed entries). */
+    public QueueIdToTableMapping(String ingestionQueue, String catalog, String schema, String table,
+                                 Map<String, String> additionalParameters, String transformation,
+                                 String view, String inputTable) {
+        this(ingestionQueue, null, catalog, schema, table, additionalParameters, transformation, view, inputTable);
+    }
+
     /** Convenience constructor for mappings that use an explicit transformation or none at all. */
     public QueueIdToTableMapping(String ingestionQueue, String catalog, String schema, String table,
                                  Map<String, String> additionalParameters, String transformation) {
-        this(ingestionQueue, catalog, schema, table, additionalParameters, transformation, null, null);
+        this(ingestionQueue, null, catalog, schema, table, additionalParameters, transformation, null, null);
     }
 
     public boolean hasViewTransformation() {
