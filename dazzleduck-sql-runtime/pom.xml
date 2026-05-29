@@ -6,7 +6,7 @@
     <parent>
         <groupId>io.dazzleduck.sql</groupId>
         <artifactId>dazzleduck-parent</artifactId>
-        <version>0.2.6</version>
+        <version>0.2.7</version>
     </parent>
     <name>DazzleDuck Project Runtime</name>
     <artifactId>dazzleduck-sql-runtime</artifactId>
@@ -250,7 +250,7 @@
                 <executions>
                     <execution>
                         <id>docker-arm64</id>
-                        <phase>package</phase>
+                        <phase>none</phase>
                         <goals><goal>dockerBuild</goal></goals>
                         <configuration>
                             <skip>${skip.docker.arm64}</skip>
@@ -266,10 +266,10 @@
                             </to>
                         </configuration>
                     </execution>
-                    <!-- amd64 image — skip with -Dskip.docker.amd64=true -->
+                    <!-- amd64 image — invoke with: mvn jib:dockerBuild -pl dazzleduck-sql-runtime -Djib.architecture=amd64 -->
                     <execution>
                         <id>docker-amd64</id>
-                        <phase>package</phase>
+                        <phase>none</phase>
                         <goals><goal>dockerBuild</goal></goals>
                         <configuration>
                             <skip>${skip.docker.amd64}</skip>
