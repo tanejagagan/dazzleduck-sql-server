@@ -168,7 +168,7 @@
                 <version>3.5.1</version>
                 <configuration>
                     <from>
-                        <image>eclipse-temurin:21-jre</image>
+                        <image>dazzleduck/base-jre:25-noble-duckdb-${duckdb.version}</image>
                     </from>
                     <to>
                         <image>dazzleduck-sql-otel-collector:latest</image>
