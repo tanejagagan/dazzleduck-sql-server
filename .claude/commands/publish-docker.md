@@ -38,6 +38,7 @@ Fail fast if this returns non-zero.
 export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED"
 ./mvnw package -DskipTests jib:build -pl dazzleduck-sql-runtime \
   -Djib.architecture=arm64 \
+  -Dsqlite.native.platform=arm64 \
   -Djib.to.image=docker.io/dazzleduck/dazzleduck:<version>-arm64
 ```
 
@@ -46,6 +47,7 @@ export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java
 export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED"
 ./mvnw package -DskipTests jib:build -pl dazzleduck-sql-runtime \
   -Djib.architecture=amd64 \
+  -Dsqlite.native.platform=amd64 \
   -Djib.to.image=docker.io/dazzleduck/dazzleduck:<version>-amd64
 ```
 
@@ -120,9 +122,6 @@ Print a table:
 - Jib pushes directly to the registry — Docker daemon is not required for the build step
 - The `<version>-arm64` / `<version>-amd64` intermediate tags are pushed by Jib; the canonical multi-arch entry points are `<version>` and `latest`
 - If Docker Hub credentials are missing, run: `docker login docker.io`
-- If a build fails with `Could not find artifact org.xerial:sqlite-jdbc:jar:linux-*`, clear the Maven negative cache and retry:
-  ```bash
-  rm -f ~/.m2/repository/org/xerial/sqlite-jdbc/*/sqlite-jdbc-*-linux-*.jar.lastUpdated
-  ```
+- `-Dsqlite.native.platform` selects the platform-specific sqlite-jdbc JAR (~2 MB) for runtime builds. Omit it to use the fat JAR (13.6 MB). Never pass it for otel-collector builds — those always use the fat JAR.
 - `dazzleduck-sql-runtime` bundles Flight SQL + HTTP + OTel Collector (all-in-one)
 - `dazzleduck-sql-otel-collector` is a lightweight standalone OTel collector image

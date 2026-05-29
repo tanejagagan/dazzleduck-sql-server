@@ -22,24 +22,25 @@
     </properties>
 
     <!--
-      Piggybacks on -Djib.architecture used by dazzleduck-sql-runtime to select the
-      matching platform-specific sqlite-jdbc native binary for Docker builds.
-        amd64 (default) → linux-x86_64  (~2 MB vs 13.6 MB fat JAR)
-        arm64           → linux-aarch64
-      Local dev / tests: no flag → fat JAR (all platforms, runs anywhere).
+      Pass -Dsqlite.native.platform=arm64 or amd64 to select a platform-specific
+      sqlite-jdbc native binary for Docker builds (~2 MB vs 13.6 MB fat JAR).
+      Kept separate from -Djib.architecture so modules that use -Djib.architecture
+      without needing the native JAR (e.g. dazzleduck-sql-otel-collector) don't
+      accidentally activate this profile.
+      Local dev / tests: omit the property → fat JAR (all platforms, runs anywhere).
     -->
     <profiles>
         <profile>
             <id>sqlite-linux-amd64</id>
             <activation>
-                <property><name>jib.architecture</name><value>amd64</value></property>
+                <property><name>sqlite.native.platform</name><value>amd64</value></property>
             </activation>
             <properties><sqlite.classifier>linux-x86_64</sqlite.classifier></properties>
         </profile>
         <profile>
             <id>sqlite-linux-arm64</id>
             <activation>
-                <property><name>jib.architecture</name><value>arm64</value></property>
+                <property><name>sqlite.native.platform</name><value>arm64</value></property>
             </activation>
             <properties><sqlite.classifier>linux-aarch64</sqlite.classifier></properties>
         </profile>
