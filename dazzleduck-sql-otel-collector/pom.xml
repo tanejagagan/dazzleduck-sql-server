@@ -25,6 +25,8 @@
         <grpc.version>1.68.0</grpc.version>
         <otel.proto.version>1.3.2-alpha</otel.proto.version>
         <exec.mainClass>io.dazzleduck.sql.otel.collector.Main</exec.mainClass>
+        <!-- Override with -Djib.architecture=arm64 on Apple Silicon -->
+        <jib.architecture>amd64</jib.architecture>
     </properties>
 
     <dependencyManagement>
@@ -169,6 +171,12 @@
                 <configuration>
                     <from>
                         <image>dazzleduck/base-jre:25-noble-duckdb-${duckdb.version}</image>
+                        <platforms>
+                            <platform>
+                                <os>linux</os>
+                                <architecture>${jib.architecture}</architecture>
+                            </platform>
+                        </platforms>
                     </from>
                     <to>
                         <image>dazzleduck-sql-otel-collector:latest</image>
