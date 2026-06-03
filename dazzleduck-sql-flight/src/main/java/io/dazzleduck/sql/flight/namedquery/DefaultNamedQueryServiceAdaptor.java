@@ -55,10 +55,16 @@ public class DefaultNamedQueryServiceAdaptor implements NamedQueryServiceAdaptor
         String sql = LOAD_FROM_DB_QUERY.formatted(this.name, safeName);
         try (DuckDBConnection connection = ConnectionPool.getConnection()) {
             var iter = ConnectionPool.collectAll(connection, sql, NamedQueryDefinition.class).iterator();
-            if (!iter.hasNext()) {
-                throw new NamedQueryServiceAdaptor.TemplateNotFoundException("Named query not found: " + name);
+            try {
+                if (!iter.hasNext()) {
+                    throw new NamedQueryServiceAdaptor.TemplateNotFoundException("Named query not found: " + name);
+                }
+                return iter.next();
+            } finally {
+                if (iter instanceof AutoCloseable ac) {
+                    try { ac.close(); } catch (Exception ignored) {}
+                }
             }
-            return iter.next();
         }
     }
 
