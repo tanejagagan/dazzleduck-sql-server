@@ -13,7 +13,7 @@
 
     <properties>
         <testcontainer.version>1.21.2</testcontainer.version>
-        <dazzleduck.version>0.2.4</dazzleduck.version>
+        <dazzleduck.version>${project.version}</dazzleduck.version>
         <exec.mainClass>io.dazzleduck.sql.runtime.Main</exec.mainClass>
         <!-- Override with -Djib.architecture=arm64 on Apple Silicon -->
         <jib.architecture>amd64</jib.architecture>
