@@ -36,13 +36,13 @@ public class DynamicDuckLakeIngestionTaskFactoryProvider extends AbstractIngesti
     protected Map<String, QueueIdToTableMapping> loadMappings() {
         if (config == null || !config.hasPath(DB_PATH_KEY)) return Map.of();
         String dbPath = config.getString(DB_PATH_KEY);
-        try (SqliteQueueRepository repo = new SqliteQueueRepository(dbPath)) {
+        try (DynamicQueueRepository repo = new DynamicQueueRepository(dbPath)) {
             repo.init();
             try (Connection conn = repo.openReadOnlyConnection()) {
-                return SqliteQueueRepository.loadAll(conn);
+                return DynamicQueueRepository.loadAll(conn);
             }
         } catch (SQLException e) {
-            throw new RuntimeException("Failed to load ingestion queue mappings from SQLite: " + dbPath, e);
+            throw new RuntimeException("Failed to load ingestion queue mappings from: " + dbPath, e);
         }
     }
 
@@ -56,13 +56,13 @@ public class DynamicDuckLakeIngestionTaskFactoryProvider extends AbstractIngesti
                 ? config.getLong(CONFIG_LOAD_INTERVAL_KEY)
                 : DEFAULT_INTERVAL_MS;
 
-        SqliteQueueRepository repo = new SqliteQueueRepository(dbPath);
+        DynamicQueueRepository repo = new DynamicQueueRepository(dbPath);
         try {
             repo.init();
             Connection readConn = repo.openReadOnlyConnection();
-            Map<String, QueueIdToTableMapping> initial = SqliteQueueRepository.loadAll(readConn);
+            Map<String, QueueIdToTableMapping> initial = DynamicQueueRepository.loadAll(readConn);
             logger.info("DynamicIngestionHandler: {} queue(s) loaded from {}", initial.size(), dbPath);
-            return new DynamicIngestionHandler(readConn, initial, Duration.ofMillis(intervalMs));
+            return new DynamicIngestionHandler(dbPath, readConn, initial, Duration.ofMillis(intervalMs));
         } catch (SQLException e) {
             repo.close();
             throw new RuntimeException("Failed to initialise DynamicIngestionHandler for: " + dbPath, e);

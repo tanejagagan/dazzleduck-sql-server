@@ -17,18 +17,18 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * {@link IngestionHandler} backed by a SQLite registry of queues.
  *
- * <p>A background thread polls {@code schema_version} at {@code checkInterval}. When the
- * version changes it reloads the full registry from {@code ingestion_queues}. New queues
- * are picked up automatically; removed queues are evicted and their
- * {@link ParquetIngestionQueue} is closed.
+ * <p>A background thread polls the SQLite file's last-modified time at {@code checkInterval}.
+ * When the mtime changes it reloads the full registry via a single persistent DuckDB
+ * connection (with the SQLite file attached) that is kept open for the handler's lifetime.
  *
- * <p>The hot path (every ingest RPC) never touches SQLite — it reads only from the
+ * <p>The hot path (every ingest RPC) never touches the SQLite file — it reads only from the
  * in-memory {@code liveRegistry} map.
  */
 public class DynamicIngestionHandler implements IngestionHandler {
 
     private static final Logger logger = LoggerFactory.getLogger(DynamicIngestionHandler.class);
 
+    private final String dbPath;
     private final Connection readConn;
     private final Duration checkInterval;
 
@@ -43,14 +43,15 @@ public class DynamicIngestionHandler implements IngestionHandler {
                 return t;
             });
 
-    public DynamicIngestionHandler(Connection readConn,
+    public DynamicIngestionHandler(String dbPath,
+                                   Connection readConn,
                                    Map<String, QueueIdToTableMapping> initialMappings,
                                    Duration checkInterval) {
+        this.dbPath        = dbPath;
         this.readConn      = readConn;
         this.checkInterval = checkInterval;
         liveRegistry.putAll(initialMappings);
-        long version = SqliteQueueRepository.readDataVersion(readConn);
-        lastSeenVersion.set(version);
+        lastSeenVersion.set(DynamicQueueRepository.readDataVersion(dbPath));
 
         long intervalMs = checkInterval.toMillis();
         scheduler.scheduleWithFixedDelay(this::checkAndReload,
@@ -146,17 +147,17 @@ public class DynamicIngestionHandler implements IngestionHandler {
 
     private void checkAndReload() {
         try {
-            long currentVersion = SqliteQueueRepository.readDataVersion(readConn);
+            long currentVersion = DynamicQueueRepository.readDataVersion(dbPath);
             if (currentVersion == lastSeenVersion.get()) return;
 
-            logger.debug("schema_version changed ({} → {}), reloading ingestion queues",
+            logger.debug("File mtime changed ({} → {}), reloading ingestion queues",
                     lastSeenVersion.get(), currentVersion);
 
-            Map<String, QueueIdToTableMapping> fresh = SqliteQueueRepository.loadAll(readConn);
+            Map<String, QueueIdToTableMapping> fresh = DynamicQueueRepository.loadAll(readConn);
             applyReload(fresh);
             lastSeenVersion.set(currentVersion);
         } catch (Exception e) {
-            logger.warn("Failed to reload ingestion queue registry from SQLite", e);
+            logger.warn("Failed to reload ingestion queue registry from {}", dbPath, e);
         }
     }
 

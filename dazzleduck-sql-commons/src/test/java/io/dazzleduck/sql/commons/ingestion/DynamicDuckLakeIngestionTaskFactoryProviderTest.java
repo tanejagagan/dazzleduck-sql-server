@@ -25,7 +25,7 @@ class DynamicDuckLakeIngestionTaskFactoryProviderTest {
     }
 
     private void initDb(String dbPath) throws Exception {
-        try (SqliteQueueRepository repo = new SqliteQueueRepository(dbPath)) {
+        try (DynamicQueueRepository repo = new DynamicQueueRepository(dbPath)) {
             repo.init();
         }
     }
@@ -33,13 +33,17 @@ class DynamicDuckLakeIngestionTaskFactoryProviderTest {
     private void insertQueue(String dbPath, String queueId, String outputPath,
                              String catalog, String schema, String table,
                              String transformation) throws Exception {
-        try (Connection rw = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
-             Statement st = rw.createStatement()) {
-            st.execute("INSERT INTO ingestion_queues " +
+        String safePath = dbPath.replace("'", "''");
+        String transVal = transformation == null ? "NULL" : "'" + transformation + "'";
+        String att = DynamicQueueRepository.ATTACHMENT;
+        try (Connection conn = DriverManager.getConnection("jdbc:duckdb:");
+             Statement st = conn.createStatement()) {
+            st.execute("LOAD sqlite");
+            st.execute("ATTACH '" + safePath + "' AS " + att + " (TYPE sqlite)");
+            st.execute("INSERT INTO " + att + ".ingestion_queues " +
                        "(ingestion_queue, output_path, catalog, schema_name, table_name, transformation) " +
                        "VALUES ('" + queueId + "', '" + outputPath + "', '" +
-                       catalog + "', '" + schema + "', '" + table + "', " +
-                       (transformation == null ? "NULL" : "'" + transformation + "'") + ")");
+                       catalog + "', '" + schema + "', '" + table + "', " + transVal + ")");
         }
     }
 
@@ -117,9 +121,9 @@ class DynamicDuckLakeIngestionTaskFactoryProviderTest {
         String dbPath = tempDir.resolve("new.db").toString();
         IngestionHandler handler = providerFor(dbPath).getIngestionHandler();
         try {
-            // schema_version must exist and start at 0
-            try (Connection conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath)) {
-                assertEquals(0L, SqliteQueueRepository.readSchemaVersion(conn));
+            try (DynamicQueueRepository repo = new DynamicQueueRepository(dbPath);
+                 Connection conn = repo.openReadOnlyConnection()) {
+                assertEquals(0L, DynamicQueueRepository.readSchemaVersion(conn));
             }
         } finally {
             handler.closeQueues();

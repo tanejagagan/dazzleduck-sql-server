@@ -163,7 +163,10 @@ dazzleduck_server = {
 
 **Frameworks:** JUnit 5, JMock, Testcontainers (MinIO, etc.)
 
+**Required:** Use JDK 21 (`JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home`). JDK 25 causes test failures.
+
 ```bash
+export JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home
 ./mvnw test
 ./mvnw test -pl dazzleduck-sql-http
 ./mvnw test -pl dazzleduck-sql-http -Dtest=QueryServiceTest
