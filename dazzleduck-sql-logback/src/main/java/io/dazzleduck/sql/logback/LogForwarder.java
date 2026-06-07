@@ -7,8 +7,10 @@ import org.slf4j.LoggerFactory;
 
 import java.io.Closeable;
 import java.time.Clock;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -22,7 +24,7 @@ public final class LogForwarder implements Closeable {
 
     private final LogToArrowConverter converter;
     private final HttpArrowProducer httpProducer;
-    private final Map<String, String> resourceMdc;
+    private final ConcurrentHashMap<String, String> resourceMdc;
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
@@ -33,7 +35,7 @@ public final class LogForwarder implements Closeable {
      */
     public LogForwarder(LogForwarderConfig config) {
         this.converter = new LogToArrowConverter();
-        this.resourceMdc = config.resourceMdc();
+        this.resourceMdc = new ConcurrentHashMap<>(config.resourceMdc());
 
         // Create HttpArrowProducer — use static JWT constructor if a token is preconfigured
         this.httpProducer = config.jwt() != null
@@ -71,6 +73,24 @@ public final class LogForwarder implements Closeable {
 
         logger.info("LogForwarder started with baseUrl={}, ingestionQueue={}",
                 config.baseUrl(), config.ingestionQueue());
+    }
+
+    /**
+     * Update a single resource MDC entry at runtime.
+     * Used to inject values known only after startup (e.g. org_id from backend config).
+     *
+     * @param key   MDC key
+     * @param value MDC value
+     */
+    public void putResourceMdc(String key, String value) {
+        resourceMdc.put(key, value);
+    }
+
+    /**
+     * Returns an unmodifiable snapshot of the current resource MDC. Primarily for testing.
+     */
+    public Map<String, String> getResourceMdc() {
+        return Collections.unmodifiableMap(resourceMdc);
     }
 
     /**

@@ -102,6 +102,31 @@ public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
     }
 
     /**
+     * Update a single resource MDC entry on this appender's forwarder at runtime.
+     * Used to inject values known only after startup (e.g. org_id from the backend cluster config).
+     * No-op if the forwarder has not been initialized yet.
+     *
+     * @param key   MDC key
+     * @param value MDC value
+     */
+    public void putResourceMdc(String key, String value) {
+        LogForwarder f = this.forwarder;
+        if (f != null) {
+            f.putResourceMdc(key, value);
+        }
+    }
+
+    /**
+     * Returns the current resource MDC snapshot from the underlying forwarder.
+     * Returns an empty map if the forwarder has not been initialized.
+     * Primarily for testing.
+     */
+    public Map<String, String> getResourceMdc() {
+        LogForwarder f = this.forwarder;
+        return f != null ? f.getResourceMdc() : Map.of();
+    }
+
+    /**
      * Reset the global static state. Primarily for testing.
      * Note: per-instance forwarders are cleaned up via {@link #stop()}.
      */
