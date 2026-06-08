@@ -465,6 +465,8 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
                 action,
                 ctx.isPreparedStatementContext(),
                 ctx.getQuery(),
+                ctx.getDatabase(),
+                ctx.getSchema(),
                 ctx.startTime(),
                 ctx.endTime(),
                 ctx.bytesOut(),

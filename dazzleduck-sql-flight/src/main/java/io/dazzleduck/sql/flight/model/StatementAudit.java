@@ -8,6 +8,8 @@ public record StatementAudit(
         String action,                // CANCEL, START, END, ERROR, TIMEOUT ETC.
         boolean isPreparedStatement,  // True or False
         String query,
+        String database,
+        String schema,
         Instant startTime,
         Instant endTime,
         long bytesOut,
