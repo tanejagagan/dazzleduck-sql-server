@@ -16,14 +16,16 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Integration test for LogForwardingAppender configured via logback.xml.
- * Tests that logs are correctly forwarded to the server with project expressions applied.
+ * Tests that logs are correctly forwarded to the server and physically partitioned on disk.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 public class LogForwardingIntegrationTest {
 
     @TempDir
@@ -108,6 +110,7 @@ public class LogForwardingIntegrationTest {
     }
 
     @Test
+    @Order(1)
     void testLogsForwardedWithProjectExpressions() throws Exception {
         // Get a logger and generate some log messages
         Logger testLogger = LoggerFactory.getLogger("test.integration.logger");
@@ -154,6 +157,21 @@ public class LogForwardingIntegrationTest {
                 "SELECT DISTINCT level FROM " + CATALOG_NAME + "." + SCHEMA_NAME + "." + TABLE_NAME +
                         " WHERE logger = 'test.integration.logger' ORDER BY level"
         );
+    }
+
+    @Test
+    @Order(2)
+    void testLogsPartitionedByDate() throws Exception {
+        // The appender is configured with <partitionBy>date</partitionBy>.
+        // The server-side transformation adds a DATE column: CAST(timestamp AS DATE) AS date.
+        // DuckDB COPY writes Hive-style directories: date=YYYY-MM-DD/ under the table data path.
+        try (Stream<Path> paths = Files.walk(warehouse.resolve(DUCKLAKE_DATA_DIR))) {
+            boolean hasDatePartition = paths
+                    .filter(Files::isDirectory)
+                    .anyMatch(p -> p.getFileName().toString().startsWith("date="));
+            assertTrue(hasDatePartition,
+                    "Expected Hive-style date=YYYY-MM-DD partition directories under " + DUCKLAKE_DATA_DIR);
+        }
     }
 
     @AfterAll
