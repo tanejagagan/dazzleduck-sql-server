@@ -36,7 +36,6 @@ import java.util.stream.Collectors;
  *   max_on_disk_bytes = 1073741824
  *   retry_count = 3
  *   retry_interval_ms = 1000
- *   project = ["*", "CAST (timestamp AS date) AS date"]
  *   partition_by = [date]
  * }
  * }</pre>
@@ -136,7 +135,6 @@ public final class LogForwarderConfigFactory {
                 .maxOnDiskSize(config.getLong(ConfigConstants.MAX_ON_DISK_BYTES_KEY))
                 .retryCount(config.getInt(ConfigConstants.RETRY_COUNT_KEY))
                 .retryIntervalMillis(config.getLong(ConfigConstants.RETRY_INTERVAL_MS_KEY))
-                .project(config.getStringList(ConfigConstants.PROJECT_KEY))
                 .partitionBy(config.getStringList(ConfigConstants.PARTITION_BY_KEY))
                 .enabled(config.getBoolean(ConfigConstants.ENABLED_KEY))
                 .captureCallerData(config.getBoolean(ConfigConstants.CAPTURE_CALLER_DATA_KEY))

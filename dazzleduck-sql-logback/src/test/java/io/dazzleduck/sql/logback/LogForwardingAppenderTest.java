@@ -137,14 +137,6 @@ class LogForwardingAppenderTest {
     }
 
     @Test
-    void setProject_shouldParseCommaSeparatedValues() {
-        LogForwardingAppender newAppender = new LogForwardingAppender();
-        newAppender.setProject("*,col1 AS alias1,col2 AS alias2");
-        // Should not throw - just verify setter works
-        assertDoesNotThrow(() -> newAppender.start());
-    }
-
-    @Test
     void setPartitionBy_shouldParseCommaSeparatedValues() {
         LogForwardingAppender newAppender = new LogForwardingAppender();
         newAppender.setPartitionBy("date,hour");

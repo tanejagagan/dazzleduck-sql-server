@@ -27,7 +27,6 @@ import java.util.concurrent.atomic.AtomicLong;
  *     <username>admin</username>
  *     <password>admin</password>
  *     <ingestionQueue>log</ingestionQueue>
- *     <project>*,'myhost' AS application_host,CAST(timestamp AS date) AS date</project>
  *     <partitionBy>date</partitionBy>
  * </appender>
  * }</pre>
@@ -80,7 +79,6 @@ public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
     private String jwt;
     private String ingestionQueue = "log";
     private long minBatchSize = 1024; // 1 KB default for logs (smaller than metrics)
-    private List<String> project = Collections.emptyList();
     private List<String> partitionBy = Collections.emptyList();
 
     /**
@@ -192,16 +190,6 @@ public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
     }
 
     /**
-     * Set project expressions (comma-separated).
-     * Example: "*,'hostname' AS application_host,CAST(timestamp AS date) AS date"
-     */
-    public void setProject(String project) {
-        if (project != null && !project.trim().isEmpty()) {
-            this.project = Arrays.asList(project.split(","));
-        }
-    }
-
-    /**
      * Set partition columns (comma-separated).
      * Example: "date"
      */
@@ -247,7 +235,6 @@ public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
                             .claims(claims)
                             .ingestionQueue(ingestionQueue)
                             .minBatchSize(minBatchSize)
-                            .project(project)
                             .partitionBy(partitionBy)
                             .captureCallerData(captureCallerData)
                             .build();
@@ -257,7 +244,6 @@ public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
                             .jwt(jwt)
                             .ingestionQueue(ingestionQueue)
                             .minBatchSize(minBatchSize)
-                            .project(project)
                             .partitionBy(partitionBy)
                             .captureCallerData(captureCallerData)
                             .build();
