@@ -6,7 +6,7 @@
     <parent>
         <groupId>io.dazzleduck.sql</groupId>
         <artifactId>dazzleduck-parent</artifactId>
-        <version>0.2.9-SNAPSHOT</version>
+        <version>0.2.9</version>
     </parent>
 
     <artifactId>dazzleduck-sql-ducklake-compactor</artifactId>
@@ -94,7 +94,10 @@
                         </platforms>
                     </from>
                     <to>
-                        <image>dazzleduck/ducklake-compactor:${project.version}</image>
+                        <image>dazzleduck/ducklake-compactor:${project.version}-${jib.architecture}</image>
+                        <tags>
+                            <tag>latest-${jib.architecture}</tag>
+                        </tags>
                     </to>
                     <container>
                         <mainClass>${exec.mainClass}</mainClass>

@@ -122,7 +122,10 @@
                         <image>dazzleduck/base-jre:25-noble-duckdb-${duckdb.version}</image>
                     </from>
                     <to>
-                        <image>dazzleduck-sql-scrapper:latest</image>
+                        <image>dazzleduck/dazzleduck-sql-scrapper:${project.version}</image>
+                        <tags>
+                            <tag>latest</tag>
+                        </tags>
                     </to>
                     <container>
                         <entrypoint>
