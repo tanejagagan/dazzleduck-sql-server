@@ -6,7 +6,7 @@
     <parent>
         <groupId>io.dazzleduck.sql</groupId>
         <artifactId>dazzleduck-parent</artifactId>
-        <version>0.2.9-SNAPSHOT</version>
+        <version>0.2.9</version>
     </parent>
     <name>DazzleDuck Project Runtime</name>
     <artifactId>dazzleduck-sql-runtime</artifactId>
@@ -237,6 +237,14 @@
                                 <from>${project.basedir}/docker</from>
                                 <into>/app</into>
                                 <includes><include>entrypoint.sh</include></includes>
+                            </path>
+                            <path>
+                                <from>${project.basedir}/../example/data</from>
+                                <into>/data</into>
+                            </path>
+                            <path>
+                                <from>${project.basedir}/../example/startup</from>
+                                <into>/startup</into>
                             </path>
                         </paths>
                         <permissions>
