@@ -6,7 +6,7 @@
     <parent>
         <groupId>io.dazzleduck.sql</groupId>
         <artifactId>dazzleduck-parent</artifactId>
-        <version>0.2.8</version>
+        <version>0.2.9-SNAPSHOT</version>
     </parent>
     <artifactId>dazzleduck-sql-commons</artifactId>
     <name>DazzleDuck Project Commons</name>
@@ -16,7 +16,6 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <testcontainer.version>2.0.2</testcontainer.version>
         <delta-kernel.version>3.3.2</delta-kernel.version>
-        <sqlite.jdbc.version>3.47.1.0</sqlite.jdbc.version>
     </properties>
 
     <dependencies>
@@ -155,12 +154,7 @@
         <dependency>
             <groupId>io.dazzleduck.sql</groupId>
             <artifactId>dazzleduck-sql-common</artifactId>
-            <version>0.2.8</version>
-        </dependency>
-        <dependency>
-            <groupId>org.xerial</groupId>
-            <artifactId>sqlite-jdbc</artifactId>
-            <version>${sqlite.jdbc.version}</version>
+            <version>0.2.9-SNAPSHOT</version>
         </dependency>
     </dependencies>
 

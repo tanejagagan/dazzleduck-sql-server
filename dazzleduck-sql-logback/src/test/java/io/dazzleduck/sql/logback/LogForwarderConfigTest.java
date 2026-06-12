@@ -155,7 +155,7 @@ class LogForwarderConfigTest {
                 Duration.ofSeconds(1),
                 1024L, 2048L,
                 3, 1000L,
-                List.of(), List.of(),
+                List.of(),
                 true, false,
                 null));
     }

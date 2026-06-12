@@ -22,6 +22,7 @@ import org.duckdb.DuckDBConnection;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Clock;
 import java.time.Instant;
@@ -145,5 +146,13 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
 
     public synchronized long useCount() {
         return useCount;
+    }
+
+    public String getDatabase() {
+        try { return connection.getCatalog(); } catch (SQLException e) { return null; }
+    }
+
+    public String getSchema() {
+        try { return connection.getSchema(); } catch (SQLException e) { return null; }
     }
 }

@@ -15,15 +15,21 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Integration test for LogForwardingAppender configured via logback.xml.
- * Tests that logs are correctly forwarded to the server with project expressions applied.
+ * Tests that logs are correctly forwarded to the server and physically partitioned on disk.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 public class LogForwardingIntegrationTest {
 
     @TempDir
@@ -34,21 +40,16 @@ public class LogForwardingIntegrationTest {
     private static final int HTTP_PORT = 18081;
     private static final String CATALOG_NAME = "test_ducklake";
     private static final String TABLE_NAME = "test_logs";
+    private static final String TABLE_NAME_PARTITIONED = "test_logs_partitioned";
     private static final String SCHEMA_NAME = "main";
     private static final String INGESTION_QUEUE_ID = "test-logs";
+    private static final String INGESTION_QUEUE_ID_PARTITIONED = "test-logs-partitioned";
     private static final String DUCKLAKE_DATA_DIR = "ducklake_data";
 
     @BeforeAll
     void setup() throws Exception {
         server = new SharedTestServer();
-        String startupScript = "INSTALL arrow;\n" +
-                "LOAD arrow;\n" +
-                "\n" +
-                "LOAD ducklake;\n" +
-                "ATTACH 'ducklake:" + warehouse + "/" + CATALOG_NAME + "' AS " + CATALOG_NAME +
-                " (DATA_PATH '" + warehouse + "/" + DUCKLAKE_DATA_DIR + "');\n" +
-                "USE " + CATALOG_NAME + ";\n" +
-                "CREATE TABLE IF NOT EXISTS " + TABLE_NAME + " (\n" +
+        String tableColumns = "(\n" +
                 "    sequence_number BIGINT,\n" +
                 "    timestamp TIMESTAMP,\n" +
                 "    level VARCHAR,\n" +
@@ -65,7 +66,18 @@ public class LogForwardingIntegrationTest {
                 "    caller_line INTEGER,\n" +
                 "    application_host VARCHAR,\n" +
                 "    date DATE\n" +
-                ");\n";
+                ")";
+        String startupScript = "INSTALL arrow;\n" +
+                "LOAD arrow;\n" +
+                "\n" +
+                "LOAD ducklake;\n" +
+                "ATTACH 'ducklake:" + warehouse + "/" + CATALOG_NAME + "' AS " + CATALOG_NAME +
+                " (DATA_PATH '" + warehouse + "/" + DUCKLAKE_DATA_DIR + "');\n" +
+                "USE " + CATALOG_NAME + ";\n" +
+                "CREATE TABLE IF NOT EXISTS " + TABLE_NAME + " " + tableColumns + ";\n" +
+                "CREATE TABLE IF NOT EXISTS " + TABLE_NAME_PARTITIONED + " " + tableColumns + ";\n" +
+                "ALTER TABLE " + CATALOG_NAME + "." + SCHEMA_NAME + "." + TABLE_NAME_PARTITIONED +
+                " SET PARTITIONED BY (date);\n";
 
         server.startWithWarehouse(
                 HTTP_PORT,
@@ -80,6 +92,12 @@ public class LogForwardingIntegrationTest {
                 "ingestion_task_factory_provider.ingestion_queue_table_mapping.0.catalog=" + CATALOG_NAME,
                 "ingestion_task_factory_provider.ingestion_queue_table_mapping.0.ingestion_queue=" + INGESTION_QUEUE_ID,
                 "ingestion_task_factory_provider.ingestion_queue_table_mapping.0.transformation=SELECT *, 'test-host' AS application_host, CAST(timestamp AS DATE) AS date FROM __this",
+                // Second mapping — table-driven partitioning (ALTER TABLE SET PARTITIONED BY (date))
+                "ingestion_task_factory_provider.ingestion_queue_table_mapping.1.table=" + TABLE_NAME_PARTITIONED,
+                "ingestion_task_factory_provider.ingestion_queue_table_mapping.1.schema=" + SCHEMA_NAME,
+                "ingestion_task_factory_provider.ingestion_queue_table_mapping.1.catalog=" + CATALOG_NAME,
+                "ingestion_task_factory_provider.ingestion_queue_table_mapping.1.ingestion_queue=" + INGESTION_QUEUE_ID_PARTITIONED,
+                "ingestion_task_factory_provider.ingestion_queue_table_mapping.1.transformation=SELECT *, 'test-host' AS application_host, CAST(timestamp AS DATE) AS date FROM __this",
                 // Startup script
                 "startup_script_provider.class=io.dazzleduck.sql.flight.ConfigBasedStartupScriptProvider",
                 "startup_script_provider.content=" + startupScript
@@ -94,20 +112,25 @@ public class LogForwardingIntegrationTest {
     }
 
     private void configureLogback() throws JoranException {
+        configureLogback("/logback-integration-test.xml");
+    }
+
+    private void configureLogback(String resource) throws JoranException {
         LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
         context.reset();
 
         JoranConfigurator configurator = new JoranConfigurator();
         configurator.setContext(context);
 
-        try (InputStream configStream = getClass().getResourceAsStream("/logback-integration-test.xml")) {
+        try (InputStream configStream = getClass().getResourceAsStream(resource)) {
             configurator.doConfigure(configStream);
         } catch (IOException e) {
-            throw new RuntimeException("Failed to load logback configuration", e);
+            throw new RuntimeException("Failed to load logback configuration: " + resource, e);
         }
     }
 
     @Test
+    @Order(1)
     void testLogsForwardedWithProjectExpressions() throws Exception {
         // Get a logger and generate some log messages
         Logger testLogger = LoggerFactory.getLogger("test.integration.logger");
@@ -154,6 +177,68 @@ public class LogForwardingIntegrationTest {
                 "SELECT DISTINCT level FROM " + CATALOG_NAME + "." + SCHEMA_NAME + "." + TABLE_NAME +
                         " WHERE logger = 'test.integration.logger' ORDER BY level"
         );
+    }
+
+    @Test
+    @Order(2)
+    void testLogsPartitionedByDate() throws Exception {
+        // The appender is configured with <partitionBy>date</partitionBy>.
+        // The server-side transformation adds a DATE column: CAST(timestamp AS DATE) AS date.
+        // DuckDB COPY writes Hive-style directories: date=YYYY-MM-DD/ under the table data path.
+        try (Stream<Path> paths = Files.walk(warehouse.resolve(DUCKLAKE_DATA_DIR))) {
+            boolean hasDatePartition = paths
+                    .filter(Files::isDirectory)
+                    .anyMatch(p -> p.getFileName().toString().startsWith("date="));
+            assertTrue(hasDatePartition,
+                    "Expected Hive-style date=YYYY-MM-DD partition directories under " + DUCKLAKE_DATA_DIR);
+        }
+    }
+
+    @Test
+    @Order(3)
+    void testTableDrivenPartitionBy() throws Exception {
+        // Use LogForwarder directly (no Logback context) to avoid context lifecycle issues
+        // after ctx.stop() in test 1. The config intentionally omits partitionBy — this
+        // exercises DuckLakeIngestionHandler's fallback to ducklake_partition_column metadata.
+        LogForwarderConfig config = LogForwarderConfig.builder()
+                .baseUrl("http://localhost:" + HTTP_PORT)
+                .username("admin")
+                .password("admin")
+                .ingestionQueue(INGESTION_QUEUE_ID_PARTITIONED)
+                .minBatchSize(1)                        // send on first entry
+                .maxSendInterval(Duration.ofSeconds(1))
+                .retryCount(0)
+                .build();
+
+        try (LogForwarder forwarder = new LogForwarder(config)) {
+            forwarder.addLogEntry(new LogEntry(1, Instant.now(), "INFO",
+                    "test.table.partition.logger", "main",
+                    "Table-driven partition test 1",
+                    Map.of(), null, List.of(), Map.of(), null));
+            forwarder.addLogEntry(new LogEntry(2, Instant.now(), "WARN",
+                    "test.table.partition.logger", "main",
+                    "Table-driven partition test 2",
+                    Map.of(), null, List.of(), Map.of(), null));
+            Thread.sleep(3000); // allow login + send to complete before close drains
+        }
+
+        Thread.sleep(2000); // allow server-side ingest to complete
+
+        // DuckLakeIngestionHandler.getPartitionBy() returned ["date"] from ducklake_partition_column
+        // (set by ALTER TABLE SET PARTITIONED BY (date) in startup script).
+        // ParquetIngestionQueue used it in COPY ... (PARTITION_BY(date)), producing date= paths.
+        Long partitionedFileCount = ConnectionPool.collectFirst(
+                "SELECT COUNT(*) " +
+                "FROM __ducklake_metadata_" + CATALOG_NAME + ".ducklake_data_file df " +
+                "JOIN __ducklake_metadata_" + CATALOG_NAME + ".ducklake_table t ON df.table_id = t.table_id " +
+                "WHERE t.table_name = '" + TABLE_NAME_PARTITIONED + "' " +
+                "  AND t.end_snapshot IS NULL " +
+                "  AND df.end_snapshot IS NULL " +
+                "  AND df.path LIKE '%date=%'",
+                Long.class
+        );
+        assertTrue(partitionedFileCount > 0,
+                "Expected table-driven date= partition paths in ducklake_data_file for " + TABLE_NAME_PARTITIONED);
     }
 
     @AfterAll

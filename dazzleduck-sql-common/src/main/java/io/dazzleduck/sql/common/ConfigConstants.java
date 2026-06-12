@@ -105,8 +105,6 @@ public class ConfigConstants {
     public static final String RETRY_COUNT_KEY = "retry_count";
     public static final String RETRY_INTERVAL_MS_KEY = "retry_interval_ms";
 
-    // Projection keys
-    public static final String PROJECT_KEY = "project";
     public static final String PARTITION_BY_KEY = "partition_by";
 
     // Feature flags

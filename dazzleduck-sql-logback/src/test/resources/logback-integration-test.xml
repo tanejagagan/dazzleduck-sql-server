@@ -17,6 +17,7 @@
         <username>admin</username>
         <password>admin</password>
         <ingestionQueue>test-logs</ingestionQueue>
+        <partitionBy>date</partitionBy>
     </appender>
 
     <!-- Exclude DazzleDuck internal packages to prevent infinite loops -->
