@@ -2,10 +2,13 @@
 # Build and publish all Docker images with multi-arch manifests.
 #
 # Usage:
-#   ./scripts/docker-publish.sh                  # build + push both arches + manifests
-#   ./scripts/docker-publish.sh --local          # build to local Docker daemon only (amd64)
-#   ./scripts/docker-publish.sh --arch arm64     # push one arch only (skip manifests)
-#   ./scripts/docker-publish.sh --skip-build     # skip jib, only create/push manifests
+#   ./scripts/docker-publish.sh                        # build + push all arches + manifests
+#   ./scripts/docker-publish.sh --local                # build to local Docker daemon only (amd64)
+#   ./scripts/docker-publish.sh --arch arm64           # push one arch only (skip manifests)
+#   ./scripts/docker-publish.sh --module compactor     # build + push one module only
+#   ./scripts/docker-publish.sh --skip-build           # skip jib, only create/push manifests
+#
+# Module aliases: runtime, compactor, otel-collector, scrapper
 #
 # Override version:
 #   VERSION=0.2.9 ./scripts/docker-publish.sh
@@ -15,16 +18,18 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$SCRIPT_DIR/.."
 
-# ── Options ──────────────────────────────────────────────────────────────────
+# ── Options ───────────────────────────────────────────────────────────────────
 LOCAL=false
 SKIP_BUILD=false
 SINGLE_ARCH=""
+MODULE_FILTER=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
     --local)       LOCAL=true; shift ;;
     --skip-build)  SKIP_BUILD=true; shift ;;
     --arch)        SINGLE_ARCH="$2"; shift 2 ;;
+    --module)      MODULE_FILTER="$2"; shift 2 ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
@@ -39,27 +44,30 @@ export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java
 
 MVN="$ROOT/mvnw"
 
-# ── Multi-arch images (amd64 + arm64 + manifest) ─────────────────────────────
-MULTI_ARCH_MODULES=(
-  "dazzleduck-sql-runtime:jib:build@docker-amd64:jib:build@docker-arm64"
-  "dazzleduck-sql-ducklake-compactor:jib:build:jib:build"
-  "dazzleduck-sql-otel-collector:jib:build:jib:build"
+# ── Module registry ───────────────────────────────────────────────────────────
+# Format: "alias|maven-module|docker-image|arch-support"  (arch-support: multi|single)
+MODULES=(
+  "runtime|dazzleduck-sql-runtime|dazzleduck/dazzleduck|multi"
+  "compactor|dazzleduck-sql-ducklake-compactor|dazzleduck/ducklake-compactor|multi"
+  "otel-collector|dazzleduck-sql-otel-collector|dazzleduck/dazzleduck-sql-otel-collector|multi"
+  "scrapper|dazzleduck-sql-scrapper|dazzleduck/dazzleduck-sql-scrapper|single"
 )
 
-MULTI_ARCH_IMAGES=(
-  "dazzleduck/dazzleduck"
-  "dazzleduck/ducklake-compactor"
-  "dazzleduck/dazzleduck-sql-otel-collector"
-)
-
-# ── Single-arch images ────────────────────────────────────────────────────────
-SINGLE_ARCH_MODULES=(
-  "dazzleduck-sql-scrapper"
-)
-
-SINGLE_ARCH_IMAGES=(
-  "dazzleduck/dazzleduck-sql-scrapper"
-)
+# Filter to a single module if requested
+if [[ -n "$MODULE_FILTER" ]]; then
+  filtered=()
+  for entry in "${MODULES[@]}"; do
+    alias="${entry%%|*}"
+    if [[ "$alias" == "$MODULE_FILTER" ]]; then
+      filtered+=("$entry")
+    fi
+  done
+  if [[ ${#filtered[@]} -eq 0 ]]; then
+    echo "Unknown module: $MODULE_FILTER. Valid: runtime, compactor, otel-collector, scrapper"
+    exit 1
+  fi
+  MODULES=("${filtered[@]}")
+fi
 
 # ── Install all JARs to local Maven repo ──────────────────────────────────────
 if [[ "$SKIP_BUILD" == false ]]; then
@@ -68,70 +76,75 @@ if [[ "$SKIP_BUILD" == false ]]; then
   "$MVN" install -DskipTests -f "$ROOT/pom.xml"
 fi
 
-# ── Build function ────────────────────────────────────────────────────────────
-build_image() {
-  local module="$1"
-  local goal="$2"
-  local arch="$3"
+# ── Build helpers ─────────────────────────────────────────────────────────────
+jib_goal() {
+  local goal="$1"
+  [[ "$LOCAL" == true ]] && goal="${goal/jib:build/jib:dockerBuild}" || true
+  echo "$goal"
+}
 
-  if [[ "$LOCAL" == true ]]; then
-    # Replace jib:build with jib:dockerBuild for local daemon
-    goal="${goal/jib:build/jib:dockerBuild}"
-    goal="${goal/jib:build@/jib:dockerBuild@}"
-  fi
+build_multi_arch() {
+  local maven_module="$1"
+  local arch="$2"
+  local goal
 
-  echo ""
-  echo "▶ $module ($arch) — $goal"
-  if [[ "$module" == "dazzleduck-sql-ducklake-compactor" || "$module" == "dazzleduck-sql-otel-collector" ]]; then
-    "$MVN" "$goal" -pl "$module" -Djib.architecture="$arch" -DskipTests -f "$ROOT/pom.xml"
+  # runtime uses named executions with arch hardcoded; others use -Djib.architecture
+  if [[ "$maven_module" == "dazzleduck-sql-runtime" ]]; then
+    goal=$(jib_goal "jib:build@docker-${arch}")
+    echo ""
+    echo "▶ $maven_module ($arch)"
+    "$MVN" "$goal" -pl "$maven_module" -DskipTests -f "$ROOT/pom.xml"
   else
-    "$MVN" "$goal" -pl "$module" -DskipTests -f "$ROOT/pom.xml"
+    goal=$(jib_goal "jib:build")
+    echo ""
+    echo "▶ $maven_module ($arch)"
+    "$MVN" "$goal" -pl "$maven_module" -Djib.architecture="$arch" -DskipTests -f "$ROOT/pom.xml"
   fi
 }
 
-# ── Build multi-arch images ───────────────────────────────────────────────────
+build_single_arch() {
+  local maven_module="$1"
+  local goal
+  goal=$(jib_goal "jib:build")
+  echo ""
+  echo "▶ $maven_module"
+  "$MVN" "$goal" -pl "$maven_module" -DskipTests -f "$ROOT/pom.xml"
+}
+
+push_manifests() {
+  local image="$1"
+  echo ""
+  echo "▶ manifest: $image"
+  for tag in "$VERSION" "latest"; do
+    docker manifest create --amend "${image}:${tag}" \
+      "${image}:${tag}-amd64" \
+      "${image}:${tag}-arm64"
+    docker manifest push "${image}:${tag}"
+    echo "  pushed ${image}:${tag}"
+  done
+}
+
+# ── Build and publish ─────────────────────────────────────────────────────────
 ARCHES=("amd64" "arm64")
 [[ -n "$SINGLE_ARCH" ]] && ARCHES=("$SINGLE_ARCH")
 
-for i in "${!MULTI_ARCH_MODULES[@]}"; do
-  IFS=: read -r module goal_amd64 _ goal_arm64 <<< "${MULTI_ARCH_MODULES[$i]}"
+for entry in "${MODULES[@]}"; do
+  IFS='|' read -r alias maven_module image arch_support <<< "$entry"
 
   if [[ "$SKIP_BUILD" == false ]]; then
-    for arch in "${ARCHES[@]}"; do
-      if [[ "$arch" == "amd64" ]]; then
-        build_image "$module" "$goal_amd64" "amd64"
-      else
-        build_image "$module" "$goal_arm64" "arm64"
-      fi
-    done
+    if [[ "$arch_support" == "multi" ]]; then
+      for arch in "${ARCHES[@]}"; do
+        build_multi_arch "$maven_module" "$arch"
+      done
+    else
+      build_single_arch "$maven_module"
+    fi
+  fi
+
+  if [[ "$LOCAL" == false && "$arch_support" == "multi" && -z "$SINGLE_ARCH" ]]; then
+    push_manifests "$image"
   fi
 done
 
-# ── Build single-arch images ──────────────────────────────────────────────────
-if [[ "$SKIP_BUILD" == false ]]; then
-  for module in "${SINGLE_ARCH_MODULES[@]}"; do
-    echo ""
-    echo "▶ $module"
-    "$MVN" jib:build -pl "$module" -DskipTests -f "$ROOT/pom.xml"
-  done
-fi
-
-# ── Create and push multi-arch manifests ──────────────────────────────────────
-if [[ "$LOCAL" == false && -z "$SINGLE_ARCH" ]]; then
-  echo ""
-  echo "▶ Creating multi-arch manifests..."
-  for image in "${MULTI_ARCH_IMAGES[@]}"; do
-    for tag in "$VERSION" "latest"; do
-      echo "  manifest: $image:$tag"
-      docker manifest create --amend "${image}:${tag}" \
-        "${image}:${tag}-amd64" \
-        "${image}:${tag}-arm64"
-      docker manifest push "${image}:${tag}"
-    done
-  done
-  echo ""
-  echo "✓ All images built and published."
-else
-  echo ""
-  echo "✓ Build complete (manifest step skipped)."
-fi
+echo ""
+echo "✓ Done."
