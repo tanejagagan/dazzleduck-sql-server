@@ -55,14 +55,15 @@ class CompactionIntegrationTest {
                 Duration.ofMillis(500),   // housekeeping every 500ms in tests
                 512 * 1024L,              // 512KB minor max
                 10 * 1024 * 1024L,        // 10MB major max
-                Duration.ofSeconds(5)
+                Duration.ofSeconds(5),
+                0                         // 0 = OS-assigned port, health server not used in tests
         );
 
         registry = new SimpleMeterRegistry();
-        CompactionMetrics metrics = new CompactionMetrics(registry, config.databases());
+        CompactionState state = new CompactionState(registry, config.databases());
         MajorCompactor majorCompactor = new DuckDbMajorCompactor(
-                config.majorCompactionMaxSize(), config.snapshotRetention(), metrics);
-        service = new CompactionService(config, majorCompactor, metrics);
+                config.majorCompactionMaxSize(), config.snapshotRetention(), state);
+        service = new CompactionService(config, majorCompactor, state);
     }
 
     @AfterAll
@@ -86,7 +87,7 @@ class CompactionIntegrationTest {
     @Test
     @Order(2)
     void minorCompactionTimerIsRecorded() {
-        service.runCompaction();
+        service.runCompaction(CATALOG);
 
         Timer timer = registry.find("ducklake.compaction.duration")
                 .tag("type", "minor")
@@ -124,7 +125,7 @@ class CompactionIntegrationTest {
     void majorCompactionTimersAreRecorded() throws Exception {
         // majorCompactionFrequency = 100ms, so wait for it to be eligible
         Thread.sleep(200);
-        service.runCompaction();
+        service.runCompaction(CATALOG);
 
         Timer mergeTimer = registry.find("ducklake.compaction.duration")
                 .tag("type", "major")
@@ -138,7 +139,7 @@ class CompactionIntegrationTest {
     @Test
     @Order(5)
     void housekeepingTimersAreRecorded() throws Exception {
-        service.runHousekeeping();
+        service.runHousekeeping(CATALOG);
 
         for (String step : List.of("expire", "cleanup")) {
             Timer timer = registry.find("ducklake.compaction.duration")
@@ -161,7 +162,7 @@ class CompactionIntegrationTest {
 
         // Ensure major fires
         Thread.sleep(200);
-        service.runCompaction();
+        service.runCompaction(CATALOG);
 
         long after = ConnectionPool.collectFirst(
                 "SELECT COUNT(*) FROM %s.main.ducklake_data_file WHERE end_snapshot IS NULL"

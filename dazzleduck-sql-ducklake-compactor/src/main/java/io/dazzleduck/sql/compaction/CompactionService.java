@@ -7,7 +7,10 @@ import org.slf4j.LoggerFactory;
 
 import java.io.Closeable;
 import java.sql.ResultSet;
-import java.util.List;
+import java.time.Instant;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -19,88 +22,108 @@ public class CompactionService implements Closeable {
 
     private final CompactionConfig config;
     private final MajorCompactor majorCompactor;
-    private final CompactionMetrics metrics;
+    private final CompactionState state;
+
+    // Shared schedulers — one task submitted per database so each runs independently
     private final ScheduledExecutorService compactionScheduler;
     private final ScheduledExecutorService housekeepingScheduler;
-    private final AtomicLong lastMajorRun = new AtomicLong(System.currentTimeMillis());
 
-    public CompactionService(CompactionConfig config, MajorCompactor majorCompactor, CompactionMetrics metrics) {
+    // Tracks when major compaction last ran per database
+    private final ConcurrentHashMap<String, AtomicLong> lastMajorRun = new ConcurrentHashMap<>();
+
+    public CompactionService(CompactionConfig config, MajorCompactor majorCompactor, CompactionState state) {
         this.config = config;
         this.majorCompactor = majorCompactor;
-        this.metrics = metrics;
-        this.compactionScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "compaction-scheduler");
+        this.state = state;
+        int dbCount = Math.max(1, config.databases().size());
+        this.compactionScheduler = Executors.newScheduledThreadPool(dbCount, r -> {
+            Thread t = new Thread(r, "compaction");
             t.setDaemon(false);
             return t;
         });
-        this.housekeepingScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "housekeeping-scheduler");
+        this.housekeepingScheduler = Executors.newScheduledThreadPool(dbCount, r -> {
+            Thread t = new Thread(r, "housekeeping");
             t.setDaemon(false);
             return t;
         });
+        config.databases().forEach(db -> lastMajorRun.put(db, new AtomicLong(System.currentTimeMillis())));
     }
 
     public void start() {
+        if (config.databases().isEmpty()) {
+            logger.warn("No databases configured — compaction service idle");
+            return;
+        }
         long minorSeconds = config.minorCompactionFrequency().toSeconds();
         long housekeepingSeconds = config.housekeepingFrequency().toSeconds();
 
-        compactionScheduler.scheduleWithFixedDelay(this::runCompaction, 0, minorSeconds, TimeUnit.SECONDS);
-        housekeepingScheduler.scheduleWithFixedDelay(this::runHousekeeping, housekeepingSeconds, housekeepingSeconds, TimeUnit.SECONDS);
+        for (String db : config.databases()) {
+            compactionScheduler.scheduleWithFixedDelay(
+                    () -> runCompaction(db), 0, minorSeconds, TimeUnit.SECONDS);
+            housekeepingScheduler.scheduleWithFixedDelay(
+                    () -> runHousekeeping(db), housekeepingSeconds, housekeepingSeconds, TimeUnit.SECONDS);
+        }
 
-        logger.info("Compaction service started — minor every {}s, major every {}s, housekeeping every {}s",
-                minorSeconds, config.majorCompactionFrequency().toSeconds(), housekeepingSeconds);
+        logger.info("Compaction service started for {} database(s) — minor every {}s, major every {}s, housekeeping every {}s",
+                config.databases().size(), minorSeconds, config.majorCompactionFrequency().toSeconds(), housekeepingSeconds);
     }
 
-    void runCompaction() {
-        try {
-            List<String> databases = config.databases();
-            if (databases.isEmpty()) {
-                logger.warn("No databases configured, skipping compaction");
-                return;
-            }
+    public CompactionStats getStats() {
+        Map<String, CompactionStats.DatabaseStats> dbStats = new HashMap<>();
+        CompactionStats base = state.getSnapshot(config.databases());
+        for (Map.Entry<String, CompactionStats.DatabaseStats> entry : base.databases().entrySet()) {
+            String db = entry.getKey();
+            CompactionStats.DatabaseStats ds = entry.getValue();
+            Instant last = state.getLastExecutionTime(db);
+            Instant next = last != null ? last.plus(config.minorCompactionFrequency()) : null;
+            dbStats.put(db, new CompactionStats.DatabaseStats(
+                    ds.totalMinorCompactions(),
+                    ds.totalMajorCompactions(),
+                    ds.totalFilesCompacted(),
+                    last,
+                    next,
+                    ds.currentSmallFiles(),
+                    ds.currentMediumFiles(),
+                    ds.currentTotalFiles()));
+        }
+        return new CompactionStats(base.serviceStart(), dbStats);
+    }
 
-            boolean runMajor = System.currentTimeMillis() - lastMajorRun.get()
+    void runCompaction(String database) {
+        try {
+            boolean runMajor = System.currentTimeMillis() - lastMajorRun.get(database).get()
                     >= config.majorCompactionFrequency().toMillis();
 
-            for (String database : databases) {
-                if (runMajor) {
-                    runMajor(database);
-                } else {
-                    runMinor(database);
-                }
-                updateFileCounts(database);
-            }
-
+            long filesBefore = queryTotalFiles(database);
             if (runMajor) {
-                lastMajorRun.set(System.currentTimeMillis());
+                runMajor(database);
+                state.incrementMajor(database);
+                lastMajorRun.get(database).set(System.currentTimeMillis());
+            } else {
+                runMinor(database);
+                state.incrementMinor(database);
             }
+            updateFileCounts(database);
+            long filesAfter = queryTotalFiles(database);
+            state.addFilesCompacted(database, filesBefore - filesAfter);
+            state.recordLastExecution(database);
         } catch (Throwable t) {
-            logger.error("Unexpected error in compaction cycle — scheduler will continue", t);
+            logger.error("Unexpected error in compaction cycle for {} — scheduler will continue", database, t);
         }
     }
 
-    void runHousekeeping() {
+    void runHousekeeping(String database) {
         try {
-            List<String> databases = config.databases();
-            if (databases.isEmpty()) return;
-
-            for (String database : databases) {
-                try {
-                    majorCompactor.housekeep(database);
-                    logger.info("Housekeeping completed for {}", database);
-                } catch (Exception e) {
-                    logger.error("Housekeeping failed for {}", database, e);
-                }
-            }
+            majorCompactor.housekeep(database);
+            logger.info("Housekeeping completed for {}", database);
         } catch (Throwable t) {
-            logger.error("Unexpected error in housekeeping cycle — scheduler will continue", t);
+            logger.error("Unexpected error in housekeeping cycle for {} — scheduler will continue", database, t);
         }
     }
 
     private void runMinor(String database) {
-        Timer.Sample sample = null;
+        Timer.Sample sample = state.startTimer();
         try (var connection = ConnectionPool.getConnection()) {
-            sample = metrics.startTimer();
             String sql = "CALL ducklake_merge_adjacent_files('%s', max_file_size := %d)"
                     .formatted(database, config.minorCompactionMaxSize());
             ConnectionPool.execute(connection, sql);
@@ -108,7 +131,7 @@ public class CompactionService implements Closeable {
         } catch (Exception e) {
             logger.error("Minor compaction failed for {}", database, e);
         } finally {
-            if (sample != null) metrics.stopTimer(sample, "minor", "merge", database);
+            state.stopTimer(sample, "minor", "merge", database);
         }
     }
 
@@ -118,6 +141,22 @@ public class CompactionService implements Closeable {
             logger.info("Major compaction completed for {}", database);
         } catch (Exception e) {
             logger.error("Major compaction failed for {}", database, e);
+        }
+    }
+
+    private long queryTotalFiles(String database) {
+        String mdDatabase = "\"__ducklake_metadata_" + database + "\"";
+        String sql = "SELECT COUNT(*) AS total FROM %s.ducklake_data_file WHERE end_snapshot IS NULL"
+                .formatted(mdDatabase);
+        try (var connection = ConnectionPool.getConnection();
+             var statement = connection.createStatement()) {
+            statement.execute(sql);
+            try (ResultSet rs = statement.getResultSet()) {
+                return rs.next() ? rs.getLong("total") : 0L;
+            }
+        } catch (Exception e) {
+            logger.warn("Could not query file count for {}", database, e);
+            return 0L;
         }
     }
 
@@ -141,14 +180,14 @@ public class CompactionService implements Closeable {
             statement.execute(sql);
             try (ResultSet rs = statement.getResultSet()) {
                 if (rs.next()) {
-                    metrics.updateFileCounts(database,
+                    state.updateFileCounts(database,
                             rs.getLong("small_files"),
                             rs.getLong("medium_files"),
                             rs.getLong("total_files"));
                 }
             }
         } catch (Exception e) {
-            logger.error("Failed to update file count metrics for {}", database, e);
+            logger.error("Failed to update file counts for {}", database, e);
         }
     }
 

@@ -19,16 +19,19 @@ public class Main {
         executeStartupScript(rawConfig);
 
         MeterRegistry registry = new LoggingMeterRegistry();
-        CompactionMetrics metrics = new CompactionMetrics(registry, config.databases());
+        CompactionState state = new CompactionState(registry, config.databases());
         MajorCompactor majorCompactor = new DuckDbMajorCompactor(
-                config.majorCompactionMaxSize(), config.snapshotRetention(), metrics);
-        CompactionService service = new CompactionService(config, majorCompactor, metrics);
+                config.majorCompactionMaxSize(), config.snapshotRetention(), state);
+        CompactionService service = new CompactionService(config, majorCompactor, state);
+        HealthServer healthServer = new HealthServer(config.healthPort(), service::getStats);
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             logger.info("Shutdown signal received");
             service.close();
+            healthServer.close();
         }, "shutdown-hook"));
 
+        healthServer.start();
         service.start();
 
         Thread.currentThread().join();

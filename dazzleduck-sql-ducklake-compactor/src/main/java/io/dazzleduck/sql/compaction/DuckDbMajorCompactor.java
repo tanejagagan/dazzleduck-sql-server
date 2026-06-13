@@ -13,9 +13,9 @@ public class DuckDbMajorCompactor implements MajorCompactor {
 
     private final long maxFileSizeBytes;
     private final Duration snapshotRetention;
-    private final CompactionMetrics metrics;
+    private final CompactionState metrics;
 
-    public DuckDbMajorCompactor(long maxFileSizeBytes, Duration snapshotRetention, CompactionMetrics metrics) {
+    public DuckDbMajorCompactor(long maxFileSizeBytes, Duration snapshotRetention, CompactionState metrics) {
         this.maxFileSizeBytes = maxFileSizeBytes;
         this.snapshotRetention = snapshotRetention;
         this.metrics = metrics;

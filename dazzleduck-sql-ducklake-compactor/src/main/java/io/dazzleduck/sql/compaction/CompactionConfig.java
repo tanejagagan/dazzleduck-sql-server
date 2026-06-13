@@ -14,7 +14,8 @@ public record CompactionConfig(
         Duration housekeepingFrequency,
         long minorCompactionMaxSize,
         long majorCompactionMaxSize,
-        Duration snapshotRetention
+        Duration snapshotRetention,
+        int healthPort
 ) {
     private static final String CONFIG_PATH = "dazzleduck_sql_compaction";
 
@@ -39,7 +40,8 @@ public record CompactionConfig(
                 c.getDuration("housekeeping_frequency"),
                 c.getBytes("minor_compaction_max_size"),
                 c.getBytes("major_compaction_max_size"),
-                c.getDuration("snapshot_retention")
+                c.getDuration("snapshot_retention"),
+                c.getInt("health_port")
         );
     }
 }
