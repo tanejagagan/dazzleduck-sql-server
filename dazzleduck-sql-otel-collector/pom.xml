@@ -6,7 +6,7 @@
     <parent>
         <groupId>io.dazzleduck.sql</groupId>
         <artifactId>dazzleduck-parent</artifactId>
-        <version>0.2.9-SNAPSHOT</version>
+        <version>0.2.9</version>
     </parent>
 
     <artifactId>dazzleduck-sql-otel-collector</artifactId>
@@ -86,12 +86,12 @@
         <dependency>
             <groupId>io.dazzleduck.sql</groupId>
             <artifactId>dazzleduck-sql-commons</artifactId>
-            <version>0.2.9-SNAPSHOT</version>
+            <version>0.2.9</version>
         </dependency>
         <dependency>
             <groupId>io.dazzleduck.sql</groupId>
             <artifactId>dazzleduck-sql-common</artifactId>
-            <version>0.2.9-SNAPSHOT</version>
+            <version>0.2.9</version>
         </dependency>
 
         <!-- Logging -->
@@ -179,7 +179,10 @@
                         </platforms>
                     </from>
                     <to>
-                        <image>dazzleduck-sql-otel-collector:latest</image>
+                        <image>dazzleduck/dazzleduck-sql-otel-collector:${project.version}-${jib.architecture}</image>
+                        <tags>
+                            <tag>latest-${jib.architecture}</tag>
+                        </tags>
                     </to>
                 </configuration>
             </plugin>
