@@ -27,6 +27,11 @@
             <version>0.2.9</version>
         </dependency>
         <dependency>
+            <groupId>io.dazzleduck.sql</groupId>
+            <artifactId>dazzleduck-sql-common</artifactId>
+            <version>0.2.9</version>
+        </dependency>
+        <dependency>
             <groupId>io.helidon.webserver</groupId>
             <artifactId>helidon-webserver</artifactId>
             <version>${helidon.version}</version>

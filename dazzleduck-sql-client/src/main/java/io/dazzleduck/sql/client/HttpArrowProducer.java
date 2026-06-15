@@ -262,8 +262,8 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
                 .uri(URI.create(baseUrl + "/v1/login"))
                 .timeout(httpClientTimeout)
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body))
-                .header("Content-Type", "application/json")
-                .header("Accept", "application/json")
+                .header("Content-Type", io.dazzleduck.sql.common.ContentTypes.APPLICATION_JSON)
+                .header("Accept", io.dazzleduck.sql.common.ContentTypes.APPLICATION_JSON)
                 .build();
 
         HttpResponse<String> resp;
@@ -459,7 +459,7 @@ public final class HttpArrowProducer extends ArrowProducer.AbstractArrowProducer
                 .timeout(httpClientTimeout)
                 .POST(HttpRequest.BodyPublishers.ofByteArray(payload))
                 .header("Authorization", getJwt())
-                .header("Content-Type", "application/vnd.apache.arrow.stream");
+                .header("Content-Type", io.dazzleduck.sql.common.ContentTypes.APPLICATION_ARROW);
 
         if (!getPartitionBy().isEmpty()) {
             String partitionByValue = String.join(",", getPartitionBy());

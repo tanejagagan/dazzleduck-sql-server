@@ -4,7 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.google.protobuf.ByteString;
 import io.dazzleduck.sql.flight.server.HttpFlightAdaptor;
 import io.dazzleduck.sql.flight.server.StatementHandle;
-import io.dazzleduck.sql.http.server.model.ContentTypes;
+import io.dazzleduck.sql.common.ContentTypes;
 import io.dazzleduck.sql.http.server.model.HttpConfig;
 import io.dazzleduck.sql.http.server.model.QueryRequest;
 import io.helidon.http.HeaderNames;

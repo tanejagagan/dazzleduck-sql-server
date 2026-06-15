@@ -156,6 +156,14 @@
             <artifactId>dazzleduck-sql-common</artifactId>
             <version>0.2.9</version>
         </dependency>
+        <!-- Test only: ResultStreamsTest exercises ZSTD Arrow round-trip via CommonsCompressionFactory
+             (brings zstd-jni transitively). commons main code stays compression-impl-free. -->
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-compression</artifactId>
+            <version>${arrow.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
