@@ -3,7 +3,7 @@ package io.dazzleduck.sql.http.server;
 import com.typesafe.config.Config;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.util.TestUtils;
-import io.dazzleduck.sql.http.server.model.ContentTypes;
+import io.dazzleduck.sql.common.ContentTypes;
 import io.dazzleduck.sql.http.server.model.QueryRequest;
 import io.helidon.http.HeaderValues;
 import org.apache.arrow.memory.BufferAllocator;

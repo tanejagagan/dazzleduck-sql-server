@@ -1,7 +1,7 @@
 package io.dazzleduck.sql.http.server;
 
 import io.dazzleduck.sql.commons.ConnectionPool;
-import io.dazzleduck.sql.http.server.model.ContentTypes;
+import io.dazzleduck.sql.common.ContentTypes;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.ipc.ArrowStreamWriter;

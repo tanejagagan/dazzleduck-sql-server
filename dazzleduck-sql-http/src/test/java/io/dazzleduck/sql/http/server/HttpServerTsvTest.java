@@ -1,7 +1,7 @@
 package io.dazzleduck.sql.http.server;
 
 import io.dazzleduck.sql.commons.ConnectionPool;
-import io.dazzleduck.sql.http.server.model.ContentTypes;
+import io.dazzleduck.sql.common.ContentTypes;
 import io.dazzleduck.sql.http.server.model.QueryRequest;
 import io.helidon.http.HeaderValues;
 import org.junit.jupiter.api.*;
