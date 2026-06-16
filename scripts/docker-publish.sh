@@ -116,7 +116,9 @@ push_manifests() {
   echo ""
   echo "▶ manifest: $image"
   for tag in "$VERSION" "latest"; do
-    docker manifest create --amend "${image}:${tag}" \
+    # Remove stale local manifest cache so --amend picks up freshly pushed arch digests
+    docker manifest rm "${image}:${tag}" 2>/dev/null || true
+    docker manifest create "${image}:${tag}" \
       "${image}:${tag}-amd64" \
       "${image}:${tag}-arm64"
     docker manifest push "${image}:${tag}"
