@@ -5,7 +5,7 @@ import io.dazzleduck.sql.common.ParameterValidationException;
 import io.dazzleduck.sql.flight.namedquery.NamedQueryRequest;
 import io.dazzleduck.sql.flight.namedquery.NamedQueryServiceAdaptor;
 import io.dazzleduck.sql.flight.server.TsvOutputStreamListener;
-import io.dazzleduck.sql.http.server.model.ContentTypes;
+import io.dazzleduck.sql.common.ContentTypes;
 import io.helidon.http.HeaderNames;
 import io.helidon.http.Status;
 import io.helidon.webserver.http.HttpRules;

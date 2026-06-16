@@ -1,5 +1,6 @@
 package io.dazzleduck.sql.flight.server;
 
+import io.dazzleduck.sql.commons.io.ResultStreams;
 import org.apache.arrow.compression.CommonsCompressionFactory;
 import org.apache.arrow.flight.FlightProducer;
 import org.apache.arrow.memory.ArrowBuf;
@@ -14,7 +15,6 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.OutputStream;
-import java.nio.channels.Channels;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 
@@ -97,18 +97,9 @@ public class DirectOutputStreamListener implements FlightProducer.ServerStreamLi
             // Only do this when we're ready to write data
             this.outputStream = outputStreamSupplier.get();
 
-            // Handle NO_COMPRESSION separately - use constructor without compression factory
-            if (compressionCodec == CompressionUtil.CodecType.NO_COMPRESSION) {
-                this.writer = new ArrowStreamWriter(root, dictionaries, outputStream);
-            } else {
-                this.writer = new ArrowStreamWriter(
-                        root,
-                        dictionaries,
-                        Channels.newChannel(outputStream),
-                        option != null ? option : IpcOption.DEFAULT,
-                        CommonsCompressionFactory.INSTANCE,
-                        compressionCodec);
-            }
+            this.writer = ResultStreams.newArrowStreamWriter(
+                    root, dictionaries, outputStream,
+                    compressionCodec, CommonsCompressionFactory.INSTANCE, option);
             writer.start();
             outputStream.flush();
             logger.debug("writer.start() and flush completed successfully with compression: {}", compressionCodec);
