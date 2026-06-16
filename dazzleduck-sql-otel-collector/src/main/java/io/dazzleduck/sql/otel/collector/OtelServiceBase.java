@@ -15,7 +15,6 @@ import org.slf4j.LoggerFactory;
 import java.io.Closeable;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.nio.channels.Channels;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
@@ -74,7 +73,9 @@ class OtelServiceBase implements Closeable {
         try (VectorSchemaRoot root = VectorSchemaRoot.create(schema, allocator)) {
             batchWriter.accept(entries, root);
             try (FileOutputStream fos = new FileOutputStream(tempFile.toFile());
-                 ArrowStreamWriter writer = new ArrowStreamWriter(root, null, Channels.newChannel(fos))) {
+                 ArrowStreamWriter writer = io.dazzleduck.sql.commons.io.ResultStreams.newArrowStreamWriter(
+                         root, null, fos,
+                         org.apache.arrow.vector.compression.CompressionUtil.CodecType.NO_COMPRESSION, null)) {
                 writer.start();
                 writer.writeBatch();
                 writer.end();
