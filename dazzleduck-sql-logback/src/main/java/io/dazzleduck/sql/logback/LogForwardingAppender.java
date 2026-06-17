@@ -76,7 +76,7 @@ public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
     private String username = "admin";
     private String password = "admin";
     private Map<String, String> claims = Collections.emptyMap();
-    private String jwt;
+    private String token;
     private String ingestionQueue = "log";
     private long minBatchSize = 1024; // 1 KB default for logs (smaller than metrics)
     private List<String> partitionBy = Collections.emptyList();
@@ -155,8 +155,12 @@ public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
         this.password = password;
     }
 
-    public void setJwt(String jwt) {
-        this.jwt = jwt;
+    /**
+     * Set a raw bearer token. The {@code Bearer } prefix is added automatically at startup.
+     * A blank or absent token falls back to username/password.
+     */
+    public void setToken(String token) {
+        this.token = token;
     }
 
     /**
@@ -226,8 +230,11 @@ public class LogForwardingAppender extends AppenderBase<ILoggingEvent> {
                 // Inline-properties mode: build config from individual XML properties
                 addInfo("Initializing LogForwardingAppender with baseUrl=" + baseUrl +
                         ", ingestionQueue=" + ingestionQueue);
+                // A raw <token> is normalized to a full Bearer header value. A blank/absent token
+                // leaves jwt null so the username/password path below is used.
+                String jwt = (token != null && !token.isBlank()) ? "Bearer " + token : null;
                 LogForwarderConfig config;
-                if (jwt == null || jwt.isEmpty()) {
+                if (jwt == null) {
                     config = LogForwarderConfig.builder()
                             .baseUrl(baseUrl)
                             .username(username)

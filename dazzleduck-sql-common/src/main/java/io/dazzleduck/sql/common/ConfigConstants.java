@@ -74,6 +74,7 @@ public class ConfigConstants {
     public static final String CLAIMS_KEY = "claims";
     public static final String AUTH_NONE = "none";
     public static final String AUTH_JWT = "jwt";
+    public static final String AUTH_TOKEN = "token";
 
     // HTTP configuration keys
     public static final String HTTP_PREFIX = "http";

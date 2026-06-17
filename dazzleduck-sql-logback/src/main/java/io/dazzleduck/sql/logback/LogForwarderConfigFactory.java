@@ -119,7 +119,7 @@ public final class LogForwarderConfigFactory {
                         .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().toString()))
                 : Map.of();
 
-        String jwt = http.hasPath(ConfigConstants.AUTH_JWT) ? http.getString(ConfigConstants.AUTH_JWT) : null;
+        String token = http.hasPath(ConfigConstants.AUTH_TOKEN) ? http.getString(ConfigConstants.AUTH_TOKEN) : null;
 
         LogForwarderConfig.Builder builder = LogForwarderConfig.builder()
                 .baseUrl(http.getString(ConfigConstants.BASE_URL_KEY))
@@ -142,8 +142,8 @@ public final class LogForwarderConfigFactory {
                 .captureCallerData(config.getBoolean(ConfigConstants.CAPTURE_CALLER_DATA_KEY))
                 .resourceMdc(resourceMdc);
 
-        if (jwt != null && !jwt.isBlank()) {
-            builder.jwt(jwt);
+        if (token != null && !token.isBlank()) {
+            builder.jwt("Bearer " + token);
         }
 
         return builder.build();
