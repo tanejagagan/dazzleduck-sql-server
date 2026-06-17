@@ -3,7 +3,7 @@ package io.dazzleduck.sql.http.server;
 import io.dazzleduck.sql.common.ParameterValidationException;
 import io.dazzleduck.sql.common.NamedQueryParameterValidator;
 import io.dazzleduck.sql.commons.ConnectionPool;
-import io.dazzleduck.sql.flight.namedquery.NamedQueryRequest;
+import io.dazzleduck.sql.commons.namedquery.NamedQueryRequest;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import io.dazzleduck.sql.common.ContentTypes;
 import org.apache.arrow.memory.RootAllocator;

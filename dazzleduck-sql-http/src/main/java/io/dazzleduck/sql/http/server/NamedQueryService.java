@@ -2,7 +2,7 @@ package io.dazzleduck.sql.http.server;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.dazzleduck.sql.common.ParameterValidationException;
-import io.dazzleduck.sql.flight.namedquery.NamedQueryRequest;
+import io.dazzleduck.sql.commons.namedquery.NamedQueryRequest;
 import io.dazzleduck.sql.flight.namedquery.NamedQueryServiceAdaptor;
 import io.dazzleduck.sql.flight.server.TsvOutputStreamListener;
 import io.dazzleduck.sql.common.ContentTypes;
