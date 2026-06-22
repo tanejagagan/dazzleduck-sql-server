@@ -70,6 +70,23 @@ class DuckLakeIngestionHandlerTest {
         assertNull(factory.getTargetPath("unknown-queue"));
     }
 
+    /**
+     * Regression: a queue added via {@link DuckLakeIngestionHandler#updateMappings} (as the dynamic
+     * handler does) has no cached state yet — its path must still be derived lazily on first access.
+     * This was broken when the state-key lookup consulted the state cache instead of the mappings.
+     */
+    @Test
+    void shouldResolveTargetPathForQueueAddedViaUpdateMappings() {
+        var factory = new DuckLakeIngestionHandler(Map.of()); // empty: no eagerly-built state
+        assertNull(factory.getTargetPath(QUEUE_ID), "unknown before it is registered");
+
+        factory.updateMappings(Map.of(QUEUE_ID, mapping(QUEUE_ID, null)));
+
+        String path = factory.getTargetPath(QUEUE_ID);
+        assertNotNull(path, "path must be derived lazily for a queue added via updateMappings");
+        assertTrue(path.contains(tempDir.resolve("data").toString()), "got: " + path);
+    }
+
     // -----------------------------------------------------------------------
     // createPostIngestionTask — direct match
     // -----------------------------------------------------------------------

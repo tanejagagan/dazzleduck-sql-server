@@ -1,6 +1,7 @@
 package io.dazzleduck.sql.otel.collector;
 
 import io.dazzleduck.sql.commons.auth.Validator;
+import io.dazzleduck.sql.commons.ingestion.IngestionHandler;
 import io.dazzleduck.sql.otel.collector.auth.JwtServerInterceptor;
 import io.dazzleduck.sql.otel.collector.config.CollectorProperties;
 import io.grpc.Server;
@@ -12,17 +13,22 @@ import org.slf4j.LoggerFactory;
 import java.io.Closeable;
 import java.io.IOException;
 import java.net.InetAddress;
-import java.util.LinkedHashMap;
-import java.util.Map;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Manages the lifecycle of the OTLP gRPC server and signal writers.
+ * Manages the lifecycle of the OTLP gRPC server.
  *
- * <p>Writers are keyed by queue ID, sourced from
- * {@code otel_collector.ingestion_task_factory_provider.ingestion_queue_table_mapping}.
- * Every request must carry the {@code x-dd-ingestion-queue} JWT claim — there is no default
- * fallback. JWT authentication is the only supported mode.
+ * <p>Queues are not pre-created at startup. Each request is resolved straight through the
+ * {@link IngestionHandler}, which is the single registry: it is the source of truth for which
+ * queues exist ({@link IngestionHandler#getKnownQueues()}) and where each writes
+ * ({@link IngestionHandler#getTargetPath(String)}), and it lazily creates / caches / evicts the
+ * underlying {@code ParquetIngestionQueue} per ID. So queues added to or removed from a dynamic
+ * registry (e.g. {@code DynamicDuckLakeIngestionTaskFactoryProvider}) are routable/rejected
+ * without a restart. The three signal services share one {@link #flushScheduler} for time-based
+ * flushes. Every request must carry the {@code x-dd-ingestion-queue} JWT claim — there is no
+ * default fallback. JWT authentication is the only supported mode.
  */
 public class OtelCollectorServer implements Closeable {
 
@@ -30,7 +36,8 @@ public class OtelCollectorServer implements Closeable {
 
     private final CollectorProperties props;
     private Server grpcServer;
-    private Map<String, SignalWriter> writers;
+    private IngestionHandler handler;
+    private ScheduledExecutorService flushScheduler;
     private OtelLogService logService;
     private OtelTraceService traceService;
     private OtelMetricsService metricsService;
@@ -42,25 +49,23 @@ public class OtelCollectorServer implements Closeable {
 
     public void start() throws IOException {
         try {
-            var handler = props.getIngestionHandler();
+            handler = props.getIngestionHandler();
             var ingestionConfig = props.getIngestionConfig();
 
-            var queueIds = props.getQueues();
-            if (queueIds == null || queueIds.isEmpty()) {
-                throw new IllegalStateException("otel_collector.queues must contain at least one queue name");
-            }
-            writers = new LinkedHashMap<>();
-            for (String queueId : queueIds) {
-                writers.put(queueId, new SignalWriter(queueId, handler, ingestionConfig));
-            }
-
+            // No startup seeding: the handler is the single registry. Queues are created lazily on
+            // first use of a known queue and evicted when the handler stops reporting them.
+            // All queues share one flush scheduler; an evicted queue's stray flush is a no-op.
             setupCommonTags(props.getMeterRegistry(), props.getServiceName());
             collectorMetrics = new OtelCollectorMetrics(props.getMeterRegistry());
-            writers.forEach(collectorMetrics::registerWriter);
+            flushScheduler = Executors.newScheduledThreadPool(2, r -> {
+                Thread t = new Thread(r, "otel-flush-scheduler");
+                t.setDaemon(true);
+                return t;
+            });
 
-            logService     = new OtelLogService(writers, collectorMetrics);
-            traceService   = new OtelTraceService(writers, collectorMetrics);
-            metricsService = new OtelMetricsService(writers, collectorMetrics);
+            logService     = new OtelLogService(handler, ingestionConfig, flushScheduler, collectorMetrics);
+            traceService   = new OtelTraceService(handler, ingestionConfig, flushScheduler, collectorMetrics);
+            metricsService = new OtelMetricsService(handler, ingestionConfig, flushScheduler, collectorMetrics);
 
             if (!"jwt".equals(props.getAuthentication())) {
                 throw new IllegalStateException(
@@ -89,8 +94,8 @@ public class OtelCollectorServer implements Closeable {
 
             grpcServer = builder.build().start();
 
-            log.info("OTLP gRPC server started on port {} — queues: {}",
-                    props.getGrpcPort(), writers.keySet());
+            log.info("OTLP gRPC server started on port {} — known queues: {} (writers created lazily on first use)",
+                    props.getGrpcPort(), handler.getKnownQueues());
         } catch (Exception e) {
             close();
             if (e instanceof IOException ioe) throw ioe;
@@ -135,13 +140,17 @@ public class OtelCollectorServer implements Closeable {
                 Thread.currentThread().interrupt();
             }
         }
+        // Flush and close all queues the handler owns, then stop the shared flush scheduler.
+        if (handler != null) {
+            try { handler.closeQueues(); } catch (Exception e) { log.warn("Error closing ingestion queues", e); }
+        }
+        if (flushScheduler != null) {
+            flushScheduler.shutdownNow();
+        }
         closeQuietly("logService",       logService);
         closeQuietly("traceService",     traceService);
         closeQuietly("metricsService",   metricsService);
         closeQuietly("collectorMetrics", collectorMetrics);
-        if (writers != null) {
-            writers.forEach((id, w) -> closeQuietly("writer[" + id + "]", w));
-        }
         log.info("OtelCollectorServer stopped.");
     }
 

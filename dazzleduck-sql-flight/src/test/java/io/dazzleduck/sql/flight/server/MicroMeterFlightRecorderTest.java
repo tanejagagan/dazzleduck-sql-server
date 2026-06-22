@@ -75,6 +75,32 @@ public class MicroMeterFlightRecorderTest {
         recorder.recordGetStreamPreparedStatement(123);
     }
 
+    @Test
+    void registerThenUnregisterWriteQueue_removesPerQueueMeters() {
+        java.util.function.LongSupplier zero = () -> 0L;
+        recorder.registerWriteQueue("q1",
+                java.util.Map.of("write_batches", zero),
+                java.util.Map.of("pending_batches", zero),
+                java.util.Map.of("write_latency",
+                        new io.dazzleduck.sql.flight.FlightRecorder.WriteTimerSuppliers(zero, zero)));
+
+        assertEquals(3, writeQueueMeterCount("q1"), "counter + gauge + timer registered for q1");
+
+        recorder.unregisterWriteQueue("q1");
+        assertEquals(0, writeQueueMeterCount("q1"),
+                "all per-queue meters removed on unregister so the queue can be GC'd");
+
+        // Unregistering an unknown identifier is a harmless no-op.
+        assertDoesNotThrow(() -> recorder.unregisterWriteQueue("never-registered"));
+    }
+
+    private long writeQueueMeterCount(String identifier) {
+        return registry.getMeters().stream()
+                .filter(m -> m.getId().getName().startsWith("dazzleduck.flight.ingest_queue."))
+                .filter(m -> identifier.equals(m.getId().getTag("identifier")))
+                .count();
+    }
+
     private static StatementContext<Statement> dummyContext(boolean prepared, String query) {
         Statement dummyStmt = (Statement) Proxy.newProxyInstance(MicroMeterFlightRecorderTest.class.getClassLoader(), new Class<?>[]{prepared ? PreparedStatement.class : Statement.class}, (proxy, method, args) -> 0);
         StatementContext<Statement> ctx = new StatementContext<>(ConnectionPool.getConnection(), dummyStmt, query);

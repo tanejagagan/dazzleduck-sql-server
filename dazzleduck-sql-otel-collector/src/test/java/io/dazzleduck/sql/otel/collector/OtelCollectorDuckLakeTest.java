@@ -88,6 +88,12 @@ class OtelCollectorDuckLakeTest {
             });
         }
 
+        // The output directories are the operator's responsibility (ParquetIngestionQueue no longer
+        // creates them); here the test is the operator and pre-creates each table's data directory.
+        for (String table : new String[]{"logs", "spans", "metrics"}) {
+            Files.createDirectories(dataDir.resolve("main").resolve(table));
+        }
+
         // Single handler maps all three queue IDs to their respective DuckLake tables.
         // getTargetPath() returns the DuckLake table path; Parquet files are written there.
         var ingestionHandler = new DuckLakeIngestionHandler(Map.of(

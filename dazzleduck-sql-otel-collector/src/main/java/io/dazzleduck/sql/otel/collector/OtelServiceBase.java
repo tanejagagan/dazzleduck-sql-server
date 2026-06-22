@@ -1,6 +1,10 @@
 package io.dazzleduck.sql.otel.collector;
 
 import io.dazzleduck.sql.common.Headers;
+import io.dazzleduck.sql.commons.ingestion.Batch;
+import io.dazzleduck.sql.commons.ingestion.IngestionConfig;
+import io.dazzleduck.sql.commons.ingestion.IngestionHandler;
+import io.dazzleduck.sql.commons.ingestion.ParquetIngestionQueue;
 import io.dazzleduck.sql.otel.collector.auth.JwtServerInterceptor;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
@@ -17,15 +21,24 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.BiConsumer;
 
 /**
  * Shared resources and common logic for OTLP signal services.
- * Each signal service holds one instance as a field and delegates to these methods.
+ *
+ * <p>Each signal service holds one instance as a field and delegates to these methods. Queue
+ * resolution goes straight through the {@link IngestionHandler} — it is the single registry:
+ * {@link IngestionHandler#getOrCreateQueue} lazily creates a queue for a known ID (via our
+ * {@code creator}), caches it, and evicts/closes it when its target path disappears (firing
+ * {@code onDeleted}). There is no separate writer cache. Metrics are registered when a queue is
+ * created and unregistered via the {@code onDeleted} lifecycle callback.
  */
 class OtelServiceBase implements Closeable {
 
@@ -34,18 +47,55 @@ class OtelServiceBase implements Closeable {
     final RootAllocator allocator;
     final Path tempDir;
 
-    OtelServiceBase(String tempDirPrefix) throws IOException {
+    private final IngestionHandler handler;
+    private final OtelCollectorMetrics metrics;
+    private final IngestionHandler.QueueCreator creator;
+    private final IngestionHandler.QueueEventListener listener;
+
+    OtelServiceBase(String tempDirPrefix,
+                    IngestionHandler handler,
+                    IngestionConfig ingestionConfig,
+                    ScheduledExecutorService flushScheduler,
+                    OtelCollectorMetrics metrics) throws IOException {
         this.allocator = new RootAllocator();
         this.tempDir = Files.createTempDirectory(tempDirPrefix);
+        this.handler = handler;
+        this.metrics = metrics;
+        // Build the queue (sharing the collector-wide flush scheduler) and register its metrics.
+        this.creator = (id, targetPath) -> {
+            ParquetIngestionQueue queue = new ParquetIngestionQueue(
+                    "otel-collector", "arrow", targetPath, id,
+                    ingestionConfig.minBucketSize(),
+                    ingestionConfig.maxBucketSize(),
+                    ingestionConfig.maxBatches(),
+                    ingestionConfig.maxPendingWrite(),
+                    ingestionConfig.maxDelay(),
+                    handler,
+                    flushScheduler, Clock.systemUTC());
+            metrics.registerQueue(id, queue);
+            return queue;
+        };
+        this.listener = new IngestionHandler.QueueEventListener() {
+            @Override public void onCreated(String id)   { log.info("Ingestion queue '{}' created", id); }
+            @Override public void onRefreshed(String id) { log.debug("Ingestion queue '{}' refreshed", id); }
+            @Override public void onDeleted(String id)   {
+                metrics.unregisterQueue(id); // drop per-queue meters so an evicted queue can be GC'd
+                log.warn("Ingestion queue '{}' deleted", id);
+            }
+        };
     }
 
     /**
-     * Reads the {@value Headers#CLAIM_INGESTION_QUEUE} JWT claim from the gRPC context and
-     * resolves it to a {@link SignalWriter}. Returns {@code null} after sending an
-     * {@code INVALID_ARGUMENT} error if the claim is absent or the queue is not configured.
+     * Reads the {@value Headers#CLAIM_INGESTION_QUEUE} JWT claim from the gRPC context and resolves
+     * it to a live {@link ParquetIngestionQueue} via the handler. Returns {@code null} after
+     * sending an error to {@code responseObserver}:
+     * <ul>
+     *   <li>{@code INVALID_ARGUMENT} if the claim is absent or names an unknown queue;</li>
+     *   <li>{@code FAILED_PRECONDITION} if the queue is registered but cannot be created yet
+     *       (e.g. its output location is not provisioned) — distinct from an unknown queue.</li>
+     * </ul>
      */
-    static SignalWriter resolveWriter(Map<String, SignalWriter> writers,
-                                      StreamObserver<?> responseObserver) {
+    ParquetIngestionQueue resolveQueue(StreamObserver<?> responseObserver) {
         String queueId = JwtServerInterceptor.QUEUE_CONTEXT_KEY.get();
         if (queueId == null) {
             responseObserver.onError(Status.INVALID_ARGUMENT
@@ -53,14 +103,37 @@ class OtelServiceBase implements Closeable {
                     .asRuntimeException());
             return null;
         }
-        SignalWriter writer = writers.get(queueId);
-        if (writer == null) {
-            responseObserver.onError(Status.INVALID_ARGUMENT
-                    .withDescription("Unknown ingestion queue: '" + queueId + "'")
+        ParquetIngestionQueue queue;
+        try {
+            queue = handler.getOrCreateQueue(queueId, creator, listener);
+        } catch (RuntimeException e) {
+            // Known queue, but building it failed (e.g. output not provisioned) — retryable.
+            // Log with the cause so a genuine handler/creator bug isn't silently masked as "not ready".
+            log.error("Failed to resolve ingestion queue '{}'", queueId, e);
+            responseObserver.onError(Status.FAILED_PRECONDITION
+                    .withDescription("Ingestion queue '" + queueId + "' is registered but not ready: " + e.getMessage())
                     .asRuntimeException());
             return null;
         }
-        return writer;
+        if (queue == null) {
+            // null means no target path: distinguish "registered but not ready" from "unknown".
+            boolean known = handler.getKnownQueues().contains(queueId);
+            responseObserver.onError((known ? Status.FAILED_PRECONDITION : Status.INVALID_ARGUMENT)
+                    .withDescription(known
+                            ? "Ingestion queue '" + queueId + "' is registered but not ready (no output path)"
+                            : "Unknown ingestion queue: '" + queueId + "'")
+                    .asRuntimeException());
+            return null;
+        }
+        return queue;
+    }
+
+    /** Submits an Arrow file to the queue as a single batch. */
+    CompletableFuture<Void> addBatch(ParquetIngestionQueue queue, Path arrowFile) throws IOException {
+        long fileSize = Files.size(arrowFile);
+        Batch<String> batch = new Batch<>(new String[0], new String[0],
+                arrowFile.toString(), null, 0, fileSize, "parquet", Instant.now());
+        return queue.add(batch).thenApply(ignored -> null);
     }
 
     /**
@@ -89,9 +162,9 @@ class OtelServiceBase implements Closeable {
     }
 
     /**
-     * Returns a {@code whenComplete} handler for a {@link io.dazzleduck.sql.otel.collector.SignalWriter#addBatch}
-     * future. On success records the export metric and notifies the client; on failure deletes
-     * the temp file, records the error metric, and propagates the error to the client.
+     * Returns a {@code whenComplete} handler for an {@link #addBatch} future. On success records
+     * the export metric and notifies the client; on failure deletes the temp file, records the
+     * error metric, and propagates the error to the client.
      */
     static <R> BiConsumer<Void, Throwable> batchCompleteHandler(
             Path arrowFile,

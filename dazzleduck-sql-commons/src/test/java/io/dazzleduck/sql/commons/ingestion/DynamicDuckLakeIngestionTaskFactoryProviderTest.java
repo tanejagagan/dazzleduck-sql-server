@@ -30,7 +30,7 @@ class DynamicDuckLakeIngestionTaskFactoryProviderTest {
         }
     }
 
-    private void insertQueue(String dbPath, String queueId, String outputPath,
+    private void insertQueue(String dbPath, String queueId,
                              String catalog, String schema, String table,
                              String transformation) throws Exception {
         String safePath = dbPath.replace("'", "''");
@@ -41,8 +41,8 @@ class DynamicDuckLakeIngestionTaskFactoryProviderTest {
             st.execute("LOAD sqlite");
             st.execute("ATTACH '" + safePath + "' AS " + att + " (TYPE sqlite)");
             st.execute("INSERT INTO " + att + ".ingestion_queues " +
-                       "(ingestion_queue, output_path, catalog, schema_name, table_name, transformation) " +
-                       "VALUES ('" + queueId + "', '" + outputPath + "', '" +
+                       "(ingestion_queue, catalog, schema_name, table_name, transformation) " +
+                       "VALUES ('" + queueId + "', '" +
                        catalog + "', '" + schema + "', '" + table + "', " + transVal + ")");
         }
     }
@@ -70,14 +70,14 @@ class DynamicDuckLakeIngestionTaskFactoryProviderTest {
     void loadMappingsReturnsInsertedRows() throws Exception {
         String dbPath = tempDir.resolve("test.db").toString();
         initDb(dbPath);
-        insertQueue(dbPath, "logs", "/data/logs", "loglake", "main", "logs", null);
+        insertQueue(dbPath, "logs", "loglake", "main", "logs", null);
 
         var mappings = providerFor(dbPath).loadMappings();
 
         assertEquals(1, mappings.size());
         QueueIdToTableMapping m = mappings.get("logs");
         assertNotNull(m);
-        assertEquals("/data/logs", m.outputPath());
+        assertNull(m.outputPath(), "output path is derived from DuckLake, not read from the registry");
         assertEquals("loglake", m.catalog());
         assertEquals("main", m.schema());
         assertEquals("logs", m.table());
@@ -88,9 +88,9 @@ class DynamicDuckLakeIngestionTaskFactoryProviderTest {
     void loadMappingsReturnsMultipleRows() throws Exception {
         String dbPath = tempDir.resolve("test.db").toString();
         initDb(dbPath);
-        insertQueue(dbPath, "logs",    "/data/logs",    "loglake", "main", "logs",    null);
-        insertQueue(dbPath, "traces",  "/data/traces",  "loglake", "main", "traces",  null);
-        insertQueue(dbPath, "metrics", "/data/metrics", "loglake", "main", "metrics", null);
+        insertQueue(dbPath, "logs",    "loglake", "main", "logs",    null);
+        insertQueue(dbPath, "traces",  "loglake", "main", "traces",  null);
+        insertQueue(dbPath, "metrics", "loglake", "main", "metrics", null);
 
         assertEquals(3, providerFor(dbPath).loadMappings().size());
     }
@@ -134,11 +134,12 @@ class DynamicDuckLakeIngestionTaskFactoryProviderTest {
     void getIngestionHandlerLoadsInitialQueues() throws Exception {
         String dbPath = tempDir.resolve("test.db").toString();
         initDb(dbPath);
-        insertQueue(dbPath, "logs", "/data/logs", "loglake", "main", "logs", null);
+        insertQueue(dbPath, "logs", "loglake", "main", "logs", null);
 
         IngestionHandler handler = providerFor(dbPath).getIngestionHandler();
         try {
-            assertEquals("/data/logs", handler.getTargetPath("logs"));
+            // The target path is derived from DuckLake metadata (not set up here); the loaded
+            // registry is reflected in the known-queue set.
             assertTrue(handler.getKnownQueues().contains("logs"));
         } finally {
             handler.closeQueues();
@@ -159,7 +160,7 @@ class DynamicDuckLakeIngestionTaskFactoryProviderTest {
     void validatePassesWithValidTransformation() throws Exception {
         String dbPath = tempDir.resolve("test.db").toString();
         initDb(dbPath);
-        insertQueue(dbPath, "logs", "/data/logs", "loglake", "main", "logs",
+        insertQueue(dbPath, "logs", "loglake", "main", "logs",
                 "SELECT id, ts FROM __this");
 
         assertDoesNotThrow(() -> providerFor(dbPath).validate());
@@ -169,7 +170,7 @@ class DynamicDuckLakeIngestionTaskFactoryProviderTest {
     void validatePassesWithNoTransformation() throws Exception {
         String dbPath = tempDir.resolve("test.db").toString();
         initDb(dbPath);
-        insertQueue(dbPath, "logs", "/data/logs", "loglake", "main", "logs", null);
+        insertQueue(dbPath, "logs", "loglake", "main", "logs", null);
 
         assertDoesNotThrow(() -> providerFor(dbPath).validate());
     }
@@ -178,7 +179,7 @@ class DynamicDuckLakeIngestionTaskFactoryProviderTest {
     void validateFailsWhenTransformationDoesNotReferenceThis() throws Exception {
         String dbPath = tempDir.resolve("test.db").toString();
         initDb(dbPath);
-        insertQueue(dbPath, "logs", "/data/logs", "loglake", "main", "logs",
+        insertQueue(dbPath, "logs", "loglake", "main", "logs",
                 "SELECT * FROM wrong_table");
 
         var ex = assertThrows(IllegalArgumentException.class,
@@ -191,8 +192,8 @@ class DynamicDuckLakeIngestionTaskFactoryProviderTest {
     void validateChecksAllQueues() throws Exception {
         String dbPath = tempDir.resolve("test.db").toString();
         initDb(dbPath);
-        insertQueue(dbPath, "logs",    "/data/logs",    "loglake", "main", "logs",    "SELECT * FROM __this");
-        insertQueue(dbPath, "metrics", "/data/metrics", "loglake", "main", "metrics", "SELECT * FROM wrong_table");
+        insertQueue(dbPath, "logs",    "loglake", "main", "logs",    "SELECT * FROM __this");
+        insertQueue(dbPath, "metrics", "loglake", "main", "metrics", "SELECT * FROM wrong_table");
 
         var ex = assertThrows(IllegalArgumentException.class,
                 () -> providerFor(dbPath).validate());

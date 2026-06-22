@@ -36,9 +36,13 @@ public interface IngestionHandler {
     default void closeQueues() {}
 
     /**
-     * Returns the set of queue IDs currently known to this handler.
-     * An empty set means "unknown" — callers fall back to static configuration.
-     * Dynamic handlers (e.g. SQLite-backed) override this to return the live registry.
+     * Returns the set of queue IDs this handler currently knows about — the single source of
+     * truth for which queues are routable. Callers (e.g. the OTLP collector's signal services)
+     * accept a request for a queue only when it is in this set; an unknown queue is rejected.
+     * An empty set means "no queues are currently configured" (reject everything), which is a
+     * real state, not "unknown". Static handlers return a fixed set (their configured mappings);
+     * dynamic handlers (e.g. SQLite-backed) return a live set that changes as the registry is
+     * reloaded.
      */
     default java.util.Set<String> getKnownQueues() { return java.util.Set.of(); }
 

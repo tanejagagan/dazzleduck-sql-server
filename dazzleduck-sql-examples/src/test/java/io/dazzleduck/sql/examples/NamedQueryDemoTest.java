@@ -22,7 +22,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Verifies that named queries can be listed and executed against the
  * bundled SIEM/marketing dataset.
  *
- * Run with: mvn test -Pdocker-compose -pl dazzleduck-sql-examples
+ * Run with (this module is packaging=pom, so invoke the goals directly — see README.md):
+ *   mvn -pl dazzleduck-sql-examples -Pdocker-compose resources:testResources compiler:testCompile surefire:test
  */
 @Tag("docker-compose")
 class NamedQueryDemoTest {

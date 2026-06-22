@@ -124,13 +124,16 @@ public class OtelCollectorCustomQueueTest {
         return meta;
     }
 
-    static io.dazzleduck.sql.commons.ingestion.IngestionHandler noopHandler(String outputPath) {
+    static io.dazzleduck.sql.commons.ingestion.IngestionHandler noopHandler(String outputPath, String... knownQueues) {
+        java.util.Set<String> known = new java.util.LinkedHashSet<>(java.util.List.of(knownQueues));
         return new io.dazzleduck.sql.commons.ingestion.IngestionHandler() {
             @Override public io.dazzleduck.sql.commons.ingestion.PostIngestionTask
             createPostIngestionTask(io.dazzleduck.sql.commons.ingestion.IngestionResult r) {
                 return io.dazzleduck.sql.commons.ingestion.PostIngestionTask.NOOP;
             }
-            @Override public String getTargetPath(String id) { return outputPath; }
+            @Override public java.util.Set<String> getKnownQueues() { return known; }
+            // Mirror real handlers: a target path exists only for a known queue (null ⇒ unknown).
+            @Override public String getTargetPath(String id) { return known.contains(id) ? outputPath : null; }
             @Override public String[] getPartitionBy(String id) { return new String[0]; }
         };
     }
@@ -161,12 +164,12 @@ public class OtelCollectorCustomQueueTest {
         void setup() throws Exception {
             int port = findFreePort();
             var outputPath = Files.createTempDirectory("otel-custom-queue").resolve("output");
+            Files.createDirectories(outputPath); // operator provisions the output dir
 
             CollectorProperties props = new CollectorProperties();
             props.setGrpcPort(port);
             // Writers map contains "app-logs" plus traces/metrics defaults
-            props.setQueues(List.of("app-logs", "traces", "metrics"));
-            props.setIngestionHandler(noopHandler(outputPath.toString()));
+            props.setIngestionHandler(noopHandler(outputPath.toString(), "app-logs", "traces", "metrics"));
             props.setIngestionConfig(smallBucketConfig());
             props.setAuthentication("jwt");
             props.setSecretKey(SECRET_KEY_BASE64);
@@ -227,12 +230,12 @@ public class OtelCollectorCustomQueueTest {
         void setup() throws Exception {
             int port = findFreePort();
             var outputPath = Files.createTempDirectory("otel-default-queue").resolve("output");
+            Files.createDirectories(outputPath); // operator provisions the output dir
 
             CollectorProperties props = new CollectorProperties();
             props.setGrpcPort(port);
             // Default queues — "logs" present, so fallback works
-            props.setQueues(List.of("logs", "traces", "metrics"));
-            props.setIngestionHandler(noopHandler(outputPath.toString()));
+            props.setIngestionHandler(noopHandler(outputPath.toString(), "logs", "traces", "metrics"));
             props.setIngestionConfig(smallBucketConfig());
             props.setAuthentication("jwt");
             props.setSecretKey(SECRET_KEY_BASE64);
@@ -294,11 +297,11 @@ public class OtelCollectorCustomQueueTest {
         void setup() throws Exception {
             int port = findFreePort();
             var outputPath = Files.createTempDirectory("otel-unknown-queue").resolve("output");
+            Files.createDirectories(outputPath); // operator provisions the output dir
 
             CollectorProperties props = new CollectorProperties();
             props.setGrpcPort(port);
-            props.setQueues(List.of("logs", "traces", "metrics"));
-            props.setIngestionHandler(noopHandler(outputPath.toString()));
+            props.setIngestionHandler(noopHandler(outputPath.toString(), "logs", "traces", "metrics"));
             props.setIngestionConfig(smallBucketConfig());
             props.setAuthentication("jwt");
             props.setSecretKey(SECRET_KEY_BASE64);
@@ -386,10 +389,11 @@ public class OtelCollectorCustomQueueTest {
         void setup() throws Exception {
             int port = findFreePort();
             var outputPath = Files.createTempDirectory("otel-no-verify").resolve("output");
+            Files.createDirectories(outputPath); // operator provisions the output dir
 
             CollectorProperties props = new CollectorProperties();
             props.setGrpcPort(port);
-            props.setIngestionHandler(noopHandler(outputPath.toString()));
+            props.setIngestionHandler(noopHandler(outputPath.toString(), "logs", "traces", "metrics"));
             props.setIngestionConfig(smallBucketConfig());
             props.setAuthentication("jwt");
             props.setSecretKey(SECRET_KEY_BASE64);

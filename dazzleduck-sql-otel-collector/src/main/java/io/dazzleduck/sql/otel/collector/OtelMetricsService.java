@@ -1,5 +1,8 @@
 package io.dazzleduck.sql.otel.collector;
 
+import io.dazzleduck.sql.commons.ingestion.IngestionConfig;
+import io.dazzleduck.sql.commons.ingestion.IngestionHandler;
+import io.dazzleduck.sql.commons.ingestion.ParquetIngestionQueue;
 import io.dazzleduck.sql.otel.collector.auth.JwtServerInterceptor;
 import io.grpc.stub.StreamObserver;
 import io.opentelemetry.proto.collector.metrics.v1.ExportMetricsServiceRequest;
@@ -15,7 +18,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
+import java.util.concurrent.ScheduledExecutorService;
 
 /**
  * gRPC service that receives OTLP metric exports and writes them to Parquet.
@@ -25,21 +28,20 @@ public class OtelMetricsService extends MetricsServiceGrpc.MetricsServiceImplBas
 
     private static final Logger log = LoggerFactory.getLogger(OtelMetricsService.class);
 
-    private final Map<String, SignalWriter> writers;
     private final OtelCollectorMetrics metrics;
     private final OtelServiceBase base;
 
-    public OtelMetricsService(Map<String, SignalWriter> writers, OtelCollectorMetrics metrics) throws IOException {
-        this.writers = writers;
+    public OtelMetricsService(IngestionHandler handler, IngestionConfig ingestionConfig,
+                              ScheduledExecutorService flushScheduler, OtelCollectorMetrics metrics) throws IOException {
         this.metrics = metrics;
-        this.base = new OtelServiceBase("otel-metrics-arrow-");
+        this.base = new OtelServiceBase("otel-metrics-arrow-", handler, ingestionConfig, flushScheduler, metrics);
     }
 
     @Override
     public void export(ExportMetricsServiceRequest request,
                        StreamObserver<ExportMetricsServiceResponse> responseObserver) {
-        SignalWriter writer = OtelServiceBase.resolveWriter(writers, responseObserver);
-        if (writer == null) return;
+        ParquetIngestionQueue queue = base.resolveQueue(responseObserver);
+        if (queue == null) return;
 
         List<MetricEntry> entries = new ArrayList<>();
         for (ResourceMetrics resourceMetrics : request.getResourceMetricsList()) {
@@ -58,7 +60,7 @@ public class OtelMetricsService extends MetricsServiceGrpc.MetricsServiceImplBas
 
         try {
             Path arrowFile = base.writeArrowFile(entries, OtelMetricSchema.SCHEMA, MetricBatchWriter::write);
-            writer.addBatch(arrowFile).whenComplete(
+            base.addBatch(queue, arrowFile).whenComplete(
                     OtelServiceBase.batchCompleteHandler(arrowFile, metricCount, queueId,
                             sample, metrics,
                             responseObserver, ExportMetricsServiceResponse.getDefaultInstance()));

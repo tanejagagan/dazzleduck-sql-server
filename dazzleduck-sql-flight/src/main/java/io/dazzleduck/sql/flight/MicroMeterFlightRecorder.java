@@ -9,7 +9,10 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.MarkerFactory;
 
 import java.net.InetAddress;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.LongSupplier;
@@ -61,6 +64,13 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
     private final LongAdder queueCreatedCount = new LongAdder();
     private final LongAdder queueRefreshedCount = new LongAdder();
     private final LongAdder queueDeletedCount = new LongAdder();
+
+    /**
+     * Per-queue write-queue meters, tracked so {@link #unregisterWriteQueue} can remove them when a
+     * (dynamic) queue is deleted. Without this, each deleted queue leaks its meters and — because
+     * the gauges hold a supplier referencing the queue — pins the queue object in memory.
+     */
+    private final ConcurrentHashMap<String, List<Meter>> writeQueueMeters = new ConcurrentHashMap<>();
 
     // Lifecycle metrics
     private final LongAdder statementStartCount = new LongAdder();
@@ -287,36 +297,50 @@ public class MicroMeterFlightRecorder implements FlightRecorder {
             return;
         }
 
+        List<Meter> meters = new ArrayList<>();
+
         counters.forEach((name, supplier) ->
-            FunctionCounter.builder("dazzleduck.flight.ingest_queue." + name, supplier, LongSupplier::getAsLong)
+            meters.add(FunctionCounter.builder("dazzleduck.flight.ingest_queue." + name, supplier, LongSupplier::getAsLong)
                     .tag("identifier", identifier)
                     .description("Write queue counter for " + identifier + "." + name)
-                    .register(registry));
+                    .register(registry)));
 
         if (gauges != null) {
             gauges.forEach((name, supplier) ->
-                Gauge.builder("dazzleduck.flight.ingest_queue." + name, supplier, s -> (double) s.getAsLong())
+                meters.add(Gauge.builder("dazzleduck.flight.ingest_queue." + name, supplier, s -> (double) s.getAsLong())
                         .tag("identifier", identifier)
                         .description("Write queue gauge for " + identifier + "." + name)
-                        .register(registry));
+                        .register(registry)));
         }
 
         if (timers != null) {
             timers.forEach((name, t) ->
-                FunctionTimer.builder("dazzleduck.flight.ingest_queue." + name,
+                meters.add(FunctionTimer.builder("dazzleduck.flight.ingest_queue." + name,
                                 t,
                                 (WriteTimerSuppliers s) -> s.count().getAsLong(),
                                 (WriteTimerSuppliers s) -> (double) s.totalTimeMs().getAsLong(),
                                 TimeUnit.MILLISECONDS)
                         .tag("identifier", identifier)
                         .description("Write queue timer for " + identifier + "." + name)
-                        .register(registry));
+                        .register(registry)));
         }
+
+        writeQueueMeters.put(identifier, meters);
 
         logger.debug("Registered write queue '{}' with {} counters, {} gauges, {} timers",
                 identifier, counters.size(),
                 gauges == null ? 0 : gauges.size(),
                 timers == null ? 0 : timers.size());
+    }
+
+    @Override
+    public void unregisterWriteQueue(String identifier) {
+        List<Meter> meters = writeQueueMeters.remove(identifier);
+        if (meters == null) {
+            return;
+        }
+        meters.forEach(registry::remove);
+        logger.debug("Unregistered {} write-queue meter(s) for '{}'", meters.size(), identifier);
     }
 
     // ---------------------------------------------------------------------------

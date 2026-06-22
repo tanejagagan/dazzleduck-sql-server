@@ -7,20 +7,29 @@ no collector restart is required.
 ## How It Works
 
 ```
-External process              SQLite file                  otel-collector
-──────────────────      ──────────────────────────      ────────────────────────────
-INSERT / UPDATE /   →   ingestion_queues table      →   background thread detects
-DELETE row              mtime bumped on every write      mtime change, reloads registry
-                                                         within config_load_interval_ms
+External process                    SQLite file                  otel-collector
+────────────────────────────   ──────────────────────────   ────────────────────────────
+INSERT / UPDATE / DELETE row    ingestion_queues table   →   background thread detects the
++ bump schema_version       →   schema_version bumped         schema_version change, reloads
+(same transaction)              in the same transaction       registry within
+                                                              config_load_interval_ms
 ```
 
-1. The collector opens the SQLite file read-only via DuckDB's SQLite extension at startup.
-2. A background thread polls the file's **last-modified time** every `config_load_interval_ms`
-   milliseconds (default 5 000 ms).
-3. When the mtime changes the thread re-reads the entire `ingestion_queues` table and applies
+1. The collector opens the SQLite file read-only via DuckDB's SQLite extension at startup and
+   holds that one connection open for its lifetime.
+2. A background thread polls the **`schema_version.version`** counter every
+   `config_load_interval_ms` milliseconds (default 5 000 ms), through that persistent connection.
+3. When the version changes the thread re-reads the entire `ingestion_queues` table and applies
    the diff to the in-memory registry.
 4. The hot path (every incoming OTLP RPC) reads only from the in-memory registry — no SQLite
    I/O on the critical path.
+
+> **Important:** change detection is driven by the `schema_version` counter, **not** by file
+> mtime. Every external writer **must** bump `schema_version` in the *same transaction* as its
+> data change (see the examples below) or the collector will not notice the change. This is
+> deliberate: a long-lived process polling file mtime on a FUSE-backed bind mount (e.g. Docker
+> Desktop for Mac / virtiofs) can see a stale cached mtime indefinitely, whereas reading the
+> counter through the open connection forces a real read every time.
 
 ## Enabling the Dynamic Provider
 
@@ -44,7 +53,7 @@ if the file does not exist.
 ```sql
 CREATE TABLE ingestion_queues (
     ingestion_queue  TEXT PRIMARY KEY,  -- queue ID used in JWT x-dd-ingestion-queue claim
-    output_path      TEXT NOT NULL,     -- destination directory for Parquet files
+    output_path      TEXT NOT NULL,     -- destination for Parquet files; must already exist (see below)
     catalog          TEXT NOT NULL,     -- DuckLake catalog name
     schema_name      TEXT NOT NULL,     -- DuckLake schema (e.g. "main")
     table_name       TEXT NOT NULL,     -- DuckLake table name
@@ -55,20 +64,54 @@ CREATE TABLE ingestion_queues (
     min_bucket_size  INTEGER,          -- flush threshold in bytes (overrides global setting)
     max_delay_ms     INTEGER           -- flush interval in ms (overrides global setting)
 );
+
+-- Single-row counter the collector polls for change detection. Writers bump it (in the same
+-- transaction as any change to ingestion_queues) so the collector reloads. Created automatically.
+CREATE TABLE schema_version (
+    id      INTEGER PRIMARY KEY CHECK (id = 1),
+    version INTEGER NOT NULL DEFAULT 0
+);
 ```
+
+## Provisioning the Output Location
+
+`output_path` may be a local filesystem path (`/var/data/app-logs`, `file:///var/data/app-logs`)
+or an object-store URI (`s3://bucket/app-logs`, `gs://…`, `azure://…`).
+
+**The collector never creates the output location** — provisioning it is the operator's
+responsibility, outside the scope of this project:
+
+- **Local paths:** create the directory before (or at the same time as) registering the queue.
+  DuckDB's `COPY` will not create the parent directory for you, so writes to a missing directory
+  fail.
+- **Object stores:** the bucket must already exist (object "directories" are implicit keys, so no
+  directory pre-creation is needed) and the collector must be configured with credentials for it —
+  e.g. an httpfs S3 secret in the `startup_script` (`CREATE SECRET … (TYPE s3, …)`).
+
+There is also **no default or fallback queue**. A queue is routable only while it is present in
+`ingestion_queues`; an empty registry means every request is rejected. Requests whose
+`x-dd-ingestion-queue` claim names an unregistered (or deleted) queue get `INVALID_ARGUMENT`.
+
+> Avoid a trailing slash on an object-store `output_path` (`s3://bucket/app-logs`, not
+> `s3://bucket/app-logs/`): the writer appends `/<file>.parquet`, and a `//` in an S3 key breaks
+> SigV4 request signing (HTTP 400). It is harmless on a local filesystem.
 
 ## Queue Lifecycle Operations
 
 Any process with write access to the SQLite file can perform the following operations.
-Changes are picked up within one `config_load_interval_ms` interval.
+Each change must bump `schema_version` **in the same transaction**, and is then picked up within
+one `config_load_interval_ms` interval. (Provision the `output_path` first — see above.)
 
 ### Add a queue
 
 ```sql
+BEGIN;
 INSERT INTO ingestion_queues
     (ingestion_queue, output_path, catalog, schema_name, table_name)
 VALUES
-    ('app-logs', 's3://my-bucket/app-logs/', 'my_catalog', 'main', 'app_logs');
+    ('app-logs', 's3://my-bucket/app-logs', 'my_catalog', 'main', 'app_logs');
+UPDATE schema_version SET version = version + 1 WHERE id = 1;
+COMMIT;
 ```
 
 Once the collector picks up the change, any OTLP request whose JWT contains
@@ -78,9 +121,12 @@ The `ParquetIngestionQueue` is created lazily on the first incoming message.
 ### Update a queue (e.g. change transformation or output path)
 
 ```sql
+BEGIN;
 UPDATE ingestion_queues
 SET transformation = 'CAST(timestamp AS DATE) AS date, severity_text AS level'
 WHERE ingestion_queue = 'app-logs';
+UPDATE schema_version SET version = version + 1 WHERE id = 1;
+COMMIT;
 ```
 
 The updated `transformation` SQL is applied on the next batch flush — in-flight batches
@@ -89,12 +135,15 @@ complete with the old transformation first.
 ### Delete a queue
 
 ```sql
+BEGIN;
 DELETE FROM ingestion_queues WHERE ingestion_queue = 'app-logs';
+UPDATE schema_version SET version = version + 1 WHERE id = 1;
+COMMIT;
 ```
 
-The collector closes the queue (flushing any pending buffered data to Parquet) and stops
-accepting new messages for that queue ID. Subsequent requests referencing the deleted queue ID
-are rejected with `INVALID_ARGUMENT`.
+The collector closes the queue (flushing any pending buffered data to Parquet), stops
+accepting new messages for that queue ID, and unregisters the queue's metrics. Subsequent
+requests referencing the deleted queue ID are rejected with `INVALID_ARGUMENT`.
 
 ## Concurrency Notes
 
@@ -117,18 +166,27 @@ ATTACH '/var/data/ingestion-queues.db' AS reg (TYPE sqlite);
 -- List current queues
 SELECT * FROM reg.ingestion_queues;
 
--- Add a queue
+-- Add a queue (bump schema_version so the collector reloads)
+BEGIN;
 INSERT INTO reg.ingestion_queues
     (ingestion_queue, output_path, catalog, schema_name, table_name)
-VALUES ('audit-logs', 's3://my-bucket/audit/', 'my_catalog', 'main', 'audit_logs');
+VALUES ('audit-logs', 's3://my-bucket/audit', 'my_catalog', 'main', 'audit_logs');
+UPDATE reg.schema_version SET version = version + 1 WHERE id = 1;
+COMMIT;
 
 -- Update transformation
+BEGIN;
 UPDATE reg.ingestion_queues
 SET transformation = 'CAST(timestamp AS DATE) AS date'
 WHERE ingestion_queue = 'audit-logs';
+UPDATE reg.schema_version SET version = version + 1 WHERE id = 1;
+COMMIT;
 
 -- Remove a queue
+BEGIN;
 DELETE FROM reg.ingestion_queues WHERE ingestion_queue = 'audit-logs';
+UPDATE reg.schema_version SET version = version + 1 WHERE id = 1;
+COMMIT;
 
 DETACH reg;
 ```
@@ -140,21 +198,30 @@ import sqlite3
 
 con = sqlite3.connect("/var/data/ingestion-queues.db")
 
-# Add a queue
+def bump(con):
+    """Signal the collector to reload — call inside the same transaction as the change."""
+    con.execute("UPDATE schema_version SET version = version + 1 WHERE id = 1")
+
+# Add a queue (the connection's implicit transaction commits on con.commit())
 con.execute("""
     INSERT INTO ingestion_queues (ingestion_queue, output_path, catalog, schema_name, table_name)
     VALUES (?, ?, ?, ?, ?)
-""", ("audit-logs", "s3://my-bucket/audit/", "my_catalog", "main", "audit_logs"))
+""", ("audit-logs", "s3://my-bucket/audit", "my_catalog", "main", "audit_logs"))
+bump(con)
+con.commit()
 
 # Update output path
 con.execute("""
     UPDATE ingestion_queues SET output_path = ? WHERE ingestion_queue = ?
-""", ("s3://new-bucket/audit/", "audit-logs"))
+""", ("s3://new-bucket/audit", "audit-logs"))
+bump(con)
+con.commit()
 
 # Delete a queue
 con.execute("DELETE FROM ingestion_queues WHERE ingestion_queue = ?", ("audit-logs",))
-
+bump(con)
 con.commit()
+
 con.close()
 ```
 
@@ -164,5 +231,8 @@ con.close()
   always uses an empty partition list regardless of this column's value.
 - `min_bucket_size` and `max_delay_ms` per-queue overrides are stored but not yet wired
   into the queue creation path — the global values from `ingestion` config are used.
-- The reload is triggered by file mtime. On filesystems where writes do not reliably update
-  mtime (e.g. some network filesystems), changes may not be detected.
+- Reload depends on writers bumping `schema_version` in the same transaction as their change. A
+  write that updates `ingestion_queues` without bumping `schema_version` will **not** be detected.
+- The `output_path` is never created by the collector — it must be provisioned by the operator
+  (local directory created ahead of time, or object-store bucket created with credentials
+  configured). See *Provisioning the Output Location*.

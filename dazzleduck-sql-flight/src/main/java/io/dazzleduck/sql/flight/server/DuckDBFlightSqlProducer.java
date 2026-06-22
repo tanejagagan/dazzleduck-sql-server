@@ -904,7 +904,10 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                 new IngestionHandler.QueueEventListener() {
                     @Override public void onCreated(String id)   { recorder.recordQueueCreated(id);   }
                     @Override public void onRefreshed(String id) { recorder.recordQueueRefreshed(id); }
-                    @Override public void onDeleted(String id)   { recorder.recordQueueDeleted(id);   }
+                    @Override public void onDeleted(String id)   {
+                        recorder.recordQueueDeleted(id);
+                        recorder.unregisterWriteQueue(id); // drop per-queue meters so they don't leak
+                    }
                 });
     }
 
