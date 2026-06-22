@@ -66,7 +66,7 @@ public class Main {
 
     // Authentication types
     private static final String AUTH_NONE = ConfigConstants.AUTH_NONE;
-    private static final String AUTH_JWT = ConfigConstants.AUTH_JWT;
+    private static final String AUTH_JWT = ConfigConstants.AUTH_TOKEN;
 
     // HTTP protocols
     private static final String PROTOCOL_HTTP = "http";

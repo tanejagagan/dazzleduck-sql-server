@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -23,8 +24,11 @@ import java.util.Map;
  *   schema_version    — single row (id=1); owned by the writer to track remote sync progress.
  * </pre>
  *
- * <p>Change detection for {@link DynamicIngestionHandler} uses the file's last-modified
- * timestamp, checked via {@link #readDataVersion(String)}.
+ * <p>Change detection for {@link DynamicIngestionHandler} polls {@link #readSchemaVersion(Connection)}
+ * via its persistent connection. {@link #readDataVersion(String)} (file mtime) is a separate,
+ * lighter-weight check available for callers that don't hold a persistent connection open — but
+ * it is unsuitable for a long-lived poller on FUSE-backed mounts (see {@link DynamicIngestionHandler}'s
+ * class javadoc), so {@link DynamicIngestionHandler} itself does not use it.
  *
  * <p>All I/O uses DuckDB's {@code sqlite} extension via standalone connections
  * ({@code DriverManager.getConnection("jdbc:duckdb:")}), not the shared {@code ConnectionPool}.
@@ -56,7 +60,6 @@ public class DynamicQueueRepository implements AutoCloseable {
             st.execute("""
                 CREATE TABLE IF NOT EXISTS %s.ingestion_queues (
                     ingestion_queue  TEXT PRIMARY KEY,
-                    output_path      TEXT NOT NULL,
                     catalog          TEXT NOT NULL,
                     schema_name      TEXT NOT NULL,
                     table_name       TEXT NOT NULL,
@@ -124,14 +127,46 @@ public class DynamicQueueRepository implements AutoCloseable {
     // -----------------------------------------------------------------------
 
     /**
+     * Change-detection query: a primary-key point lookup on the single-row {@code schema_version}
+     * table (so no index beyond the implicit PK is needed).
+     */
+    private static final String SCHEMA_VERSION_QUERY =
+            "SELECT version FROM " + ATTACHMENT + ".schema_version WHERE id = 1";
+
+    /**
      * Reads the writer's remote-sync version from {@code schema_version} via the supplied
      * connection (which must have {@value ATTACHMENT} already attached).
      * Returns -1 if unreadable.
+     *
+     * <p>For a hot polling loop prefer {@link #prepareSchemaVersionQuery(Connection)} +
+     * {@link #readSchemaVersion(PreparedStatement)} to avoid re-parsing the query on every poll.
      */
     public static long readSchemaVersion(Connection conn) {
         try (Statement st = conn.createStatement();
-             ResultSet rs = st.executeQuery(
-                     "SELECT version FROM " + ATTACHMENT + ".schema_version WHERE id = 1")) {
+             ResultSet rs = st.executeQuery(SCHEMA_VERSION_QUERY)) {
+            return rs.next() ? rs.getLong(1) : -1L;
+        } catch (SQLException e) {
+            logger.debug("schema_version not readable ({}), returning -1", e.getMessage());
+            return -1L;
+        }
+    }
+
+    /**
+     * Prepares the {@code schema_version} change-detection query on {@code conn} (which must have
+     * {@value ATTACHMENT} attached). Reuse the returned statement across polls to skip re-parsing
+     * the query each time; the caller owns it and must close it. Not thread-safe — drive it from a
+     * single poller thread.
+     */
+    public static PreparedStatement prepareSchemaVersionQuery(Connection conn) throws SQLException {
+        return conn.prepareStatement(SCHEMA_VERSION_QUERY);
+    }
+
+    /**
+     * Reads {@code schema_version} via a statement from {@link #prepareSchemaVersionQuery}.
+     * Returns -1 if unreadable.
+     */
+    public static long readSchemaVersion(PreparedStatement schemaVersionQuery) {
+        try (ResultSet rs = schemaVersionQuery.executeQuery()) {
             return rs.next() ? rs.getLong(1) : -1L;
         } catch (SQLException e) {
             logger.debug("schema_version not readable ({}), returning -1", e.getMessage());
@@ -142,25 +177,30 @@ public class DynamicQueueRepository implements AutoCloseable {
     /**
      * Loads all rows from {@code ingestion_queues} via the supplied connection
      * (which must have {@value ATTACHMENT} already attached).
+     *
+     * <p>The write location and partition columns are <strong>not</strong> read from the registry —
+     * {@link DynamicIngestionHandler} (via {@link DuckLakeIngestionHandler}) derives them from the
+     * DuckLake table's own metadata. The registry supplies {@code catalog}/{@code schema}/
+     * {@code table} (plus optional {@code transformation}/{@code view}/{@code input_table}); the
+     * {@code partition_by} column is reserved for future use and not read here.
      */
     public static Map<String, QueueIdToTableMapping> loadAll(Connection conn) throws SQLException {
         Map<String, QueueIdToTableMapping> result = new LinkedHashMap<>();
         try (Statement st = conn.createStatement();
              ResultSet rs = st.executeQuery(
-                     "SELECT ingestion_queue, output_path, catalog, schema_name, table_name," +
+                     "SELECT ingestion_queue, catalog, schema_name, table_name," +
                      " transformation, view_name, input_table FROM " + ATTACHMENT + ".ingestion_queues")) {
             while (rs.next()) {
                 String queueId    = rs.getString("ingestion_queue");
-                String outputPath = rs.getString("output_path");
                 String catalog    = rs.getString("catalog");
                 String schema     = rs.getString("schema_name");
                 String table      = rs.getString("table_name");
                 String transform  = rs.getString("transformation");
                 String view       = rs.getString("view_name");
                 String inputTable = rs.getString("input_table");
+                // outputPath omitted: derived from DuckLake metadata by the handler.
                 result.put(queueId, new QueueIdToTableMapping(
-                        queueId, outputPath, catalog, schema, table,
-                        Map.of(), transform, view, inputTable));
+                        queueId, catalog, schema, table, Map.of(), transform, view, inputTable));
             }
         }
         return result;

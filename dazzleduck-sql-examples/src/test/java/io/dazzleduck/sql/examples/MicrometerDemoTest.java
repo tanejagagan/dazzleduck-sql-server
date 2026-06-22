@@ -22,7 +22,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * The demo container pushes Micrometer metrics to DazzleDuck via the
  * ingestion queue; this test waits for data to land and queries it.
  *
- * Run with: mvn test -Pdocker-compose -pl dazzleduck-sql-examples
+ * Run with (this module is packaging=pom, so invoke the goals directly — see README.md):
+ *   mvn -pl dazzleduck-sql-examples -Pdocker-compose resources:testResources compiler:testCompile surefire:test
  */
 @Tag("docker-compose")
 class MicrometerDemoTest {

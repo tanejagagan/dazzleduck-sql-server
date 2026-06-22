@@ -85,6 +85,49 @@ public class AuthUtils {
         };
     }
 
+    /**
+     * Creates a client middleware factory that authenticates using a pre-existing bearer
+     * token instead of username/password BasicAuth. The supplied token is sent as the
+     * {@code Authorization} header on the first call. If the server responds with a new
+     * bearer token (e.g. a freshly minted access token), subsequent calls use that token.
+     *
+     * @param token   the bearer token, with or without the {@code "Bearer "} prefix
+     * @param headers extra headers to attach to every outgoing call
+     */
+    public static FlightClientMiddleware.Factory createClientMiddlewareFactory(String token,
+                                                                               Map<String, String> headers) {
+        final String initialBearer = token.startsWith(Auth2Constants.BEARER_PREFIX)
+                ? token
+                : Auth2Constants.BEARER_PREFIX + token;
+        return new FlightClientMiddleware.Factory() {
+            private volatile String bearer = initialBearer;
+
+            @Override
+            public FlightClientMiddleware onCallStarted(CallInfo info) {
+                return new FlightClientMiddleware() {
+                    @Override
+                    public void onBeforeSendingHeaders(CallHeaders outgoingHeaders) {
+                        outgoingHeaders.insert(Auth2Constants.AUTHORIZATION_HEADER, bearer);
+                        headers.forEach(outgoingHeaders::insert);
+                    }
+
+                    @Override
+                    public void onHeadersReceived(CallHeaders incomingHeaders) {
+                        var received = incomingHeaders.get(Auth2Constants.AUTHORIZATION_HEADER);
+                        if (received != null) {
+                            bearer = received;
+                        }
+                    }
+
+                    @Override
+                    public void onCallCompleted(CallStatus status) {
+
+                    }
+                };
+            }
+        };
+    }
+
     private static final Logger logger = LoggerFactory.getLogger(AuthUtils.class);
 
     public static AdvanceBasicCallHeaderAuthenticator.AdvanceCredentialValidator createCredentialValidator(Config config) {

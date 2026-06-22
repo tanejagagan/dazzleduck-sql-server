@@ -45,8 +45,8 @@ class DynamicQueueRepositoryTest {
             long before = DynamicQueueRepository.readDataVersion(dbPath);
 
             writeToDb(dbPath, "INSERT INTO " + DynamicQueueRepository.ATTACHMENT + ".ingestion_queues " +
-                    "(ingestion_queue, output_path, catalog, schema_name, table_name) " +
-                    "VALUES ('q1', '/data/q1', 'cat', 'main', 'q1')");
+                    "(ingestion_queue, catalog, schema_name, table_name) " +
+                    "VALUES ('q1', 'cat', 'main', 'q1')");
 
             long after = DynamicQueueRepository.readDataVersion(dbPath);
             assertTrue(after >= before, "data version (mtime) must be >= after a write");
@@ -60,8 +60,8 @@ class DynamicQueueRepositoryTest {
             repo.init();
 
             writeToDb(dbPath, "INSERT INTO " + DynamicQueueRepository.ATTACHMENT + ".ingestion_queues " +
-                    "(ingestion_queue, output_path, catalog, schema_name, table_name) " +
-                    "VALUES ('q1', '/data/q1', 'cat', 'main', 'q1')");
+                    "(ingestion_queue, catalog, schema_name, table_name) " +
+                    "VALUES ('q1', 'cat', 'main', 'q1')");
             writeToDb(dbPath, "UPDATE " + DynamicQueueRepository.ATTACHMENT +
                     ".schema_version SET version = version + 1 WHERE id = 1");
             writeToDb(dbPath, "DELETE FROM " + DynamicQueueRepository.ATTACHMENT +
@@ -83,15 +83,15 @@ class DynamicQueueRepositoryTest {
             repo.init();
 
             writeToDb(dbPath, "INSERT INTO " + DynamicQueueRepository.ATTACHMENT + ".ingestion_queues " +
-                    "(ingestion_queue, output_path, catalog, schema_name, table_name) " +
-                    "VALUES ('logs', '/data/logs', 'my_catalog', 'main', 'logs')");
+                    "(ingestion_queue, catalog, schema_name, table_name) " +
+                    "VALUES ('logs', 'my_catalog', 'main', 'logs')");
 
             try (Connection conn = repo.openReadOnlyConnection()) {
                 Map<String, QueueIdToTableMapping> mappings = DynamicQueueRepository.loadAll(conn);
                 assertEquals(1, mappings.size());
                 QueueIdToTableMapping m = mappings.get("logs");
                 assertNotNull(m);
-                assertEquals("/data/logs", m.outputPath());
+                assertNull(m.outputPath(), "output path is derived from DuckLake, not read from the registry");
                 assertEquals("my_catalog", m.catalog());
                 assertEquals("main", m.schema());
                 assertEquals("logs", m.table());
@@ -106,26 +106,35 @@ class DynamicQueueRepositoryTest {
         try (DynamicQueueRepository repo = new DynamicQueueRepository(dbPath)) {
             repo.init();
 
+            // Real writers (e.g. QueueRegistryWriter) always bump schema_version in the same
+            // transaction as any data change — that's what DynamicIngestionHandler now polls for
+            // change detection (not file mtime; see its class javadoc), so the test must model it.
             writeToDb(dbPath, "INSERT INTO " + DynamicQueueRepository.ATTACHMENT + ".ingestion_queues " +
-                    "(ingestion_queue, output_path, catalog, schema_name, table_name) " +
-                    "VALUES ('q1', '/data/q1', 'cat', 'main', 'q1')");
+                    "(ingestion_queue, catalog, schema_name, table_name) " +
+                    "VALUES ('q1', 'cat', 'main', 'q1')");
+            writeToDb(dbPath, "UPDATE " + DynamicQueueRepository.ATTACHMENT +
+                    ".schema_version SET version = version + 1 WHERE id = 1");
 
             Connection readConn = repo.openReadOnlyConnection();
             Map<String, QueueIdToTableMapping> initial = DynamicQueueRepository.loadAll(readConn);
             var handler = new DynamicIngestionHandler(dbPath, readConn, initial,
                     java.time.Duration.ofMillis(50));
 
-            assertEquals("/data/q1", handler.getTargetPath("q1"));
-            assertNull(handler.getTargetPath("q2"));
+            // Assert on the known-queue set (the registry-driven part). The actual target path is
+            // derived from DuckLake table metadata, which these fixture tables don't have, so this
+            // test verifies hot-reload of the mapping set, not path resolution (covered elsewhere).
+            assertTrue(handler.getKnownQueues().contains("q1"));
+            assertFalse(handler.getKnownQueues().contains("q2"));
 
-            Thread.sleep(100); // ensure mtime will differ
             writeToDb(dbPath, "INSERT INTO " + DynamicQueueRepository.ATTACHMENT + ".ingestion_queues " +
-                    "(ingestion_queue, output_path, catalog, schema_name, table_name) " +
-                    "VALUES ('q2', '/data/q2', 'cat', 'main', 'q2')");
+                    "(ingestion_queue, catalog, schema_name, table_name) " +
+                    "VALUES ('q2', 'cat', 'main', 'q2')");
+            writeToDb(dbPath, "UPDATE " + DynamicQueueRepository.ATTACHMENT +
+                    ".schema_version SET version = version + 1 WHERE id = 1");
 
             Thread.sleep(200);
 
-            assertEquals("/data/q2", handler.getTargetPath("q2"));
+            assertTrue(handler.getKnownQueues().contains("q2"), "hot-reload picked up the new queue");
 
             handler.closeQueues();
         }

@@ -51,6 +51,9 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
               AND t.end_snapshot IS NULL
             """;
 
+    // Mutable so subclasses (e.g. DynamicIngestionHandler) can reconcile the set at runtime via
+    // updateMappings(); concurrent because read accessors run on request threads while a reload
+    // thread may be updating it.
     private final Map<String, QueueIdToTableMapping> queueIdsToTableMappings;
 
     // -----------------------------------------------------------------------
@@ -81,10 +84,37 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
     }
 
     public DuckLakeIngestionHandler(Map<String, QueueIdToTableMapping> mappings, Duration refreshInterval, Clock clock) {
-        this.queueIdsToTableMappings = mappings;
+        this.queueIdsToTableMappings = new ConcurrentHashMap<>(mappings);
         this.refreshInterval = refreshInterval;
         this.clock = clock;
         mappings.forEach((id, mapping) -> stateCache.put(id, buildState(mapping, clock.instant())));
+    }
+
+    /**
+     * Reconciles the queue→table mapping set to {@code fresh} (add/replace changed entries, drop
+     * removed ones, evicting and closing their cached queues). Derived state for added/changed
+     * queues is invalidated and rebuilt lazily on next access (which also defers the DuckLake
+     * metadata read until the table actually exists). Intended for a dynamic source that detects
+     * registry changes; call it from a single reconcile thread.
+     */
+    protected void updateMappings(Map<String, QueueIdToTableMapping> fresh) {
+        fresh.forEach((id, mapping) -> {
+            QueueIdToTableMapping previous = queueIdsToTableMappings.put(id, mapping);
+            if (previous == null || !previous.equals(mapping)) {
+                stateCache.remove(id); // force a lazy rebuild of the DuckLake-derived state
+            }
+        });
+        queueIdsToTableMappings.keySet().removeIf(id -> {
+            if (fresh.containsKey(id)) return false;
+            stateCache.remove(id);
+            ParquetIngestionQueue removed = queueCache.remove(id);
+            if (removed != null) {
+                try { removed.close(); } catch (Exception e) {
+                    logger.atWarn().setCause(e).log("Failed to close evicted queue: {}", id);
+                }
+            }
+            return true;
+        });
     }
 
     /**
@@ -115,6 +145,12 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
     public String[] getPartitionBy(String queueId) {
         QueueState s = getOrRefreshState(queueId);
         return s != null ? s.partitionColumns() : new String[0];
+    }
+
+    @Override
+    public java.util.Set<String> getKnownQueues() {
+        // The configured mappings are this handler's fixed, authoritative queue set.
+        return queueIdsToTableMappings.keySet();
     }
 
     @Override
@@ -205,13 +241,18 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
     }
 
     /**
-     * Resolves the canonical state-cache key for {@code queueId}: exact match first, then the
-     * last path segment as a fallback for path-style IDs like {@code /some/path/tableName}.
+     * Resolves the canonical mapping key for {@code queueId}: exact match first, then the last path
+     * segment as a fallback for path-style IDs like {@code /some/path/tableName}.
+     *
+     * <p>Resolved against the mapping set (the authoritative source), not {@code stateCache}: a queue
+     * may be known but have no cached state yet — at startup for the static handler, and after every
+     * {@link #updateMappings} for the dynamic handler, which invalidates state for lazy rebuild.
+     * {@link #getOrRefreshState} then builds the state on first access via {@code stateCache.compute}.
      */
     private String resolveStateKey(String queueId) {
-        if (stateCache.containsKey(queueId)) return queueId;
+        if (queueIdsToTableMappings.containsKey(queueId)) return queueId;
         String suffix = extractSuffix(queueId);
-        return stateCache.containsKey(suffix) ? suffix : null;
+        return queueIdsToTableMappings.containsKey(suffix) ? suffix : null;
     }
 
     // -----------------------------------------------------------------------

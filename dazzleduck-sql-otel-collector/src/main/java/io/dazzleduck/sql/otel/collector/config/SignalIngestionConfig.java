@@ -9,8 +9,8 @@ import java.util.List;
  * that are appended as {@code SELECT *, <transformation> FROM __this} before the COPY command.
  * Example: {@code "CAST(timestamp AS DATE) AS date, severity_text AS level"}
  *
- * <p>Transformations are refreshed every 2 minutes by the {@link io.dazzleduck.sql.otel.collector.SignalWriter}
- * scheduler via {@link io.dazzleduck.sql.commons.ingestion.IngestionHandler#getTransformation}.
+ * <p>Transformations are fetched fresh on each batch write from
+ * {@link io.dazzleduck.sql.commons.ingestion.IngestionHandler#getTransformation}.
  */
 public record SignalIngestionConfig(
         String outputPath,

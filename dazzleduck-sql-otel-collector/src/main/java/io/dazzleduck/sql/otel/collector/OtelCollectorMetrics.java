@@ -1,5 +1,6 @@
 package io.dazzleduck.sql.otel.collector;
 
+import io.dazzleduck.sql.commons.ingestion.ParquetIngestionQueue;
 import io.micrometer.core.instrument.FunctionCounter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.Meter;
@@ -17,8 +18,11 @@ import java.util.concurrent.atomic.LongAdder;
  * each configured ingestion queue gets its own counters and timers.
  *
  * <p>Meters are created on first use ({@link #recordExport}/{@link #recordError}) and on
- * {@link #registerWriter} — no pre-allocation at startup. This means a queue that never
- * receives traffic produces no meters.
+ * {@link #registerQueue} — no pre-allocation at startup. This means a queue that never
+ * receives traffic produces no meters. Every meter is also tracked per queue ID so that
+ * {@link #unregisterQueue} can remove them all when a dynamic queue is evicted — important
+ * because the writer gauges/counters hold a strong reference to the {@code ParquetIngestionQueue},
+ * so leaving them registered would pin an evicted queue in memory.
  *
  * <p>All meters carry a {@code queue} tag with the queue ID as the value, plus the common
  * tags ({@code service.name}, {@code host.name}, {@code container.id}) set once at startup
@@ -45,8 +49,18 @@ public class OtelCollectorMetrics implements Closeable {
     private final ConcurrentHashMap<String, LongAdder> errorsPerQueue   = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Timer>     timersPerQueue   = new ConcurrentHashMap<>();
 
+    /** All meters created for a given queue ID, so {@link #unregisterQueue} can remove them. */
+    private final ConcurrentHashMap<String, List<Meter>> metersByQueue = new ConcurrentHashMap<>();
+
     public OtelCollectorMetrics(MeterRegistry registry) {
         this.registry = registry;
+    }
+
+    /** Records a meter in both the global list (for {@link #close}) and the per-queue index. */
+    private <M extends Meter> M track(String queueId, M meter) {
+        registeredMeters.add(meter);
+        metersByQueue.computeIfAbsent(queueId, k -> new CopyOnWriteArrayList<>()).add(meter);
+        return meter;
     }
 
     // -----------------------------------------------------------------------
@@ -73,30 +87,50 @@ public class OtelCollectorMetrics implements Closeable {
     }
 
     // -----------------------------------------------------------------------
-    // Writer metrics — registered once per queue at startup
+    // Writer metrics — registered when a queue is created, removed on eviction
     // -----------------------------------------------------------------------
 
-    public void registerWriter(String queueId, SignalWriter writer) {
-        registeredMeters.add(FunctionCounter.builder("dazzleduck.otel.writer.bytes_written", writer,
+    public void registerQueue(String queueId, ParquetIngestionQueue writer) {
+        track(queueId, FunctionCounter.builder("dazzleduck.otel.writer.bytes_written", writer,
                         w -> w.getStats().totalWriteBytes())
                 .tag("queue", queueId)
                 .description("Cumulative bytes written to Parquet")
                 .register(registry));
-        registeredMeters.add(FunctionCounter.builder("dazzleduck.otel.writer.batches_written", writer,
+        track(queueId, FunctionCounter.builder("dazzleduck.otel.writer.batches_written", writer,
                         w -> w.getStats().totalWriteBatches())
                 .tag("queue", queueId)
                 .description("Cumulative number of Arrow batches flushed to Parquet")
                 .register(registry));
-        registeredMeters.add(Gauge.builder("dazzleduck.otel.writer.pending_batches", writer,
+        track(queueId, Gauge.builder("dazzleduck.otel.writer.pending_batches", writer,
                         w -> w.getStats().pendingBatches())
                 .tag("queue", queueId)
                 .description("Current number of batches queued but not yet written")
                 .register(registry));
-        registeredMeters.add(Gauge.builder("dazzleduck.otel.writer.pending_buckets", writer,
+        track(queueId, Gauge.builder("dazzleduck.otel.writer.pending_buckets", writer,
                         w -> w.getStats().pendingBuckets())
                 .tag("queue", queueId)
                 .description("Current number of buckets queued but not yet written")
                 .register(registry));
+    }
+
+    /**
+     * Removes every meter registered for {@code queueId} (writer gauges/counters plus any
+     * lazily-created export counters/timer) and drops the per-queue accumulators. Called when a
+     * dynamic queue is evicted so a deleted queue leaves no stale series behind and its
+     * {@code ParquetIngestionQueue} (referenced by the writer gauges) can be garbage-collected.
+     */
+    public void unregisterQueue(String queueId) {
+        List<Meter> meters = metersByQueue.remove(queueId);
+        if (meters != null) {
+            meters.forEach(m -> {
+                registry.remove(m);
+                registeredMeters.remove(m);
+            });
+        }
+        requestsPerQueue.remove(queueId);
+        recordsPerQueue.remove(queueId);
+        errorsPerQueue.remove(queueId);
+        timersPerQueue.remove(queueId);
     }
 
     // -----------------------------------------------------------------------
@@ -106,7 +140,7 @@ public class OtelCollectorMetrics implements Closeable {
     private LongAdder getOrCreateRequests(String queueId) {
         return requestsPerQueue.computeIfAbsent(queueId, id -> {
             var adder = new LongAdder();
-            registeredMeters.add(FunctionCounter.builder("dazzleduck.otel.export.requests", adder, LongAdder::sum)
+            track(id, FunctionCounter.builder("dazzleduck.otel.export.requests", adder, LongAdder::sum)
                     .tag("queue", id)
                     .description("Number of OTLP export RPC calls received")
                     .register(registry));
@@ -117,7 +151,7 @@ public class OtelCollectorMetrics implements Closeable {
     private LongAdder getOrCreateRecords(String queueId) {
         return recordsPerQueue.computeIfAbsent(queueId, id -> {
             var adder = new LongAdder();
-            registeredMeters.add(FunctionCounter.builder("dazzleduck.otel.export.records", adder, LongAdder::sum)
+            track(id, FunctionCounter.builder("dazzleduck.otel.export.records", adder, LongAdder::sum)
                     .tag("queue", id)
                     .description("Number of individual records exported")
                     .register(registry));
@@ -128,7 +162,7 @@ public class OtelCollectorMetrics implements Closeable {
     private LongAdder getOrCreateErrors(String queueId) {
         return errorsPerQueue.computeIfAbsent(queueId, id -> {
             var adder = new LongAdder();
-            registeredMeters.add(FunctionCounter.builder("dazzleduck.otel.export.errors", adder, LongAdder::sum)
+            track(id, FunctionCounter.builder("dazzleduck.otel.export.errors", adder, LongAdder::sum)
                     .tag("queue", id)
                     .description("Number of failed export requests")
                     .register(registry));
@@ -138,11 +172,11 @@ public class OtelCollectorMetrics implements Closeable {
 
     private Timer getOrCreateTimer(String queueId) {
         return timersPerQueue.computeIfAbsent(queueId, id ->
-                Timer.builder("dazzleduck.otel.export.latency")
+                track(id, Timer.builder("dazzleduck.otel.export.latency")
                         .tag("queue", id)
                         .description("End-to-end export RPC duration — from request received to onCompleted/onError")
                         .publishPercentiles(0.5, 0.95, 0.99)
-                        .register(registry));
+                        .register(registry)));
     }
 
     // -----------------------------------------------------------------------
@@ -166,10 +200,11 @@ public class OtelCollectorMetrics implements Closeable {
 
     public MeterRegistry getRegistry() { return registry; }
 
-    /** Removes all registered meters from the registry so SignalWriter references can be GC'd. */
+    /** Removes all registered meters from the registry so queue references can be GC'd. */
     @Override
     public void close() {
         registeredMeters.forEach(registry::remove);
         registeredMeters.clear();
+        metersByQueue.clear();
     }
 }

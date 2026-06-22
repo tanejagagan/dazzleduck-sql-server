@@ -184,6 +184,9 @@
                             <tag>latest-${jib.architecture}</tag>
                         </tags>
                     </to>
+                    <container>
+                        <mainClass>${exec.mainClass}</mainClass>
+                    </container>
                 </configuration>
             </plugin>
         </plugins>

@@ -130,6 +130,7 @@ public class OtelCollectorLoginDelegationTest {
 
             int otelPort = findFreePort();
             var outputPath = Files.createTempDirectory("otel-test-delegation").resolve("output");
+            Files.createDirectories(outputPath); // operator provisions the output dir
 
             CollectorProperties props = new CollectorProperties();
             props.setGrpcPort(otelPort);
@@ -260,6 +261,7 @@ public class OtelCollectorLoginDelegationTest {
         void setup() throws Exception {
             int otelPort = findFreePort();
             var outputPath = Files.createTempDirectory("otel-test-local").resolve("output");
+            Files.createDirectories(outputPath); // operator provisions the output dir
 
             CollectorProperties props = new CollectorProperties();
             props.setGrpcPort(otelPort);
@@ -337,8 +339,8 @@ public class OtelCollectorLoginDelegationTest {
         void setup() throws Exception {
             int otelPort = findFreePort();
             Path tempDir = Files.createTempDirectory("otel-test-transform");
-            // outputPath is a file prefix inside tempDir, not the dir itself
             outputPath = tempDir.resolve("output");
+            Files.createDirectories(outputPath); // operator provisions the output dir
 
             CollectorProperties props = new CollectorProperties();
             props.setGrpcPort(otelPort);
@@ -414,6 +416,7 @@ public class OtelCollectorLoginDelegationTest {
             int otelPort = findFreePort();
             Path tempDir = Files.createTempDirectory("otel-test-traces");
             tracesOutputPath = tempDir.resolve("traces");
+            Files.createDirectories(tracesOutputPath); // operator provisions the output dir
 
             CollectorProperties props = new CollectorProperties();
             props.setGrpcPort(otelPort);
@@ -493,6 +496,7 @@ public class OtelCollectorLoginDelegationTest {
             int otelPort = findFreePort();
             Path tempDir = Files.createTempDirectory("otel-test-metrics");
             metricsOutputPath = tempDir.resolve("metrics");
+            Files.createDirectories(metricsOutputPath); // operator provisions the output dir
 
             CollectorProperties props = new CollectorProperties();
             props.setGrpcPort(otelPort);
@@ -562,6 +566,11 @@ public class OtelCollectorLoginDelegationTest {
             @Override public io.dazzleduck.sql.commons.ingestion.PostIngestionTask
             createPostIngestionTask(io.dazzleduck.sql.commons.ingestion.IngestionResult r) {
                 return io.dazzleduck.sql.commons.ingestion.PostIngestionTask.NOOP;
+            }
+            // The handler is the source of truth for routable queues; these tests use the standard
+            // signal queue IDs.
+            @Override public java.util.Set<String> getKnownQueues() {
+                return java.util.Set.of("logs", "traces", "metrics");
             }
             @Override public String getTargetPath(String id) { return outputPath; }
             @Override public String[] getPartitionBy(String id) { return new String[0]; }

@@ -1,5 +1,8 @@
 package io.dazzleduck.sql.otel.collector;
 
+import io.dazzleduck.sql.commons.ingestion.IngestionConfig;
+import io.dazzleduck.sql.commons.ingestion.IngestionHandler;
+import io.dazzleduck.sql.commons.ingestion.ParquetIngestionQueue;
 import io.dazzleduck.sql.otel.collector.auth.JwtServerInterceptor;
 import io.grpc.stub.StreamObserver;
 import io.opentelemetry.proto.collector.logs.v1.ExportLogsServiceRequest;
@@ -15,7 +18,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
+import java.util.concurrent.ScheduledExecutorService;
 
 /**
  * gRPC service that receives OTLP log exports and writes them to Parquet.
@@ -25,21 +28,20 @@ public class OtelLogService extends LogsServiceGrpc.LogsServiceImplBase implemen
 
     private static final Logger log = LoggerFactory.getLogger(OtelLogService.class);
 
-    private final Map<String, SignalWriter> writers;
     private final OtelCollectorMetrics metrics;
     private final OtelServiceBase base;
 
-    public OtelLogService(Map<String, SignalWriter> writers, OtelCollectorMetrics metrics) throws IOException {
-        this.writers = writers;
+    public OtelLogService(IngestionHandler handler, IngestionConfig ingestionConfig,
+                          ScheduledExecutorService flushScheduler, OtelCollectorMetrics metrics) throws IOException {
         this.metrics = metrics;
-        this.base = new OtelServiceBase("otel-logs-arrow-");
+        this.base = new OtelServiceBase("otel-logs-arrow-", handler, ingestionConfig, flushScheduler, metrics);
     }
 
     @Override
     public void export(ExportLogsServiceRequest request,
                        StreamObserver<ExportLogsServiceResponse> responseObserver) {
-        SignalWriter writer = OtelServiceBase.resolveWriter(writers, responseObserver);
-        if (writer == null) return;
+        ParquetIngestionQueue queue = base.resolveQueue(responseObserver);
+        if (queue == null) return;
 
         List<LogEntry> entries = new ArrayList<>();
         for (ResourceLogs resourceLogs : request.getResourceLogsList()) {
@@ -58,7 +60,7 @@ public class OtelLogService extends LogsServiceGrpc.LogsServiceImplBase implemen
 
         try {
             Path arrowFile = base.writeArrowFile(entries, OtelLogSchema.SCHEMA, LogRecordBatchWriter::write);
-            writer.addBatch(arrowFile).whenComplete(
+            base.addBatch(queue, arrowFile).whenComplete(
                     OtelServiceBase.batchCompleteHandler(arrowFile, recordCount, queueId,
                             sample, metrics,
                             responseObserver, ExportLogsServiceResponse.getDefaultInstance()));

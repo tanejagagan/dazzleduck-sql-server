@@ -73,6 +73,10 @@ class OtelCollectorConfigDuckLakeTest {
             });
         }
 
+        // Output directory provisioning is the operator's responsibility (ParquetIngestionQueue no
+        // longer creates it); the test is the operator and pre-creates the logs table's data dir.
+        Files.createDirectories(dataDir.resolve("main").resolve("logs"));
+
         // Build the collector config entirely from HOCON — exercises the unified
         // ingestion_task_factory_provider block with per-signal mapping entries.
         int port = freePort();

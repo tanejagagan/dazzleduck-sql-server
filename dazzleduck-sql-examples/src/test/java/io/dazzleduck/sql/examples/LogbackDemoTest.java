@@ -22,7 +22,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Two demo app containers emit log lines via LogForwardingAppender;
  * this test waits for logs to land in DuckLake and queries them.
  *
- * Run with: mvn test -Pdocker-compose -pl dazzleduck-sql-examples
+ * Run with (this module is packaging=pom, so invoke the goals directly — see README.md):
+ *   mvn -pl dazzleduck-sql-examples -Pdocker-compose resources:testResources compiler:testCompile surefire:test
  */
 @Tag("docker-compose")
 class LogbackDemoTest {

@@ -8,7 +8,6 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 import java.time.Duration;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 public class CollectorProperties {
@@ -29,9 +28,6 @@ public class CollectorProperties {
     private Map<String, String> users = new HashMap<>();
     private Duration jwtExpiration = Duration.ofHours(1);
     private MeterRegistry meterRegistry = new SimpleMeterRegistry();
-    // Queue IDs derived from ingestion_queue_table_mapping entries; must be set explicitly
-    // when not using CollectorConfig.toProperties() (e.g. in tests).
-    private List<String> queues = List.of("logs", "traces", "metrics");
     private boolean verifySignature = true;
 
     public int getGrpcPort() {
@@ -120,14 +116,6 @@ public class CollectorProperties {
 
     public void setMeterRegistry(MeterRegistry meterRegistry) {
         this.meterRegistry = meterRegistry;
-    }
-
-    public List<String> getQueues() {
-        return queues;
-    }
-
-    public void setQueues(List<String> queues) {
-        this.queues = queues;
     }
 
     public boolean isVerifySignature() {

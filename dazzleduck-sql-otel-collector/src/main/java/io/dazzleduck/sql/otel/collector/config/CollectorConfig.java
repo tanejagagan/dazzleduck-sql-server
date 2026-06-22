@@ -141,32 +141,6 @@ public class CollectorConfig {
     }
 
     /**
-     * Returns the ingestion queue names to create at startup, derived from the
-     * {@code ingestion_queue} fields in
-     * {@code otel_collector.ingestion_task_factory_provider.ingestion_queue_table_mapping}.
-     * Falls back to {@code ["logs", "traces", "metrics"]} when the mapping is absent or empty.
-     */
-    public List<String> getQueues() {
-        String mappingPath = CONFIG_PREFIX + "." + ConfigConstants.INGESTION_CONFIG_PREFIX
-                + "." + ConfigConstants.INGESTION_QUEUE_TABLE_MAPPING_KEY;
-        try {
-            if (config.hasPath(mappingPath)) {
-                List<String> queues = config.getConfigList(mappingPath).stream()
-                        .map(c -> c.getString(ConfigConstants.INGESTION_QUEUE_KEY))
-                        .filter(s -> s != null && !s.isBlank())
-                        .distinct()
-                        .toList();
-                if (!queues.isEmpty()) {
-                    return queues;
-                }
-            }
-        } catch (Exception e) {
-            log.debug("Error reading ingestion_queue_table_mapping: {}", e.getMessage());
-        }
-        return List.of("logs", "traces", "metrics");
-    }
-
-    /**
      * Returns the single unified {@link IngestionHandler} from the top-level
      * {@code ingestion_task_factory_provider} block.
      */
@@ -254,7 +228,6 @@ public class CollectorConfig {
         props.setServiceName(getServiceName());
         props.setIngestionHandler(getIngestionHandler());
         props.setIngestionConfig(getIngestionConfig());
-        props.setQueues(getQueues());
         props.setVerifySignature(getVerifySignature());
         return props;
     }

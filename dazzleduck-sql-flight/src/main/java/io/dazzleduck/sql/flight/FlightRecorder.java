@@ -83,6 +83,14 @@ public interface FlightRecorder {
                             Map<String, LongSupplier> gauges,
                             Map<String, WriteTimerSuppliers> timers);
 
+    /**
+     * Removes the meters registered by {@link #registerWriteQueue} for {@code identifier}. Called
+     * when a queue is deleted (e.g. a dynamic queue removed from the registry) so its per-queue
+     * meters do not leak and the queue object they reference can be garbage-collected. Default
+     * no-op for recorders that do not register write-queue meters.
+     */
+    default void unregisterWriteQueue(String identifier) {}
+
     void recordIngestReceived(long bytes);
 
     void recordIngestError();

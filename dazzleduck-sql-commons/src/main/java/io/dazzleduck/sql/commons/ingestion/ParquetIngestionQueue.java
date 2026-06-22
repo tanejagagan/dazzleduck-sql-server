@@ -64,6 +64,8 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
         this.postIngestionHandler = postIngestionHandler;
         this.applicationId = applicationId;
         this.inputFormat = inputFormat;
+        // The output path (local or object store) is expected to already exist — provisioning it is
+        // the operator's responsibility, outside the scope of this project. We never create it here.
     }
 
     @Override
