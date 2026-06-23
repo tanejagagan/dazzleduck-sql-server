@@ -18,7 +18,10 @@ public interface PartitionPrunerV2 {
 
     Set<String> ducklakeDatabases = new HashSet<>();
 
-    static final String DUCKLAKE_DATABASE_QUERY = "SELECT SUBSTRING(database_name, 21) AS database_name from duckdb_databases()  where database_name like '__ducklake_metadata_%'";
+    // DuckLake catalogs are discovered by catalog type. (Earlier versions were detected via a
+    // listed '__ducklake_metadata_<catalog>' database, but since DuckDB/DuckLake 1.5.4 that metadata
+    // database is no longer shown by duckdb_databases() — the catalog itself reports type='ducklake'.)
+    static final String DUCKLAKE_DATABASE_QUERY = "SELECT database_name from duckdb_databases() where type = 'ducklake'";
     Map<String, PartitionPrunerV2> tableFunctionPlanners = Map.of(
             "read_hive", new HiveSplitPlanner(),
             "read_parquet", new HiveSplitPlanner(),
