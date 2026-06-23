@@ -53,13 +53,14 @@ if the file does not exist.
 ```sql
 CREATE TABLE ingestion_queues (
     ingestion_queue  TEXT PRIMARY KEY,  -- queue ID used in JWT x-dd-ingestion-queue claim
-    output_path      TEXT NOT NULL,     -- destination for Parquet files; must already exist (see below)
     catalog          TEXT NOT NULL,     -- DuckLake catalog name
     schema_name      TEXT NOT NULL,     -- DuckLake schema (e.g. "main")
     table_name       TEXT NOT NULL,     -- DuckLake table name
     transformation   TEXT,             -- optional SQL expressions added as SELECT *, <expr>
     view_name        TEXT,             -- optional view name (reserved for future use)
     input_table      TEXT,             -- optional source table override
+    input_schema     TEXT,             -- DuckDB column-def fragment for the __this input columns;
+                                       --   used only by manage_tables (see below)
     partition_by     TEXT,             -- reserved; not yet applied at runtime
     min_bucket_size  INTEGER,          -- flush threshold in bytes (overrides global setting)
     max_delay_ms     INTEGER           -- flush interval in ms (overrides global setting)
@@ -73,43 +74,75 @@ CREATE TABLE schema_version (
 );
 ```
 
-## Provisioning the Output Location
+> The write location and partition columns are **not** stored in the registry — they are derived
+> from the DuckLake table's own metadata (the table's `data_path` and partition spec).
 
-`output_path` may be a local filesystem path (`/var/data/app-logs`, `file:///var/data/app-logs`)
-or an object-store URI (`s3://bucket/app-logs`, `gs://…`, `azure://…`).
+## Target Table and Output Location
 
-**The collector never creates the output location** — provisioning it is the operator's
-responsibility, outside the scope of this project:
+The output location is the DuckLake table's own `data_path` (read from catalog metadata), so the
+**table must exist** before a queue can resolve its target — unless `manage_tables` is enabled (see
+[Managing Tables](#managing-tables-manage_tables)), in which case the collector creates and evolves
+the table for you.
 
-- **Local paths:** create the directory before (or at the same time as) registering the queue.
-  DuckDB's `COPY` will not create the parent directory for you, so writes to a missing directory
-  fail.
-- **Object stores:** the bucket must already exist (object "directories" are implicit keys, so no
-  directory pre-creation is needed) and the collector must be configured with credentials for it —
-  e.g. an httpfs S3 secret in the `startup_script` (`CREATE SECRET … (TYPE s3, …)`).
+When you provision tables yourself, the table's data path must be reachable by the collector:
+
+- **Local paths:** the DuckLake `DATA_PATH` directory must exist — DuckDB's `COPY` will not create a
+  missing parent directory.
+- **Object stores:** the bucket must already exist and the collector must be configured with
+  credentials for it — e.g. an httpfs S3 secret in the `startup_script` (`CREATE SECRET … (TYPE s3, …)`).
 
 There is also **no default or fallback queue**. A queue is routable only while it is present in
 `ingestion_queues`; an empty registry means every request is rejected. Requests whose
 `x-dd-ingestion-queue` claim names an unregistered (or deleted) queue get `INVALID_ARGUMENT`.
 
-> Avoid a trailing slash on an object-store `output_path` (`s3://bucket/app-logs`, not
-> `s3://bucket/app-logs/`): the writer appends `/<file>.parquet`, and a `//` in an S3 key breaks
-> SigV4 request signing (HTTP 400). It is harmless on a local filesystem.
+## Managing Tables (`manage_tables`)
+
+By default the operator must create each DuckLake table before its queue can be used. When
+`manage_tables` is enabled, the collector instead creates and evolves the table to match the queue's
+transformation output:
+
+```hocon
+otel_collector {
+    ingestion_task_factory_provider {
+        class                   = "io.dazzleduck.sql.commons.ingestion.DynamicDuckLakeIngestionTaskFactoryProvider"
+        db_path                 = "/var/data/ingestion-queues.db"
+        config_load_interval_ms = 5000
+        manage_tables           = true   # optional, default false
+    }
+}
+```
+
+How the columns are derived: for each managed queue the collector materialises the row's
+`input_schema` (a DuckDB column-definition fragment, e.g.
+`timestamp TIMESTAMP, severity_text VARCHAR, body VARCHAR`) as the `__this` input, applies the
+queue's `transformation`, and describes the result — exactly the schema real ingestion would produce.
+So a row must set `input_schema` to be managed (rows without one are skipped).
+
+Reconciliation runs whenever the registry reloads (i.e. on each `schema_version` bump):
+
+- **table absent** → `CREATE TABLE` with the derived columns, in order;
+- **table present** → `ALTER TABLE ADD COLUMN` for each derived column missing (appended in derived
+  order) and `DROP COLUMN` for each existing column no longer produced.
+
+Constraints: columns are only **added or removed** — existing columns are never re-typed or
+re-ordered (a DuckDB `ALTER` limitation) — and **tables are never dropped**. Deleting a queue only
+stops ingestion; its table and data are left intact.
 
 ## Queue Lifecycle Operations
 
 Any process with write access to the SQLite file can perform the following operations.
 Each change must bump `schema_version` **in the same transaction**, and is then picked up within
-one `config_load_interval_ms` interval. (Provision the `output_path` first — see above.)
+one `config_load_interval_ms` interval. (Ensure the target table exists, or enable `manage_tables`.)
 
 ### Add a queue
 
 ```sql
 BEGIN;
 INSERT INTO ingestion_queues
-    (ingestion_queue, output_path, catalog, schema_name, table_name)
+    (ingestion_queue, catalog, schema_name, table_name, input_schema)
 VALUES
-    ('app-logs', 's3://my-bucket/app-logs', 'my_catalog', 'main', 'app_logs');
+    ('app-logs', 'my_catalog', 'main', 'app_logs',
+     'timestamp TIMESTAMP, severity_number INTEGER, severity_text VARCHAR, body VARCHAR');
 UPDATE schema_version SET version = version + 1 WHERE id = 1;
 COMMIT;
 ```
@@ -118,7 +151,7 @@ Once the collector picks up the change, any OTLP request whose JWT contains
 `x-dd-ingestion-queue: app-logs` will start writing to the new queue.
 The `ParquetIngestionQueue` is created lazily on the first incoming message.
 
-### Update a queue (e.g. change transformation or output path)
+### Update a queue (e.g. change transformation)
 
 ```sql
 BEGIN;
@@ -169,8 +202,8 @@ SELECT * FROM reg.ingestion_queues;
 -- Add a queue (bump schema_version so the collector reloads)
 BEGIN;
 INSERT INTO reg.ingestion_queues
-    (ingestion_queue, output_path, catalog, schema_name, table_name)
-VALUES ('audit-logs', 's3://my-bucket/audit', 'my_catalog', 'main', 'audit_logs');
+    (ingestion_queue, catalog, schema_name, table_name, input_schema)
+VALUES ('audit-logs', 'my_catalog', 'main', 'audit_logs', 'timestamp TIMESTAMP, body VARCHAR');
 UPDATE reg.schema_version SET version = version + 1 WHERE id = 1;
 COMMIT;
 
@@ -204,16 +237,16 @@ def bump(con):
 
 # Add a queue (the connection's implicit transaction commits on con.commit())
 con.execute("""
-    INSERT INTO ingestion_queues (ingestion_queue, output_path, catalog, schema_name, table_name)
+    INSERT INTO ingestion_queues (ingestion_queue, catalog, schema_name, table_name, input_schema)
     VALUES (?, ?, ?, ?, ?)
-""", ("audit-logs", "s3://my-bucket/audit", "my_catalog", "main", "audit_logs"))
+""", ("audit-logs", "my_catalog", "main", "audit_logs", "timestamp TIMESTAMP, body VARCHAR"))
 bump(con)
 con.commit()
 
-# Update output path
+# Update transformation
 con.execute("""
-    UPDATE ingestion_queues SET output_path = ? WHERE ingestion_queue = ?
-""", ("s3://new-bucket/audit", "audit-logs"))
+    UPDATE ingestion_queues SET transformation = ? WHERE ingestion_queue = ?
+""", ("CAST(timestamp AS DATE) AS date", "audit-logs"))
 bump(con)
 con.commit()
 
@@ -233,6 +266,8 @@ con.close()
   into the queue creation path — the global values from `ingestion` config are used.
 - Reload depends on writers bumping `schema_version` in the same transaction as their change. A
   write that updates `ingestion_queues` without bumping `schema_version` will **not** be detected.
-- The `output_path` is never created by the collector — it must be provisioned by the operator
-  (local directory created ahead of time, or object-store bucket created with credentials
-  configured). See *Provisioning the Output Location*.
+- The target table's data path is never created by the collector — provision the table (and its
+  object-store bucket / local directory) ahead of time, or enable `manage_tables`. See
+  *Target Table and Output Location*.
+- With `manage_tables`, only columns are added/removed: existing columns are never re-typed or
+  re-ordered (a DuckDB `ALTER` limitation), and tables are never dropped.

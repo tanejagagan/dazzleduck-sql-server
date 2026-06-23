@@ -102,6 +102,7 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
             QueueIdToTableMapping previous = queueIdsToTableMappings.put(id, mapping);
             if (previous == null || !previous.equals(mapping)) {
                 stateCache.remove(id); // force a lazy rebuild of the DuckLake-derived state
+                onMappingReconciled(id, mapping);
             }
         });
         queueIdsToTableMappings.keySet().removeIf(id -> {
@@ -116,6 +117,13 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
             return true;
         });
     }
+
+    /**
+     * Hook invoked from {@link #updateMappings} for each added or changed mapping (before its derived
+     * state is rebuilt lazily). Default is a no-op; {@link DynamicIngestionHandler} overrides it to
+     * create/evolve the backing DuckLake table when {@code manageTables} is enabled.
+     */
+    protected void onMappingReconciled(String queueId, QueueIdToTableMapping mapping) {}
 
     /**
      * Convenience constructor that defaults {@code refreshInterval} to 2 minutes.

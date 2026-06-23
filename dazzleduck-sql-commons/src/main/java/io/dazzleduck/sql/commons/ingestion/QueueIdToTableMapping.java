@@ -18,6 +18,10 @@ import java.util.Map;
  * @param view        fully-qualified view name ({@code catalog.schema.view}), nullable
  * @param inputTable  fully-qualified table name inside the view to replace with {@code __this}
  *                    ({@code catalog.schema.table}), nullable; required when {@code view} is set
+ * @param inputSchema DuckDB column-definition fragment for the raw input columns (e.g.
+ *                    {@code "severity_number INTEGER, body VARCHAR"}), nullable; used only by
+ *                    {@code manageTables} as the {@code __this} input over which the transformation
+ *                    is described to derive the target table's columns
  */
 public record QueueIdToTableMapping(
         String ingestionQueue,
@@ -28,7 +32,8 @@ public record QueueIdToTableMapping(
         Map<String, String> additionalParameters,
         String transformation,
         String view,
-        String inputTable) {
+        String inputTable,
+        String inputSchema) {
 
     /** Validates invariants on every construction path. */
     public QueueIdToTableMapping {
@@ -44,20 +49,26 @@ public record QueueIdToTableMapping(
         }
     }
 
-    /** Backward-compatible constructor without outputPath (DuckLake-managed entries). */
+    /** Backward-compatible constructor without outputPath/inputSchema (DuckLake-managed entries). */
     public QueueIdToTableMapping(String ingestionQueue, String catalog, String schema, String table,
                                  Map<String, String> additionalParameters, String transformation,
                                  String view, String inputTable) {
-        this(ingestionQueue, null, catalog, schema, table, additionalParameters, transformation, view, inputTable);
+        this(ingestionQueue, null, catalog, schema, table, additionalParameters, transformation, view, inputTable, null);
     }
 
     /** Convenience constructor for mappings that use an explicit transformation or none at all. */
     public QueueIdToTableMapping(String ingestionQueue, String catalog, String schema, String table,
                                  Map<String, String> additionalParameters, String transformation) {
-        this(ingestionQueue, null, catalog, schema, table, additionalParameters, transformation, null, null);
+        this(ingestionQueue, null, catalog, schema, table, additionalParameters, transformation, null, null, null);
     }
 
     public boolean hasViewTransformation() {
         return view != null; // inputTable non-null is guaranteed by the constructor invariant
+    }
+
+    /** Returns a copy of this mapping with {@code inputSchema} set (registry-sourced field). */
+    public QueueIdToTableMapping withInputSchema(String inputSchema) {
+        return new QueueIdToTableMapping(ingestionQueue, outputPath, catalog, schema, table,
+                additionalParameters, transformation, view, inputTable, inputSchema);
     }
 }

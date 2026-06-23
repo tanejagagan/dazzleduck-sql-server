@@ -39,6 +39,8 @@ public class DynamicIngestionHandler extends DuckLakeIngestionHandler {
 
     private final String dbPath;
     private final Connection readConn;
+    /** When true, create/evolve the backing DuckLake table for each reconciled queue. */
+    private final boolean manageTables;
     /** Prepared once and reused by the single poller thread to avoid re-parsing on every poll. */
     private final PreparedStatement schemaVersionStmt;
     private final AtomicLong lastSeenVersion = new AtomicLong(-1L);
@@ -50,17 +52,27 @@ public class DynamicIngestionHandler extends DuckLakeIngestionHandler {
                 return t;
             });
 
+    /** Backward-compatible constructor: table management disabled. */
     public DynamicIngestionHandler(String dbPath,
                                    Connection readConn,
                                    Map<String, QueueIdToTableMapping> initialMappings,
                                    Duration checkInterval) {
+        this(dbPath, readConn, initialMappings, checkInterval, false);
+    }
+
+    public DynamicIngestionHandler(String dbPath,
+                                   Connection readConn,
+                                   Map<String, QueueIdToTableMapping> initialMappings,
+                                   Duration checkInterval,
+                                   boolean manageTables) {
         // Start with no mappings so the superclass does no eager DuckLake reads, then feed the
         // initial set via updateMappings (which rebuilds derived state lazily, deferring metadata
         // reads until the tables actually exist). checkInterval doubles as the DuckLake-state
         // refresh interval for already-known queues.
         super(Map.of(), checkInterval, Clock.systemUTC());
-        this.dbPath   = dbPath;
-        this.readConn = readConn;
+        this.dbPath       = dbPath;
+        this.readConn     = readConn;
+        this.manageTables = manageTables;
         // Prepare the change-detection query once; the poller reuses it. If preparing fails, fall
         // back to per-poll statements (see currentSchemaVersion) so detection still works.
         PreparedStatement stmt = null;
@@ -99,6 +111,17 @@ public class DynamicIngestionHandler extends DuckLakeIngestionHandler {
         } catch (Exception e) {
             logger.warn("Failed to reload ingestion queue registry from {}", dbPath, e);
         }
+    }
+
+    /**
+     * When {@code manageTables} is enabled, create/evolve the backing DuckLake table to match the
+     * queue's transformation output over its {@code input_schema}.
+     * Failure-isolated inside {@link DuckLakeTableManager#ensureTable}.
+     */
+    @Override
+    protected void onMappingReconciled(String queueId, QueueIdToTableMapping mapping) {
+        if (!manageTables) return;
+        DuckLakeTableManager.ensureTable(mapping);
     }
 
     @Override
