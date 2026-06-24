@@ -28,6 +28,7 @@ Each incoming export request is:
 - **DuckLake integration**: Optional post-ingestion task registration via `IngestionTaskFactory`
 - **SQL transformations**: Derive columns (e.g. partition keys) before writing
 - **Micrometer metrics**: Export counters, latency timers, and writer queue gauges
+- **Health check**: Embedded HTTP `/health` endpoint with a graceful shutdown lifecycle (see [Health Check](#health-check))
 
 ## Configuration
 
@@ -103,6 +104,46 @@ grpcurl -plaintext \
 ```
 
 **Login delegation:** Set `login_url` to forward Basic auth credentials to an external HTTP service (same pattern as the DazzleDuck Flight SQL server).
+
+## Health Check
+
+The collector runs a small embedded HTTP server (plain JDK `HttpServer`, no extra dependency)
+exposing `GET /health`. It reports one of three statuses, each with a matching HTTP code so a
+readiness probe or load balancer reacts correctly:
+
+| Status | HTTP code | Meaning |
+|--------|-----------|---------|
+| `HEALTHY` | 200 | gRPC server is up and accepting requests |
+| `MAINTENANCE` | 503 | Graceful shutdown in progress — draining, not accepting new traffic |
+| `DOWN` | 503 | Shutdown complete (briefly visible right before the process exits) |
+
+```json
+{
+  "status": "HEALTHY",
+  "uptimeSeconds": 1234,
+  "grpcPort": 4317,
+  "knownQueues": 3,
+  "batchesProcessed": 5821
+}
+```
+
+Configure the port and shutdown grace period under `otel_collector.health`:
+
+```hocon
+otel_collector {
+    health {
+        port = 8081                    # GET /health
+        shutdown_grace_period_ms = 2000   # MAINTENANCE/LB-drain window; 0 to skip
+    }
+}
+```
+
+On shutdown (SIGTERM via the JVM shutdown hook), the collector immediately flips to `MAINTENANCE`
+— so a Kubernetes readiness probe or load balancer stops routing new traffic right away — then
+stays in `MAINTENANCE` for `shutdown_grace_period_ms` before stopping the gRPC server itself.
+Already-accepted in-flight calls then get up to 10s more (`awaitTermination`) to finish, during which
+the flush scheduler is still running, so a batch buffered when shutdown begins is written to Parquet
+and its export ack returned rather than the call being cut off mid-RPC.
 
 ## Arrow Schemas
 

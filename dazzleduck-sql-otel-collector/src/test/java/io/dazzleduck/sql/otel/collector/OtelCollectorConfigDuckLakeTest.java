@@ -121,7 +121,9 @@ class OtelCollectorConfigDuckLakeTest {
                         tempDir.resolve("metrics"));
 
         var collectorConfig = new CollectorConfig(ConfigFactory.parseString(hocon));
-        otelServer = new OtelCollectorServer(collectorConfig.toProperties());
+        var props = collectorConfig.toProperties();
+        props.setShutdownGracePeriod(java.time.Duration.ZERO); // no LB-drain wait in tests
+        otelServer = new OtelCollectorServer(props);
         otelServer.start();
 
         channel = ManagedChannelBuilder.forAddress("localhost", port).usePlaintext().build();

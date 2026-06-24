@@ -133,6 +133,7 @@ public class OtelCollectorLoginDelegationTest {
             Files.createDirectories(outputPath); // operator provisions the output dir
 
             CollectorProperties props = new CollectorProperties();
+            props.setShutdownGracePeriod(Duration.ZERO); // no LB-drain wait in tests
             props.setGrpcPort(otelPort);
             props.setIngestionHandler(noopHandler(outputPath.toString()));
             props.setAuthentication("jwt");
@@ -264,6 +265,7 @@ public class OtelCollectorLoginDelegationTest {
             Files.createDirectories(outputPath); // operator provisions the output dir
 
             CollectorProperties props = new CollectorProperties();
+            props.setShutdownGracePeriod(Duration.ZERO); // no LB-drain wait in tests
             props.setGrpcPort(otelPort);
             props.setIngestionHandler(noopHandler(outputPath.toString()));
             props.setAuthentication("jwt");
@@ -343,6 +345,7 @@ public class OtelCollectorLoginDelegationTest {
             Files.createDirectories(outputPath); // operator provisions the output dir
 
             CollectorProperties props = new CollectorProperties();
+            props.setShutdownGracePeriod(Duration.ZERO); // no LB-drain wait in tests
             props.setGrpcPort(otelPort);
             props.setIngestionHandler(noopHandler(outputPath.toString(),
                     "SELECT *, severity_number * 2 as doubled_severity FROM __this"));
@@ -419,6 +422,7 @@ public class OtelCollectorLoginDelegationTest {
             Files.createDirectories(tracesOutputPath); // operator provisions the output dir
 
             CollectorProperties props = new CollectorProperties();
+            props.setShutdownGracePeriod(Duration.ZERO); // no LB-drain wait in tests
             props.setGrpcPort(otelPort);
             props.setIngestionHandler(noopHandler(tracesOutputPath.toString()));
             props.setIngestionConfig(ingestionConfig(1L, 60_000L));
@@ -499,6 +503,7 @@ public class OtelCollectorLoginDelegationTest {
             Files.createDirectories(metricsOutputPath); // operator provisions the output dir
 
             CollectorProperties props = new CollectorProperties();
+            props.setShutdownGracePeriod(Duration.ZERO); // no LB-drain wait in tests
             props.setGrpcPort(otelPort);
             props.setIngestionHandler(noopHandler(metricsOutputPath.toString()));
             props.setIngestionConfig(ingestionConfig(1L, 60_000L));

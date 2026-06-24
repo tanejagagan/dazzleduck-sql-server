@@ -167,6 +167,7 @@ public class OtelCollectorCustomQueueTest {
             Files.createDirectories(outputPath); // operator provisions the output dir
 
             CollectorProperties props = new CollectorProperties();
+            props.setShutdownGracePeriod(Duration.ZERO); // no LB-drain wait in tests
             props.setGrpcPort(port);
             // Writers map contains "app-logs" plus traces/metrics defaults
             props.setIngestionHandler(noopHandler(outputPath.toString(), "app-logs", "traces", "metrics"));
@@ -233,6 +234,7 @@ public class OtelCollectorCustomQueueTest {
             Files.createDirectories(outputPath); // operator provisions the output dir
 
             CollectorProperties props = new CollectorProperties();
+            props.setShutdownGracePeriod(Duration.ZERO); // no LB-drain wait in tests
             props.setGrpcPort(port);
             // Default queues — "logs" present, so fallback works
             props.setIngestionHandler(noopHandler(outputPath.toString(), "logs", "traces", "metrics"));
@@ -300,6 +302,7 @@ public class OtelCollectorCustomQueueTest {
             Files.createDirectories(outputPath); // operator provisions the output dir
 
             CollectorProperties props = new CollectorProperties();
+            props.setShutdownGracePeriod(Duration.ZERO); // no LB-drain wait in tests
             props.setGrpcPort(port);
             props.setIngestionHandler(noopHandler(outputPath.toString(), "logs", "traces", "metrics"));
             props.setIngestionConfig(smallBucketConfig());
@@ -392,6 +395,7 @@ public class OtelCollectorCustomQueueTest {
             Files.createDirectories(outputPath); // operator provisions the output dir
 
             CollectorProperties props = new CollectorProperties();
+            props.setShutdownGracePeriod(Duration.ZERO); // no LB-drain wait in tests
             props.setGrpcPort(port);
             props.setIngestionHandler(noopHandler(outputPath.toString(), "logs", "traces", "metrics"));
             props.setIngestionConfig(smallBucketConfig());

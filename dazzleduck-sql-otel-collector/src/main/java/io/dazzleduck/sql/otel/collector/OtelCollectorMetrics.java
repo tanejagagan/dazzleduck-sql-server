@@ -49,6 +49,13 @@ public class OtelCollectorMetrics implements Closeable {
     private final ConcurrentHashMap<String, LongAdder> errorsPerQueue   = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Timer>     timersPerQueue   = new ConcurrentHashMap<>();
 
+    // Not per-queue and never removed by unregisterQueue/close — unlike the writer FunctionCounters
+    // above (which are bound to a live ParquetIngestionQueue and intentionally dropped on eviction
+    // so the queue can be GC'd), this must keep counting across queue eviction/recreation and
+    // shutdown drain, since it backs the /health batchesProcessed field queried right up until the
+    // collector goes DOWN.
+    private final LongAdder totalBatchesProcessed = new LongAdder();
+
     /** All meters created for a given queue ID, so {@link #unregisterQueue} can remove them. */
     private final ConcurrentHashMap<String, List<Meter>> metersByQueue = new ConcurrentHashMap<>();
 
@@ -79,6 +86,7 @@ public class OtelCollectorMetrics implements Closeable {
         getOrCreateRequests(queueId).increment();
         getOrCreateRecords(queueId).add(count);
         sample.stop(getOrCreateTimer(queueId));
+        totalBatchesProcessed.increment();
     }
 
     public void recordError(String queueId, Timer.Sample sample) {
@@ -196,6 +204,11 @@ public class OtelCollectorMetrics implements Closeable {
     public long getErrors(String queueId) {
         var a = errorsPerQueue.get(queueId);
         return a != null ? a.sum() : 0L;
+    }
+
+    /** Cumulative count of batches successfully written, across all queues, past and present. */
+    public long getTotalBatchesProcessed() {
+        return totalBatchesProcessed.sum();
     }
 
     public MeterRegistry getRegistry() { return registry; }

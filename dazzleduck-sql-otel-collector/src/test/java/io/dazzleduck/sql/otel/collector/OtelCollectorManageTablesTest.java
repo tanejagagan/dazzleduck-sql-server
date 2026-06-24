@@ -100,6 +100,7 @@ class OtelCollectorManageTablesTest {
         handler = new DynamicIngestionHandler(dbPath, readConn, initial, Duration.ofSeconds(60), true);
 
         CollectorProperties props = new CollectorProperties();
+        props.setShutdownGracePeriod(Duration.ZERO); // no LB-drain wait in tests
         props.setGrpcPort(freePort());
         props.setAuthentication("jwt");
         props.setSecretKey(SECRET_KEY_BASE64);

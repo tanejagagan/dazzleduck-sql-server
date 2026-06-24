@@ -13,6 +13,12 @@ import java.util.Map;
 public class CollectorProperties {
 
     private int grpcPort = 4317;
+    private int healthPort = 8081;
+    // Absolute time to stay in MAINTENANCE (serving 503s so the load balancer stops routing) before
+    // stopping the gRPC server. Deliberately a small, bounded LB-drain window independent of the
+    // ingestion max_delay — in-flight batches are flushed by the awaitTermination window in close(),
+    // not by this sleep. Set to ZERO to skip the wait entirely (e.g. in tests).
+    private Duration shutdownGracePeriod = Duration.ofSeconds(2);
     private IngestionHandler ingestionHandler =
             new NOOPIngestionTaskFactoryProvider("./otel-output").getIngestionHandler();
     private IngestionConfig ingestionConfig = new IngestionConfig(
@@ -36,6 +42,22 @@ public class CollectorProperties {
 
     public void setGrpcPort(int grpcPort) {
         this.grpcPort = grpcPort;
+    }
+
+    public int getHealthPort() {
+        return healthPort;
+    }
+
+    public void setHealthPort(int healthPort) {
+        this.healthPort = healthPort;
+    }
+
+    public Duration getShutdownGracePeriod() {
+        return shutdownGracePeriod;
+    }
+
+    public void setShutdownGracePeriod(Duration shutdownGracePeriod) {
+        this.shutdownGracePeriod = shutdownGracePeriod;
     }
 
     public IngestionHandler getIngestionHandler() {
