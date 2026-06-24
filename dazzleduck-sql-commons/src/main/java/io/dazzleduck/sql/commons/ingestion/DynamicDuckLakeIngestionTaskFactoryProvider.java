@@ -30,6 +30,7 @@ public class DynamicDuckLakeIngestionTaskFactoryProvider extends AbstractIngesti
 
     static final String DB_PATH_KEY              = "db_path";
     static final String CONFIG_LOAD_INTERVAL_KEY = "config_load_interval_ms";
+    static final String MANAGE_TABLES_KEY        = "manage_tables";
     static final long   DEFAULT_INTERVAL_MS      = 5_000L;
 
     @Override
@@ -55,14 +56,17 @@ public class DynamicDuckLakeIngestionTaskFactoryProvider extends AbstractIngesti
         long intervalMs = config.hasPath(CONFIG_LOAD_INTERVAL_KEY)
                 ? config.getLong(CONFIG_LOAD_INTERVAL_KEY)
                 : DEFAULT_INTERVAL_MS;
+        boolean manageTables = config.hasPath(MANAGE_TABLES_KEY) && config.getBoolean(MANAGE_TABLES_KEY);
 
         DynamicQueueRepository repo = new DynamicQueueRepository(dbPath);
         try {
             repo.init();
             Connection readConn = repo.openReadOnlyConnection();
             Map<String, QueueIdToTableMapping> initial = DynamicQueueRepository.loadAll(readConn);
-            logger.info("DynamicIngestionHandler: {} queue(s) loaded from {}", initial.size(), dbPath);
-            return new DynamicIngestionHandler(dbPath, readConn, initial, Duration.ofMillis(intervalMs));
+            logger.info("DynamicIngestionHandler: {} queue(s) loaded from {} (manage_tables={})",
+                    initial.size(), dbPath, manageTables);
+            return new DynamicIngestionHandler(dbPath, readConn, initial, Duration.ofMillis(intervalMs),
+                    manageTables);
         } catch (SQLException e) {
             repo.close();
             throw new RuntimeException("Failed to initialise DynamicIngestionHandler for: " + dbPath, e);

@@ -96,6 +96,25 @@ class DynamicQueueRepositoryTest {
                 assertEquals("main", m.schema());
                 assertEquals("logs", m.table());
                 assertNull(m.transformation());
+                assertNull(m.inputSchema(), "input_schema defaults to null when not set");
+            }
+        }
+    }
+
+    @Test
+    void loadAllReadsInputSchema() throws Exception {
+        String dbPath = tempDir.resolve("schema.db").toString();
+        try (DynamicQueueRepository repo = new DynamicQueueRepository(dbPath)) {
+            repo.init();
+
+            writeToDb(dbPath, "INSERT INTO " + DynamicQueueRepository.ATTACHMENT + ".ingestion_queues " +
+                    "(ingestion_queue, catalog, schema_name, table_name, input_schema) " +
+                    "VALUES ('app_logs', 'otel_lake', 'main', 'app_logs', 'severity_number INTEGER, body VARCHAR')");
+
+            try (Connection conn = repo.openReadOnlyConnection()) {
+                QueueIdToTableMapping m = DynamicQueueRepository.loadAll(conn).get("app_logs");
+                assertNotNull(m);
+                assertEquals("severity_number INTEGER, body VARCHAR", m.inputSchema());
             }
         }
     }

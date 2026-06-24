@@ -66,6 +66,7 @@ public class DynamicQueueRepository implements AutoCloseable {
                     transformation   TEXT,
                     view_name        TEXT,
                     input_table      TEXT,
+                    input_schema     TEXT,
                     partition_by     TEXT,
                     min_bucket_size  INTEGER,
                     max_delay_ms     INTEGER
@@ -181,26 +182,29 @@ public class DynamicQueueRepository implements AutoCloseable {
      * <p>The write location and partition columns are <strong>not</strong> read from the registry —
      * {@link DynamicIngestionHandler} (via {@link DuckLakeIngestionHandler}) derives them from the
      * DuckLake table's own metadata. The registry supplies {@code catalog}/{@code schema}/
-     * {@code table} (plus optional {@code transformation}/{@code view}/{@code input_table}); the
-     * {@code partition_by} column is reserved for future use and not read here.
+     * {@code table} (plus optional {@code transformation}/{@code view}/{@code input_table} and
+     * {@code input_schema}, the latter used only by {@code manageTables} to derive the table columns);
+     * the {@code partition_by} column is reserved for future use and not read here.
      */
     public static Map<String, QueueIdToTableMapping> loadAll(Connection conn) throws SQLException {
         Map<String, QueueIdToTableMapping> result = new LinkedHashMap<>();
         try (Statement st = conn.createStatement();
              ResultSet rs = st.executeQuery(
                      "SELECT ingestion_queue, catalog, schema_name, table_name," +
-                     " transformation, view_name, input_table FROM " + ATTACHMENT + ".ingestion_queues")) {
+                     " transformation, view_name, input_table, input_schema FROM " + ATTACHMENT + ".ingestion_queues")) {
             while (rs.next()) {
-                String queueId    = rs.getString("ingestion_queue");
-                String catalog    = rs.getString("catalog");
-                String schema     = rs.getString("schema_name");
-                String table      = rs.getString("table_name");
-                String transform  = rs.getString("transformation");
-                String view       = rs.getString("view_name");
-                String inputTable = rs.getString("input_table");
+                String queueId     = rs.getString("ingestion_queue");
+                String catalog     = rs.getString("catalog");
+                String schema      = rs.getString("schema_name");
+                String table       = rs.getString("table_name");
+                String transform   = rs.getString("transformation");
+                String view        = rs.getString("view_name");
+                String inputTable  = rs.getString("input_table");
+                String inputSchema = rs.getString("input_schema");
                 // outputPath omitted: derived from DuckLake metadata by the handler.
                 result.put(queueId, new QueueIdToTableMapping(
-                        queueId, catalog, schema, table, Map.of(), transform, view, inputTable));
+                        queueId, catalog, schema, table, Map.of(), transform, view, inputTable)
+                        .withInputSchema(inputSchema));
             }
         }
         return result;
