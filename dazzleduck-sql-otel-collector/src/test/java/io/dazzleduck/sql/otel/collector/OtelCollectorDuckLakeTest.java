@@ -34,6 +34,7 @@ import java.io.IOException;
 import java.net.ServerSocket;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.sql.Connection;
 import java.util.Calendar;
 import java.util.Map;
@@ -102,6 +103,7 @@ class OtelCollectorDuckLakeTest {
                 "metrics", new QueueIdToTableMapping("metrics", CATALOG, "main", "metrics", Map.of(), null)));
 
         CollectorProperties props = new CollectorProperties();
+        props.setShutdownGracePeriod(Duration.ZERO); // no LB-drain wait in tests
         props.setGrpcPort(freePort());
         props.setAuthentication("jwt");
         props.setSecretKey(SECRET_KEY_BASE64);

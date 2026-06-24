@@ -4,6 +4,9 @@ import io.dazzleduck.sql.commons.auth.Validator;
 import io.dazzleduck.sql.commons.ingestion.IngestionHandler;
 import io.dazzleduck.sql.otel.collector.auth.JwtServerInterceptor;
 import io.dazzleduck.sql.otel.collector.config.CollectorProperties;
+import io.dazzleduck.sql.otel.collector.health.CollectorHealth;
+import io.dazzleduck.sql.otel.collector.health.CollectorHealthStatus;
+import io.dazzleduck.sql.otel.collector.health.HealthServer;
 import io.grpc.Server;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -13,6 +16,7 @@ import org.slf4j.LoggerFactory;
 import java.io.Closeable;
 import java.io.IOException;
 import java.net.InetAddress;
+import java.time.Duration;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -42,6 +46,10 @@ public class OtelCollectorServer implements Closeable {
     private OtelTraceService traceService;
     private OtelMetricsService metricsService;
     private OtelCollectorMetrics collectorMetrics;
+    private CollectorHealth health;
+    private HealthServer healthServer;
+    private boolean started = false;
+    private boolean closed = false;
 
     public OtelCollectorServer(CollectorProperties props) {
         this.props = props;
@@ -57,6 +65,15 @@ public class OtelCollectorServer implements Closeable {
             // All queues share one flush scheduler; an evicted queue's stray flush is a no-op.
             setupCommonTags(props.getMeterRegistry(), props.getServiceName());
             collectorMetrics = new OtelCollectorMetrics(props.getMeterRegistry());
+            health = new CollectorHealth(
+                    () -> handler.getKnownQueues().size(),
+                    // Sourced from collectorMetrics, not handler.getQueueStats(): the latter only
+                    // sums currently-cached queues, so it drops a queue's contribution the instant
+                    // it's evicted or the cache is cleared on drain — wrong for a counter queried
+                    // right up until the collector reports DOWN. collectorMetrics' total is a plain
+                    // LongAdder bumped once per successfully written batch, independent of queue
+                    // lifecycle.
+                    collectorMetrics::getTotalBatchesProcessed);
             flushScheduler = Executors.newScheduledThreadPool(2, r -> {
                 Thread t = new Thread(r, "otel-flush-scheduler");
                 t.setDaemon(true);
@@ -94,6 +111,11 @@ public class OtelCollectorServer implements Closeable {
 
             grpcServer = builder.build().start();
 
+            healthServer = new HealthServer(props.getHealthPort(), health, props.getGrpcPort());
+            healthServer.start();
+            health.transitionTo(CollectorHealthStatus.HEALTHY);
+            started = true;
+
             log.info("OTLP gRPC server started on port {} — known queues: {} (writers created lazily on first use)",
                     props.getGrpcPort(), handler.getKnownQueues());
         } catch (Exception e) {
@@ -128,9 +150,28 @@ public class OtelCollectorServer implements Closeable {
 
     @Override
     public void close() {
+        // Idempotent: a JVM shutdown hook and an explicit close() can race (and tests close twice),
+        // and re-running would re-enter MAINTENANCE and sleep the grace period again. First caller wins.
+        synchronized (this) {
+            if (closed) {
+                return;
+            }
+            closed = true;
+        }
+        // Enter MAINTENANCE and give readiness probes/load balancers a grace period to notice the
+        // 503 and stop routing new traffic before the gRPC server actually stops accepting calls.
+        // Skipped on a failed-startup cleanup path (healthServer was never started).
+        if (started) {
+            health.transitionTo(CollectorHealthStatus.MAINTENANCE);
+            sleepForGracePeriod();
+        }
         if (grpcServer != null) {
             log.info("Shutting down gRPC server...");
             grpcServer.shutdown();
+            // Await termination with the flush scheduler still running: an already-accepted call
+            // only gets its response once its batch is written, and the time-based flush
+            // (max_delay) fires within this window, so in-flight calls can complete normally
+            // before we force-cancel anything past the timeout.
             try {
                 if (!grpcServer.awaitTermination(10, TimeUnit.SECONDS)) {
                     grpcServer.shutdownNow();
@@ -151,7 +192,33 @@ public class OtelCollectorServer implements Closeable {
         closeQuietly("traceService",     traceService);
         closeQuietly("metricsService",   metricsService);
         closeQuietly("collectorMetrics", collectorMetrics);
+        if (started) {
+            health.transitionTo(CollectorHealthStatus.DOWN);
+        }
+        closeQuietly("healthServer", healthServer);
         log.info("OtelCollectorServer stopped.");
+    }
+
+    private void sleepForGracePeriod() {
+        // Small, bounded LB-drain window: stay in MAINTENANCE (503) long enough for readiness probes
+        // to stop routing before the gRPC server stops. Independent of max_delay — in-flight batches
+        // are flushed by the awaitTermination window in close(). ZERO skips the wait (e.g. tests).
+        Duration grace = props.getShutdownGracePeriod();
+        long graceMs = grace == null ? 0 : grace.toMillis();
+        if (graceMs <= 0) {
+            return;
+        }
+        log.info("Entering MAINTENANCE — draining for up to {}ms before shutdown", graceMs);
+        try {
+            Thread.sleep(graceMs);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /** Current health status; {@code MAINTENANCE} before {@link #start()} completes successfully. */
+    public CollectorHealthStatus getHealthStatus() {
+        return health == null ? CollectorHealthStatus.MAINTENANCE : health.getStatus();
     }
 
     private void closeQuietly(String name, Closeable c) {

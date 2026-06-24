@@ -111,6 +111,14 @@ public class CollectorConfig {
         return getInt("grpc_port", 4317);
     }
 
+    public int getHealthPort() {
+        return getInt("health.port", 8081);
+    }
+
+    public Duration getShutdownGracePeriod() {
+        return Duration.ofMillis(getLong("health.shutdown_grace_period_ms", 2_000L));
+    }
+
     /**
      * Returns the startup SQL to execute on the singleton DuckDB connection.
      * Delegates to {@link StartupScriptProvider#load} which reads from the
@@ -219,6 +227,8 @@ public class CollectorConfig {
     public CollectorProperties toProperties() {
         CollectorProperties props = new CollectorProperties();
         props.setGrpcPort(getGrpcPort());
+        props.setHealthPort(getHealthPort());
+        props.setShutdownGracePeriod(getShutdownGracePeriod());
         props.setStartupScript(getStartupScript());
         props.setAuthentication(getAuthentication());
         props.setSecretKey(getSecretKey());
