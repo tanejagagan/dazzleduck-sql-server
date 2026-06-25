@@ -35,6 +35,16 @@ public interface IngestionHandler {
     /** Closes and clears all cached queues on producer shutdown. */
     default void closeQueues() {}
 
+    /** Default per-queue bound for flushing in-flight batches on shutdown before forcing the close. */
+    java.time.Duration DEFAULT_DRAIN_TIMEOUT = java.time.Duration.ofSeconds(30);
+
+    /**
+     * Like {@link #closeQueues()}, but flushes each queue gracefully, waiting at most
+     * {@code drainTimeout} per queue before forcing the close. Override in handlers that own
+     * queues; the default delegates to {@link #closeQueues()}.
+     */
+    default void closeQueues(java.time.Duration drainTimeout) { closeQueues(); }
+
     /**
      * Returns the set of queue IDs this handler currently knows about — the single source of
      * truth for which queues are routable. Callers (e.g. the OTLP collector's signal services)

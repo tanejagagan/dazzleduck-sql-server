@@ -134,6 +134,158 @@ public class BulkIngestQueueTest {
         });
     }
 
+    @Test
+    public void testDrainFlushesPendingBatches() throws Exception {
+        var list = new ArrayList<Future<MockWriteResult>>();
+        var numBatches = 5; // below min bucket size and maxBatches, so the bucket stays buffered
+        withServiceAndQueue((service, queue, clock) -> {
+            for (int i = 0; i < numBatches; i++) {
+                list.add(queue.add(mockBatch("123", i, DEFAULT_SMALL_BATCH_SIZE)));
+            }
+            // No tick and the bucket is not full, so nothing has been written yet.
+            for (var f : list) {
+                assertFalse(f.isDone());
+            }
+
+            queue.drain();
+
+            // drain() guarantees every accepted batch is written and its future completed.
+            for (var f : list) {
+                assertTrue(f.isDone());
+                assertNotNull(f.get());
+            }
+            assertEquals(numBatches, queue.getStats().totalWriteBatches());
+            assertEquals(0, queue.getStats().pendingBatches());
+            assertEquals(0, queue.pendingWrite());
+
+            // A drained queue no longer accepts work.
+            assertThrows(IllegalStateException.class,
+                    () -> queue.add(mockBatch("123", 99, DEFAULT_SMALL_BATCH_SIZE)));
+        });
+    }
+
+    @Test
+    public void testDrainEmptyQueueDoesNotHang() throws Exception {
+        withServiceAndQueue((service, queue, clock) -> {
+            // Nothing was ever added; drain must still return promptly.
+            queue.drain();
+            assertEquals(0, queue.getStats().totalWriteBatches());
+            // Idempotent: a second drain (and a following close) are safe.
+            queue.drain();
+            queue.close();
+        });
+    }
+
+    @Test
+    public void testCloseAfterDrainIsClean() throws Exception {
+        withServiceAndQueue((service, queue, clock) -> {
+            var f = queue.add(mockBatch("123", 0, DEFAULT_SMALL_BATCH_SIZE));
+            queue.drain();
+            assertTrue(f.isDone());
+            assertNotNull(f.get());
+            // close() after a successful drain finds nothing to abandon.
+            queue.close();
+            assertTrue(f.isDone());
+        });
+    }
+
+    @Test
+    public void testDrainWithTimeoutCompletes() throws Exception {
+        withServiceAndQueue((service, queue, clock) -> {
+            var f = queue.add(mockBatch("123", 0, DEFAULT_SMALL_BATCH_SIZE));
+            // Writes complete promptly, so a generous bound returns true well before it elapses.
+            assertTrue(queue.drain(Duration.ofSeconds(5)));
+            assertTrue(f.isDone());
+            assertNotNull(f.get());
+        });
+    }
+
+    @Test
+    public void testDrainWithTimeoutExpiresThenCloseReleases() throws Exception {
+        var service = new DeterministicScheduler();
+        var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var queue = new BlockingMockQueue(release, service, clock);
+
+        var f = queue.add(mockBatch("123", 0, DEFAULT_SMALL_BATCH_SIZE));
+
+        // The writer is stuck inside write(), so a short bound elapses and drain reports failure
+        // without hanging.
+        long start = System.nanoTime();
+        boolean completed = queue.drain(Duration.ofMillis(100));
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+        assertFalse(completed);
+        assertFalse(f.isDone());
+        assertTrue(elapsedMs < 5_000, "drain(timeout) must not block past its bound");
+
+        // Unblock the write so the in-flight task can finish, then close() releases cleanly.
+        release.countDown();
+        queue.close();
+        assertTrue(f.isDone());
+    }
+
+    @Test
+    public void testCloseDoesNotHangOnStuckWriter() throws Exception {
+        var service = new DeterministicScheduler();
+        var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var queue = new BlockingMockQueue(release, service, clock);
+
+        try {
+            queue.add(mockBatch("123", 0, DEFAULT_SMALL_BATCH_SIZE));
+            // drain submits the bucket; the writer enters write() and gets stuck (and ignores the
+            // interrupt close() will send, mimicking a native COPY that doesn't respond to cancellation).
+            queue.drain(Duration.ofMillis(50));
+            queue.started.await();
+
+            long start = System.nanoTime();
+            queue.close(); // must return within the bounded join, not block on the stuck writer
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+            assertTrue(elapsedMs < 5_000, "close() must not hang on a stuck writer");
+        } finally {
+            // Always let the abandoned writer thread finish and exit, even if an assertion fails.
+            release.countDown();
+        }
+    }
+
+    /** Queue whose write() blocks until a latch is released — used to exercise drain/close timeouts. */
+    private static final class BlockingMockQueue extends BulkIngestQueue<String, MockWriteResult> {
+        private final java.util.concurrent.CountDownLatch release;
+        final java.util.concurrent.CountDownLatch started = new java.util.concurrent.CountDownLatch(1);
+
+        BlockingMockQueue(java.util.concurrent.CountDownLatch release,
+                          ScheduledExecutorService executorService, Clock clock) {
+            super("", DEFAULT_MIN_BATCH_SIZE, Long.MAX_VALUE, Integer.MAX_VALUE, Long.MAX_VALUE,
+                    DEFAULT_MAX_DELAY, executorService, clock);
+            this.release = release;
+        }
+
+        // Short bound so the stuck-writer test doesn't wait the production 5s.
+        @Override
+        protected Duration closeJoinTimeout() {
+            return Duration.ofMillis(200);
+        }
+
+        @Override
+        public void write(WriteTask<String, MockWriteResult> writeTask) {
+            started.countDown();
+            // Wait uninterruptibly — a native write (e.g. DuckDB COPY) does not unblock on
+            // Thread.interrupt(), so the close() bound, not the interrupt, must cap the wait.
+            boolean released = false;
+            while (!released) {
+                try {
+                    release.await();
+                    released = true;
+                } catch (InterruptedException e) {
+                    // swallow and keep waiting, mimicking an uninterruptible native call
+                }
+            }
+            for (var future : writeTask.bucket().futures()) {
+                future.complete(new MockWriteResult(writeTask.taskId(), writeTask.size()));
+            }
+        }
+    }
+
     private MockBulkIngestQueue createMockQueue(ScheduledExecutorService executorService, Clock clock) {
         return new MockBulkIngestQueue("", DEFAULT_MIN_BATCH_SIZE, Long.MAX_VALUE, Integer.MAX_VALUE, Long.MAX_VALUE, DEFAULT_MAX_DELAY,
                 executorService,
