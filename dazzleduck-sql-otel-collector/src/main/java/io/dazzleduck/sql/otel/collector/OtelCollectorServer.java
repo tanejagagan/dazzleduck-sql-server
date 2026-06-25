@@ -181,9 +181,12 @@ public class OtelCollectorServer implements Closeable {
                 Thread.currentThread().interrupt();
             }
         }
-        // Flush and close all queues the handler owns, then stop the shared flush scheduler.
+        // Flush and close all queues the handler owns, then stop the shared flush scheduler. The
+        // drain bound (IngestionHandler.DEFAULT_DRAIN_TIMEOUT) is distinct from the LB-drain
+        // shutdownGracePeriod: it bounds the actual data flush and returns as soon as writes
+        // complete, so it only limits how long a stalled write backend can delay shutdown.
         if (handler != null) {
-            try { handler.closeQueues(); } catch (Exception e) { log.warn("Error closing ingestion queues", e); }
+            try { handler.closeQueues(IngestionHandler.DEFAULT_DRAIN_TIMEOUT); } catch (Exception e) { log.warn("Error closing ingestion queues", e); }
         }
         if (flushScheduler != null) {
             flushScheduler.shutdownNow();

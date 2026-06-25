@@ -124,10 +124,13 @@ public class DynamicIngestionHandler extends DuckLakeIngestionHandler {
         DuckLakeTableManager.ensureTable(mapping);
     }
 
+    // Override the Duration overload (the one shutdown callers invoke) rather than the no-arg form,
+    // so this handler's extra cleanup runs no matter which entry point is used. The inherited
+    // no-arg closeQueues() delegates here via DuckLakeIngestionHandler.
     @Override
-    public void closeQueues() {
-        scheduler.shutdownNow();
-        super.closeQueues(); // close + clear the cached queues
+    public void closeQueues(Duration drainTimeout) {
+        scheduler.shutdownNow(); // stop the reconcile thread first so no new queues are created mid-drain
+        super.closeQueues(drainTimeout); // drain + close + clear the cached queues
         if (schemaVersionStmt != null) {
             try { schemaVersionStmt.close(); } catch (SQLException e) {
                 logger.warn("Failed to close schema_version statement", e);

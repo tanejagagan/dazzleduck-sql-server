@@ -2,6 +2,8 @@ package io.dazzleduck.sql.commons.ingestion;
 
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.arrow.vector.ipc.ArrowStreamWriter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -20,6 +22,21 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.LongAccumulator;
 
 public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<T, R> {
+
+    private static final Logger logger = LoggerFactory.getLogger(BulkIngestQueue.class);
+
+    /**
+     * Upper bound for {@link #close()} to wait on the write thread after cancelling/interrupting it.
+     * cancel() + interrupt should unblock a responsive write almost immediately; this bound keeps a
+     * forceful close from hanging on a write that ignores cancellation. The write thread is a daemon,
+     * so a writer still stuck past this bound cannot block JVM exit.
+     */
+    private static final Duration CLOSE_JOIN_TIMEOUT = Duration.ofSeconds(5);
+
+    /** Bound used by {@link #close()} when waiting on the write thread. Overridable for tests. */
+    protected Duration closeJoinTimeout() {
+        return CLOSE_JOIN_TIMEOUT;
+    }
 
 
 
@@ -94,11 +111,18 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
     private Instant lastWrite = Instant.EPOCH;
     private Bucket<T, R> currentBucket;
     private volatile boolean terminating;
+    private volatile boolean draining;
 
     private volatile WriteTask<T, R> runningWrite;
     private long writeTaskId;
 
     private final BlockingQueue<WriteTask<T, R>> writeQueue = new LinkedBlockingQueue<>();
+    /**
+     * Sentinel offered to {@link #writeQueue} by {@link #drain()}. Because the queue is FIFO,
+     * the write thread only reaches it after every previously enqueued task has been written,
+     * at which point it stops. Its bucket is {@code null} and must never be dereferenced.
+     */
+    private final WriteTask<T, R> poisonPill = new WriteTask<>(-1L, Instant.EPOCH, null);
     private final Thread writeThread;
     private final LongAccumulator totalWriteBatches = new LongAccumulator(Long::sum, 0L);
     private final LongAccumulator totalWriteBuckets = new LongAccumulator(Long::sum, 0L);
@@ -142,24 +166,35 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
             try {
                 var task = writeQueue.take();
 
+                // drain() enqueues the poison pill after the final real task; reaching it means
+                // every accepted batch has been written, so the drain is complete and we stop.
+                if (task == poisonPill) {
+                    break;
+                }
+
                 // Try to combine with additional buckets from the queue
                 var bucketsToCombine = new ArrayList<Bucket<T, R>>();
                 bucketsToCombine.add(task.bucket());
                 long combinedSize = task.bucket().size();
                 int combinedBatchCount = task.bucket().batchCount();
 
-                // Poll additional tasks while they can be combined
+                // Poll additional tasks while they can be combined. Combine on the task actually
+                // returned by poll() — not the peeked one — so this stays correct even if close()
+                // concurrently drains the queue after a timed-out join: each task is then consumed
+                // by exactly one of {writer, close}, never written and abandoned at once.
                 WriteTask<T, R> nextTask;
-                while ((nextTask = writeQueue.peek()) != null) {
-                    var nextBucket = nextTask.bucket();
-                    if (canCombine(combinedSize, combinedBatchCount, nextBucket, maxBucketSize, maxBatches)) {
-                        writeQueue.poll(); // Remove from queue
-                        bucketsToCombine.add(nextBucket);
-                        combinedSize += nextBucket.size();
-                        combinedBatchCount += nextBucket.batchCount();
-                    } else {
+                while ((nextTask = writeQueue.peek()) != null && nextTask != poisonPill) {
+                    if (!canCombine(combinedSize, combinedBatchCount, nextTask.bucket(), maxBucketSize, maxBatches)) {
                         break; // Can't combine more
                     }
+                    var polled = writeQueue.poll();
+                    if (polled == null || polled == poisonPill) {
+                        break; // lost the race to a concurrent consumer, or reached the pill
+                    }
+                    var polledBucket = polled.bucket();
+                    bucketsToCombine.add(polledBucket);
+                    combinedSize += polledBucket.size();
+                    combinedBatchCount += polledBucket.batchCount();
                 }
 
                 // Create combined bucket if we have multiple, otherwise use original
@@ -267,7 +302,7 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
     }
 
     public synchronized CompletableFuture<R> add(Batch<T> batch) {
-        if (terminating) {
+        if (terminating || draining) {
             throw new IllegalStateException("The queue is closed");
         }
         long currentPending = pendingWrite();
@@ -297,7 +332,9 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
     }
 
     private synchronized void triggerWriteIfRequired() {
-        if (terminating) {
+        if (terminating || draining) {
+            // Once draining, drain() owns the final flush and the write thread is stopping; any
+            // further scheduled trigger is a no-op so the executor stops rescheduling this task.
             return;
         }
         var now = clock.instant();
@@ -335,10 +372,43 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
         var writeTask = new WriteTask<>(writeTaskId++, clock.instant(), toWrite);
         lastWrite = clock.instant();
         writeQueue.offer(writeTask);
-        if (!terminating) {
+        if (!terminating && !draining) {
             scheduleNextTrigger(clock.instant());
         }
     }
+    /**
+     * Initiates draining: marks the queue as draining (so {@link #add} is rejected and scheduled
+     * triggers become no-ops), finalizes and enqueues the current bucket, then enqueues the poison
+     * pill. FIFO ordering guarantees the write thread drains that bucket — and every task still
+     * queued ahead of it — before it reaches the pill and stops. Idempotent and a no-op once
+     * {@code terminating} (close already abandoned everything) or already draining.
+     */
+    private synchronized void initiateDrain() {
+        if (!terminating && !draining) {
+            draining = true;
+            submitWriteTask();
+            writeQueue.offer(poisonPill);
+        }
+    }
+
+    @Override
+    public void drain() throws InterruptedException {
+        initiateDrain();
+        writeThread.join();
+    }
+
+    @Override
+    public boolean drain(Duration timeout) throws InterruptedException {
+        initiateDrain();
+        long millis = timeout.toMillis();
+        // join(0) blocks forever, so only wait when the bound is positive; a non-positive
+        // timeout means "don't wait" and we report whether the writer happens to be done.
+        if (millis > 0) {
+            writeThread.join(millis);
+        }
+        return !writeThread.isAlive();
+    }
+
     @Override
     public synchronized void close() throws Exception {
         terminating = true;
@@ -347,11 +417,18 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
             c.cancel();
         }
 
-        // Interrupt and wait for write thread to finish processing
-        // The write thread will exit the loop when it sees terminating=true,
-        // or when interrupted if it's blocked waiting for a task
+        // Interrupt and wait (bounded) for the write thread to finish processing. It exits the loop
+        // when it sees terminating=true, or when interrupted while blocked waiting for a task. The
+        // bound guarantees a forceful close cannot hang forever on a write that ignores cancellation;
+        // a writer still stuck past it is left running (it is a daemon and cannot block JVM exit) and
+        // only owns its own in-flight bucket, which the cleanup below deliberately does not touch.
         writeThread.interrupt();
-        writeThread.join();
+        var joinTimeout = closeJoinTimeout();
+        writeThread.join(joinTimeout.toMillis());
+        if (writeThread.isAlive()) {
+            logger.atWarn().log("Write thread {} did not terminate within {} of close(); abandoning it",
+                    writeThread.getName(), joinTimeout);
+        }
 
         // Fail any futures in the current bucket and release their resources
         var exception = new IllegalStateException("Server shutting down before batch could be written");
@@ -360,9 +437,13 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
             currentBucket.futures().forEach(f -> f.completeExceptionally(exception));
         }
 
-        // Fail any remaining tasks that weren't processed and release their resources
+        // Fail any remaining tasks that weren't processed and release their resources. A timed-out
+        // drain() can leave its poison pill (null bucket) in the queue, so skip it here.
         WriteTask<T, R> remaining;
         while ((remaining = writeQueue.poll()) != null) {
+            if (remaining == poisonPill) {
+                continue;
+            }
             remaining.bucket().batches().forEach(this::onBatchAbandoned);
             remaining.bucket().futures().forEach(f -> f.completeExceptionally(exception));
         }
