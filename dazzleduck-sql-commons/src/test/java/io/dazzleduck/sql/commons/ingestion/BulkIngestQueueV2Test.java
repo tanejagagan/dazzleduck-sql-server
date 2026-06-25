@@ -286,11 +286,11 @@ public class BulkIngestQueueV2Test {
         var queue = createMockQueueWithLongRunningDuckDBWrite(new DeterministicScheduler(),
                 new MutableClock(Clock.systemUTC().instant(), Clock.systemUTC().getZone()));
         var res = queue.add(mockBatch("producer1", 0, DEFAULT_SMALL_BATCH_SIZE * 10));
-        var waitTime = Duration.ofSeconds(2);
-        Thread.sleep(500);
+        Thread.sleep(500); // let the long-running write get in flight before we cancel it
         queue.close();
-        Thread.sleep(1000);
-        assertTrue(res.isCompletedExceptionally());
+        // close() cancels the in-flight write; wait (bounded) for the future to fail rather than
+        // sleeping a fixed 1s. assertThrows confirms it completed exceptionally.
+        assertThrows(Exception.class, () -> res.get(5, TimeUnit.SECONDS));
     }
     private MockBulkIngestQueue createMockQueue(ScheduledExecutorService executorService, Clock clock) {
         return new MockBulkIngestQueue("test", DEFAULT_MIN_BATCH_SIZE, Long.MAX_VALUE, Integer.MAX_VALUE, Long.MAX_VALUE, DEFAULT_MAX_DELAY,

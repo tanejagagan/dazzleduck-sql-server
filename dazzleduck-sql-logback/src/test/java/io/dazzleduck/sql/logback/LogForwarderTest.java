@@ -26,6 +26,9 @@ class LogForwarderTest {
                 .pollInterval(Duration.ofMillis(100))
                 .minBatchSize(100)
                 .maxSendInterval(Duration.ofMillis(100))
+                // Server is intentionally dead; these tests assert acceptance, not delivery, so
+                // don't retry the doomed send on close (default 3 x 1s retries added ~3s).
+                .retryCount(0)
                 .maxInMemorySize(1024 * 1024)
                 .maxOnDiskSize(10 * 1024 * 1024)
                 .enabled(true)

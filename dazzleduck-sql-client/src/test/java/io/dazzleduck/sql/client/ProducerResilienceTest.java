@@ -28,6 +28,8 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
+import static org.awaitility.Awaitility.await;
+
 /**
  * Resilience tests for HttpArrowProducer.
  *
@@ -48,10 +50,13 @@ public class ProducerResilienceTest {
     private static final String USER = "admin";
     private static final String PASSWORD = "admin";
 
-    private static final int TEST_DURATION_MS = 6_000;
+    // Scenario timings, kept proportional so the producer still spans the initial outage, the
+    // server-up window, and the mid-test outage — just compressed ~2x for speed.
+    private static final int TEST_DURATION_MS = 3_000;
     private static final int EVENT_INTERVAL_MS = 10;
-    private static final int SERVER_START_DELAY_MS = 500;
-    private static final int SERVER_UP_DURATION_MS = 2_000;
+    private static final int SERVER_START_DELAY_MS = 250;
+    private static final int SERVER_UP_DURATION_MS = 1_000;
+    private static final int SERVER_DOWN_DURATION_MS = 1_000;
 
     private RootAllocator allocator;
 
@@ -100,13 +105,13 @@ public class ProducerResilienceTest {
                 server.start();
                 logger.info("MockIngestionServer started successfully");
 
-                // Run for SERVER_UP_DURATION_MS, then stop for 2 seconds
+                // Run for SERVER_UP_DURATION_MS, then stop for SERVER_DOWN_DURATION_MS
                 Thread.sleep(SERVER_UP_DURATION_MS);
 
-                logger.info("Stopping MockIngestionServer for 2 seconds...");
+                logger.info("Stopping MockIngestionServer for {}ms...", SERVER_DOWN_DURATION_MS);
                 server.stop();
 
-                Thread.sleep(2000);
+                Thread.sleep(SERVER_DOWN_DURATION_MS);
 
                 logger.info("Restarting MockIngestionServer...");
                 server.start();
@@ -158,21 +163,16 @@ public class ProducerResilienceTest {
                 // Wait for server thread to complete startup if it hasn't already
                 serverThread.join(5000);
 
-                // Wait for producer to flush remaining data
-                logger.info("Waiting for producer to flush data...");
-                Thread.sleep(3000);
             }
-            // Producer closed, all data should be flushed
+            // Producer closed; close() drains remaining data. Poll until the server has written all
+            // events instead of sleeping a fixed worst-case for flush + server write.
 
-            // Wait for server to finish writing
-            Thread.sleep(2000);
-
-            // Verify all distinct events received using read_arrow for Arrow IPC files
             logger.info("Verifying data...");
             var actualQuery =
                     String.format("SELECT DISTINCT id FROM read_arrow('%s/%s/*.arrow') ORDER BY id", warehousePath, testPath);
             var expectedQuery = String.format("SELECT * FROM generate_series(0, %d) AS t(id) ORDER BY id", expectedEvents - 1);
-            TestUtils.isEqual(expectedQuery, actualQuery);
+            await().atMost(Duration.ofSeconds(15)).pollInterval(Duration.ofMillis(200))
+                    .untilAsserted(() -> TestUtils.isEqual(expectedQuery, actualQuery));
 
             logger.info("HttpArrowProducer resilience test passed - all {} distinct events received", expectedEvents);
 

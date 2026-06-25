@@ -140,6 +140,9 @@ public class OtelCollectorLoginDelegationTest {
             props.setSecretKey(SECRET_KEY_BASE64);
             props.setLoginUrl("http://localhost:" + stubPort + "/v1/login");
             props.setJwtExpiration(Duration.ofHours(1));
+            // minBucketSize=1 flushes every batch immediately, so export() returns without waiting
+            // for the time-based flush (the default 5s max_delay made each method take ~5s).
+            props.setIngestionConfig(ingestionConfig(1L, 60_000L));
 
             otelServer = new OtelCollectorServer(props);
             otelServer.start();
@@ -273,6 +276,9 @@ public class OtelCollectorLoginDelegationTest {
             props.setUsers(Map.of(VALID_USER, VALID_PASS));
             props.setJwtExpiration(Duration.ofHours(1));
             // no loginUrl → local credential validation
+            // minBucketSize=1 flushes every batch immediately, so export() returns without waiting
+            // for the time-based flush (the default 5s max_delay made each method take ~5s).
+            props.setIngestionConfig(ingestionConfig(1L, 60_000L));
 
             otelServer = new OtelCollectorServer(props);
             otelServer.start();

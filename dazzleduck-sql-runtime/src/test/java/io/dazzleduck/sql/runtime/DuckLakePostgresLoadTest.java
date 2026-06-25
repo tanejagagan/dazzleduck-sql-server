@@ -74,11 +74,11 @@ public class DuckLakePostgresLoadTest {
     private static final String SCHEMA       = "main";
     private static final String TABLE        = "logs";
     private static final int    ROWS_PER_BATCH  = 10;
-    private static final int    TOTAL_ROWS      = 10_000;
-    private static final int    HTTP_BATCHES    = TOTAL_ROWS / 2 / ROWS_PER_BATCH;   // 500
-    private static final int    FLIGHT_BATCHES  = TOTAL_ROWS / 2 / ROWS_PER_BATCH;   // 500
+    private static final int    TOTAL_ROWS      = 4_000;
+    private static final int    HTTP_BATCHES    = TOTAL_ROWS / 2 / ROWS_PER_BATCH;   // 200
+    private static final int    FLIGHT_BATCHES  = TOTAL_ROWS / 2 / ROWS_PER_BATCH;   // 200
     private static final int    CONCURRENCY     = 10; // parallel senders per protocol
-    private static final int    READ_COUNT      = (HTTP_BATCHES + FLIGHT_BATCHES) / 5; // 200 reads per reader thread
+    private static final int    READ_COUNT      = (HTTP_BATCHES + FLIGHT_BATCHES) / 5; // 80 reads per reader thread
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 

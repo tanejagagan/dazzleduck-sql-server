@@ -28,6 +28,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
+import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
@@ -93,8 +94,8 @@ public class BackPressureTest {
             byte[] arrowData = createMinimalArrowData();
             producer.enqueue(arrowData);
 
-            // Wait for producer to process and fail
-            Thread.sleep(2000);
+            // Wait until the server has rejected at least one request with 429.
+            await().atMost(Duration.ofSeconds(10)).until(() -> mockServer.get429Count() > 0);
         }
 
         // Verify that 429 was encountered (element should be dropped after max back pressure retries)
@@ -135,8 +136,8 @@ public class BackPressureTest {
         byte[] arrowData = createMinimalArrowData();
         producer.enqueue(arrowData);
 
-        // Wait for processing to complete - close() will wait for sender thread
-        Thread.sleep(1000);
+        // Wait until the request succeeds after back pressure clears; close() then joins the sender.
+        await().atMost(Duration.ofSeconds(10)).until(() -> mockServer.getSuccessCount() >= 1);
         producer.close();
 
         long elapsed = System.currentTimeMillis() - startTime;
@@ -186,8 +187,8 @@ public class BackPressureTest {
         byte[] arrowData = createMinimalArrowData();
         producer.enqueue(arrowData);
 
-        // Wait for processing then close
-        Thread.sleep(1000);
+        // Wait until the retried request succeeds, then close.
+        await().atMost(Duration.ofSeconds(10)).until(() -> mockServer.getSuccessCount() >= 1);
         producer.close();
 
         // Verify successful recovery - at least 1 back pressure event and 1 success
@@ -200,7 +201,7 @@ public class BackPressureTest {
     void testRetryAfterHeaderIsHonored() throws Exception {
         // Return 429 with Retry-After header
         mockServer.setReturn429ForFirstN(1);
-        mockServer.setRetryAfterSeconds(2); // 2 second wait
+        mockServer.setRetryAfterSeconds(1); // honor a 1s Retry-After (kept short for test speed)
 
         String path = "retry-after-test-" + System.nanoTime();
         Files.createDirectories(warehousePath.resolve(path));
@@ -233,8 +234,8 @@ public class BackPressureTest {
 
         logger.info("Retry-After test completed in {}ms", elapsed);
 
-        // Should have waited at least 2 seconds (Retry-After header value)
-        assertTrue(elapsed >= 1800, "Should honor Retry-After header, but elapsed was " + elapsed + "ms");
+        // Should have waited at least the Retry-After header value (1s, minus scheduling slack).
+        assertTrue(elapsed >= 800, "Should honor Retry-After header, but elapsed was " + elapsed + "ms");
         assertEquals(1, mockServer.get429Count());
         assertEquals(1, mockServer.getSuccessCount());
     }
@@ -271,8 +272,9 @@ public class BackPressureTest {
         byte[] arrowData = createMinimalArrowData();
         producer.enqueue(arrowData);
 
-        // Wait for retries to happen (with 3 retries and 50ms base backoff, should complete quickly)
-        Thread.sleep(2000);
+        // Wait until back pressure retries have happened; close() then joins the sender so the
+        // producer has fully given up before we assert.
+        await().atMost(Duration.ofSeconds(10)).until(() -> mockServer.get429Count() >= 2);
         producer.close();
 
         // Should have tried multiple times (1 initial + up to 3 retries = max 4 attempts)
