@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 
+import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -139,22 +140,17 @@ public class LogForwardingIntegrationTest {
         testLogger.warn("Test warning message");
         testLogger.error("Test error message");
 
-        // Wait for logs to be added to producer queue
-        Thread.sleep(1000);
-
-        // Stop all appenders to flush pending data (context.stop() calls stop() on each appender)
+        // Stop all appenders to flush pending data (context.stop() calls stop() on each appender,
+        // which drains the producer queue).
         LoggerContext ctx = (LoggerContext) LoggerFactory.getILoggerFactory();
         ctx.stop();
 
-        // Wait for server-side ingestion to complete
-        Thread.sleep(2000);
-
-        // Verify logs were received with correct project expressions
-        TestUtils.isEqual(
-                "SELECT 3 as count",
-                "SELECT count(*) as count FROM " + CATALOG_NAME + "." + SCHEMA_NAME + "." + TABLE_NAME +
-                        " WHERE logger = 'test.integration.logger'"
-        );
+        // Poll until server-side ingestion has landed all 3 rows (replaces fixed sleeps).
+        await().atMost(Duration.ofSeconds(10)).pollInterval(Duration.ofMillis(50)).untilAsserted(() ->
+                TestUtils.isEqual(
+                        "SELECT 3 as count",
+                        "SELECT count(*) as count FROM " + CATALOG_NAME + "." + SCHEMA_NAME + "." + TABLE_NAME +
+                                " WHERE logger = 'test.integration.logger'"));
 
         // Verify application_host was added by project expression
         TestUtils.isEqual(
@@ -219,24 +215,26 @@ public class LogForwardingIntegrationTest {
                     "test.table.partition.logger", "main",
                     "Table-driven partition test 2",
                     Map.of(), null, List.of(), Map.of(), null));
-            Thread.sleep(3000); // allow login + send to complete before close drains
-        }
-
-        Thread.sleep(2000); // allow server-side ingest to complete
+        }   // close() drains pending client-side sends (httpProducer.close)
 
         // DuckLakeIngestionHandler.getPartitionBy() returned ["date"] from ducklake_partition_column
         // (set by ALTER TABLE SET PARTITIONED BY (date) in startup script).
         // ParquetIngestionQueue used it in COPY ... (PARTITION_BY(date)), producing date= paths.
-        Long partitionedFileCount = ConnectionPool.collectFirst(
+        String partitionedFileCountSql =
                 "SELECT COUNT(*) " +
                 "FROM __ducklake_metadata_" + CATALOG_NAME + ".ducklake_data_file df " +
                 "JOIN __ducklake_metadata_" + CATALOG_NAME + ".ducklake_table t ON df.table_id = t.table_id " +
                 "WHERE t.table_name = '" + TABLE_NAME_PARTITIONED + "' " +
                 "  AND t.end_snapshot IS NULL " +
                 "  AND df.end_snapshot IS NULL " +
-                "  AND df.path LIKE '%date=%'",
-                Long.class
-        );
+                "  AND df.path LIKE '%date=%'";
+
+        // Poll until server-side ingest produces the table-driven date= partition files.
+        await().atMost(Duration.ofSeconds(10)).pollInterval(Duration.ofMillis(100)).until(() -> {
+            Long c = ConnectionPool.collectFirst(partitionedFileCountSql, Long.class);
+            return c != null && c > 0;
+        });
+        Long partitionedFileCount = ConnectionPool.collectFirst(partitionedFileCountSql, Long.class);
         assertTrue(partitionedFileCount > 0,
                 "Expected table-driven date= partition paths in ducklake_data_file for " + TABLE_NAME_PARTITIONED);
     }

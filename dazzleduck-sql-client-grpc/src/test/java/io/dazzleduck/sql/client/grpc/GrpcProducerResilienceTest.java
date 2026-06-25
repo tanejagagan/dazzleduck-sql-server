@@ -30,6 +30,8 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
+import static org.awaitility.Awaitility.await;
+
 /**
  * Resilience tests for GrpcArrowProducer.
  *
@@ -50,7 +52,9 @@ public class GrpcProducerResilienceTest {
     private static final String USER = "admin";
     private static final String PASSWORD = "admin";
 
-    private static final int TEST_DURATION_MS = 6_000;
+    // 2s of sending at 10ms intervals (~200 events) comfortably spans the 500ms initial outage
+    // (producer created before the server starts) and verifies all events are eventually delivered.
+    private static final int TEST_DURATION_MS = 2_000;
     private static final int EVENT_INTERVAL_MS = 10;
     private static final int SERVER_START_DELAY_MS = 500;
 
@@ -143,20 +147,15 @@ public class GrpcProducerResilienceTest {
                 // Wait for server thread to complete startup if it hasn't already
                 serverThread.join(5000);
 
-                // Wait for producer to flush remaining data
-                logger.info("Waiting for producer to flush data...");
-                Thread.sleep(3000);
             }
-            // Producer closed, all data should be flushed
+            // Producer closed; close() drains remaining data. Poll until the server has written all
+            // events instead of sleeping a fixed worst-case for flush + server write.
 
-            // Wait for server to finish writing
-            Thread.sleep(2000);
-
-            // Verify all distinct events received
             logger.info("Verifying data...");
             var actualQuery = String.format("SELECT DISTINCT id FROM read_parquet('%s/%s/*.parquet') ORDER BY id", ingestionPath, testPath);
             var expectedQuery = String.format("SELECT * FROM generate_series(0, %d) AS t(id) ORDER BY id", expectedEvents - 1);
-            TestUtils.isEqual(expectedQuery, actualQuery);
+            await().atMost(Duration.ofSeconds(15)).pollInterval(Duration.ofMillis(200))
+                    .untilAsserted(() -> TestUtils.isEqual(expectedQuery, actualQuery));
 
             logger.info("GrpcArrowProducer resilience test passed - all {} distinct events received", expectedEvents);
 

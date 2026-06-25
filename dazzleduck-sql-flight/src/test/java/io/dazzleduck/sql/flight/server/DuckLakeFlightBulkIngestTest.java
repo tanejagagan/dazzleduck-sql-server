@@ -190,7 +190,7 @@ public class DuckLakeFlightBulkIngestTest {
         Location testLocation = FlightTestUtils.findNextLocation();
         String testProducerId = UUID.randomUUID().toString();
         var testIngestionConfig = new IngestionConfig(
-                1024 * 1024,                      // minBucketSize
+                1,                                // minBucketSize: flush every batch immediately (no 2s max_delay wait)
                 1024 * 1024 * 1024L,              // maxBucketSize
                 2048,                                 // maxBatches
                 256 * 1024 * 1024L,                // maxPendingWrite
@@ -291,7 +291,7 @@ public class DuckLakeFlightBulkIngestTest {
         Location testLocation = FlightTestUtils.findNextLocation();
         String testProducerId = UUID.randomUUID().toString();
         var testIngestionConfig = new IngestionConfig(
-                1024 * 1024,                      // minBucketSize
+                1,                                // minBucketSize: flush every batch immediately (no 2s max_delay wait)
                 1024 * 1024 * 1024L,              // maxBucketSize
                 2048,                                 // maxBatches
                 256 * 1024 * 1024L,                // maxPendingWrite
@@ -403,7 +403,7 @@ public class DuckLakeFlightBulkIngestTest {
         Location testLocation = FlightTestUtils.findNextLocation();
         String testProducerId = UUID.randomUUID().toString();
         var testIngestionConfig = new IngestionConfig(
-                1024 * 1024,                      // minBucketSize
+                1,                                // minBucketSize: flush every batch immediately (no 2s max_delay wait)
                 1024 * 1024 * 1024L,              // maxBucketSize
                 2048,                                 // maxBatches
                 256 * 1024 * 1024L,                // maxPendingWrite
