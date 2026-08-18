@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -13,6 +14,16 @@ import java.util.Map;
  * Post-ingestion task that adds newly ingested files to a DuckLake table.
  * This task executes the ducklake_add_data_files procedure for each ingested file
  * within a transaction to ensure atomicity.
+ *
+ * <p>When the queue mapping configures a watermark (see {@link WatermarkSpec}), the rows
+ * precomputed at write time and carried on {@link IngestionResult#watermarkRows()} are appended
+ * to the watermark table via a plain {@code INSERT ... VALUES} in the SAME transaction, so file
+ * registration and watermark commit or roll back together. This task never re-reads the written
+ * files.
+ *
+ * <p>Limitation: queues registered through the dynamic SQLite registry
+ * ({@link DynamicQueueRepository}) do not carry {@code additional_parameters}, so watermarks are
+ * only available for statically configured queue mappings.
  */
 public class DuckLakePostIngestionTask implements PostIngestionTask {
 
@@ -24,6 +35,7 @@ public class DuckLakePostIngestionTask implements PostIngestionTask {
     private final String catalogName;
     private final String tableName;
     private final String schemaName;
+    private final WatermarkSpec watermarkSpec;
 
     public DuckLakePostIngestionTask(IngestionResult ingestionResult,
                                      String catalogName,
@@ -34,6 +46,7 @@ public class DuckLakePostIngestionTask implements PostIngestionTask {
         this.catalogName = catalogName;
         this.tableName = tableName;
         this.schemaName = schemaName;
+        this.watermarkSpec = WatermarkSpec.fromParameters(ingestionResult.queueName(), additionalParameters);
     }
 
     @Override
@@ -56,11 +69,24 @@ public class DuckLakePostIngestionTask implements PostIngestionTask {
     /**
      * Adds files to DuckLake table within a transaction.
      * All files are added atomically - if any file fails, all changes are rolled back.
+     * Precomputed watermark rows join the same transaction, so the registered files and their
+     * watermark commit or roll back together.
      */
     private void addFilesInTransaction(List<String> files) throws SQLException {
-        try (Connection conn = ConnectionPool.getConnection()) {
-            String[] queries = files.stream().map(file -> ADD_FILE_QUERY.formatted(catalogName, tableName, file, schemaName)).toArray(String[]::new);
-            ConnectionPool.executeBatchInTxn(conn, queries);
+        List<String> queries = new ArrayList<>(files.stream()
+                .map(file -> ADD_FILE_QUERY.formatted(
+                        escapeLiteral(catalogName), escapeLiteral(tableName), escapeLiteral(file), escapeLiteral(schemaName)))
+                .toList());
+        List<List<String>> watermarkRows = ingestionResult.watermarkRows();
+        if (watermarkSpec != null && watermarkRows != null && !watermarkRows.isEmpty()) {
+            queries.add(watermarkSpec.insertSql(catalogName, schemaName, watermarkRows));
         }
+        try (Connection conn = ConnectionPool.getConnection()) {
+            ConnectionPool.executeBatchInTxn(conn, queries.toArray(String[]::new));
+        }
+    }
+
+    private static String escapeLiteral(String value) {
+        return value.replace("'", "''");
     }
 }
