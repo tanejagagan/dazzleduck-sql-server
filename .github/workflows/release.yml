@@ -1,0 +1,173 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  JIB_ARGS: -B -ntp -DskipTests
+
+jobs:
+  # Reads the version from the pom and refuses to go further if it is a
+  # SNAPSHOT, or if it disagrees with the tag being released. Without this a
+  # mistagged commit could publish :latest from a development version.
+  verify:
+    name: Verify and resolve version
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Resolve and validate version
+        id: resolve
+        run: |
+          set -euo pipefail
+          version=$(./mvnw -B -ntp -q help:evaluate -Dexpression=project.version -DforceStdout)
+          echo "Resolved project version: $version"
+
+          case "$version" in
+            *-SNAPSHOT)
+              echo "::error::Refusing to release a SNAPSHOT version ($version)."
+              exit 1
+              ;;
+          esac
+
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            tag="${{ github.ref_name }}"
+            if [ "$tag" != "v$version" ]; then
+              echo "::error::Tag $tag does not match pom version $version (expected v$version)."
+              exit 1
+            fi
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build and test
+        run: ./mvnw -B -ntp clean verify
+
+  publish-images:
+    name: Publish Docker images
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      # The base image dazzleduck/base-jre is private, so Jib must be
+      # authenticated for the base-image pull as well as for the push.
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Jib packages modules that depend on the rest of the reactor, so the
+      # reactor must be installed first.
+      - name: Install reactor
+        run: ./mvnw -B -ntp clean install -DskipTests
+
+      # Jib cross-builds, so a single amd64 runner produces both architectures.
+      # The two arches run sequentially on purpose: the compactor module shades
+      # a fat jar, and two concurrent builds of it corrupt target/.
+      #
+      # runtime and compactor already default jib.to.image to
+      # <repo>:${project.version}-${jib.architecture}, so only the architecture
+      # is passed. The otel module defaults to dazzleduck-sql-otel-collector,
+      # which is NOT the published repo name, so its image is set explicitly.
+      - name: Build and push dazzleduck
+        run: |
+          for arch in amd64 arm64; do
+            ./mvnw $JIB_ARGS package jib:build -pl dazzleduck-sql-runtime \
+              -Djib.architecture=$arch
+          done
+
+      - name: Build and push dazzleduck-otel-collector
+        run: |
+          for arch in amd64 arm64; do
+            ./mvnw $JIB_ARGS package jib:build -pl dazzleduck-sql-otel-collector \
+              -Djib.architecture=$arch \
+              -Djib.to.image=docker.io/dazzleduck/dazzleduck-otel-collector:$VERSION-$arch
+          done
+
+      - name: Build and push ducklake-compactor
+        run: |
+          for arch in amd64 arm64; do
+            ./mvnw $JIB_ARGS package jib:build -pl dazzleduck-sql-ducklake-compactor \
+              -Djib.architecture=$arch
+          done
+
+      # Jib pushed one single-arch image per architecture. These stitch them
+      # into the multi-arch manifests that :$VERSION and :latest point at.
+      - name: Create multi-arch manifests
+        run: |
+          set -euo pipefail
+          for repo in dazzleduck/dazzleduck dazzleduck/dazzleduck-otel-collector dazzleduck/ducklake-compactor; do
+            for tag in "$VERSION" latest; do
+              docker buildx imagetools create -t "docker.io/$repo:$tag" \
+                "docker.io/$repo:$VERSION-amd64" \
+                "docker.io/$repo:$VERSION-arm64"
+            done
+          done
+
+      - name: Verify published manifests
+        run: |
+          set -euo pipefail
+          for repo in dazzleduck/dazzleduck dazzleduck/dazzleduck-otel-collector dazzleduck/ducklake-compactor; do
+            for tag in "$VERSION" latest; do
+              echo "=== $repo:$tag ==="
+              docker buildx imagetools inspect "docker.io/$repo:$tag"
+              # || true so a zero match reports the error below rather than
+              # aborting the step under set -e with no explanation.
+              found=$(docker buildx imagetools inspect "docker.io/$repo:$tag" | grep -cE 'linux/(amd64|arm64)$' || true)
+              if [ "$found" -lt 2 ]; then
+                echo "::error::$repo:$tag does not carry both linux/amd64 and linux/arm64."
+                exit 1
+              fi
+            done
+          done
+
+  github-release:
+    name: Create GitHub release
+    needs: [verify, publish-images]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes \
+            --latest
