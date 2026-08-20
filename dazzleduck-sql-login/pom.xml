@@ -10,6 +10,7 @@
     </parent>
     <artifactId>dazzleduck-sql-login</artifactId>
     <name>DazzleDuck Project Login</name>
+    <description>JWT authentication and token issuing service for DazzleDuck SQL.</description>
     <properties>
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>

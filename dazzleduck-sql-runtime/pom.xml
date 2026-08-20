@@ -9,6 +9,7 @@
         <version>0.2.15-SNAPSHOT</version>
     </parent>
     <name>DazzleDuck Project Runtime</name>
+    <description>Server runtime that starts the DazzleDuck Arrow Flight SQL and HTTP endpoints.</description>
     <artifactId>dazzleduck-sql-runtime</artifactId>
 
     <properties>

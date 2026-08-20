@@ -148,9 +148,42 @@ jobs:
             done
           done
 
+  # Central coordinates are immutable: once a version is published it can never be
+  # replaced or withdrawn. This runs only after the tag/pom cross-check in `verify`.
+  publish-central:
+    name: Publish to Maven Central
+    needs: verify
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # server-id writes the <server> entry the central-publishing plugin resolves via
+      # publishingServerId, and gpg-private-key imports the signing key into the runner.
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+          server-id: central
+          server-username: CENTRAL_USERNAME
+          server-password: CENTRAL_PASSWORD
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+
+      # -Ddazzleduck.release=true activates the release-sign-artifacts profile, which signs
+      # every artifact; the source and javadoc jars Central requires are already bound to
+      # the verify phase in the root pom.
+      - name: Deploy to Central
+        env:
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: ./mvnw -B -ntp -DskipTests -Ddazzleduck.release=true deploy
+
   github-release:
     name: Create GitHub release
-    needs: [verify, publish-images]
+    needs: [verify, publish-images, publish-central]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 10

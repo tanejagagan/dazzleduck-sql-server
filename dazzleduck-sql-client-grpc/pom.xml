@@ -11,6 +11,7 @@
 
     <artifactId>dazzleduck-sql-client-grpc</artifactId>
     <name>DazzleDuck Project Client gRPC</name>
+    <description>Arrow Flight SQL (gRPC) client for the DazzleDuck SQL server.</description>
 
     <properties>
         <maven.compiler.source>11</maven.compiler.source>

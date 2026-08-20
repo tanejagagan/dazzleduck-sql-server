@@ -10,6 +10,7 @@
     </parent>
     <artifactId>dazzleduck-sql-common</artifactId>
     <name>DazzleDuck Project Common</name>
+    <description>Shared configuration keys, header constants, and utilities used across DazzleDuck SQL modules.</description>
     <properties>
         <maven.compiler.source>11</maven.compiler.source>
         <maven.compiler.target>11</maven.compiler.target>

@@ -9,6 +9,7 @@
         <version>0.2.15-SNAPSHOT</version>
     </parent>
     <name>DazzleDuck Project Search</name>
+    <description>Full-text search indexing for DazzleDuck SQL.</description>
     <artifactId>dazzleduck-sql-search</artifactId>
 
     <properties>

@@ -11,6 +11,7 @@
 
     <artifactId>dazzleduck-sql-client</artifactId>
     <name>DazzleDuck Project Client</name>
+    <description>HTTP client for the DazzleDuck SQL server, with Arrow-native batching and back pressure.</description>
 
     <properties>
         <maven.compiler.source>11</maven.compiler.source>

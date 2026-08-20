@@ -11,6 +11,7 @@
 
     <artifactId>dazzleduck-sql-scrapper</artifactId>
     <name>DazzleDuck Project Scrapper</name>
+    <description>Prometheus metrics scraping and forwarding for DazzleDuck SQL.</description>
 
     <properties>
         <maven.compiler.source>21</maven.compiler.source>
