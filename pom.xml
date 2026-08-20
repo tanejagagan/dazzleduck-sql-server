@@ -231,9 +231,12 @@
                 <extensions>true</extensions>
                 <configuration>
                     <publishingServerId>central</publishingServerId>
-                    <!-- Releases are automatic on a v* tag, so the upload promotes itself
-                         rather than waiting for someone to press publish in the portal. -->
-                    <autoPublish>true</autoPublish>
+                    <!-- Deliberately manual for the first automated release: a tag uploads
+                         and validates the artifacts, then someone presses publish in the
+                         portal. Central coordinates are immutable, so the first run gets a
+                         human look before it becomes permanent. Set back to true once a
+                         release has gone through cleanly. -->
+                    <autoPublish>false</autoPublish>
                     <waitUntil>validated</waitUntil>
                 </configuration>
             </plugin>
