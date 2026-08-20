@@ -15,6 +15,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceAccessMode;
+import org.junit.jupiter.api.parallel.ResourceLock;
 
 import java.io.ByteArrayOutputStream;
 import java.time.Clock;
@@ -26,6 +28,7 @@ import java.util.concurrent.TimeUnit;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.*;
 
+@ResourceLock(value = "dazzleduck-singleton-connection", mode = ResourceAccessMode.READ_WRITE)
 public class HttpArrowProducerTimeoutTest {
 
     private static SharedTestServer server;

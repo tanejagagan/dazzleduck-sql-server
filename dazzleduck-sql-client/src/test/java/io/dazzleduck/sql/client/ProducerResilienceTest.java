@@ -15,6 +15,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
+import org.junit.jupiter.api.parallel.ResourceAccessMode;
+import org.junit.jupiter.api.parallel.ResourceLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -43,6 +45,7 @@ import static org.awaitility.Awaitility.await;
 @Tag("slow")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @Execution(ExecutionMode.CONCURRENT)
+@ResourceLock(value = "dazzleduck-singleton-connection", mode = ResourceAccessMode.READ_WRITE)
 public class ProducerResilienceTest {
 
     private static final Logger logger = LoggerFactory.getLogger(ProducerResilienceTest.class);

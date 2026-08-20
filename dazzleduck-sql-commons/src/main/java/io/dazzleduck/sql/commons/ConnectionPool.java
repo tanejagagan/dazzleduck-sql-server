@@ -498,14 +498,24 @@ public enum ConnectionPool {
      */
     public static void executeOnSingleton(String script) {
         String[] statements = splitStatements(script);
-        try (Statement statement = INSTANCE.connection.createStatement()) {
+        // The singleton connection is process-wide, so several servers starting in the
+        // same JVM run their startup scripts against it at once. A DuckDB connection is
+        // not safe for concurrent statement execution, so serialise on it here.
+        synchronized (INSTANCE.connection) {
             for (String sql : statements) {
-                if (!sql.isBlank()) {
+                if (sql.isBlank()) {
+                    continue;
+                }
+                // A fresh statement per SQL: reusing one across the script lets a failure
+                // in an earlier statement surface against a later one, which reports the
+                // opaque "unsuccessful or closed pending query result" instead of the
+                // actual error.
+                try (Statement statement = INSTANCE.connection.createStatement()) {
                     statement.execute(sql);
+                } catch (SQLException e) {
+                    throw new RuntimeSqlException("Failed to execute on singleton connection: " + sql, e);
                 }
             }
-        } catch (SQLException e) {
-            throw new RuntimeSqlException(e);
         }
     }
 
