@@ -94,10 +94,9 @@ jobs:
       # The two arches run sequentially on purpose: the compactor module shades
       # a fat jar, and two concurrent builds of it corrupt target/.
       #
-      # runtime and compactor already default jib.to.image to
+      # All three modules default jib.to.image to
       # <repo>:${project.version}-${jib.architecture}, so only the architecture
-      # is passed. The otel module defaults to dazzleduck-sql-otel-collector,
-      # which is NOT the published repo name, so its image is set explicitly.
+      # is passed and the image names stay owned by the poms.
       - name: Build and push dazzleduck
         run: |
           for arch in amd64 arm64; do
@@ -109,8 +108,7 @@ jobs:
         run: |
           for arch in amd64 arm64; do
             ./mvnw $JIB_ARGS package jib:build -pl dazzleduck-sql-otel-collector \
-              -Djib.architecture=$arch \
-              -Djib.to.image=docker.io/dazzleduck/dazzleduck-otel-collector:$VERSION-$arch
+              -Djib.architecture=$arch
           done
 
       - name: Build and push ducklake-compactor
