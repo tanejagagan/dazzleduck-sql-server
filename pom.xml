@@ -110,9 +110,12 @@
     <profiles>
         <profile>
             <id>release-sign-artifacts</id>
+            <!-- Deliberately NOT performRelease: that property also activates Maven's
+                 built-in release-profile, whose attach-sources execution collides with the
+                 bundle-sources execution this build already binds to the verify phase. -->
             <activation>
                 <property>
-                    <name>performRelease</name>
+                    <name>dazzleduck.release</name>
                     <value>true</value>
                 </property>
             </activation>
@@ -121,7 +124,7 @@
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-gpg-plugin</artifactId>
-                        <version>1.5</version>
+                        <version>3.2.7</version>
                         <executions>
                             <execution>
                                 <id>sign-artifacts</id>
@@ -131,7 +134,12 @@
                                 </goals>
                                 <configuration>
                                     <keyname>${gpg.keyname}</keyname>
-                                    <passphraseServerId>${gpg.keyname}</passphraseServerId>
+                                    <!-- CI has no tty, so gpg must take the passphrase on
+                                         stdin; it comes from MAVEN_GPG_PASSPHRASE. -->
+                                    <gpgArguments>
+                                        <arg>--pinentry-mode</arg>
+                                        <arg>loopback</arg>
+                                    </gpgArguments>
                                 </configuration>
                             </execution>
                         </executions>
@@ -223,6 +231,10 @@
                 <extensions>true</extensions>
                 <configuration>
                     <publishingServerId>central</publishingServerId>
+                    <!-- Releases are automatic on a v* tag, so the upload promotes itself
+                         rather than waiting for someone to press publish in the portal. -->
+                    <autoPublish>true</autoPublish>
+                    <waitUntil>validated</waitUntil>
                 </configuration>
             </plugin>
             <plugin>

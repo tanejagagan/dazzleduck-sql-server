@@ -11,6 +11,7 @@
 
     <artifactId>dazzleduck-sql-otel-collector</artifactId>
     <name>DazzleDuck OpenTelemetry Collector</name>
+    <description>OpenTelemetry collector that ingests traces, metrics, and logs into DuckDB and DuckLake.</description>
 
     <properties>
         <maven.compiler.source>21</maven.compiler.source>

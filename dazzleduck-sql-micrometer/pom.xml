@@ -12,6 +12,7 @@
 
     <artifactId>dazzleduck-sql-micrometer</artifactId>
     <name>DazzleDuck Project Micrometer</name>
+    <description>Micrometer meter registry that forwards metrics to DazzleDuck over Arrow.</description>
 
     <properties>
         <!-- Override parent's Java version if needed -->

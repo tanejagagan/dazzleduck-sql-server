@@ -11,6 +11,7 @@
 
     <artifactId>dazzleduck-sql-ducklake-compactor</artifactId>
     <name>DazzleDuck DuckLake Compaction Service</name>
+    <description>Compaction service that merges small DuckLake data files into larger ones.</description>
 
     <properties>
         <maven.compiler.source>21</maven.compiler.source>

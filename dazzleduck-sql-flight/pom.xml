@@ -11,6 +11,7 @@
 
     <artifactId>dazzleduck-sql-flight</artifactId>
     <name>DazzleDuck Project Flight Sql</name>
+    <description>Arrow Flight SQL server implementation backed by DuckDB.</description>
     <properties>
     </properties>
     <dependencies>
