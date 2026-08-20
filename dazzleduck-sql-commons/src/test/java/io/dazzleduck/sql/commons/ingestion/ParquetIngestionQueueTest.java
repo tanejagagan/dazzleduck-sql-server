@@ -46,8 +46,21 @@ public class ParquetIngestionQueueTest {
     }
 
     @AfterEach
-    public void cleanup() {
-        // Cleanup is handled by @TempDir
+    public void cleanup() throws Exception {
+        // close() interrupts the writer but abandons it if it outlives the join timeout
+        // (deliberately - it is a daemon and must not block shutdown). An abandoned writer
+        // keeps COPYing into tempDir, so letting @TempDir deletion start while one is alive
+        // races: the COPY fails and the directory cannot be emptied. Wait for quiescence
+        // first; @TempDir cleanup runs after @AfterEach.
+        long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        while (System.nanoTime() < deadline && writerThreadsAlive()) {
+            Thread.sleep(20);
+        }
+    }
+
+    private static boolean writerThreadsAlive() {
+        return Thread.getAllStackTraces().keySet().stream()
+                .anyMatch(t -> t.isAlive() && t.getName().startsWith("BulkIngestQueue-"));
     }
 
     @Test

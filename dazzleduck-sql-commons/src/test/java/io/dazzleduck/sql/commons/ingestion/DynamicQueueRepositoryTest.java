@@ -151,7 +151,13 @@ class DynamicQueueRepositoryTest {
             writeToDb(dbPath, "UPDATE " + DynamicQueueRepository.ATTACHMENT +
                     ".schema_version SET version = version + 1 WHERE id = 1");
 
-            Thread.sleep(200);
+            // The handler polls every 50ms. A fixed sleep assumes the poll thread got
+            // scheduled within it, which does not hold on a loaded CI runner, so wait for
+            // the condition itself instead.
+            long deadline = System.nanoTime() + java.time.Duration.ofSeconds(30).toNanos();
+            while (!handler.getKnownQueues().contains("q2") && System.nanoTime() < deadline) {
+                Thread.sleep(20);
+            }
 
             assertTrue(handler.getKnownQueues().contains("q2"), "hot-reload picked up the new queue");
 
