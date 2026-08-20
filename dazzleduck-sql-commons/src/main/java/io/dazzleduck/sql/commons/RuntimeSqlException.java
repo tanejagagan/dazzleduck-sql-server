@@ -8,4 +8,9 @@ public class RuntimeSqlException extends RuntimeException {
         super(sqlException);
         this.sqlException = sqlException;
     }
+
+    public RuntimeSqlException(String message, SQLException sqlException){
+        super(message, sqlException);
+        this.sqlException = sqlException;
+    }
 }

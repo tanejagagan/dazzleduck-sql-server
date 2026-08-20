@@ -30,11 +30,14 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
+import org.junit.jupiter.api.parallel.ResourceAccessMode;
+import org.junit.jupiter.api.parallel.ResourceLock;
 
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.*;
 
 @Execution(ExecutionMode.CONCURRENT)
+@ResourceLock(value = "dazzleduck-singleton-connection", mode = ResourceAccessMode.READ_WRITE)
 public class HttpArrowProducerTest {
 
     private static SharedTestServer server;
