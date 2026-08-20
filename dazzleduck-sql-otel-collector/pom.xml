@@ -179,7 +179,7 @@
                         </platforms>
                     </from>
                     <to>
-                        <image>dazzleduck/dazzleduck-sql-otel-collector:${project.version}-${jib.architecture}</image>
+                        <image>dazzleduck/dazzleduck-otel-collector:${project.version}-${jib.architecture}</image>
                         <tags>
                             <tag>latest-${jib.architecture}</tag>
                         </tags>

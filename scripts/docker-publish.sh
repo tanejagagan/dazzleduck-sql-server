@@ -49,7 +49,7 @@ MVN="$ROOT/mvnw"
 MODULES=(
   "runtime|dazzleduck-sql-runtime|dazzleduck/dazzleduck|multi"
   "compactor|dazzleduck-sql-ducklake-compactor|dazzleduck/ducklake-compactor|multi"
-  "otel-collector|dazzleduck-sql-otel-collector|dazzleduck/dazzleduck-sql-otel-collector|multi"
+  "otel-collector|dazzleduck-sql-otel-collector|dazzleduck/dazzleduck-otel-collector|multi"
   "scrapper|dazzleduck-sql-scrapper|dazzleduck/dazzleduck-sql-scrapper|single"
 )
 
