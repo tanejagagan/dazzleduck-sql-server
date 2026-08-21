@@ -88,6 +88,32 @@ class DuckLakeWatermarkPostIngestionTest {
     }
 
     @Test
+    void allNullTimestampGroupIsWrittenWithNullMinMaxAndRealCount() throws Exception {
+        String f = tempDir.resolve("allnull.parquet").toString();
+        try (Connection conn = ConnectionPool.getConnection()) {
+            ConnectionPool.execute(conn, ("COPY (SELECT * FROM (VALUES "
+                    + "('king', 'wa', NULL::TIMESTAMP, 1.0::DOUBLE), "
+                    + "('king', 'wa', NULL::TIMESTAMP, 2.0::DOUBLE)"
+                    + ") AS t(county, state, ts, v)) TO '%s' (FORMAT parquet)").formatted(f));
+        }
+        List<String> files = List.of(f);
+        List<List<String>> rows;
+        try (Connection conn = ConnectionPool.getConnection()) {
+            rows = SPEC.computeRows(conn, "SELECT * FROM read_parquet(['%s'])".formatted(f));
+        }
+        new DuckLakePostIngestionTask(result(files, rows), CATALOG, "facts", "main",
+                watermarkParams("ingest_watermark")).execute();
+
+        try (Connection conn = ConnectionPool.getConnection()) {
+            // the batch is recorded: NULL min/max, but the two rows are counted
+            assertEquals(List.of("king|wa|NULL|NULL|2"), collect(conn,
+                    ("SELECT county || '|' || state || '|' || coalesce(min_ts::VARCHAR, 'NULL')"
+                            + " || '|' || coalesce(max_ts::VARCHAR, 'NULL') || '|' || row_count::VARCHAR AS r "
+                            + "FROM %s.main.ingest_watermark").formatted(CATALOG)));
+        }
+    }
+
+    @Test
     void appendsPrecomputedRowsInSameTransaction() throws Exception {
         List<String> files = writeBatchFiles();
         List<List<String>> rows = computeRows(files);

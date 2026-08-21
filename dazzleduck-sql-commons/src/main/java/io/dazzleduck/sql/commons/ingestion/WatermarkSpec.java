@@ -29,8 +29,8 @@ import java.util.stream.Collectors;
  *       {@code COUNT(*)} for the group.</li>
  * </ul>
  *
- * <p>Note that {@code HAVING MIN(..) IS NOT NULL} still governs which rows are emitted, so a
- * group whose timestamps are all NULL produces no row at all — its row count is not recorded.
+ * <p>A group whose timestamps are all NULL still produces a row: NULL min and max, with the real
+ * row count. Only a genuinely empty batch is skipped.
  *
  * <p>Watermark rows are computed at WRITE time by {@link ParquetIngestionQueue} — an aggregation
  * over the same pre-COPY relation the output Parquet is written from (local data, transformation
@@ -39,7 +39,7 @@ import java.util.stream.Collectors;
  * the SAME transaction as the {@code ducklake_add_data_files} registration. The post-ingestion
  * step therefore never re-reads the written files: no second download, no dependence on the
  * written files' schema, and partition columns (present in the relation, hive-only in the files)
- * group correctly. Rows whose MIN would be NULL (empty batch / all-NULL timestamps) are excluded.
+ * group correctly. Only empty batches are excluded.
  *
  * <p>Validation runs at config-load time via {@link QueueIdToTableMapping}, so a malformed spec
  * fails startup rather than orphaning batches at flush time. Values are rejected when blank, and
@@ -130,8 +130,9 @@ public record WatermarkSpec(String table, String timestampColumn, List<String> g
     /**
      * Aggregation over the write-time source relation: one row per group with the MIN and MAX
      * timestamp and the row count.
-     * {@code HAVING MIN(..) IS NOT NULL} drops rows a NULL MIN would produce — the global row of
-     * an empty batch, or a group whose timestamps are all NULL.
+     * {@code HAVING COUNT(*) > 0} drops only the single all-NULL row a zero-row relation produces
+     * in global (ungrouped) mode. A group whose timestamps are all NULL is kept, with NULL
+     * min/max and its true row count.
      */
     public String aggregationSql(String relationSql) {
         String tsColumn = HeaderUtils.quoteIdentifier(timestampColumn);
@@ -144,8 +145,12 @@ public record WatermarkSpec(String table, String timestampColumn, List<String> g
                 tsColumn, HeaderUtils.quoteIdentifier(minTimestampColumn),
                 tsColumn, HeaderUtils.quoteIdentifier(maxTimestampColumn),
                 HeaderUtils.quoteIdentifier(rowCountColumn));
-        return "SELECT %s%s FROM (%s)%s HAVING MIN(%s) IS NOT NULL"
-                .formatted(selectPrefix, aggregates, relationSql, groupBy, tsColumn);
+        // COUNT(*) > 0, not MIN(..) IS NOT NULL: a group whose timestamps are all NULL still has
+        // rows, and its row count must be recorded — it emits NULL min/max with a real count.
+        // The predicate still suppresses the one all-NULL row a zero-row relation would produce
+        // in global (ungrouped) mode, where COUNT(*) is 0.
+        return "SELECT %s%s FROM (%s)%s HAVING COUNT(*) > 0"
+                .formatted(selectPrefix, aggregates, relationSql, groupBy);
     }
 
     /**
