@@ -6,10 +6,12 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 import java.sql.Connection;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -32,8 +34,11 @@ class WatermarkSpecTest {
         WatermarkSpec spec = WatermarkSpec.fromParameters("q", Map.of(
                 WatermarkSpec.TABLE_KEY, "wm",
                 WatermarkSpec.TIMESTAMP_COLUMN_KEY, "ts",
-                WatermarkSpec.GROUP_COLUMNS_KEY, " county , state "));
-        assertEquals(new WatermarkSpec("wm", "ts", List.of("county", "state")), spec);
+                WatermarkSpec.GROUP_COLUMNS_KEY, " county , state ",
+                WatermarkSpec.MIN_TIMESTAMP_COLUMN_KEY, "min_ts",
+                WatermarkSpec.MAX_TIMESTAMP_COLUMN_KEY, "max_ts",
+                WatermarkSpec.ROW_COUNT_COLUMN_KEY, "row_count"));
+        assertEquals(new WatermarkSpec("wm", "ts", List.of("county", "state"), "min_ts", "max_ts", "row_count"), spec);
     }
 
     @Test
@@ -42,7 +47,10 @@ class WatermarkSpecTest {
         WatermarkSpec spec = WatermarkSpec.fromParameters("q", Map.of(
                 WatermarkSpec.TABLE_KEY, "wm",
                 WatermarkSpec.TIMESTAMP_COLUMN_KEY, "ts",
-                WatermarkSpec.GROUP_COLUMNS_KEY, "[county, state]"));
+                WatermarkSpec.GROUP_COLUMNS_KEY, "[county, state]",
+                WatermarkSpec.MIN_TIMESTAMP_COLUMN_KEY, "min_ts",
+                WatermarkSpec.MAX_TIMESTAMP_COLUMN_KEY, "max_ts",
+                WatermarkSpec.ROW_COUNT_COLUMN_KEY, "row_count"));
         assertEquals(List.of("county", "state"), spec.groupColumns());
     }
 
@@ -82,41 +90,46 @@ class WatermarkSpecTest {
     }
 
     @Test
-    void computesMinPerGroupExcludingNullTimestamps() throws Exception {
-        WatermarkSpec spec = new WatermarkSpec("wm", "ts", List.of("county", "state"));
+    void keepsAllNullTimestampGroupSoItsRowCountIsRecorded() throws Exception {
+        WatermarkSpec spec = new WatermarkSpec("wm", "ts", List.of("county", "state"), "min_ts", "max_ts", "row_count");
         try (Connection conn = ConnectionPool.getConnection()) {
             String relation = relationOver(conn,
                     "('king','wa',TIMESTAMP '2026-08-01 03:00'),"
                             + "('king','wa',TIMESTAMP '2026-08-01 01:00'),"
                             + "('cook','il',TIMESTAMP '2026-08-02 05:00'),"
-                            + "('null','nv',NULL::TIMESTAMP)",   // all-NULL group must be dropped
+                            + "('null','nv',NULL::TIMESTAMP)",   // all-NULL group is kept, with a count
                     tempDir.resolve("grouped.parquet").toString());
             List<List<String>> rows = spec.computeRows(conn, relation);
             rows.sort(java.util.Comparator.comparing(r -> r.get(0)));
-            assertEquals(2, rows.size());
+            assertEquals(3, rows.size());
             // JDBC renders TIMESTAMP via java.sql.Timestamp.toString (trailing ".0"); the string
             // round-trips through DuckDB's implicit VARCHAR cast on INSERT.
-            assertEquals(List.of("cook", "il", "2026-08-02 05:00:00.0"), rows.get(0));
-            assertEquals(List.of("king", "wa", "2026-08-01 01:00:00.0"), rows.get(1));
+            // group, MIN, MAX, COUNT
+            assertEquals(List.of("cook", "il", "2026-08-02 05:00:00.0", "2026-08-02 05:00:00.0", "1"), rows.get(0));
+            assertEquals(List.of("king", "wa", "2026-08-01 01:00:00.0", "2026-08-01 03:00:00.0", "2"), rows.get(1));
+            // all timestamps NULL: no min/max, but the rows still happened and are counted
+            assertEquals(Arrays.asList("null", "nv", null, null, "1"), rows.get(2));
         }
     }
 
     @Test
-    void globalModeProducesNoRowForEmptyOrAllNullInput() throws Exception {
-        WatermarkSpec spec = new WatermarkSpec("wm", "ts", List.of());
+    void globalModeSkipsOnlyGenuinelyEmptyInput() throws Exception {
+        WatermarkSpec spec = new WatermarkSpec("wm", "ts", List.of(), "min_ts", "max_ts", "row_count");
         try (Connection conn = ConnectionPool.getConnection()) {
             // zero-row relation: a global MIN would be a single NULL row — must be suppressed
             String empty = relationOver(conn, "('x','y',TIMESTAMP '2026-01-01')",
                     tempDir.resolve("empty.parquet").toString()) + " WHERE county = 'nope'";
             assertTrue(spec.computeRows(conn, empty).isEmpty());
 
+            // all-NULL is NOT empty: one row, NULL min/max, real count
             String allNull = relationOver(conn, "('x','y',NULL::TIMESTAMP)",
                     tempDir.resolve("allnull.parquet").toString());
-            assertTrue(spec.computeRows(conn, allNull).isEmpty());
+            assertEquals(List.of(Arrays.asList(null, null, "1")), spec.computeRows(conn, allNull));
 
             String real = relationOver(conn, "('x','y',TIMESTAMP '2026-01-01 08:00')",
                     tempDir.resolve("real.parquet").toString());
-            assertEquals(List.of(List.of("2026-01-01 08:00:00.0")), spec.computeRows(conn, real));
+            assertEquals(List.of(List.of("2026-01-01 08:00:00.0", "2026-01-01 08:00:00.0", "1")),
+                    spec.computeRows(conn, real));
         }
     }
 
@@ -124,9 +137,50 @@ class WatermarkSpecTest {
 
     @Test
     void insertSqlQuotesIdentifiersAndEscapesValues() {
-        WatermarkSpec spec = new WatermarkSpec("ingest-watermark", "timestamp", List.of("county"));
-        String sql = spec.insertSql("cat", "main", List.of(List.of("o'brien", "2026-01-01 00:00:00")));
-        assertEquals("INSERT INTO \"cat\".\"main\".\"ingest-watermark\" (\"county\", \"timestamp\") "
-                + "VALUES ('o''brien', '2026-01-01 00:00:00')", sql);
+        WatermarkSpec spec = new WatermarkSpec("ingest-watermark", "timestamp", List.of("county"), "min_ts", "max_ts", "row_count");
+        String sql = spec.insertSql("cat", "main",
+                List.of(List.of("o'brien", "2026-01-01 00:00:00", "2026-01-01 06:00:00", "3")));
+        assertEquals("INSERT INTO \"cat\".\"main\".\"ingest-watermark\""
+                + " (\"county\", \"min_ts\", \"max_ts\", \"row_count\") "
+                + "VALUES ('o''brien', '2026-01-01 00:00:00', '2026-01-01 06:00:00', '3')", sql);
+    }
+
+    // ------------------------------------------------ MAX timestamp and row count
+
+    @Test
+    void aggregationAlwaysIncludesMinMaxAndCount() {
+        WatermarkSpec spec = new WatermarkSpec("wm", "ts", List.of("county"), "min_ts", "max_ts", "rows");
+        assertEquals("SELECT \"county\", MIN(\"ts\") AS \"min_ts\", MAX(\"ts\") AS \"max_ts\","
+                + " COUNT(*) AS \"rows\" FROM (SELECT 1) GROUP BY \"county\""
+                + " HAVING COUNT(*) > 0",
+                spec.aggregationSql("SELECT 1"));
+    }
+
+    @Test
+    void insertColumnOrderMatchesAggregateOrder() {
+        WatermarkSpec spec = new WatermarkSpec("wm", "ts", List.of("county"), "min_ts", "max_ts", "rows");
+        assertEquals("INSERT INTO \"cat\".\"main\".\"wm\""
+                + " (\"county\", \"min_ts\", \"max_ts\", \"rows\")"
+                + " VALUES ('a', '1', '9', '42')",
+                spec.insertSql("cat", "main", List.of(List.of("a", "1", "9", "42"))));
+    }
+
+    @Test
+    void blankMaxOrRowCountColumnIsRejected() {
+        assertThrows(IllegalArgumentException.class,
+                () -> new WatermarkSpec("wm", "ts", List.of(), "min_ts", "  ", "rows"));
+        assertThrows(IllegalArgumentException.class,
+                () -> new WatermarkSpec("wm", "ts", List.of(), "min_ts", "max_ts", null));
+    }
+
+    @Test
+    void missingMaxOrRowCountKeyIsRejected() {
+        assertThrows(IllegalArgumentException.class, () -> WatermarkSpec.fromParameters("q", Map.of(
+                "watermark_table", "wm",
+                "watermark_timestamp_column", "ts")));
+        assertThrows(IllegalArgumentException.class, () -> WatermarkSpec.fromParameters("q", Map.of(
+                "watermark_table", "wm",
+                "watermark_timestamp_column", "ts",
+                "watermark_max_timestamp_column", "max_ts")));
     }
 }

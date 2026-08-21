@@ -14,13 +14,23 @@ import java.util.stream.Collectors;
  * Per-queue watermark configuration, parsed from a queue mapping's {@code additional_parameters}:
  * <ul>
  *   <li>{@code watermark_table} — unqualified table (same catalog/schema as the target) receiving
- *       one row per group with the MIN of the timestamp column across each ingested batch.</li>
- *   <li>{@code watermark_timestamp_column} — column to MIN over; required when the table is set.
- *       The value lands in a watermark-table column of the same name.</li>
+ *       one row per group with the MIN and MAX of the timestamp column and the row count
+ *       across each ingested batch.</li>
+ *   <li>{@code watermark_timestamp_column} — the SOURCE column in the ingested data; both the MIN
+ *       and the MAX are computed over it. Required when the table is set.</li>
+ *   <li>{@code watermark_min_timestamp_column} — required when the table is set; the watermark-table
+ *       column the MIN lands in.</li>
  *   <li>{@code watermark_group_columns} — optional grouping columns as a comma-separated string
  *       (a HOCON list is tolerated: its flattened {@code [a, b]} form is unwrapped). Empty means
  *       one global MIN row per batch.</li>
+ *   <li>{@code watermark_max_timestamp_column} — required when the table is set; the watermark-table
+ *       column the MAX lands in.</li>
+ *   <li>{@code watermark_row_count_column} — required when the table is set; receives
+ *       {@code COUNT(*)} for the group.</li>
  * </ul>
+ *
+ * <p>A group whose timestamps are all NULL still produces a row: NULL min and max, with the real
+ * row count. Only a genuinely empty batch is skipped.
  *
  * <p>Watermark rows are computed at WRITE time by {@link ParquetIngestionQueue} — an aggregation
  * over the same pre-COPY relation the output Parquet is written from (local data, transformation
@@ -29,25 +39,33 @@ import java.util.stream.Collectors;
  * the SAME transaction as the {@code ducklake_add_data_files} registration. The post-ingestion
  * step therefore never re-reads the written files: no second download, no dependence on the
  * written files' schema, and partition columns (present in the relation, hive-only in the files)
- * group correctly. Rows whose MIN would be NULL (empty batch / all-NULL timestamps) are excluded.
+ * group correctly. Only empty batches are excluded.
  *
  * <p>Validation runs at config-load time via {@link QueueIdToTableMapping}, so a malformed spec
  * fails startup rather than orphaning batches at flush time. Values are rejected when blank, and
  * unknown {@code watermark_}-prefixed keys are rejected to surface typos.
  */
-public record WatermarkSpec(String table, String timestampColumn, List<String> groupColumns) {
+public record WatermarkSpec(String table, String timestampColumn, List<String> groupColumns,
+                            String minTimestampColumn, String maxTimestampColumn, String rowCountColumn) {
 
     public static final String TABLE_KEY = "watermark_table";
     public static final String TIMESTAMP_COLUMN_KEY = "watermark_timestamp_column";
     public static final String GROUP_COLUMNS_KEY = "watermark_group_columns";
+    public static final String MIN_TIMESTAMP_COLUMN_KEY = "watermark_min_timestamp_column";
+    public static final String MAX_TIMESTAMP_COLUMN_KEY = "watermark_max_timestamp_column";
+    public static final String ROW_COUNT_COLUMN_KEY = "watermark_row_count_column";
 
-    private static final List<String> KNOWN_KEYS = List.of(TABLE_KEY, TIMESTAMP_COLUMN_KEY, GROUP_COLUMNS_KEY);
+    private static final List<String> KNOWN_KEYS = List.of(TABLE_KEY, TIMESTAMP_COLUMN_KEY, GROUP_COLUMNS_KEY,
+            MIN_TIMESTAMP_COLUMN_KEY, MAX_TIMESTAMP_COLUMN_KEY, ROW_COUNT_COLUMN_KEY);
 
     public WatermarkSpec {
         requireNonBlank(table, TABLE_KEY);
         requireNonBlank(timestampColumn, TIMESTAMP_COLUMN_KEY);
         groupColumns = groupColumns == null ? List.of() : List.copyOf(groupColumns);
         groupColumns.forEach(c -> requireNonBlank(c, GROUP_COLUMNS_KEY));
+        requireNonBlank(minTimestampColumn, MIN_TIMESTAMP_COLUMN_KEY);
+        requireNonBlank(maxTimestampColumn, MAX_TIMESTAMP_COLUMN_KEY);
+        requireNonBlank(rowCountColumn, ROW_COUNT_COLUMN_KEY);
     }
 
     /**
@@ -69,13 +87,20 @@ public record WatermarkSpec(String table, String timestampColumn, List<String> g
         }
         String table = parameters.get(TABLE_KEY);
         String timestampColumn = parameters.get(TIMESTAMP_COLUMN_KEY);
-        if (isBlank(table) || isBlank(timestampColumn)) {
+        String minTimestampColumn = parameters.get(MIN_TIMESTAMP_COLUMN_KEY);
+        String maxTimestampColumn = parameters.get(MAX_TIMESTAMP_COLUMN_KEY);
+        String rowCountColumn = parameters.get(ROW_COUNT_COLUMN_KEY);
+        if (isBlank(table) || isBlank(timestampColumn) || isBlank(minTimestampColumn)
+                || isBlank(maxTimestampColumn) || isBlank(rowCountColumn)) {
             throw new IllegalArgumentException(
-                    "Queue '%s': watermark configuration requires non-blank '%s' and '%s'"
-                            .formatted(queueName, TABLE_KEY, TIMESTAMP_COLUMN_KEY));
+                    "Queue '%s': watermark configuration requires non-blank '%s', '%s', '%s', '%s' and '%s'"
+                            .formatted(queueName, TABLE_KEY, TIMESTAMP_COLUMN_KEY, MIN_TIMESTAMP_COLUMN_KEY,
+                                    MAX_TIMESTAMP_COLUMN_KEY, ROW_COUNT_COLUMN_KEY));
         }
         try {
-            return new WatermarkSpec(table.trim(), timestampColumn.trim(), parseGroupColumns(parameters.get(GROUP_COLUMNS_KEY)));
+            return new WatermarkSpec(table.trim(), timestampColumn.trim(),
+                    parseGroupColumns(parameters.get(GROUP_COLUMNS_KEY)),
+                    minTimestampColumn.trim(), maxTimestampColumn.trim(), rowCountColumn.trim());
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException("Queue '%s': %s".formatted(queueName, e.getMessage()), e);
         }
@@ -103,17 +128,29 @@ public record WatermarkSpec(String table, String timestampColumn, List<String> g
     }
 
     /**
-     * Aggregation over the write-time source relation: one row per group with the MIN timestamp.
-     * {@code HAVING MIN(..) IS NOT NULL} drops rows a NULL MIN would produce — the global row of
-     * an empty batch, or a group whose timestamps are all NULL.
+     * Aggregation over the write-time source relation: one row per group with the MIN and MAX
+     * timestamp and the row count.
+     * {@code HAVING COUNT(*) > 0} drops only the single all-NULL row a zero-row relation produces
+     * in global (ungrouped) mode. A group whose timestamps are all NULL is kept, with NULL
+     * min/max and its true row count.
      */
     public String aggregationSql(String relationSql) {
         String tsColumn = HeaderUtils.quoteIdentifier(timestampColumn);
         String groups = groupColumns.stream().map(HeaderUtils::quoteIdentifier).collect(Collectors.joining(", "));
         String selectPrefix = groups.isEmpty() ? "" : groups + ", ";
         String groupBy = groups.isEmpty() ? "" : " GROUP BY " + groups;
-        return "SELECT %sMIN(%s) AS %s FROM (%s)%s HAVING MIN(%s) IS NOT NULL"
-                .formatted(selectPrefix, tsColumn, tsColumn, relationSql, groupBy, tsColumn);
+        // Aggregate order must match the column order in insertSql and the read order in
+        // computeRows: groups, MIN, MAX, COUNT.
+        String aggregates = "MIN(%s) AS %s, MAX(%s) AS %s, COUNT(*) AS %s".formatted(
+                tsColumn, HeaderUtils.quoteIdentifier(minTimestampColumn),
+                tsColumn, HeaderUtils.quoteIdentifier(maxTimestampColumn),
+                HeaderUtils.quoteIdentifier(rowCountColumn));
+        // COUNT(*) > 0, not MIN(..) IS NOT NULL: a group whose timestamps are all NULL still has
+        // rows, and its row count must be recorded — it emits NULL min/max with a real count.
+        // The predicate still suppresses the one all-NULL row a zero-row relation would produce
+        // in global (ungrouped) mode, where COUNT(*) is 0.
+        return "SELECT %s%s FROM (%s)%s HAVING COUNT(*) > 0"
+                .formatted(selectPrefix, aggregates, relationSql, groupBy);
     }
 
     /**
@@ -123,7 +160,7 @@ public record WatermarkSpec(String table, String timestampColumn, List<String> g
      */
     public List<List<String>> computeRows(Connection connection, String relationSql) throws SQLException {
         List<List<String>> rows = new ArrayList<>();
-        int columns = groupColumns.size() + 1;
+        int columns = valueColumnCount();
         try (var statement = connection.createStatement();
              var resultSet = statement.executeQuery(aggregationSql(relationSql))) {
             while (resultSet.next()) {
@@ -144,13 +181,20 @@ public record WatermarkSpec(String table, String timestampColumn, List<String> g
      */
     public String insertSql(String catalog, String schema, List<List<String>> rows) {
         String columnList = groupColumns.stream().map(HeaderUtils::quoteIdentifier).collect(Collectors.joining(", "));
-        columnList = (columnList.isEmpty() ? "" : columnList + ", ") + HeaderUtils.quoteIdentifier(timestampColumn);
+        columnList = (columnList.isEmpty() ? "" : columnList + ", ") + HeaderUtils.quoteIdentifier(minTimestampColumn);
+        columnList += ", " + HeaderUtils.quoteIdentifier(maxTimestampColumn)
+                + ", " + HeaderUtils.quoteIdentifier(rowCountColumn);
         String values = rows.stream()
                 .map(row -> row.stream().map(WatermarkSpec::literal).collect(Collectors.joining(", ", "(", ")")))
                 .collect(Collectors.joining(", "));
         return "INSERT INTO %s.%s.%s (%s) VALUES %s".formatted(
                 HeaderUtils.quoteIdentifier(catalog), HeaderUtils.quoteIdentifier(schema),
                 HeaderUtils.quoteIdentifier(table), columnList, values);
+    }
+
+    /** Group columns plus the three aggregates: MIN timestamp, MAX timestamp, row count. */
+    private int valueColumnCount() {
+        return groupColumns.size() + 3;
     }
 
     private static String literal(String value) {

@@ -34,7 +34,7 @@ class DuckLakeWatermarkPostIngestionTest {
                     "ATTACH 'ducklake:%s' AS %s (DATA_PATH '%s')".formatted(
                             tempDir.resolve("catalog"), CATALOG, tempDir.resolve("data")),
                     "CREATE TABLE %s.main.facts (county VARCHAR, state VARCHAR, ts TIMESTAMP, v DOUBLE)".formatted(CATALOG),
-                    "CREATE TABLE %s.main.ingest_watermark (county VARCHAR, state VARCHAR, ts TIMESTAMP)".formatted(CATALOG)
+                    "CREATE TABLE %s.main.ingest_watermark (county VARCHAR, state VARCHAR, min_ts TIMESTAMP, max_ts TIMESTAMP, row_count BIGINT)".formatted(CATALOG)
             });
         }
     }
@@ -63,13 +63,16 @@ class DuckLakeWatermarkPostIngestionTest {
         return List.of(f1, f2);
     }
 
-    private static final WatermarkSpec SPEC = new WatermarkSpec("ingest_watermark", "ts", List.of("county", "state"));
+    private static final WatermarkSpec SPEC = new WatermarkSpec("ingest_watermark", "ts", List.of("county", "state"), "min_ts", "max_ts", "row_count");
 
     private static Map<String, String> watermarkParams(String table) {
         return Map.of(
                 WatermarkSpec.TABLE_KEY, table,
                 WatermarkSpec.TIMESTAMP_COLUMN_KEY, "ts",
-                WatermarkSpec.GROUP_COLUMNS_KEY, "county, state");
+                WatermarkSpec.GROUP_COLUMNS_KEY, "county, state",
+                WatermarkSpec.MIN_TIMESTAMP_COLUMN_KEY, "min_ts",
+                WatermarkSpec.MAX_TIMESTAMP_COLUMN_KEY, "max_ts",
+                WatermarkSpec.ROW_COUNT_COLUMN_KEY, "row_count");
     }
 
     /** Computes the rows the way ParquetIngestionQueue does at write time: over the source relation. */
@@ -85,6 +88,32 @@ class DuckLakeWatermarkPostIngestionTest {
     }
 
     @Test
+    void allNullTimestampGroupIsWrittenWithNullMinMaxAndRealCount() throws Exception {
+        String f = tempDir.resolve("allnull.parquet").toString();
+        try (Connection conn = ConnectionPool.getConnection()) {
+            ConnectionPool.execute(conn, ("COPY (SELECT * FROM (VALUES "
+                    + "('king', 'wa', NULL::TIMESTAMP, 1.0::DOUBLE), "
+                    + "('king', 'wa', NULL::TIMESTAMP, 2.0::DOUBLE)"
+                    + ") AS t(county, state, ts, v)) TO '%s' (FORMAT parquet)").formatted(f));
+        }
+        List<String> files = List.of(f);
+        List<List<String>> rows;
+        try (Connection conn = ConnectionPool.getConnection()) {
+            rows = SPEC.computeRows(conn, "SELECT * FROM read_parquet(['%s'])".formatted(f));
+        }
+        new DuckLakePostIngestionTask(result(files, rows), CATALOG, "facts", "main",
+                watermarkParams("ingest_watermark")).execute();
+
+        try (Connection conn = ConnectionPool.getConnection()) {
+            // the batch is recorded: NULL min/max, but the two rows are counted
+            assertEquals(List.of("king|wa|NULL|NULL|2"), collect(conn,
+                    ("SELECT county || '|' || state || '|' || coalesce(min_ts::VARCHAR, 'NULL')"
+                            + " || '|' || coalesce(max_ts::VARCHAR, 'NULL') || '|' || row_count::VARCHAR AS r "
+                            + "FROM %s.main.ingest_watermark").formatted(CATALOG)));
+        }
+    }
+
+    @Test
     void appendsPrecomputedRowsInSameTransaction() throws Exception {
         List<String> files = writeBatchFiles();
         List<List<String>> rows = computeRows(files);
@@ -95,12 +124,14 @@ class DuckLakeWatermarkPostIngestionTest {
             assertEquals(List.of("4"), collect(conn, "SELECT count(*)::VARCHAR AS r FROM %s.main.facts".formatted(CATALOG)));
 
             List<String> watermarks = collect(conn,
-                    ("SELECT county || '|' || state || '|' || strftime(ts, '%%Y-%%m-%%d %%H:%%M') AS r "
+                    ("SELECT county || '|' || state || '|' || strftime(min_ts, '%%Y-%%m-%%d %%H:%%M') "
+                            + "|| '|' || strftime(max_ts, '%%Y-%%m-%%d %%H:%%M') || '|' || row_count::VARCHAR AS r "
                             + "FROM %s.main.ingest_watermark ORDER BY county, state").formatted(CATALOG));
+            // county|state|MIN|MAX|count — aggregated across BOTH files, not per file
             assertEquals(List.of(
-                    "cook|il|2026-08-02 05:00",
-                    "cook|in|2026-08-03 09:00",
-                    "king|wa|2026-08-01 01:00"),  // min across BOTH files, not per file
+                    "cook|il|2026-08-02 05:00|2026-08-02 05:00|1",
+                    "cook|in|2026-08-03 09:00|2026-08-03 09:00|1",
+                    "king|wa|2026-08-01 01:00|2026-08-01 03:00|2"),
                     watermarks);
         }
     }
