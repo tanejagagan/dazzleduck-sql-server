@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DazzleDuck Ingestion Path</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500&display=swap">
+</head>
+<body>
+<style>
+  :root {
+    /* Deliberately single-theme: this page is a light printed-diagram surface,
+       so every colour is painted explicitly and no dark variant is defined. */
+    color-scheme: light;
+    --ground:  #F2F5F7;
+    --surface: #FFFFFF;
+    --ink:     #14202B;
+    --muted:   #5C6B78;
+    --rule:    #D9E1E7;
+    --accent:  #0D7C86;
+    --lane:    #EDF2F5;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 56px 28px 80px;
+    display: flex;
+    flex-direction: column;
+    gap: 36px;
+  }
+
+  header { display: flex; flex-direction: column; gap: 10px; }
+
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 11px;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0;
+  }
+
+  h1 {
+    font-family: "Archivo", ui-sans-serif, system-ui, sans-serif;
+    font-weight: 700;
+    font-size: clamp(30px, 4.2vw, 44px);
+    letter-spacing: -0.022em;
+    line-height: 1.1;
+    text-wrap: balance;
+    margin: 0;
+  }
+
+  .standfirst {
+    margin: 0;
+    max-width: 64ch;
+    font-size: 17px;
+    color: var(--muted);
+  }
+
+  figure {
+    margin: 0;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 24px 20px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .scroller { overflow-x: auto; }
+
+  svg.diagram {
+    display: block;
+    min-width: 860px;
+    width: 100%;
+    height: auto;
+    color: var(--ink);
+  }
+
+  figcaption {
+    font-size: 13.5px;
+    color: var(--muted);
+    max-width: 76ch;
+    border-top: 1px solid var(--rule);
+    padding-top: 14px;
+    margin: 0;
+  }
+
+  .notes {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(258px, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .note {
+    background: var(--surface);
+    padding: 20px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+
+  .note h2 {
+    font-family: "Archivo", ui-sans-serif, system-ui, sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+    margin: 0;
+  }
+
+  .note p { margin: 0; font-size: 13.5px; color: var(--muted); }
+
+  code {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.88em;
+    color: var(--ink);
+    background: var(--lane);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 18px;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .swatch { width: 22px; height: 0; border-top: 2px solid currentColor; }
+  .swatch.acc { border-top-color: var(--accent); }
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">Ingestion topology</p>
+    <h1>DazzleDuck Ingestion Path</h1>
+    <p class="standfirst">
+      Many clients per queue, a handful of queues per server, one writer thread each — and a single
+      transaction where the Parquet files and their catalog entry land together.
+    </p>
+  </header>
+
+  <figure>
+    <div class="scroller">
+      <svg class="diagram" viewBox="0 0 1020 540" role="img"
+           aria-label="Clients POST batches into one of several ingestion queues on a server. Each queue accumulates a bucket until a size or delay threshold, then a single writer thread applies the transformation and runs a DuckDB COPY that writes partitioned Parquet files. The written files are registered in the DuckLake catalog together with the watermark row in one transaction.">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"></path>
+          </marker>
+          <marker id="ar-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent)"></path>
+          </marker>
+        </defs>
+
+        <!-- ================= server enclosure ================= -->
+        <rect x="230" y="36" width="430" height="456" rx="4"
+              fill="var(--lane)" stroke="currentColor" stroke-opacity="0.28"></rect>
+        <text x="248" y="62" font-family="IBM Plex Mono, monospace" font-size="10"
+              letter-spacing="1.4" fill="currentColor" fill-opacity="0.55">SERVER</text>
+
+        <!-- ================= lane 1 : logs ================= -->
+        <rect x="34" y="90" width="112" height="56" rx="3" fill="var(--surface)" stroke="currentColor" stroke-opacity="0.2"></rect>
+        <rect x="29" y="85" width="112" height="56" rx="3" fill="var(--surface)" stroke="currentColor" stroke-opacity="0.3"></rect>
+        <rect x="24" y="80" width="112" height="56" rx="3" fill="var(--surface)" stroke="currentColor" stroke-opacity="0.75"></rect>
+        <text x="80" y="104" text-anchor="middle" font-size="13" fill="currentColor">clients</text>
+        <text x="80" y="121" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" fill-opacity="0.6">many producers</text>
+
+        <line x1="146" y1="108" x2="222" y2="108" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar)"></line>
+        <text x="184" y="100" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" fill-opacity="0.65">batches</text>
+
+        <rect x="252" y="76" width="164" height="64" rx="3" fill="var(--surface)" stroke="currentColor" stroke-opacity="0.75"></rect>
+        <text x="334" y="101" text-anchor="middle" font-size="13" fill="currentColor">queue &#8220;logs&#8221;</text>
+        <text x="334" y="118" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" fill-opacity="0.6">bucket fills</text>
+
+        <line x1="416" y1="108" x2="444" y2="108" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar)"></line>
+
+        <rect x="448" y="76" width="188" height="64" rx="3" fill="var(--surface)" stroke="currentColor" stroke-opacity="0.75"></rect>
+        <text x="542" y="101" text-anchor="middle" font-size="13" fill="currentColor">writer thread</text>
+        <text x="542" y="118" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" fill-opacity="0.6">transform &#8594; COPY</text>
+
+        <!-- ================= lane 2 : traces ================= -->
+        <rect x="34" y="230" width="112" height="56" rx="3" fill="var(--surface)" stroke="currentColor" stroke-opacity="0.2"></rect>
+        <rect x="29" y="225" width="112" height="56" rx="3" fill="var(--surface)" stroke="currentColor" stroke-opacity="0.3"></rect>
+        <rect x="24" y="220" width="112" height="56" rx="3" fill="var(--surface)" stroke="currentColor" stroke-opacity="0.75"></rect>
+        <text x="80" y="244" text-anchor="middle" font-size="13" fill="currentColor">clients</text>
+        <text x="80" y="261" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" fill-opacity="0.6">many producers</text>
+
+        <line x1="146" y1="248" x2="222" y2="248" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar)"></line>
+        <text x="184" y="240" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" fill-opacity="0.65">batches</text>
+
+        <rect x="252" y="216" width="164" height="64" rx="3" fill="var(--surface)" stroke="currentColor" stroke-opacity="0.75"></rect>
+        <text x="334" y="241" text-anchor="middle" font-size="13" fill="currentColor">queue &#8220;traces&#8221;</text>
+        <text x="334" y="258" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" fill-opacity="0.6">bucket fills</text>
+
+        <line x1="416" y1="248" x2="444" y2="248" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar)"></line>
+
+        <rect x="448" y="216" width="188" height="64" rx="3" fill="var(--surface)" stroke="currentColor" stroke-opacity="0.75"></rect>
+        <text x="542" y="241" text-anchor="middle" font-size="13" fill="currentColor">writer thread</text>
+        <text x="542" y="258" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" fill-opacity="0.6">transform &#8594; COPY</text>
+
+        <!-- ================= lane 3 : metrics ================= -->
+        <rect x="34" y="370" width="112" height="56" rx="3" fill="var(--surface)" stroke="currentColor" stroke-opacity="0.2"></rect>
+        <rect x="29" y="365" width="112" height="56" rx="3" fill="var(--surface)" stroke="currentColor" stroke-opacity="0.3"></rect>
+        <rect x="24" y="360" width="112" height="56" rx="3" fill="var(--surface)" stroke="currentColor" stroke-opacity="0.75"></rect>
+        <text x="80" y="384" text-anchor="middle" font-size="13" fill="currentColor">clients</text>
+        <text x="80" y="401" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" fill-opacity="0.6">many producers</text>
+
+        <line x1="146" y1="388" x2="222" y2="388" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar)"></line>
+        <text x="184" y="380" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" fill-opacity="0.65">batches</text>
+
+        <rect x="252" y="356" width="164" height="64" rx="3" fill="var(--surface)" stroke="currentColor" stroke-opacity="0.75"></rect>
+        <text x="334" y="381" text-anchor="middle" font-size="13" fill="currentColor">queue &#8220;metrics&#8221;</text>
+        <text x="334" y="398" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" fill-opacity="0.6">bucket fills</text>
+
+        <line x1="416" y1="388" x2="444" y2="388" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar)"></line>
+
+        <rect x="448" y="356" width="188" height="64" rx="3" fill="var(--surface)" stroke="currentColor" stroke-opacity="0.75"></rect>
+        <text x="542" y="381" text-anchor="middle" font-size="13" fill="currentColor">writer thread</text>
+        <text x="542" y="398" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" fill-opacity="0.6">transform &#8594; COPY</text>
+
+        <!-- threshold annotation under the lanes -->
+        <text x="334" y="452" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" fill-opacity="0.6">flush on min_bucket_size or max_delay_ms</text>
+        <text x="542" y="452" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" fill-opacity="0.6">exactly one writer per queue</text>
+
+        <!-- ================= server to lake ================= -->
+        <path d="M 660 108 C 726 108, 736 214, 796 216" fill="none" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar)"></path>
+        <path d="M 660 248 L 796 234" fill="none" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar)"></path>
+        <path d="M 660 388 C 726 388, 736 254, 796 252" fill="none" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar)"></path>
+        <text x="726" y="200" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" fill-opacity="0.65">COPY</text>
+
+        <!-- ================= lake enclosure ================= -->
+        <rect x="796" y="150" width="212" height="300" rx="4"
+              fill="var(--lane)" stroke="currentColor" stroke-opacity="0.28"></rect>
+        <text x="814" y="176" font-family="IBM Plex Mono, monospace" font-size="10"
+              letter-spacing="1.4" fill="currentColor" fill-opacity="0.55">DUCKLAKE</text>
+
+        <rect x="814" y="200" width="176" height="60" rx="3" fill="var(--surface)" stroke="currentColor" stroke-opacity="0.75"></rect>
+        <text x="902" y="223" text-anchor="middle" font-size="12.5" fill="currentColor">Parquet data files</text>
+        <text x="902" y="240" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" fill-opacity="0.6">partitioned</text>
+
+        <!-- the commit: the one thing that carries the accent -->
+        <line x1="838" y1="260" x2="838" y2="330" stroke="var(--accent)" stroke-width="1.8" marker-end="url(#ar-acc)"></line>
+        <text x="854" y="284" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" fill-opacity="0.8">add_data_files</text>
+        <text x="854" y="299" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" fill-opacity="0.8">+ watermark row</text>
+        <text x="854" y="316" font-family="IBM Plex Mono, monospace" font-size="9" letter-spacing="0.9" fill="var(--accent)">ONE TRANSACTION</text>
+
+        <rect x="814" y="334" width="176" height="66" rx="3" fill="var(--surface)" stroke="var(--accent)" stroke-width="1.4"></rect>
+        <text x="902" y="360" text-anchor="middle" font-size="12.5" fill="currentColor">catalog</text>
+        <text x="902" y="377" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" fill-opacity="0.6">metadata + watermark</text>
+
+        <text x="902" y="428" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" fill-opacity="0.6">one table per queue</text>
+      </svg>
+    </div>
+
+    <div class="legend">
+      <span><i class="swatch"></i> data path</span>
+      <span><i class="swatch acc"></i> atomic commit — files and watermark, or neither</span>
+    </div>
+
+    <figcaption>
+      Each queue batches independently and is drained by its own writer thread, so a slow or failing
+      queue does not stall the others. The transformation runs inside the DuckDB <code>COPY</code> that
+      produces the Parquet files, and the watermark is computed from that same pre-COPY relation — so it
+      never re-reads what was written. File registration and the watermark row commit together.
+    </figcaption>
+  </figure>
+
+  <section class="notes">
+    <div class="note">
+      <h2>Why the bucket exists</h2>
+      <p>
+        Clients send small batches constantly. Writing each one straight through would produce a
+        tiny Parquet file per batch. The bucket trades a bounded delay for file size, flushing on
+        whichever of <code>min_bucket_size</code> or <code>max_delay_ms</code> comes first.
+      </p>
+    </div>
+    <div class="note">
+      <h2>One writer, on purpose</h2>
+      <p>
+        Each queue has a single writer thread. Parallelism comes from running several queues, not
+        from several writers on one queue — which keeps each queue's output files and its ordering
+        guarantees straightforward.
+      </p>
+    </div>
+    <div class="note">
+      <h2>The commit is the boundary</h2>
+      <p>
+        Registering the files and appending the watermark happen in one transaction. Either the data
+        is visible with its watermark, or nothing landed and the files are left unregistered for
+        cleanup — never a file without its accounting.
+      </p>
+    </div>
+    <div class="note">
+      <h2>What the picture leaves out</h2>
+      <p>
+        Producer de-duplication, back pressure when pending writes exceed the limit, and the
+        compaction job that later merges these files. Each is real; none changes the shape above.
+      </p>
+    </div>
+  </section>
+</div>
+</body>
+</html>
