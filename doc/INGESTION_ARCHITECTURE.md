@@ -4,9 +4,16 @@ A server runs a small number of ingestion queues — typically one per signal. E
 many clients, batches independently, and is drained by its own writer thread that applies the
 queue's transformation and writes Parquet into DuckLake.
 
-A rendered version of the diagram below lives alongside this file as
-[ingestion-architecture.html](ingestion-architecture.html) — open it in a browser for the
-same architecture drawn as a scalable figure.
+The same diagram is drawn as a figure alongside this file, in whichever form you need:
+
+| File | Use |
+|---|---|
+| [ingestion-architecture.html](ingestion-architecture.html) | open in a browser; the figure plus explanatory notes |
+| [ingestion-architecture.svg](ingestion-architecture.svg) | vector — imports into Keynote, PowerPoint, Figma, Excalidraw |
+| [ingestion-architecture.png](ingestion-architecture.png) | 3060x1620 raster for Google Slides and anything that will not take SVG |
+
+The SVG is self-contained: colours are literal, and it falls back to a system sans if IBM Plex
+is not installed.
 
 ## Shape
 
