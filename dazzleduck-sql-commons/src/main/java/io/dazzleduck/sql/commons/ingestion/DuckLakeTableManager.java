@@ -118,6 +118,13 @@ public final class DuckLakeTableManager {
         return mapping.transformation();
     }
 
+    /** Case-insensitive column-presence check, sharing this class's identifier-folding rule. */
+    static boolean hasColumn(DuckDBConnection conn, QueueIdToTableMapping mapping, String column)
+            throws SQLException {
+        String target = lower(column);
+        return currentColumnNames(conn, mapping).stream().anyMatch(name -> lower(name).equals(target));
+    }
+
     private static List<String> currentColumnNames(DuckDBConnection conn, QueueIdToTableMapping mapping)
             throws SQLException {
         List<String> names = new ArrayList<>();
