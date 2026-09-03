@@ -27,9 +27,10 @@ import java.util.stream.Collectors;
  *       column the MAX lands in.</li>
  *   <li>{@code watermark_row_count_column} — required when the table is set; receives
  *       {@code COUNT(*)} for the group.</li>
- *   <li>{@code watermark_snapshot_id_column} — required when the table is set; receives the
- *       DuckLake snapshot id the batch commits as, written by the same INSERT as the rest of the
- *       row.</li>
+ *   <li>{@code watermark_snapshot_id_column} — required when the table is set; receives a LOWER
+ *       BOUND on the DuckLake snapshot the batch committed in, written by the same INSERT as the
+ *       rest of the row. The true snapshot is this value or higher, never lower — see
+ *       {@link DuckLakePostIngestionTask} for why. Consumers must join with {@code >=}.</li>
  * </ul>
  *
  * <p>A group whose timestamps are all NULL still produces a row: NULL min and max, with the real

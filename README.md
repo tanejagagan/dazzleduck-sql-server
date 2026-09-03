@@ -561,7 +561,7 @@ row count. Configure under `additional_parameters`:
 | `watermark_max_timestamp_column` | Yes | Destination column for the MAX timestamp |
 | `watermark_row_count_column` | Yes | Destination column for the batch row count |
 | `watermark_group_columns` | No | Comma-separated grouping columns; empty = one global row per batch |
-| `watermark_snapshot_id_column` | Yes | Destination column for the DuckLake snapshot id the batch commits as |
+| `watermark_snapshot_id_column` | Yes | Destination column for a lower bound on the DuckLake snapshot the batch committed in |
 
 A malformed spec (partial keys, blanks, typos in `watermark_*` keys) fails at startup rather
 than per batch. Watermarks are not available for queues registered via the dynamic SQLite
@@ -569,7 +569,7 @@ provider, whose registry does not store `additional_parameters`.
 
 ### The snapshot id column
 
-Every watermark row records the DuckLake snapshot its batch committed as, so the watermark table
+Every watermark row records the DuckLake snapshot its batch committed in, so the watermark table
 must carry the column named by `watermark_snapshot_id_column`:
 
 ```sql
@@ -580,23 +580,29 @@ The key is **required** whenever a watermark is configured; a spec without it fa
 The column must be `BIGINT` and nullable — it is written on every insert, but leaving it nullable
 lets an existing table be migrated without a rewrite.
 
-The id is written by the same INSERT as the rest of the row, so a batch remains **one transaction
-and one snapshot**. DuckLake does not expose the pending snapshot id — it is assigned at COMMIT —
-but it derives the id as `max(snapshot_id) + 1` and enforces it with a primary key, so the value is
-computed just before the transaction opens and verified immediately afterwards.
+**The value is a lower bound, not an exact id.** The true snapshot is the recorded value or
+higher, never lower. Join with `>=`, not `=`:
 
-What to expect from the recorded value:
+```sql
+-- batches whose data is visible as of snapshot N
+SELECT * FROM ingest_watermark WHERE commit_snapshot_id <= N;
+```
 
-- Normally it is exactly the snapshot the batch's data files landed in, and matches
-  `begin_snapshot` in `ducklake_data_file` for those files.
-- If a concurrent writer takes that id first, DuckLake retries the commit one higher **without
-  error**. The committed id is therefore always **greater than or equal to** the predicted one —
-  the value can only ever be under-reported, never ahead. The verification step detects this and
-  repairs the rows.
-- If the process dies between the commit and the verification, the row keeps the under-reported
-  id. That id names a real snapshot belonging to a different writer, so it joins cleanly to the
-  wrong batch rather than failing loudly. Treat the column as authoritative only while ingestion
-  is running normally; to audit it, compare against `begin_snapshot` of the batch's files.
+The bound holds unconditionally. DuckLake assigns the snapshot id at COMMIT and does not expose
+the pending one, so what gets written is `max(snapshot_id) + 1` — the same formula DuckLake uses,
+read just before the transaction opens. The committed id can only be that or higher, because
+`max(snapshot_id)` never decreases (even aggressive `ducklake_expire_snapshots` retains the newest
+snapshot, and ids are never reused) and a concurrent writer taking the id first merely pushes the
+commit higher.
+
+In practice the bound is tight: immediately after committing, the id is verified against
+`begin_snapshot` of the batch's files and corrected if a concurrent writer won the race, so the
+recorded value is normally the exact snapshot. That step improves accuracy rather than
+correctness — if it is skipped, or the process dies before it runs, the column still satisfies its
+contract and no reader is misled.
+
+To recover the exact snapshot for a batch at any time, read `begin_snapshot` from
+`ducklake_data_file` for that batch's files.
 
 Never predict this id yourself without the verification step: a lost race commits silently, with
 no error.

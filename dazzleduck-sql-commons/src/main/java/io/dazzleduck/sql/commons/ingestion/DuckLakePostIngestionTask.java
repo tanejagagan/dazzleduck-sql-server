@@ -24,12 +24,21 @@ import java.util.Map;
  * files.
  *
  * <p>The snapshot id ({@code watermark_snapshot_id_column}) is written by that same INSERT, so it
- * commits with the rows rather than being patched in afterwards. DuckLake does not expose the
- * pending snapshot id, but it derives it as {@code max(snapshot_id) + 1} and
- * enforces it with a primary key, so the value can be computed up front (see
- * {@link #predictNextSnapshotId}) and is guaranteed correct unless a competing writer takes the id
- * first — in which case DuckLake retries our commit one higher, and
- * {@link #verifySnapshotId} repairs the rows.
+ * commits with the rows rather than being patched in afterwards. DuckLake assigns a snapshot id at
+ * COMMIT and does not expose the pending one, so what is written is
+ * {@code max(snapshot_id) + 1} — the same formula DuckLake uses, read just before the transaction
+ * opens.
+ *
+ * <p><strong>The column is therefore a lower bound, and is specified as one.</strong> The committed
+ * id is always {@code >=} what was written: DuckLake takes {@code max + 1} at commit, {@code max}
+ * only ever grows (even aggressive snapshot expiry retains the newest snapshot and ids are never
+ * reused), and a competing writer that takes the id first only pushes our commit higher. So the
+ * recorded value can be stale but never ahead of the truth, whatever happens — including a crash
+ * between the commit and the verification below.
+ *
+ * <p>{@link #verifySnapshotId} then tightens the bound to the exact snapshot, which is the normal
+ * outcome. That step is an accuracy improvement, not a correctness requirement: if it is skipped or
+ * fails, the column still satisfies its contract.
  *
  * <p>Limitation: queues registered through the dynamic SQLite registry
  * ({@link DynamicQueueRepository}) do not carry {@code additional_parameters}, so watermarks are
