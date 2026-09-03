@@ -14,6 +14,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * DuckLakePostIngestionTask's watermark append: watermark rows are precomputed at write time
@@ -34,7 +35,7 @@ class DuckLakeWatermarkPostIngestionTest {
                     "ATTACH 'ducklake:%s' AS %s (DATA_PATH '%s')".formatted(
                             tempDir.resolve("catalog"), CATALOG, tempDir.resolve("data")),
                     "CREATE TABLE %s.main.facts (county VARCHAR, state VARCHAR, ts TIMESTAMP, v DOUBLE)".formatted(CATALOG),
-                    "CREATE TABLE %s.main.ingest_watermark (county VARCHAR, state VARCHAR, min_ts TIMESTAMP, max_ts TIMESTAMP, row_count BIGINT)".formatted(CATALOG)
+                    "CREATE TABLE %s.main.ingest_watermark (county VARCHAR, state VARCHAR, min_ts TIMESTAMP, max_ts TIMESTAMP, row_count BIGINT, commit_snapshot_id BIGINT)".formatted(CATALOG)
             });
         }
     }
@@ -63,7 +64,7 @@ class DuckLakeWatermarkPostIngestionTest {
         return List.of(f1, f2);
     }
 
-    private static final WatermarkSpec SPEC = new WatermarkSpec("ingest_watermark", "ts", List.of("county", "state"), "min_ts", "max_ts", "row_count");
+    private static final WatermarkSpec SPEC = new WatermarkSpec("ingest_watermark", "ts", List.of("county", "state"), "min_ts", "max_ts", "row_count", "commit_snapshot_id");
 
     private static Map<String, String> watermarkParams(String table) {
         return Map.of(
@@ -72,7 +73,8 @@ class DuckLakeWatermarkPostIngestionTest {
                 WatermarkSpec.GROUP_COLUMNS_KEY, "county, state",
                 WatermarkSpec.MIN_TIMESTAMP_COLUMN_KEY, "min_ts",
                 WatermarkSpec.MAX_TIMESTAMP_COLUMN_KEY, "max_ts",
-                WatermarkSpec.ROW_COUNT_COLUMN_KEY, "row_count");
+                WatermarkSpec.ROW_COUNT_COLUMN_KEY, "row_count",
+                WatermarkSpec.SNAPSHOT_ID_COLUMN_KEY, "commit_snapshot_id");
     }
 
     /** Computes the rows the way ParquetIngestionQueue does at write time: over the source relation. */
@@ -175,19 +177,6 @@ class DuckLakeWatermarkPostIngestionTest {
 
     // ── watermark_snapshot_id_column ────────────────────────────────────────
 
-    private static Map<String, String> watermarkParamsWithSnapshot(String table) {
-        Map<String, String> params = new java.util.HashMap<>(watermarkParams(table));
-        params.put(WatermarkSpec.SNAPSHOT_ID_COLUMN_KEY, "commit_snapshot_id");
-        return Map.copyOf(params);
-    }
-
-    private void addSnapshotIdColumn() throws Exception {
-        try (Connection conn = ConnectionPool.getConnection()) {
-            ConnectionPool.execute(conn,
-                    "ALTER TABLE %s.main.ingest_watermark ADD COLUMN commit_snapshot_id BIGINT".formatted(CATALOG));
-        }
-    }
-
     /** One file with a single row, so a batch can be run more than once with distinct files. */
     private List<String> writeSingleFile(String name, String county) throws Exception {
         String f = tempDir.resolve(name).toString();
@@ -208,11 +197,10 @@ class DuckLakeWatermarkPostIngestionTest {
 
     @Test
     void stampsTheSnapshotTheFilesWereRegisteredIn() throws Exception {
-        addSnapshotIdColumn();
         List<String> files = writeBatchFiles();
         List<List<String>> rows = computeRows(files);
         new DuckLakePostIngestionTask(result(files, rows), CATALOG, "facts", "main",
-                watermarkParamsWithSnapshot("ingest_watermark")).execute();
+                watermarkParams("ingest_watermark")).execute();
 
         try (Connection conn = ConnectionPool.getConnection()) {
             // every watermark row is stamped — no NULL left behind
@@ -232,8 +220,7 @@ class DuckLakeWatermarkPostIngestionTest {
     /** Consecutive batches each land on their own snapshot rather than sharing or overwriting one. */
     @Test
     void eachBatchIsStampedWithItsOwnSnapshot() throws Exception {
-        addSnapshotIdColumn();
-        Map<String, String> params = watermarkParamsWithSnapshot("ingest_watermark");
+        Map<String, String> params = watermarkParams("ingest_watermark");
 
         List<String> first = writeSingleFile("s1.parquet", "king");
         new DuckLakePostIngestionTask(result(first, computeRowsFor(first)), CATALOG, "facts", "main", params).execute();
@@ -263,7 +250,6 @@ class DuckLakeWatermarkPostIngestionTest {
      */
     @Test
     void aStrayUnstampedRowIsNotClaimedByThisBatch() throws Exception {
-        addSnapshotIdColumn();
         try (Connection conn = ConnectionPool.getConnection()) {
             ConnectionPool.execute(conn, ("INSERT INTO %s.main.ingest_watermark "
                     + "(county, state, min_ts, max_ts, row_count, commit_snapshot_id) VALUES "
@@ -273,7 +259,7 @@ class DuckLakeWatermarkPostIngestionTest {
 
         List<String> files = writeBatchFiles();
         new DuckLakePostIngestionTask(result(files, computeRows(files)), CATALOG, "facts", "main",
-                watermarkParamsWithSnapshot("ingest_watermark")).execute();
+                watermarkParams("ingest_watermark")).execute();
 
         try (Connection conn = ConnectionPool.getConnection()) {
             // the stray row is still NULL; only this batch's 3 rows were stamped
@@ -292,7 +278,6 @@ class DuckLakeWatermarkPostIngestionTest {
      */
     @Test
     void theWholeBatchIncludingTheSnapshotIdIsASingleSnapshot() throws Exception {
-        addSnapshotIdColumn();
         long before;
         try (Connection conn = ConnectionPool.getConnection()) {
             before = Long.parseLong(collect(conn,
@@ -301,7 +286,7 @@ class DuckLakeWatermarkPostIngestionTest {
 
         List<String> files = writeBatchFiles();
         new DuckLakePostIngestionTask(result(files, computeRows(files)), CATALOG, "facts", "main",
-                watermarkParamsWithSnapshot("ingest_watermark")).execute();
+                watermarkParams("ingest_watermark")).execute();
 
         try (Connection conn = ConnectionPool.getConnection()) {
             long after = Long.parseLong(collect(conn,
@@ -313,18 +298,19 @@ class DuckLakeWatermarkPostIngestionTest {
         }
     }
 
-    /** Without the key the column is left alone entirely — no second transaction, no stamping. */
+    /** The key is required whenever a watermark is configured — a spec without it fails to parse. */
     @Test
-    void withoutTheKeyTheSnapshotColumnStaysNull() throws Exception {
-        addSnapshotIdColumn();
-        List<String> files = writeBatchFiles();
-        new DuckLakePostIngestionTask(result(files, computeRows(files)), CATALOG, "facts", "main",
-                watermarkParams("ingest_watermark")).execute();
-
-        try (Connection conn = ConnectionPool.getConnection()) {
-            assertEquals(List.of("3"), collect(conn,
-                    "SELECT count(*)::VARCHAR AS r FROM %s.main.ingest_watermark WHERE commit_snapshot_id IS NULL".formatted(CATALOG)));
-        }
+    void watermarkWithoutSnapshotColumnIsRejected() {
+        Map<String, String> withoutKey = Map.of(
+                WatermarkSpec.TABLE_KEY, "ingest_watermark",
+                WatermarkSpec.TIMESTAMP_COLUMN_KEY, "ts",
+                WatermarkSpec.MIN_TIMESTAMP_COLUMN_KEY, "min_ts",
+                WatermarkSpec.MAX_TIMESTAMP_COLUMN_KEY, "max_ts",
+                WatermarkSpec.ROW_COUNT_COLUMN_KEY, "row_count");
+        var e = assertThrows(IllegalArgumentException.class,
+                () -> WatermarkSpec.fromParameters("q1", withoutKey));
+        assertTrue(e.getMessage().contains(WatermarkSpec.SNAPSHOT_ID_COLUMN_KEY),
+                "the error should name the missing key, got: " + e.getMessage());
     }
 
     private static List<String> collect(Connection conn, String sql) throws Exception {

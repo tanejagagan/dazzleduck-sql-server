@@ -561,19 +561,45 @@ row count. Configure under `additional_parameters`:
 | `watermark_max_timestamp_column` | Yes | Destination column for the MAX timestamp |
 | `watermark_row_count_column` | Yes | Destination column for the batch row count |
 | `watermark_group_columns` | No | Comma-separated grouping columns; empty = one global row per batch |
-| `watermark_snapshot_id_column` | No | Destination column for the DuckLake snapshot id the batch committed as |
+| `watermark_snapshot_id_column` | Yes | Destination column for the DuckLake snapshot id the batch commits as |
 
 A malformed spec (partial keys, blanks, typos in `watermark_*` keys) fails at startup rather
 than per batch. Watermarks are not available for queues registered via the dynamic SQLite
 provider, whose registry does not store `additional_parameters`.
 
-`watermark_snapshot_id_column` is written by the same INSERT as the rest of the row, so the
-batch stays a single transaction and a single snapshot. DuckLake does not expose the pending
-snapshot id, but it derives it as `max(snapshot_id) + 1` and enforces it with a primary key, so
-the value is computed up front and is correct unless a concurrent writer takes that id first —
-DuckLake then retries the commit one higher and the rows are repaired after the fact. Never
-predict this id yourself without that verification step: a lost race commits silently, with no
-error.
+### The snapshot id column
+
+Every watermark row records the DuckLake snapshot its batch committed as, so the watermark table
+must carry the column named by `watermark_snapshot_id_column`:
+
+```sql
+ALTER TABLE my_catalog.main.ingest_watermark ADD COLUMN commit_snapshot_id BIGINT;
+```
+
+The key is **required** whenever a watermark is configured; a spec without it fails at startup.
+The column must be `BIGINT` and nullable — it is written on every insert, but leaving it nullable
+lets an existing table be migrated without a rewrite.
+
+The id is written by the same INSERT as the rest of the row, so a batch remains **one transaction
+and one snapshot**. DuckLake does not expose the pending snapshot id — it is assigned at COMMIT —
+but it derives the id as `max(snapshot_id) + 1` and enforces it with a primary key, so the value is
+computed just before the transaction opens and verified immediately afterwards.
+
+What to expect from the recorded value:
+
+- Normally it is exactly the snapshot the batch's data files landed in, and matches
+  `begin_snapshot` in `ducklake_data_file` for those files.
+- If a concurrent writer takes that id first, DuckLake retries the commit one higher **without
+  error**. The committed id is therefore always **greater than or equal to** the predicted one —
+  the value can only ever be under-reported, never ahead. The verification step detects this and
+  repairs the rows.
+- If the process dies between the commit and the verification, the row keeps the under-reported
+  id. That id names a real snapshot belonging to a different writer, so it joins cleanly to the
+  wrong batch rather than failing loudly. Treat the column as authoritative only while ingestion
+  is running normally; to audit it, compare against `begin_snapshot` of the batch's files.
+
+Never predict this id yourself without the verification step: a lost race commits silently, with
+no error.
 
 ## Publishing
 

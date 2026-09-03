@@ -27,8 +27,9 @@ import java.util.stream.Collectors;
  *       column the MAX lands in.</li>
  *   <li>{@code watermark_row_count_column} — required when the table is set; receives
  *       {@code COUNT(*)} for the group.</li>
- *   <li>{@code watermark_snapshot_id_column} — optional; receives the DuckLake snapshot id the
- *       batch commits as, written by the same INSERT as the rest of the row. Omit to skip it.</li>
+ *   <li>{@code watermark_snapshot_id_column} — required when the table is set; receives the
+ *       DuckLake snapshot id the batch commits as, written by the same INSERT as the rest of the
+ *       row.</li>
  * </ul>
  *
  * <p>A group whose timestamps are all NULL still produces a row: NULL min and max, with the real
@@ -70,16 +71,7 @@ public record WatermarkSpec(String table, String timestampColumn, List<String> g
         requireNonBlank(minTimestampColumn, MIN_TIMESTAMP_COLUMN_KEY);
         requireNonBlank(maxTimestampColumn, MAX_TIMESTAMP_COLUMN_KEY);
         requireNonBlank(rowCountColumn, ROW_COUNT_COLUMN_KEY);
-        // Optional: absent means the snapshot id is simply not recorded.
-        if (snapshotIdColumn != null) {
-            requireNonBlank(snapshotIdColumn, SNAPSHOT_ID_COLUMN_KEY);
-        }
-    }
-
-    /** Spec without a snapshot-id column. */
-    public WatermarkSpec(String table, String timestampColumn, List<String> groupColumns,
-                         String minTimestampColumn, String maxTimestampColumn, String rowCountColumn) {
-        this(table, timestampColumn, groupColumns, minTimestampColumn, maxTimestampColumn, rowCountColumn, null);
+        requireNonBlank(snapshotIdColumn, SNAPSHOT_ID_COLUMN_KEY);
     }
 
     /**
@@ -104,19 +96,19 @@ public record WatermarkSpec(String table, String timestampColumn, List<String> g
         String minTimestampColumn = parameters.get(MIN_TIMESTAMP_COLUMN_KEY);
         String maxTimestampColumn = parameters.get(MAX_TIMESTAMP_COLUMN_KEY);
         String rowCountColumn = parameters.get(ROW_COUNT_COLUMN_KEY);
-        if (isBlank(table) || isBlank(timestampColumn) || isBlank(minTimestampColumn)
-                || isBlank(maxTimestampColumn) || isBlank(rowCountColumn)) {
-            throw new IllegalArgumentException(
-                    "Queue '%s': watermark configuration requires non-blank '%s', '%s', '%s', '%s' and '%s'"
-                            .formatted(queueName, TABLE_KEY, TIMESTAMP_COLUMN_KEY, MIN_TIMESTAMP_COLUMN_KEY,
-                                    MAX_TIMESTAMP_COLUMN_KEY, ROW_COUNT_COLUMN_KEY));
-        }
         String snapshotIdColumn = parameters.get(SNAPSHOT_ID_COLUMN_KEY);
+        if (isBlank(table) || isBlank(timestampColumn) || isBlank(minTimestampColumn)
+                || isBlank(maxTimestampColumn) || isBlank(rowCountColumn) || isBlank(snapshotIdColumn)) {
+            throw new IllegalArgumentException(
+                    "Queue '%s': watermark configuration requires non-blank '%s', '%s', '%s', '%s', '%s' and '%s'"
+                            .formatted(queueName, TABLE_KEY, TIMESTAMP_COLUMN_KEY, MIN_TIMESTAMP_COLUMN_KEY,
+                                    MAX_TIMESTAMP_COLUMN_KEY, ROW_COUNT_COLUMN_KEY, SNAPSHOT_ID_COLUMN_KEY));
+        }
         try {
             return new WatermarkSpec(table.trim(), timestampColumn.trim(),
                     parseGroupColumns(parameters.get(GROUP_COLUMNS_KEY)),
                     minTimestampColumn.trim(), maxTimestampColumn.trim(), rowCountColumn.trim(),
-                    snapshotIdColumn == null ? null : snapshotIdColumn.trim());
+                    snapshotIdColumn.trim());
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException("Queue '%s': %s".formatted(queueName, e.getMessage()), e);
         }
@@ -192,16 +184,11 @@ public record WatermarkSpec(String table, String timestampColumn, List<String> g
 
     /**
      * Renders the INSERT appending precomputed watermark rows — explicit quoted column list
-     * (group columns then timestamp column), values as escaped string literals relying on
-     * DuckDB's implicit cast to the table's column types.
-     */
-    public String insertSql(String catalog, String schema, List<List<String>> rows) {
-        return insertSql(catalog, schema, rows, null);
-    }
-
-    /**
-     * As {@link #insertSql(String, String, List)}, additionally writing {@code snapshotId} into
-     * {@link #snapshotIdColumn} so the snapshot lands in the SAME transaction as the rows.
+     * (group columns, the timestamp columns, the row count, then {@link #snapshotIdColumn}), values
+     * as escaped string literals relying on DuckDB's implicit cast to the table's column types.
+     *
+     * <p>The snapshot id is written here, in the SAME transaction as the rows, rather than patched
+     * in afterwards.
      *
      * <p>{@code snapshotId} is the id the transaction is predicted to commit as
      * ({@code max(snapshot_id) + 1}). DuckLake does not expose the pending id, but it derives the
@@ -211,16 +198,13 @@ public record WatermarkSpec(String table, String timestampColumn, List<String> g
      * one higher; {@code DuckLakePostIngestionTask} verifies the committed id afterwards and
      * repairs the rows on the rare occasion they disagree.
      */
-    public String insertSql(String catalog, String schema, List<List<String>> rows, Long snapshotId) {
-        boolean withSnapshot = snapshotIdColumn != null && snapshotId != null;
+    public String insertSql(String catalog, String schema, List<List<String>> rows, long snapshotId) {
         String columnList = groupColumns.stream().map(HeaderUtils::quoteIdentifier).collect(Collectors.joining(", "));
         columnList = (columnList.isEmpty() ? "" : columnList + ", ") + HeaderUtils.quoteIdentifier(minTimestampColumn);
         columnList += ", " + HeaderUtils.quoteIdentifier(maxTimestampColumn)
                 + ", " + HeaderUtils.quoteIdentifier(rowCountColumn);
-        if (withSnapshot) {
-            columnList += ", " + HeaderUtils.quoteIdentifier(snapshotIdColumn);
-        }
-        String suffix = withSnapshot ? ", " + snapshotId : "";
+        columnList += ", " + HeaderUtils.quoteIdentifier(snapshotIdColumn);
+        String suffix = ", " + snapshotId;
         String values = rows.stream()
                 .map(row -> row.stream().map(WatermarkSpec::literal).collect(Collectors.joining(", ", "(", suffix + ")")))
                 .collect(Collectors.joining(", "));

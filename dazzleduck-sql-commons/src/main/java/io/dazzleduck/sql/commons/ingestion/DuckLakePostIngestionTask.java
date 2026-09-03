@@ -11,7 +11,6 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 /**
  * Post-ingestion task that adds newly ingested files to a DuckLake table.
@@ -24,9 +23,9 @@ import java.util.stream.Collectors;
  * registration and watermark commit or roll back together. This task never re-reads the written
  * files.
  *
- * <p>When the spec also sets {@code watermark_snapshot_id_column}, the snapshot id is written by
- * that same INSERT, so it commits with the rows rather than being patched in afterwards. DuckLake
- * does not expose the pending snapshot id, but it derives it as {@code max(snapshot_id) + 1} and
+ * <p>The snapshot id ({@code watermark_snapshot_id_column}) is written by that same INSERT, so it
+ * commits with the rows rather than being patched in afterwards. DuckLake does not expose the
+ * pending snapshot id, but it derives it as {@code max(snapshot_id) + 1} and
  * enforces it with a primary key, so the value can be computed up front (see
  * {@link #predictNextSnapshotId}) and is guaranteed correct unless a competing writer takes the id
  * first — in which case DuckLake retries our commit one higher, and
@@ -91,16 +90,14 @@ public class DuckLakePostIngestionTask implements PostIngestionTask {
         List<List<String>> watermarkRows = ingestionResult.watermarkRows();
         boolean hasWatermark = watermarkSpec != null && watermarkRows != null && !watermarkRows.isEmpty();
         try (Connection conn = ConnectionPool.getConnection()) {
-            Long predictedSnapshotId = hasWatermark && watermarkSpec.snapshotIdColumn() != null
-                    ? predictNextSnapshotId(conn)
-                    : null;
-            if (hasWatermark) {
-                queries.add(watermarkSpec.insertSql(catalogName, schemaName, watermarkRows, predictedSnapshotId));
+            if (!hasWatermark) {
+                ConnectionPool.executeBatchInTxn(conn, queries.toArray(String[]::new));
+                return;
             }
+            long predictedSnapshotId = predictNextSnapshotId(conn);
+            queries.add(watermarkSpec.insertSql(catalogName, schemaName, watermarkRows, predictedSnapshotId));
             ConnectionPool.executeBatchInTxn(conn, queries.toArray(String[]::new));
-            if (predictedSnapshotId != null) {
-                verifySnapshotId(conn, files, predictedSnapshotId);
-            }
+            verifySnapshotId(conn, files, predictedSnapshotId);
         }
     }
 
@@ -123,16 +120,23 @@ public class DuckLakePostIngestionTask implements PostIngestionTask {
      * if not.
      *
      * <p>The prediction only loses when a competing writer takes the id first: DuckLake then
-     * retries our commit internally at a higher id, transparently and without error. That is rare,
-     * so the common path is a single transaction carrying the correct id; this is the safety net
-     * that keeps a lost race from silently persisting a wrong one.
+     * retries our commit internally at a higher id, transparently and without error.
+     *
+     * <p>The common case is settled without touching {@code ducklake_data_file} at all. The
+     * committed id is always {@code >=} the predicted one, and {@code current_snapshot()} is the
+     * newest id in the catalog, so {@code current == predicted} can only mean our commit took
+     * exactly the predicted id. Only when the catalog has moved further does the file lookup run —
+     * which is also the only case where a repair could be needed.
      *
      * <p>Failures here are logged rather than thrown — the batch is already durable, and failing an
      * ingest that succeeded would be worse than a stale id.
      */
     private void verifySnapshotId(Connection conn, List<String> files, long predicted) {
         try {
-            Long actual = resolveCommittedSnapshotId(conn, files, predicted);
+            if (currentSnapshotId(conn) == predicted) {
+                return;
+            }
+            Long actual = resolveCommittedSnapshotId(conn, files.get(0), predicted);
             if (actual == null || actual == predicted) {
                 return;
             }
@@ -145,28 +149,37 @@ public class DuckLakePostIngestionTask implements PostIngestionTask {
         }
     }
 
+    /** Newest snapshot in the catalog, i.e. an upper bound on the id this batch committed as. */
+    private long currentSnapshotId(Connection conn) throws SQLException {
+        try (Statement statement = conn.createStatement();
+             ResultSet resultSet = statement.executeQuery(
+                     "SELECT id FROM ducklake_current_snapshot('%s')".formatted(escapeLiteral(catalogName)))) {
+            resultSet.next();
+            return resultSet.getLong("id");
+        }
+    }
+
     /**
-     * The snapshot the just-registered files became visible in. All files of one batch are
-     * registered by a single transaction, so exactly one distinct {@code begin_snapshot} is
-     * expected; anything else means the batch did not commit as one unit and is not stamped.
+     * The snapshot a registered file became visible in. One file is enough: the whole batch is
+     * registered by a single transaction, so every file of it carries the same
+     * {@code begin_snapshot}.
+     *
+     * <p>{@code begin_snapshot >= lowerBound} is free pruning rather than a filter on correctness —
+     * the committed id is always {@code >=} the predicted one, and {@code begin_snapshot} rises with
+     * time, so zone maps skip almost the whole table instead of scanning every path in the catalog.
      */
-    private Long resolveCommittedSnapshotId(Connection conn, List<String> files, long lowerBound) throws SQLException {
-        String paths = files.stream().map(f -> "'" + escapeLiteral(f) + "'").collect(Collectors.joining(", "));
-        // begin_snapshot >= lowerBound is free pruning, not a filter on correctness: the committed id
-        // is always >= the predicted one (DuckLake takes max+1 at commit, and max only grows), and
-        // begin_snapshot rises with time, so this lets zone maps skip nearly the whole table. Without
-        // it this is an unindexed scan of every path in the catalog — 3.4ms vs 0.3ms at 1M files.
-        String query = ("SELECT count(DISTINCT begin_snapshot) AS distinct_snapshots, max(begin_snapshot) AS snapshot_id "
-                + "FROM __ducklake_metadata_%s.ducklake_data_file WHERE begin_snapshot >= %d AND path IN (%s)")
-                .formatted(escapeLiteral(catalogName), lowerBound, paths);
+    private Long resolveCommittedSnapshotId(Connection conn, String file, long lowerBound) throws SQLException {
+        String query = ("SELECT begin_snapshot FROM __ducklake_metadata_%s.ducklake_data_file "
+                + "WHERE begin_snapshot >= %d AND path = '%s'")
+                .formatted(escapeLiteral(catalogName), lowerBound, escapeLiteral(file));
         try (Statement statement = conn.createStatement();
              ResultSet resultSet = statement.executeQuery(query)) {
-            if (!resultSet.next() || resultSet.getLong("distinct_snapshots") != 1) {
-                logger.warn("Expected exactly one snapshot for the {} files registered for queue '{}'; "
-                        + "leaving '{}' NULL", files.size(), ingestionResult.queueName(), watermarkSpec.snapshotIdColumn());
+            if (!resultSet.next()) {
+                logger.warn("Could not locate registered file {} for queue '{}'; leaving '{}' as written",
+                        file, ingestionResult.queueName(), watermarkSpec.snapshotIdColumn());
                 return null;
             }
-            return resultSet.getLong("snapshot_id");
+            return resultSet.getLong("begin_snapshot");
         }
     }
 

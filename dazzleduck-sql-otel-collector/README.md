@@ -355,7 +355,7 @@ otel_collector {
                 #     watermark_min_timestamp_column = "min_timestamp"
                 #     watermark_max_timestamp_column = "max_timestamp"
                 #     watermark_row_count_column     = "row_count"
-                #     watermark_snapshot_id_column   = "commit_snapshot_id"   # optional; snapshot the batch commits as
+                #     watermark_snapshot_id_column   = "commit_snapshot_id"   # required; BIGINT column, snapshot the batch commits as
                 #     watermark_group_columns        = "county,state"      # optional
                 # }
             }
