@@ -5,7 +5,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.sql.Connection;
+import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -20,6 +22,23 @@ import java.util.Map;
  * to the watermark table via a plain {@code INSERT ... VALUES} in the SAME transaction, so file
  * registration and watermark commit or roll back together. This task never re-reads the written
  * files.
+ *
+ * <p>The snapshot id ({@code watermark_snapshot_id_column}) is written by that same INSERT, so it
+ * commits with the rows rather than being patched in afterwards. DuckLake assigns a snapshot id at
+ * COMMIT and does not expose the pending one, so what is written is
+ * {@code max(snapshot_id) + 1} — the same formula DuckLake uses, read just before the transaction
+ * opens.
+ *
+ * <p><strong>The column is therefore a lower bound, and is specified as one.</strong> The committed
+ * id is always {@code >=} what was written: DuckLake takes {@code max + 1} at commit, {@code max}
+ * only ever grows (even aggressive snapshot expiry retains the newest snapshot and ids are never
+ * reused), and a competing writer that takes the id first only pushes our commit higher. So the
+ * recorded value can be stale but never ahead of the truth, whatever happens — including a crash
+ * between the commit and the verification below.
+ *
+ * <p>{@link #verifySnapshotId} then tightens the bound to the exact snapshot, which is the normal
+ * outcome. That step is an accuracy improvement, not a correctness requirement: if it is skipped or
+ * fails, the column still satisfies its contract.
  *
  * <p>Limitation: queues registered through the dynamic SQLite registry
  * ({@link DynamicQueueRepository}) do not carry {@code additional_parameters}, so watermarks are
@@ -78,11 +97,82 @@ public class DuckLakePostIngestionTask implements PostIngestionTask {
                         escapeLiteral(catalogName), escapeLiteral(tableName), escapeLiteral(file), escapeLiteral(schemaName)))
                 .toList());
         List<List<String>> watermarkRows = ingestionResult.watermarkRows();
-        if (watermarkSpec != null && watermarkRows != null && !watermarkRows.isEmpty()) {
-            queries.add(watermarkSpec.insertSql(catalogName, schemaName, watermarkRows));
-        }
+        boolean hasWatermark = watermarkSpec != null && watermarkRows != null && !watermarkRows.isEmpty();
         try (Connection conn = ConnectionPool.getConnection()) {
+            if (!hasWatermark) {
+                ConnectionPool.executeBatchInTxn(conn, queries.toArray(String[]::new));
+                return;
+            }
+            long predictedSnapshotId = predictNextSnapshotId(conn);
+            queries.add(watermarkSpec.insertSql(catalogName, schemaName, watermarkRows, predictedSnapshotId));
             ConnectionPool.executeBatchInTxn(conn, queries.toArray(String[]::new));
+            verifySnapshotId(conn, files, predictedSnapshotId);
+        }
+    }
+
+    /**
+     * The id this transaction will commit as, barring a competing writer: DuckLake derives the next
+     * snapshot id the same way and enforces it with a primary key on {@code ducklake_snapshot}.
+     */
+    private long predictNextSnapshotId(Connection conn) throws SQLException {
+        String query = "SELECT coalesce(max(snapshot_id), -1) + 1 AS next_id FROM __ducklake_metadata_%s.ducklake_snapshot"
+                .formatted(escapeLiteral(catalogName));
+        try (Statement statement = conn.createStatement();
+             ResultSet resultSet = statement.executeQuery(query)) {
+            resultSet.next();
+            return resultSet.getLong("next_id");
+        }
+    }
+
+    /**
+     * Tightens the recorded lower bound to the exact snapshot the batch committed in.
+     *
+     * <p>One query settles it: the file we just registered carries the committed id in its
+     * {@code begin_snapshot}. A cheaper pre-check was tried and removed — both a global
+     * {@code current_snapshot()} and a per-table high-water mark cost about as much as this lookup
+     * (0.15-0.21ms vs 0.16ms at 1M files), and when either says "something moved" this query still
+     * has to run. One unconditional exact lookup is simpler and no slower.
+     *
+     * <p>Failures here are logged rather than thrown. The batch is already durable, and the column
+     * is specified as a lower bound, so a skipped repair leaves a value that is merely loose rather
+     * than wrong — whereas failing an ingest that succeeded would be a real loss.
+     */
+    private void verifySnapshotId(Connection conn, List<String> files, long predicted) {
+        try {
+            Long actual = resolveCommittedSnapshotId(conn, files.get(0), predicted);
+            if (actual == null || actual == predicted) {
+                return;
+            }
+            logger.info("Queue '{}' committed as snapshot {} rather than the predicted {} (a concurrent "
+                    + "writer took the id); tightening the watermark rows", ingestionResult.queueName(), actual, predicted);
+            ConnectionPool.execute(conn, watermarkSpec.updateSnapshotIdSql(catalogName, schemaName, actual));
+        } catch (Exception e) {
+            logger.warn("Could not tighten the snapshot id written to {}.{}.{}; rows keep the lower bound {}",
+                    catalogName, schemaName, watermarkSpec.table(), predicted, e);
+        }
+    }
+
+    /**
+     * The snapshot a registered file became visible in. One file is enough: the whole batch is
+     * registered by a single transaction, so every file of it carries the same
+     * {@code begin_snapshot}.
+     *
+     * <p>{@code begin_snapshot >= lowerBound} is free pruning rather than a filter on correctness —
+     * the committed id is always {@code >=} the predicted one, and {@code begin_snapshot} rises with
+     * time, so zone maps skip almost the whole table instead of scanning every path in the catalog.
+     */
+    private Long resolveCommittedSnapshotId(Connection conn, String file, long lowerBound) throws SQLException {
+        String query = ("SELECT begin_snapshot FROM __ducklake_metadata_%s.ducklake_data_file "
+                + "WHERE begin_snapshot >= %d AND path = '%s'")
+                .formatted(escapeLiteral(catalogName), lowerBound, escapeLiteral(file));
+        try (Statement statement = conn.createStatement();
+             ResultSet resultSet = statement.executeQuery(query)) {
+            if (!resultSet.next()) {
+                logger.warn("Could not locate registered file {} for queue '{}'; leaving '{}' as written",
+                        file, ingestionResult.queueName(), watermarkSpec.snapshotIdColumn());
+                return null;
+            }
+            return resultSet.getLong("begin_snapshot");
         }
     }
 

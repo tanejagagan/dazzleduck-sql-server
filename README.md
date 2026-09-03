@@ -561,10 +561,52 @@ row count. Configure under `additional_parameters`:
 | `watermark_max_timestamp_column` | Yes | Destination column for the MAX timestamp |
 | `watermark_row_count_column` | Yes | Destination column for the batch row count |
 | `watermark_group_columns` | No | Comma-separated grouping columns; empty = one global row per batch |
+| `watermark_snapshot_id_column` | Yes | Destination column for a lower bound on the DuckLake snapshot the batch committed in |
 
 A malformed spec (partial keys, blanks, typos in `watermark_*` keys) fails at startup rather
 than per batch. Watermarks are not available for queues registered via the dynamic SQLite
 provider, whose registry does not store `additional_parameters`.
+
+### The snapshot id column
+
+Every watermark row records the DuckLake snapshot its batch committed in, so the watermark table
+must carry the column named by `watermark_snapshot_id_column`:
+
+```sql
+ALTER TABLE my_catalog.main.ingest_watermark ADD COLUMN min_commit_snapshot_id BIGINT;
+```
+
+The key is **required** whenever a watermark is configured; a spec without it fails at startup.
+The column must be `BIGINT` and nullable — it is written on every insert, but leaving it nullable
+lets an existing table be migrated without a rewrite.
+
+**The value is a lower bound, not an exact id** — hence the `min_` prefix in the suggested column
+name. The true snapshot is the recorded value or higher, never lower, so compare with `>=` / `<=`
+rather than `=`:
+
+```sql
+-- batches whose data is visible as of snapshot N
+SELECT * FROM ingest_watermark WHERE min_commit_snapshot_id <= N;
+```
+
+The bound holds unconditionally. DuckLake assigns the snapshot id at COMMIT and does not expose
+the pending one, so what gets written is `max(snapshot_id) + 1` — the same formula DuckLake uses,
+read just before the transaction opens. The committed id can only be that or higher, because
+`max(snapshot_id)` never decreases (even aggressive `ducklake_expire_snapshots` retains the newest
+snapshot, and ids are never reused) and a concurrent writer taking the id first merely pushes the
+commit higher.
+
+In practice the bound is tight: immediately after committing, the id is verified against
+`begin_snapshot` of the batch's files and corrected if a concurrent writer won the race, so the
+recorded value is normally the exact snapshot. That step improves accuracy rather than
+correctness — if it is skipped, or the process dies before it runs, the column still satisfies its
+contract and no reader is misled.
+
+To recover the exact snapshot for a batch at any time, read `begin_snapshot` from
+`ducklake_data_file` for that batch's files.
+
+Never predict this id yourself without the verification step: a lost race commits silently, with
+no error.
 
 ## Publishing
 
