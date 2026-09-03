@@ -35,7 +35,7 @@ class DuckLakeWatermarkPostIngestionTest {
                     "ATTACH 'ducklake:%s' AS %s (DATA_PATH '%s')".formatted(
                             tempDir.resolve("catalog"), CATALOG, tempDir.resolve("data")),
                     "CREATE TABLE %s.main.facts (county VARCHAR, state VARCHAR, ts TIMESTAMP, v DOUBLE)".formatted(CATALOG),
-                    "CREATE TABLE %s.main.ingest_watermark (county VARCHAR, state VARCHAR, min_ts TIMESTAMP, max_ts TIMESTAMP, row_count BIGINT, commit_snapshot_id BIGINT)".formatted(CATALOG)
+                    "CREATE TABLE %s.main.ingest_watermark (county VARCHAR, state VARCHAR, min_ts TIMESTAMP, max_ts TIMESTAMP, row_count BIGINT, min_commit_snapshot_id BIGINT)".formatted(CATALOG)
             });
         }
     }
@@ -64,7 +64,7 @@ class DuckLakeWatermarkPostIngestionTest {
         return List.of(f1, f2);
     }
 
-    private static final WatermarkSpec SPEC = new WatermarkSpec("ingest_watermark", "ts", List.of("county", "state"), "min_ts", "max_ts", "row_count", "commit_snapshot_id");
+    private static final WatermarkSpec SPEC = new WatermarkSpec("ingest_watermark", "ts", List.of("county", "state"), "min_ts", "max_ts", "row_count", "min_commit_snapshot_id");
 
     private static Map<String, String> watermarkParams(String table) {
         return Map.of(
@@ -74,7 +74,7 @@ class DuckLakeWatermarkPostIngestionTest {
                 WatermarkSpec.MIN_TIMESTAMP_COLUMN_KEY, "min_ts",
                 WatermarkSpec.MAX_TIMESTAMP_COLUMN_KEY, "max_ts",
                 WatermarkSpec.ROW_COUNT_COLUMN_KEY, "row_count",
-                WatermarkSpec.SNAPSHOT_ID_COLUMN_KEY, "commit_snapshot_id");
+                WatermarkSpec.SNAPSHOT_ID_COLUMN_KEY, "min_commit_snapshot_id");
     }
 
     /** Computes the rows the way ParquetIngestionQueue does at write time: over the source relation. */
@@ -205,11 +205,11 @@ class DuckLakeWatermarkPostIngestionTest {
         try (Connection conn = ConnectionPool.getConnection()) {
             // every watermark row is stamped — no NULL left behind
             assertEquals(List.of("0"), collect(conn,
-                    "SELECT count(*)::VARCHAR AS r FROM %s.main.ingest_watermark WHERE commit_snapshot_id IS NULL".formatted(CATALOG)));
+                    "SELECT count(*)::VARCHAR AS r FROM %s.main.ingest_watermark WHERE min_commit_snapshot_id IS NULL".formatted(CATALOG)));
             // and the value is exactly the snapshot the data files became visible in
             assertEquals(List.of("1"), collect(conn, ("""
-                    SELECT count(DISTINCT commit_snapshot_id)::VARCHAR AS r FROM (
-                      SELECT commit_snapshot_id FROM %s.main.ingest_watermark
+                    SELECT count(DISTINCT min_commit_snapshot_id)::VARCHAR AS r FROM (
+                      SELECT min_commit_snapshot_id FROM %s.main.ingest_watermark
                       UNION
                       SELECT DISTINCT begin_snapshot FROM __ducklake_metadata_%s.ducklake_data_file
                       WHERE path IN ('%s', '%s'))""")
@@ -231,13 +231,13 @@ class DuckLakeWatermarkPostIngestionTest {
         try (Connection conn = ConnectionPool.getConnection()) {
             // two batches, two rows, two different snapshots — the first was not re-stamped
             assertEquals(List.of("2"), collect(conn,
-                    "SELECT count(DISTINCT commit_snapshot_id)::VARCHAR AS r FROM %s.main.ingest_watermark".formatted(CATALOG)));
+                    "SELECT count(DISTINCT min_commit_snapshot_id)::VARCHAR AS r FROM %s.main.ingest_watermark".formatted(CATALOG)));
             assertEquals(List.of("0"), collect(conn,
-                    "SELECT count(*)::VARCHAR AS r FROM %s.main.ingest_watermark WHERE commit_snapshot_id IS NULL".formatted(CATALOG)));
+                    "SELECT count(*)::VARCHAR AS r FROM %s.main.ingest_watermark WHERE min_commit_snapshot_id IS NULL".formatted(CATALOG)));
             // each row carries the snapshot of its own file
             assertEquals(List.of("king", "pierce"), collect(conn, ("""
                     SELECT w.county AS r FROM %s.main.ingest_watermark w
-                    JOIN __ducklake_metadata_%s.ducklake_data_file f ON f.begin_snapshot = w.commit_snapshot_id
+                    JOIN __ducklake_metadata_%s.ducklake_data_file f ON f.begin_snapshot = w.min_commit_snapshot_id
                     ORDER BY w.county""").formatted(CATALOG, CATALOG)));
         }
     }
@@ -246,13 +246,13 @@ class DuckLakeWatermarkPostIngestionTest {
      * The stamping must touch only the rows of its own batch. A pre-existing unstamped row — a
      * concurrent queue's in-flight batch on a shared watermark table, or a row from before the
      * column was added — must be left alone. This is precisely what rowid scoping buys over a
-     * blanket {@code WHERE commit_snapshot_id IS NULL}, which would sweep the stray row up too.
+     * blanket {@code WHERE min_commit_snapshot_id IS NULL}, which would sweep the stray row up too.
      */
     @Test
     void aStrayUnstampedRowIsNotClaimedByThisBatch() throws Exception {
         try (Connection conn = ConnectionPool.getConnection()) {
             ConnectionPool.execute(conn, ("INSERT INTO %s.main.ingest_watermark "
-                    + "(county, state, min_ts, max_ts, row_count, commit_snapshot_id) VALUES "
+                    + "(county, state, min_ts, max_ts, row_count, min_commit_snapshot_id) VALUES "
                     + "('stray', 'zz', TIMESTAMP '2026-01-01 00:00', TIMESTAMP '2026-01-01 00:00', 7, NULL)")
                     .formatted(CATALOG));
         }
@@ -264,10 +264,10 @@ class DuckLakeWatermarkPostIngestionTest {
         try (Connection conn = ConnectionPool.getConnection()) {
             // the stray row is still NULL; only this batch's 3 rows were stamped
             assertEquals(List.of("stray"), collect(conn,
-                    ("SELECT county AS r FROM %s.main.ingest_watermark WHERE commit_snapshot_id IS NULL")
+                    ("SELECT county AS r FROM %s.main.ingest_watermark WHERE min_commit_snapshot_id IS NULL")
                             .formatted(CATALOG)));
             assertEquals(List.of("3"), collect(conn,
-                    ("SELECT count(*)::VARCHAR AS r FROM %s.main.ingest_watermark WHERE commit_snapshot_id IS NOT NULL")
+                    ("SELECT count(*)::VARCHAR AS r FROM %s.main.ingest_watermark WHERE min_commit_snapshot_id IS NOT NULL")
                             .formatted(CATALOG)));
         }
     }
@@ -294,7 +294,7 @@ class DuckLakeWatermarkPostIngestionTest {
             assertEquals(1, after - before, "ingest must advance the catalog by exactly one snapshot");
             // and that single snapshot is the one recorded on the rows
             assertEquals(List.of(String.valueOf(after)), collect(conn,
-                    "SELECT DISTINCT commit_snapshot_id::VARCHAR AS r FROM %s.main.ingest_watermark".formatted(CATALOG)));
+                    "SELECT DISTINCT min_commit_snapshot_id::VARCHAR AS r FROM %s.main.ingest_watermark".formatted(CATALOG)));
         }
     }
 

@@ -573,19 +573,20 @@ Every watermark row records the DuckLake snapshot its batch committed in, so the
 must carry the column named by `watermark_snapshot_id_column`:
 
 ```sql
-ALTER TABLE my_catalog.main.ingest_watermark ADD COLUMN commit_snapshot_id BIGINT;
+ALTER TABLE my_catalog.main.ingest_watermark ADD COLUMN min_commit_snapshot_id BIGINT;
 ```
 
 The key is **required** whenever a watermark is configured; a spec without it fails at startup.
 The column must be `BIGINT` and nullable — it is written on every insert, but leaving it nullable
 lets an existing table be migrated without a rewrite.
 
-**The value is a lower bound, not an exact id.** The true snapshot is the recorded value or
-higher, never lower. Join with `>=`, not `=`:
+**The value is a lower bound, not an exact id** — hence the `min_` prefix in the suggested column
+name. The true snapshot is the recorded value or higher, never lower, so compare with `>=` / `<=`
+rather than `=`:
 
 ```sql
 -- batches whose data is visible as of snapshot N
-SELECT * FROM ingest_watermark WHERE commit_snapshot_id <= N;
+SELECT * FROM ingest_watermark WHERE min_commit_snapshot_id <= N;
 ```
 
 The bound holds unconditionally. DuckLake assigns the snapshot id at COMMIT and does not expose

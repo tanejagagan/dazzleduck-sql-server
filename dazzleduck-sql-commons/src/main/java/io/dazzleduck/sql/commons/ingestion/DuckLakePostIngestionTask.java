@@ -125,46 +125,30 @@ public class DuckLakePostIngestionTask implements PostIngestionTask {
     }
 
     /**
-     * Confirms the transaction actually committed as the predicted snapshot, and repairs the rows
-     * if not.
+     * Tightens the recorded lower bound to the exact snapshot the batch committed in.
      *
-     * <p>The prediction only loses when a competing writer takes the id first: DuckLake then
-     * retries our commit internally at a higher id, transparently and without error.
+     * <p>One query settles it: the file we just registered carries the committed id in its
+     * {@code begin_snapshot}. A cheaper pre-check was tried and removed — both a global
+     * {@code current_snapshot()} and a per-table high-water mark cost about as much as this lookup
+     * (0.15-0.21ms vs 0.16ms at 1M files), and when either says "something moved" this query still
+     * has to run. One unconditional exact lookup is simpler and no slower.
      *
-     * <p>The common case is settled without touching {@code ducklake_data_file} at all. The
-     * committed id is always {@code >=} the predicted one, and {@code current_snapshot()} is the
-     * newest id in the catalog, so {@code current == predicted} can only mean our commit took
-     * exactly the predicted id. Only when the catalog has moved further does the file lookup run —
-     * which is also the only case where a repair could be needed.
-     *
-     * <p>Failures here are logged rather than thrown — the batch is already durable, and failing an
-     * ingest that succeeded would be worse than a stale id.
+     * <p>Failures here are logged rather than thrown. The batch is already durable, and the column
+     * is specified as a lower bound, so a skipped repair leaves a value that is merely loose rather
+     * than wrong — whereas failing an ingest that succeeded would be a real loss.
      */
     private void verifySnapshotId(Connection conn, List<String> files, long predicted) {
         try {
-            if (currentSnapshotId(conn) == predicted) {
-                return;
-            }
             Long actual = resolveCommittedSnapshotId(conn, files.get(0), predicted);
             if (actual == null || actual == predicted) {
                 return;
             }
             logger.info("Queue '{}' committed as snapshot {} rather than the predicted {} (a concurrent "
-                    + "writer took the id); correcting the watermark rows", ingestionResult.queueName(), actual, predicted);
+                    + "writer took the id); tightening the watermark rows", ingestionResult.queueName(), actual, predicted);
             ConnectionPool.execute(conn, watermarkSpec.updateSnapshotIdSql(catalogName, schemaName, actual));
         } catch (Exception e) {
-            logger.warn("Could not verify the snapshot id written to {}.{}.{}; rows may carry the predicted {} "
-                    + "instead of the committed id", catalogName, schemaName, watermarkSpec.table(), predicted, e);
-        }
-    }
-
-    /** Newest snapshot in the catalog, i.e. an upper bound on the id this batch committed as. */
-    private long currentSnapshotId(Connection conn) throws SQLException {
-        try (Statement statement = conn.createStatement();
-             ResultSet resultSet = statement.executeQuery(
-                     "SELECT id FROM ducklake_current_snapshot('%s')".formatted(escapeLiteral(catalogName)))) {
-            resultSet.next();
-            return resultSet.getLong("id");
+            logger.warn("Could not tighten the snapshot id written to {}.{}.{}; rows keep the lower bound {}",
+                    catalogName, schemaName, watermarkSpec.table(), predicted, e);
         }
     }
 

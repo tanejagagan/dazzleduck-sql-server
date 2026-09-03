@@ -38,8 +38,8 @@ class WatermarkSpecTest {
                 WatermarkSpec.MIN_TIMESTAMP_COLUMN_KEY, "min_ts",
                 WatermarkSpec.MAX_TIMESTAMP_COLUMN_KEY, "max_ts",
                 WatermarkSpec.ROW_COUNT_COLUMN_KEY, "row_count",
-                WatermarkSpec.SNAPSHOT_ID_COLUMN_KEY, "commit_snapshot_id"));
-        assertEquals(new WatermarkSpec("wm", "ts", List.of("county", "state"), "min_ts", "max_ts", "row_count", "commit_snapshot_id"), spec);
+                WatermarkSpec.SNAPSHOT_ID_COLUMN_KEY, "min_commit_snapshot_id"));
+        assertEquals(new WatermarkSpec("wm", "ts", List.of("county", "state"), "min_ts", "max_ts", "row_count", "min_commit_snapshot_id"), spec);
     }
 
     @Test
@@ -52,7 +52,7 @@ class WatermarkSpecTest {
                 WatermarkSpec.MIN_TIMESTAMP_COLUMN_KEY, "min_ts",
                 WatermarkSpec.MAX_TIMESTAMP_COLUMN_KEY, "max_ts",
                 WatermarkSpec.ROW_COUNT_COLUMN_KEY, "row_count",
-                WatermarkSpec.SNAPSHOT_ID_COLUMN_KEY, "commit_snapshot_id"));
+                WatermarkSpec.SNAPSHOT_ID_COLUMN_KEY, "min_commit_snapshot_id"));
         assertEquals(List.of("county", "state"), spec.groupColumns());
     }
 
@@ -93,7 +93,7 @@ class WatermarkSpecTest {
 
     @Test
     void keepsAllNullTimestampGroupSoItsRowCountIsRecorded() throws Exception {
-        WatermarkSpec spec = new WatermarkSpec("wm", "ts", List.of("county", "state"), "min_ts", "max_ts", "row_count", "commit_snapshot_id");
+        WatermarkSpec spec = new WatermarkSpec("wm", "ts", List.of("county", "state"), "min_ts", "max_ts", "row_count", "min_commit_snapshot_id");
         try (Connection conn = ConnectionPool.getConnection()) {
             String relation = relationOver(conn,
                     "('king','wa',TIMESTAMP '2026-08-01 03:00'),"
@@ -116,7 +116,7 @@ class WatermarkSpecTest {
 
     @Test
     void globalModeSkipsOnlyGenuinelyEmptyInput() throws Exception {
-        WatermarkSpec spec = new WatermarkSpec("wm", "ts", List.of(), "min_ts", "max_ts", "row_count", "commit_snapshot_id");
+        WatermarkSpec spec = new WatermarkSpec("wm", "ts", List.of(), "min_ts", "max_ts", "row_count", "min_commit_snapshot_id");
         try (Connection conn = ConnectionPool.getConnection()) {
             // zero-row relation: a global MIN would be a single NULL row — must be suppressed
             String empty = relationOver(conn, "('x','y',TIMESTAMP '2026-01-01')",
@@ -139,11 +139,11 @@ class WatermarkSpecTest {
 
     @Test
     void insertSqlQuotesIdentifiersAndEscapesValues() {
-        WatermarkSpec spec = new WatermarkSpec("ingest-watermark", "timestamp", List.of("county"), "min_ts", "max_ts", "row_count", "commit_snapshot_id");
+        WatermarkSpec spec = new WatermarkSpec("ingest-watermark", "timestamp", List.of("county"), "min_ts", "max_ts", "row_count", "min_commit_snapshot_id");
         String sql = spec.insertSql("cat", "main",
                 List.of(List.of("o'brien", "2026-01-01 00:00:00", "2026-01-01 06:00:00", "3")), 7);
         assertEquals("INSERT INTO \"cat\".\"main\".\"ingest-watermark\""
-                + " (\"county\", \"min_ts\", \"max_ts\", \"row_count\", \"commit_snapshot_id\") "
+                + " (\"county\", \"min_ts\", \"max_ts\", \"row_count\", \"min_commit_snapshot_id\") "
                 + "VALUES ('o''brien', '2026-01-01 00:00:00', '2026-01-01 06:00:00', '3', 7)", sql);
     }
 
@@ -151,7 +151,7 @@ class WatermarkSpecTest {
 
     @Test
     void aggregationAlwaysIncludesMinMaxAndCount() {
-        WatermarkSpec spec = new WatermarkSpec("wm", "ts", List.of("county"), "min_ts", "max_ts", "rows", "commit_snapshot_id");
+        WatermarkSpec spec = new WatermarkSpec("wm", "ts", List.of("county"), "min_ts", "max_ts", "rows", "min_commit_snapshot_id");
         assertEquals("SELECT \"county\", MIN(\"ts\") AS \"min_ts\", MAX(\"ts\") AS \"max_ts\","
                 + " COUNT(*) AS \"rows\" FROM (SELECT 1) GROUP BY \"county\""
                 + " HAVING COUNT(*) > 0",
@@ -160,9 +160,9 @@ class WatermarkSpecTest {
 
     @Test
     void insertColumnOrderMatchesAggregateOrder() {
-        WatermarkSpec spec = new WatermarkSpec("wm", "ts", List.of("county"), "min_ts", "max_ts", "rows", "commit_snapshot_id");
+        WatermarkSpec spec = new WatermarkSpec("wm", "ts", List.of("county"), "min_ts", "max_ts", "rows", "min_commit_snapshot_id");
         assertEquals("INSERT INTO \"cat\".\"main\".\"wm\""
-                + " (\"county\", \"min_ts\", \"max_ts\", \"rows\", \"commit_snapshot_id\")"
+                + " (\"county\", \"min_ts\", \"max_ts\", \"rows\", \"min_commit_snapshot_id\")"
                 + " VALUES ('a', '1', '9', '42', 7)",
                 spec.insertSql("cat", "main", List.of(List.of("a", "1", "9", "42")), 7));
     }
@@ -170,9 +170,9 @@ class WatermarkSpecTest {
     @Test
     void blankMaxOrRowCountColumnIsRejected() {
         assertThrows(IllegalArgumentException.class,
-                () -> new WatermarkSpec("wm", "ts", List.of(), "min_ts", "  ", "rows", "commit_snapshot_id"));
+                () -> new WatermarkSpec("wm", "ts", List.of(), "min_ts", "  ", "rows", "min_commit_snapshot_id"));
         assertThrows(IllegalArgumentException.class,
-                () -> new WatermarkSpec("wm", "ts", List.of(), "min_ts", "max_ts", null, "commit_snapshot_id"));
+                () -> new WatermarkSpec("wm", "ts", List.of(), "min_ts", "max_ts", null, "min_commit_snapshot_id"));
         assertThrows(IllegalArgumentException.class,
                 () -> new WatermarkSpec("wm", "ts", List.of(), "min_ts", "max_ts", "rows", null));
     }
