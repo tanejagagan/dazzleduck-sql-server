@@ -561,10 +561,19 @@ row count. Configure under `additional_parameters`:
 | `watermark_max_timestamp_column` | Yes | Destination column for the MAX timestamp |
 | `watermark_row_count_column` | Yes | Destination column for the batch row count |
 | `watermark_group_columns` | No | Comma-separated grouping columns; empty = one global row per batch |
+| `watermark_snapshot_id_column` | No | Destination column for the DuckLake snapshot id the batch committed as |
 
 A malformed spec (partial keys, blanks, typos in `watermark_*` keys) fails at startup rather
 than per batch. Watermarks are not available for queues registered via the dynamic SQLite
 provider, whose registry does not store `additional_parameters`.
+
+`watermark_snapshot_id_column` is written by the same INSERT as the rest of the row, so the
+batch stays a single transaction and a single snapshot. DuckLake does not expose the pending
+snapshot id, but it derives it as `max(snapshot_id) + 1` and enforces it with a primary key, so
+the value is computed up front and is correct unless a concurrent writer takes that id first —
+DuckLake then retries the commit one higher and the rows are repaired after the fact. Never
+predict this id yourself without that verification step: a lost race commits silently, with no
+error.
 
 ## Publishing
 

@@ -27,6 +27,8 @@ import java.util.stream.Collectors;
  *       column the MAX lands in.</li>
  *   <li>{@code watermark_row_count_column} — required when the table is set; receives
  *       {@code COUNT(*)} for the group.</li>
+ *   <li>{@code watermark_snapshot_id_column} — optional; receives the DuckLake snapshot id the
+ *       batch commits as, written by the same INSERT as the rest of the row. Omit to skip it.</li>
  * </ul>
  *
  * <p>A group whose timestamps are all NULL still produces a row: NULL min and max, with the real
@@ -46,7 +48,8 @@ import java.util.stream.Collectors;
  * unknown {@code watermark_}-prefixed keys are rejected to surface typos.
  */
 public record WatermarkSpec(String table, String timestampColumn, List<String> groupColumns,
-                            String minTimestampColumn, String maxTimestampColumn, String rowCountColumn) {
+                            String minTimestampColumn, String maxTimestampColumn, String rowCountColumn,
+                            String snapshotIdColumn) {
 
     public static final String TABLE_KEY = "watermark_table";
     public static final String TIMESTAMP_COLUMN_KEY = "watermark_timestamp_column";
@@ -54,9 +57,10 @@ public record WatermarkSpec(String table, String timestampColumn, List<String> g
     public static final String MIN_TIMESTAMP_COLUMN_KEY = "watermark_min_timestamp_column";
     public static final String MAX_TIMESTAMP_COLUMN_KEY = "watermark_max_timestamp_column";
     public static final String ROW_COUNT_COLUMN_KEY = "watermark_row_count_column";
+    public static final String SNAPSHOT_ID_COLUMN_KEY = "watermark_snapshot_id_column";
 
     private static final List<String> KNOWN_KEYS = List.of(TABLE_KEY, TIMESTAMP_COLUMN_KEY, GROUP_COLUMNS_KEY,
-            MIN_TIMESTAMP_COLUMN_KEY, MAX_TIMESTAMP_COLUMN_KEY, ROW_COUNT_COLUMN_KEY);
+            MIN_TIMESTAMP_COLUMN_KEY, MAX_TIMESTAMP_COLUMN_KEY, ROW_COUNT_COLUMN_KEY, SNAPSHOT_ID_COLUMN_KEY);
 
     public WatermarkSpec {
         requireNonBlank(table, TABLE_KEY);
@@ -66,6 +70,16 @@ public record WatermarkSpec(String table, String timestampColumn, List<String> g
         requireNonBlank(minTimestampColumn, MIN_TIMESTAMP_COLUMN_KEY);
         requireNonBlank(maxTimestampColumn, MAX_TIMESTAMP_COLUMN_KEY);
         requireNonBlank(rowCountColumn, ROW_COUNT_COLUMN_KEY);
+        // Optional: absent means the snapshot id is simply not recorded.
+        if (snapshotIdColumn != null) {
+            requireNonBlank(snapshotIdColumn, SNAPSHOT_ID_COLUMN_KEY);
+        }
+    }
+
+    /** Spec without a snapshot-id column. */
+    public WatermarkSpec(String table, String timestampColumn, List<String> groupColumns,
+                         String minTimestampColumn, String maxTimestampColumn, String rowCountColumn) {
+        this(table, timestampColumn, groupColumns, minTimestampColumn, maxTimestampColumn, rowCountColumn, null);
     }
 
     /**
@@ -97,10 +111,12 @@ public record WatermarkSpec(String table, String timestampColumn, List<String> g
                             .formatted(queueName, TABLE_KEY, TIMESTAMP_COLUMN_KEY, MIN_TIMESTAMP_COLUMN_KEY,
                                     MAX_TIMESTAMP_COLUMN_KEY, ROW_COUNT_COLUMN_KEY));
         }
+        String snapshotIdColumn = parameters.get(SNAPSHOT_ID_COLUMN_KEY);
         try {
             return new WatermarkSpec(table.trim(), timestampColumn.trim(),
                     parseGroupColumns(parameters.get(GROUP_COLUMNS_KEY)),
-                    minTimestampColumn.trim(), maxTimestampColumn.trim(), rowCountColumn.trim());
+                    minTimestampColumn.trim(), maxTimestampColumn.trim(), rowCountColumn.trim(),
+                    snapshotIdColumn == null ? null : snapshotIdColumn.trim());
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException("Queue '%s': %s".formatted(queueName, e.getMessage()), e);
         }
@@ -180,16 +196,61 @@ public record WatermarkSpec(String table, String timestampColumn, List<String> g
      * DuckDB's implicit cast to the table's column types.
      */
     public String insertSql(String catalog, String schema, List<List<String>> rows) {
+        return insertSql(catalog, schema, rows, null);
+    }
+
+    /**
+     * As {@link #insertSql(String, String, List)}, additionally writing {@code snapshotId} into
+     * {@link #snapshotIdColumn} so the snapshot lands in the SAME transaction as the rows.
+     *
+     * <p>{@code snapshotId} is the id the transaction is predicted to commit as
+     * ({@code max(snapshot_id) + 1}). DuckLake does not expose the pending id, but it derives the
+     * same value and enforces it with a primary key on {@code ducklake_snapshot} — so a commit that
+     * succeeds unopposed carries exactly this id. It is a prediction only in the sense that a
+     * competing writer can take the id first, in which case DuckLake's internal retry commits us
+     * one higher; {@code DuckLakePostIngestionTask} verifies the committed id afterwards and
+     * repairs the rows on the rare occasion they disagree.
+     */
+    public String insertSql(String catalog, String schema, List<List<String>> rows, Long snapshotId) {
+        boolean withSnapshot = snapshotIdColumn != null && snapshotId != null;
         String columnList = groupColumns.stream().map(HeaderUtils::quoteIdentifier).collect(Collectors.joining(", "));
         columnList = (columnList.isEmpty() ? "" : columnList + ", ") + HeaderUtils.quoteIdentifier(minTimestampColumn);
         columnList += ", " + HeaderUtils.quoteIdentifier(maxTimestampColumn)
                 + ", " + HeaderUtils.quoteIdentifier(rowCountColumn);
+        if (withSnapshot) {
+            columnList += ", " + HeaderUtils.quoteIdentifier(snapshotIdColumn);
+        }
+        String suffix = withSnapshot ? ", " + snapshotId : "";
         String values = rows.stream()
-                .map(row -> row.stream().map(WatermarkSpec::literal).collect(Collectors.joining(", ", "(", ")")))
+                .map(row -> row.stream().map(WatermarkSpec::literal).collect(Collectors.joining(", ", "(", suffix + ")")))
                 .collect(Collectors.joining(", "));
         return "INSERT INTO %s.%s.%s (%s) VALUES %s".formatted(
                 HeaderUtils.quoteIdentifier(catalog), HeaderUtils.quoteIdentifier(schema),
                 HeaderUtils.quoteIdentifier(table), columnList, values);
+    }
+
+    /**
+     * Renders the post-commit UPDATE stamping {@link #snapshotIdColumn} onto exactly the rows this
+     * batch inserted.
+     *
+     * <p>The rows are identified by DuckLake's stable {@code rowid}, read back from
+     * {@code ducklake_table_insertions} for the one snapshot the batch committed as. The two
+     * obvious alternatives are both wrong: watermark rows carry no key, so matching on values
+     * cannot distinguish two batches that aggregate identically, and {@code snapshot_id IS NULL}
+     * would stamp rows belonging to a concurrent queue's in-flight batch on the same table.
+     *
+     * <p>The id cannot be written by {@link #insertSql} instead: DuckLake only assigns a snapshot
+     * id at COMMIT, so inside the ingest transaction it does not yet exist.
+     */
+    public String updateSnapshotIdSql(String catalog, String schema, long snapshotId) {
+        return "UPDATE %s.%s.%s SET %s = %d WHERE rowid IN (SELECT rowid FROM ducklake_table_insertions('%s', '%s', '%s', %d, %d))"
+                .formatted(HeaderUtils.quoteIdentifier(catalog), HeaderUtils.quoteIdentifier(schema),
+                        HeaderUtils.quoteIdentifier(table), HeaderUtils.quoteIdentifier(snapshotIdColumn), snapshotId,
+                        escapeLiteral(catalog), escapeLiteral(schema), escapeLiteral(table), snapshotId, snapshotId);
+    }
+
+    private static String escapeLiteral(String value) {
+        return value.replace("'", "''");
     }
 
     /** Group columns plus the three aggregates: MIN timestamp, MAX timestamp, row count. */

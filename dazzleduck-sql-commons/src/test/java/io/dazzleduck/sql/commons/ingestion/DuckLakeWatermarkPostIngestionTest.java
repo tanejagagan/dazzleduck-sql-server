@@ -173,6 +173,160 @@ class DuckLakeWatermarkPostIngestionTest {
         }
     }
 
+    // ── watermark_snapshot_id_column ────────────────────────────────────────
+
+    private static Map<String, String> watermarkParamsWithSnapshot(String table) {
+        Map<String, String> params = new java.util.HashMap<>(watermarkParams(table));
+        params.put(WatermarkSpec.SNAPSHOT_ID_COLUMN_KEY, "commit_snapshot_id");
+        return Map.copyOf(params);
+    }
+
+    private void addSnapshotIdColumn() throws Exception {
+        try (Connection conn = ConnectionPool.getConnection()) {
+            ConnectionPool.execute(conn,
+                    "ALTER TABLE %s.main.ingest_watermark ADD COLUMN commit_snapshot_id BIGINT".formatted(CATALOG));
+        }
+    }
+
+    /** One file with a single row, so a batch can be run more than once with distinct files. */
+    private List<String> writeSingleFile(String name, String county) throws Exception {
+        String f = tempDir.resolve(name).toString();
+        try (Connection conn = ConnectionPool.getConnection()) {
+            ConnectionPool.execute(conn, ("COPY (SELECT * FROM (VALUES "
+                    + "('%s', 'wa', TIMESTAMP '2026-08-01 03:00', 1.0::DOUBLE)"
+                    + ") AS t(county, state, ts, v)) TO '%s' (FORMAT parquet)").formatted(county, f));
+        }
+        return List.of(f);
+    }
+
+    private List<List<String>> computeRowsFor(List<String> files) throws Exception {
+        String relation = "SELECT * FROM read_parquet(['%s'])".formatted(String.join("', '", files));
+        try (Connection conn = ConnectionPool.getConnection()) {
+            return SPEC.computeRows(conn, relation);
+        }
+    }
+
+    @Test
+    void stampsTheSnapshotTheFilesWereRegisteredIn() throws Exception {
+        addSnapshotIdColumn();
+        List<String> files = writeBatchFiles();
+        List<List<String>> rows = computeRows(files);
+        new DuckLakePostIngestionTask(result(files, rows), CATALOG, "facts", "main",
+                watermarkParamsWithSnapshot("ingest_watermark")).execute();
+
+        try (Connection conn = ConnectionPool.getConnection()) {
+            // every watermark row is stamped — no NULL left behind
+            assertEquals(List.of("0"), collect(conn,
+                    "SELECT count(*)::VARCHAR AS r FROM %s.main.ingest_watermark WHERE commit_snapshot_id IS NULL".formatted(CATALOG)));
+            // and the value is exactly the snapshot the data files became visible in
+            assertEquals(List.of("1"), collect(conn, ("""
+                    SELECT count(DISTINCT commit_snapshot_id)::VARCHAR AS r FROM (
+                      SELECT commit_snapshot_id FROM %s.main.ingest_watermark
+                      UNION
+                      SELECT DISTINCT begin_snapshot FROM __ducklake_metadata_%s.ducklake_data_file
+                      WHERE path IN ('%s', '%s'))""")
+                    .formatted(CATALOG, CATALOG, files.get(0), files.get(1))));
+        }
+    }
+
+    /** Consecutive batches each land on their own snapshot rather than sharing or overwriting one. */
+    @Test
+    void eachBatchIsStampedWithItsOwnSnapshot() throws Exception {
+        addSnapshotIdColumn();
+        Map<String, String> params = watermarkParamsWithSnapshot("ingest_watermark");
+
+        List<String> first = writeSingleFile("s1.parquet", "king");
+        new DuckLakePostIngestionTask(result(first, computeRowsFor(first)), CATALOG, "facts", "main", params).execute();
+
+        List<String> second = writeSingleFile("s2.parquet", "pierce");
+        new DuckLakePostIngestionTask(result(second, computeRowsFor(second)), CATALOG, "facts", "main", params).execute();
+
+        try (Connection conn = ConnectionPool.getConnection()) {
+            // two batches, two rows, two different snapshots — the first was not re-stamped
+            assertEquals(List.of("2"), collect(conn,
+                    "SELECT count(DISTINCT commit_snapshot_id)::VARCHAR AS r FROM %s.main.ingest_watermark".formatted(CATALOG)));
+            assertEquals(List.of("0"), collect(conn,
+                    "SELECT count(*)::VARCHAR AS r FROM %s.main.ingest_watermark WHERE commit_snapshot_id IS NULL".formatted(CATALOG)));
+            // each row carries the snapshot of its own file
+            assertEquals(List.of("king", "pierce"), collect(conn, ("""
+                    SELECT w.county AS r FROM %s.main.ingest_watermark w
+                    JOIN __ducklake_metadata_%s.ducklake_data_file f ON f.begin_snapshot = w.commit_snapshot_id
+                    ORDER BY w.county""").formatted(CATALOG, CATALOG)));
+        }
+    }
+
+    /**
+     * The stamping must touch only the rows of its own batch. A pre-existing unstamped row — a
+     * concurrent queue's in-flight batch on a shared watermark table, or a row from before the
+     * column was added — must be left alone. This is precisely what rowid scoping buys over a
+     * blanket {@code WHERE commit_snapshot_id IS NULL}, which would sweep the stray row up too.
+     */
+    @Test
+    void aStrayUnstampedRowIsNotClaimedByThisBatch() throws Exception {
+        addSnapshotIdColumn();
+        try (Connection conn = ConnectionPool.getConnection()) {
+            ConnectionPool.execute(conn, ("INSERT INTO %s.main.ingest_watermark "
+                    + "(county, state, min_ts, max_ts, row_count, commit_snapshot_id) VALUES "
+                    + "('stray', 'zz', TIMESTAMP '2026-01-01 00:00', TIMESTAMP '2026-01-01 00:00', 7, NULL)")
+                    .formatted(CATALOG));
+        }
+
+        List<String> files = writeBatchFiles();
+        new DuckLakePostIngestionTask(result(files, computeRows(files)), CATALOG, "facts", "main",
+                watermarkParamsWithSnapshot("ingest_watermark")).execute();
+
+        try (Connection conn = ConnectionPool.getConnection()) {
+            // the stray row is still NULL; only this batch's 3 rows were stamped
+            assertEquals(List.of("stray"), collect(conn,
+                    ("SELECT county AS r FROM %s.main.ingest_watermark WHERE commit_snapshot_id IS NULL")
+                            .formatted(CATALOG)));
+            assertEquals(List.of("3"), collect(conn,
+                    ("SELECT count(*)::VARCHAR AS r FROM %s.main.ingest_watermark WHERE commit_snapshot_id IS NOT NULL")
+                            .formatted(CATALOG)));
+        }
+    }
+
+    /**
+     * The whole point of writing the id inline: the batch must still be ONE transaction, i.e. one
+     * snapshot. A patch-it-up-afterwards implementation commits twice and shows up here as two.
+     */
+    @Test
+    void theWholeBatchIncludingTheSnapshotIdIsASingleSnapshot() throws Exception {
+        addSnapshotIdColumn();
+        long before;
+        try (Connection conn = ConnectionPool.getConnection()) {
+            before = Long.parseLong(collect(conn,
+                    "SELECT max(snapshot_id)::VARCHAR AS r FROM __ducklake_metadata_%s.ducklake_snapshot".formatted(CATALOG)).get(0));
+        }
+
+        List<String> files = writeBatchFiles();
+        new DuckLakePostIngestionTask(result(files, computeRows(files)), CATALOG, "facts", "main",
+                watermarkParamsWithSnapshot("ingest_watermark")).execute();
+
+        try (Connection conn = ConnectionPool.getConnection()) {
+            long after = Long.parseLong(collect(conn,
+                    "SELECT max(snapshot_id)::VARCHAR AS r FROM __ducklake_metadata_%s.ducklake_snapshot".formatted(CATALOG)).get(0));
+            assertEquals(1, after - before, "ingest must advance the catalog by exactly one snapshot");
+            // and that single snapshot is the one recorded on the rows
+            assertEquals(List.of(String.valueOf(after)), collect(conn,
+                    "SELECT DISTINCT commit_snapshot_id::VARCHAR AS r FROM %s.main.ingest_watermark".formatted(CATALOG)));
+        }
+    }
+
+    /** Without the key the column is left alone entirely — no second transaction, no stamping. */
+    @Test
+    void withoutTheKeyTheSnapshotColumnStaysNull() throws Exception {
+        addSnapshotIdColumn();
+        List<String> files = writeBatchFiles();
+        new DuckLakePostIngestionTask(result(files, computeRows(files)), CATALOG, "facts", "main",
+                watermarkParams("ingest_watermark")).execute();
+
+        try (Connection conn = ConnectionPool.getConnection()) {
+            assertEquals(List.of("3"), collect(conn,
+                    "SELECT count(*)::VARCHAR AS r FROM %s.main.ingest_watermark WHERE commit_snapshot_id IS NULL".formatted(CATALOG)));
+        }
+    }
+
     private static List<String> collect(Connection conn, String sql) throws Exception {
         List<String> rows = new ArrayList<>();
         ConnectionPool.collectAll(conn, sql, rs -> rs.getString("r")).forEach(rows::add);
