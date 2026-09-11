@@ -1900,32 +1900,307 @@ public class Transformations {
         }
     }
     /**
-     * Applies LIMIT (and optionally OFFSET) to the outermost SELECT node.
+     * Applies a row cap and a request offset to the outermost SELECT node - a thin delegate over
+     * {@link #applyOffset} then {@link #capLimit}, kept for callers compiled against it.
      *
-     * <p>Works for all FROM clause types: BASE_TABLE, TABLE_FUNCTION, SUBQUERY,
-     * SET_OPERATION_NODE. Previously only BASE_TABLE and simple SUBQUERY were
-     * handled; TABLE_FUNCTION queries (e.g. generate_series) were silently skipped.
+     * <p>The order matters: applying an offset reduces how many of the query's own rows remain,
+     * and the cap is then a ceiling on whatever is left.
+     *
+     * @param limit  row cap, or negative for "no cap"
+     * @param offset request offset, or negative for "no offset"
+     * @deprecated the name says "add" but this caps, and it bundles two unrelated concerns - the
+     *             row cap is a security bound, the offset is request pagination - which is how
+     *             several offset bugs stayed hidden. Call {@link #applyOffset(JsonNode, long)}
+     *             then {@link #capLimit(JsonNode, long)} instead, in that order:
+     *             <pre>{@code capLimit(applyOffset(query, offset), cap)}</pre>
      */
+    @Deprecated(since = "0.2.18", forRemoval = true)
     public static JsonNode addLimit(JsonNode query, long limit, long offset) {
-        if (limit < 0 && offset < 0) {
+        return capLimit(applyOffset(query, offset), limit);
+    }
+
+    /**
+     * Bounds the outermost SELECT's LIMIT by {@code cap} - a <b>ceiling, not an assignment</b>.
+     * When the query already carries a LIMIT, the smaller of the two wins; a cap must never widen
+     * a query's own {@code LIMIT 10} to the cap, which is what made a named-query template with
+     * {@code LIMIT 10} render all 16 rows.
+     *
+     * <p>The query's LIMIT must be an integer literal, or unlimited (absent, or {@code LIMIT
+     * NULL} - which SQL reads as every row). The min folds in Java, so the emitted SQL stays a
+     * plain {@code LIMIT n}.
+     *
+     * <p>A negative {@code cap} means "no cap" and leaves the query untouched.
+     *
+     * <p>Both {@code LIMIT n%} and a non-literal LIMIT (expression, scalar subquery, bind
+     * parameter) are <b>rejected</b> with an {@link IllegalArgumentException}, which both
+     * transports map to 400 / INVALID_ARGUMENT - see {@link #rejectPercentLimit} and
+     * {@link #rejectNonLiteralLimit}. A negative cap still leaves such a query untouched.
+     */
+    public static JsonNode capLimit(JsonNode query, long cap) {
+        if (cap < 0) {
             return query;
         }
-        var select = (ObjectNode) getFirstStatementNode(query);
+        ObjectNode modifier = limitModifierOf(query);
+        modifier.set(FIELD_LIMIT, cappedLimit(modifier.get(FIELD_LIMIT), cap));
+        return query;
+    }
 
+    /**
+     * Applies a request offset to the outermost SELECT node, <b>composing</b> with the query's own
+     * OFFSET rather than replacing it: a request offset paginates within the query's result, which
+     * already begins after the query's own OFFSET, so the two add ({@code OFFSET 5} + request 10 =
+     * {@code OFFSET 15}). Replacing it silently discarded a template's {@code OFFSET 5} on every
+     * non-paginated read, since the cap path passes {@code offset = 0}.
+     *
+     * <p>It also <b>reduces the query's own LIMIT</b> by the offset. That LIMIT bounds the query's
+     * <i>result</i>, so skipping {@code offset} rows of it leaves only {@code own - offset} rows
+     * for this page; without that, {@code LIMIT 10} with a request offset of 9 returned 10 rows
+     * instead of the single row that remains.
+     *
+     * <p>A negative {@code offset} means "no offset" and leaves the query untouched.
+     *
+     * <p>A zero or negative {@code offset} means "no offset" and leaves the query untouched -
+     * including its modifiers and any construct {@link #rejectNonLiteralLimit} would refuse, since
+     * nothing is being bounded.
+     *
+     * @throws IllegalArgumentException if the offset lands strictly <i>past</i> the query's own
+     *         literal LIMIT. An offset exactly <i>at</i> that LIMIT is allowed and yields an empty
+     *         page, so the usual "request pages until a short page" loop still terminates; going
+     *         beyond it can only be a client error. Also thrown if the query's LIMIT is not a
+     *         non-negative integer literal - see {@link #rejectNonLiteralLimit}.
+     */
+    public static JsonNode applyOffset(JsonNode query, long offset) {
+        if (offset <= 0) {
+            return query;   // skipping zero rows changes nothing - do not touch the AST
+        }
+        ObjectNode modifier = limitModifierOf(query);
+        JsonNode ownLimit = modifier.get(FIELD_LIMIT);
+        rejectOffsetPastOwnLimit(ownLimit, offset);
+        modifier.set(FIELD_LIMIT, remainingAfterOffset(ownLimit, offset));
+        modifier.set(FIELD_OFFSET, composedOffset(modifier.get(FIELD_OFFSET), offset));
+        return query;
+    }
+
+    /**
+     * The outermost SELECT's LIMIT_MODIFIER, creating an empty one (limit = JSON null, DuckDB's
+     * own shape for an OFFSET-only modifier) when absent. Mutated in place, so LIMIT and OFFSET
+     * can be set independently without either clobbering the other - they share one AST node,
+     * which is why a rewrite of one used to destroy the other.
+     */
+    private static ObjectNode limitModifierOf(JsonNode query) {
+        var select = (ObjectNode) getFirstStatementNode(query);
         ArrayNode modifiers = (ArrayNode) select.get(FIELD_MODIFIERS);
         if (modifiers == null) {
             modifiers = select.putArray(FIELD_MODIFIERS);
-        } else {
-            for (int i = 0; i < modifiers.size(); i++) {
-                if (modifiers.get(i).get(FIELD_TYPE).asText().equals(LIMIT_MODIFIER_TYPE)) {
-                    modifiers.remove(i);
-                    break;
-                }
+        }
+        rejectPercentLimit(modifiers);
+        for (JsonNode modifier : modifiers) {
+            if (LIMIT_MODIFIER_TYPE.equals(modifier.path(FIELD_TYPE).asText())) {
+                rejectNonLiteralLimit(modifier.get(FIELD_LIMIT));
+                return (ObjectNode) modifier;
             }
         }
+        ObjectNode created = modifiers.addObject();
+        created.put(FIELD_TYPE, LIMIT_MODIFIER_TYPE);
+        created.set(FIELD_LIMIT, NullNode.getInstance());
+        return created;
+    }
 
-        modifiers.add(ExpressionFactory.limitModifier(limit, offset));
-        return query;
+    /**
+     * Rejects {@code LIMIT n%}, which no row cap can meaningfully bound.
+     *
+     * <p>A percent limit is a fraction of the query's <i>result cardinality</i>, so the engine
+     * must materialize the whole result before it can take the percentage. A row cap therefore
+     * cannot bound the work: {@code SELECT * FROM huge LIMIT 1%} still builds the entire result
+     * and discards 99% of it, making the cap cosmetic in exactly the modes that rely on it.
+     *
+     * <p>It is also not expressible by merging: {@code %} is a syntactic form, not a scalar, so
+     * there is no {@code least(cap, 3%)} to emit ({@code Parser Error}), and a percent limit is a
+     * separate LIMIT_PERCENT_MODIFIER node - appending a row LIMIT beside it produced
+     * {@code LIMIT (3) % LIMIT 5}, which does not parse.
+     *
+     * <p>Only reached when a cap or an offset is actually being applied, so a query with
+     * {@code LIMIT n%} and no cap is left alone.
+     */
+    private static void rejectPercentLimit(ArrayNode modifiers) {
+        for (JsonNode modifier : modifiers) {
+            if (LIMIT_PERCENT_MODIFIER_TYPE.equals(modifier.path(FIELD_TYPE).asText())) {
+                throw new IllegalArgumentException(
+                        "'LIMIT n%' is not supported when a row cap or offset applies: a percent "
+                        + "limit is a fraction of the result, so the whole result must be built "
+                        + "before it can be taken and the cap cannot bound the work. "
+                        + "Use an absolute LIMIT instead.");
+            }
+        }
+    }
+
+    /**
+     * Rejects a LIMIT that is not an integer literal, when a cap or offset is being applied.
+     *
+     * <p>Bounding a non-literal limit means reproducing SQL's own semantics in AST arithmetic -
+     * {@code least} skips NULLs but {@code subtract} propagates them, {@code greatest} clamps only
+     * after {@code subtract} has already poisoned the value, and {@code LIMIT NULL} is
+     * <i>unlimited</i> in SQL but NULL in arithmetic. Each limit form was a separate special case,
+     * and each one passed its tests before the next was found. Rejecting is the honest bound: the
+     * caller learns the query cannot be paginated instead of receiving a plausible wrong page.
+     *
+     * <p>It also closes an inconsistency: {@link #rejectOffsetPastOwnLimit} can only compare a
+     * literal, so {@code LIMIT 5+5 OFFSET 20} previously returned a silent empty page where
+     * {@code LIMIT 10 OFFSET 20} raised. With non-literals rejected, that guard always applies.
+     *
+     * <p>An <i>unlimited</i> limit is allowed: an absent LIMIT and an explicit {@code LIMIT NULL}
+     * both mean "every row", which is exactly the case the cap handles, so there is no arithmetic
+     * to get wrong.
+     */
+    private static void rejectNonLiteralLimit(JsonNode ownLimit) {
+        if (ownLimit == null || ownLimit.isNull() || isNullConstant(ownLimit)) {
+            return;
+        }
+        Long literal = literalIntOf(ownLimit);
+        if (literal == null) {
+            throw new IllegalArgumentException(
+                    "the query's LIMIT must be an integer literal when a row cap or offset "
+                    + "applies; an expression, scalar subquery, bind parameter or non-integer "
+                    + "literal cannot be bounded reliably. Use a literal integer LIMIT instead.");
+        }
+        if (literal < 0) {
+            // DuckDB folds "LIMIT -1" into a constant, so it reaches here and would otherwise be
+            // reported as an offset problem by rejectOffsetPastOwnLimit.
+            throw new IllegalArgumentException(
+                    "the query's LIMIT must not be negative, got " + literal + ".");
+        }
+    }
+
+    /**
+     * Rejects a request offset that lands at or past the query's own LIMIT - that page is empty,
+     * and merging modifiers would instead hand back rows the query's own bound excluded.
+     */
+    private static void rejectOffsetPastOwnLimit(JsonNode ownLimit, long offset) {
+        if (offset <= 0) {
+            return;
+        }
+        Long literal = literalIntOf(ownLimit);
+        if (literal != null && offset > literal) {
+            throw new IllegalArgumentException(
+                    "'offset' " + offset + " is past the query's own LIMIT " + literal
+                    + ". Lower the offset or raise the query's LIMIT.");
+        }
+    }
+
+    /**
+     * The query's own LIMIT less {@code offset} rows already skipped, clamped at 0.
+     *
+     * <p>An unlimited query stays unlimited: there is nothing to subtract from. That covers an
+     * absent LIMIT and an explicit {@code LIMIT NULL}, which SQL reads as <i>unlimited</i> - it
+     * parses as a CONSTANT whose value is NULL, not as JSON null, so without the
+     * {@link #isNullConstant} check it took the arithmetic path and
+     * {@code greatest(subtract(NULL, 5), 0)} collapsed to {@code LIMIT 0}, i.e. an empty page for
+     * a query that asked for every row.
+     */
+    private static JsonNode remainingAfterOffset(JsonNode ownLimit, long offset) {
+        if (ownLimit == null || ownLimit.isNull() || isNullConstant(ownLimit)) {
+            return NullNode.getInstance();
+        }
+        if (offset == 0) {
+            return ownLimit;
+        }
+        // Guaranteed a literal by rejectNonLiteralLimit, and > offset by rejectOffsetPastOwnLimit.
+        return ExpressionFactory.constant(literalIntOf(ownLimit) - offset);
+    }
+
+    /**
+     * The limit bounded by {@code cap}. A pure ceiling - no offset arithmetic. An unlimited query
+     * (absent LIMIT, or {@code LIMIT NULL}) is bounded by the cap itself; otherwise the limit is
+     * an integer literal, guaranteed by {@link #rejectNonLiteralLimit}, so the min folds in Java
+     * and the emitted SQL stays a plain {@code LIMIT n}.
+     */
+    private static JsonNode cappedLimit(JsonNode existing, long cap) {
+        if (existing == null || existing.isNull() || isNullConstant(existing)) {
+            return ExpressionFactory.constant(cap);
+        }
+        return ExpressionFactory.constant(Math.min(literalIntOf(existing), cap));
+    }
+
+    /**
+     * The query's own OFFSET composed additively with the caller's. A non-literal offset is
+     * wrapped in {@code coalesce(..., 0)} so a NULL offset contributes 0 instead of poisoning the
+     * sum - the {@code add} counterpart to {@code least}'s NULL-skipping in {@link #cappedLimit}.
+     */
+    private static JsonNode composedOffset(JsonNode existing, long offset) {
+        if (existing == null || existing.isNull()) {
+            return ExpressionFactory.constant(offset);
+        }
+        if (offset == 0) {
+            return existing;
+        }
+        Long literal = literalIntOf(existing);
+        if (literal != null) {
+            long sum = literal + offset;
+            return ExpressionFactory.constant(sum < 0 ? Long.MAX_VALUE : sum); // saturate
+        }
+        return call("add", coalesceWithZero(existing), ExpressionFactory.constant(offset));
+    }
+
+    /**
+     * {@code coalesce(expr, 0)}. COALESCE is not a FUNCTION node in DuckDB's AST - it serializes
+     * as an OPERATOR of type OPERATOR_COALESCE (so does {@code ifnull}), and a FUNCTION node
+     * named "coalesce" fails to bind.
+     */
+    private static JsonNode coalesceWithZero(JsonNode expression) {
+        ObjectNode coalesce = JsonNodeFactory.instance.objectNode();
+        coalesce.put(FIELD_CLASS, OPERATOR_CLASS);
+        coalesce.put(FIELD_TYPE, COALESCE_TYPE_OPERATOR);
+        ArrayNode children = coalesce.putArray(FIELD_CHILDREN);
+        children.add(expression);
+        children.add(ExpressionFactory.constant(0L));
+        return coalesce;
+    }
+
+    /** A two-argument function call in the default catalog/schema. */
+    private static JsonNode call(String name, JsonNode left, JsonNode right) {
+        ArrayNode args = JsonNodeFactory.instance.arrayNode();
+        args.add(left);
+        args.add(right);
+        return ExpressionFactory.createFunction(name, "", "", args);
+    }
+
+    /** True for a CONSTANT node whose value is NULL - i.e. an explicit {@code LIMIT/OFFSET NULL}. */
+    private static boolean isNullConstant(JsonNode node) {
+        return node != null
+                && CONSTANT_CLASS.equals(node.path(FIELD_CLASS).asText())
+                && node.path(FIELD_VALUE).path(FIELD_IS_NULL).asBoolean(false);
+    }
+
+    /**
+     * DuckDB {@code type.id} values whose serialized constant is a plain integer. Anything else -
+     * DECIMAL, DOUBLE, FLOAT - is <b>not</b> read as a literal, because DuckDB serializes a
+     * DECIMAL as its <i>unscaled</i> integer plus a scale in {@code type_info}: {@code LIMIT 10.9}
+     * arrives as {@code 109}, and reading that as 10.9 rows would widen the query's own bound by
+     * 10^scale - the very bug this class now guards against.
+     */
+    private static final Set<String> INTEGER_CONSTANT_TYPE_IDS = Set.of(
+            "TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT",
+            "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT", "UHUGEINT");
+
+    /**
+     * The value of a LIMIT/OFFSET expression when it is an integer literal, else {@code null} (an
+     * expression, bind parameter, NULL, or a non-integer numeric type) - i.e. when it cannot be
+     * folded in Java, and so is rejected or composed at execution time instead.
+     */
+    private static Long literalIntOf(JsonNode node) {
+        if (node == null || node.isNull()
+                || !CONSTANT_CLASS.equals(node.path(FIELD_CLASS).asText())) {
+            return null;
+        }
+        JsonNode value = node.get(FIELD_VALUE);
+        if (value == null || value.path(FIELD_IS_NULL).asBoolean(false)) {
+            return null;
+        }
+        if (!INTEGER_CONSTANT_TYPE_IDS.contains(value.path(FIELD_TYPE).path(FIELD_ID).asText())) {
+            return null;
+        }
+        JsonNode inner = value.get(FIELD_VALUE);
+        return inner != null && inner.isIntegralNumber() ? inner.asLong() : null;
     }
 
     private static String escapeSpecialChar(String sql) {

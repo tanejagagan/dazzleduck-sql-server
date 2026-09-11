@@ -1447,6 +1447,11 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             query = transformQuery(context, connection, query);
         } catch (UnauthorizedException e) {
             throw CallStatus.UNAUTHORIZED.withCause(e).withDescription(e.getMessage()).toRuntimeException();
+        } catch (IllegalArgumentException e) {
+            // A rejected request (unsupported LIMIT form, offset past the query's own bound) is a
+            // client error. getStreamStatement already maps it via ErrorHandling; without this
+            // branch the getFlightInfo half of the same call returned INTERNAL / HTTP 500.
+            throw CallStatus.INVALID_ARGUMENT.withCause(e).withDescription(e.getMessage()).toRuntimeException();
         } catch (Exception e){
             throw CallStatus.INTERNAL.withCause(e).withDescription("Failed to transform query: " + e.getMessage()).toRuntimeException();
         }
