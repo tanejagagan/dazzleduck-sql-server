@@ -6,6 +6,25 @@ Ship `dazzleduck-sql-otel-collector` as a GraalVM **native image** as an alterna
 current JVM/jib image, for **fast startup and low memory footprint** (a collector/sidecar
 workload). The JVM image stays the default; native is an additional artifact.
 
+## Status — native build works end-to-end (linux/arm64)
+
+A native `collector` binary of the real `Main` builds, parses args, and **starts the OTLP gRPC
+server on 4317 in ~2 s**, both directly and inside a container.
+
+- Build: `./mvnw -Pnative -pl dazzleduck-sql-otel-collector -am -DskipTests package` (a GraalVM
+  JDK 21 with `native-image` on PATH), or `docker build -f dazzleduck-sql-otel-collector/Dockerfile.native .`
+- Binary ~115 MB (embeds the DuckDB `.so`); runtime image on `debian:12-slim` ~298 MB.
+- Reachability metadata is committed under `src/main/resources/META-INF/native-image/` (captured
+  by the tracing agent against this project's exact dependency versions). The shipped GraalVM
+  metadata repo is **disabled** in the profile — its entries are for older versions and one fails
+  to link (`ScopedMemoryAccess.closeScope0`).
+- Metadata is **linux/arm64 only** so far (the bundled DuckDB `.so` is arm64); an amd64 image needs
+  its own agent capture.
+
+Still open: exercise the actual OTLP ingest path (send an export → Parquet/DuckLake) to catch any
+message-path reflection the startup-only agent run missed; strip + tailored base for size; amd64;
+CI. See the plan below.
+
 ## Feasibility — proven by a spike
 
 A minimal native binary exercising only the two risky dependencies — **DuckDB (JNI)** and

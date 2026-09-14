@@ -192,4 +192,59 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!--
+          GraalVM native image. Build with a GraalVM JDK 21 (native-image on PATH):
+            ./mvnw -Pnative -pl dazzleduck-sql-otel-collector -am -DskipTests package
+          produces target/collector. Reachability metadata (reflection/JNI/resources, incl. the
+          bundled DuckDB .so) lives in src/main/resources/META-INF/native-image and is picked up
+          automatically. The metadata is captured on linux/arm64; an amd64 build needs its own
+          capture of the amd64 DuckDB .so.
+        -->
+        <profile>
+            <id>native</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.graalvm.buildtools</groupId>
+                        <artifactId>native-maven-plugin</artifactId>
+                        <version>0.10.3</version>
+                        <extensions>true</extensions>
+                        <executions>
+                            <execution>
+                                <id>build-native</id>
+                                <goals>
+                                    <goal>compile-no-fork</goal>
+                                </goals>
+                                <phase>package</phase>
+                            </execution>
+                        </executions>
+                        <configuration>
+                            <imageName>collector</imageName>
+                            <mainClass>${exec.mainClass}</mainClass>
+                            <!--
+                              Use only the metadata captured for this project's exact dependency
+                              versions (src/main/resources/META-INF/native-image). The shipped
+                              GraalVM reachability-metadata repo carries entries for OLDER versions
+                              (netty 4.1.80 vs 4.2.9, jackson 2.15 vs 2.21, logback 1.4.9 vs 1.5.15)
+                              and one of them registers a JNI method that fails to link
+                              (ScopedMemoryAccess.closeScope0).
+                            -->
+                            <metadataRepository>
+                                <enabled>false</enabled>
+                            </metadataRepository>
+                            <buildArgs>
+                                <buildArg>--no-fallback</buildArg>
+                                <buildArg>-H:+ReportExceptionStackTraces</buildArg>
+                                <!-- Logback/SLF4J must be initialized at build time or the build aborts. -->
+                                <buildArg>--initialize-at-build-time=org.slf4j,ch.qos.logback</buildArg>
+                                <buildArg>--initialize-at-run-time=io.netty</buildArg>
+                            </buildArgs>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

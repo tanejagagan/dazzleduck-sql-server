@@ -1,0 +1,29 @@
+# Multi-stage GraalVM native build of the OTel collector.
+#
+# Build from the REPO ROOT (the build stage needs the parent pom + common/commons modules):
+#   docker build -f dazzleduck-sql-otel-collector/Dockerfile.native -t dazzleduck/otel-collector-native .
+#
+# Reachability metadata (reflection/JNI/resources, incl. the bundled DuckDB .so) lives in
+# dazzleduck-sql-otel-collector/src/main/resources/META-INF/native-image and is picked up by the
+# native-maven-plugin automatically. Metadata is captured on linux/arm64 — an amd64 image needs its
+# own capture of the amd64 DuckDB .so, so build this on the target architecture.
+
+# ---- build stage: GraalVM native-image + Maven wrapper ----
+FROM ghcr.io/graalvm/native-image-community:21 AS build
+# zlib-devel provides libz.so, which the final native-image link needs (gcc ... -lz).
+RUN microdnf install -y zlib-devel && microdnf clean all
+WORKDIR /src
+COPY . .
+# -Pnative binds native-maven-plugin's compile-no-fork to the package phase and emits target/collector.
+# The --mount cache keeps the Maven repo across builds so deps are not re-downloaded each time.
+RUN --mount=type=cache,target=/root/.m2 \
+    ./mvnw -q -Pnative -pl dazzleduck-sql-otel-collector -am -DskipTests package
+
+# ---- runtime stage: glibc base with the C++/zlib libs the DuckDB .so needs ----
+# debian:12-slim carries glibc + libstdc++/libgcc + libz. distroless/cc is smaller but lacks libz.
+FROM debian:12-slim AS runtime
+LABEL org.opencontainers.image.title="dazzleduck-sql-otel-collector (native)"
+COPY --from=build /src/dazzleduck-sql-otel-collector/target/collector /usr/local/bin/collector
+# DuckDB extracts its bundled native library to java.io.tmpdir on first use; /tmp is writable.
+EXPOSE 4317
+ENTRYPOINT ["/usr/local/bin/collector"]
