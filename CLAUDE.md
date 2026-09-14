@@ -154,6 +154,17 @@ number or boolean (`{"n":42}`) is rejected with a hint to quote it, since all va
 applied as VARCHAR literals; cast for numeric/temporal comparisons (`getvariable('n')::INT`).
 Variable names must match `[A-Za-z_][A-Za-z0-9_]*`; a malformed claim fails the request.
 
+**Trust model.** "Verified-claim only" means the value cannot be overridden per request on an
+already-issued token — the claim is not a recognized request header, so a query request cannot
+change it. It does **not** mean the value is server-authored: the claim is populated at token
+issuance, and in the Flight basic-auth path `AdvanceJWTTokenAuthenticator` copies every
+`claims.generate.headers` entry from the connection headers into the signed token — so a Flight
+client can set `x-dd-variables` via its connection string, exactly as it can for `x-dd-access` /
+`x-dd-filter`. Assigning variables from the authenticated identity (e.g. a fixed tenant per user)
+rather than trusting client-supplied values is the login/auth service's responsibility. The
+`SessionVariables.validate(...)` hook is the server-side place to enforce a variable policy
+(allowed names, value constraints) before the variables are applied.
+
 **External access control** (for restricted modes):
 ```sql
 SET enable_external_access = true;   -- in startup script to enable

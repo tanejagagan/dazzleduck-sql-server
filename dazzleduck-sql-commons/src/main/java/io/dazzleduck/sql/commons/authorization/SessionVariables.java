@@ -55,7 +55,9 @@ public final class SessionVariables {
             throw new IllegalArgumentException(
                     "Invalid " + Headers.CLAIM_SESSION_VARIABLES + " claim: expected a JSON object", e);
         }
-        List<String> sqls = new ArrayList<>(vars.size());
+        // Parse and enforce the structural rules needed for safe SQL rendering, collecting a
+        // name→value map, then hand it to the policy hook before anything is applied.
+        Map<String, String> variables = new LinkedHashMap<>();
         for (Map.Entry<String, Object> entry : vars.entrySet()) {
             String name = entry.getKey();
             if (!VALID_NAME.matcher(name).matches()) {
@@ -76,9 +78,32 @@ public final class SessionVariables {
                         "Session variable '" + name + "': " + value + " needs to be inside quotes "
                                 + "(write it as \"" + name + "\": \"" + value + "\")");
             }
-            sqls.add("SET VARIABLE " + name + " = " + sqlLiteral((String) value));
+            variables.put(name, (String) value);
         }
+
+        validate(variables);
+
+        List<String> sqls = new ArrayList<>(variables.size());
+        variables.forEach((name, value) ->
+                sqls.add("SET VARIABLE " + name + " = " + sqlLiteral(value)));
         return sqls;
+    }
+
+    /**
+     * Policy hook for the requested session variables, called after structural parsing and before
+     * any {@code SET VARIABLE} is rendered. The parser already guarantees valid identifier names and
+     * string values (what safe SQL rendering needs); this is where higher-level policy belongs —
+     * e.g. an allow-list of variable names, per-tenant value constraints, or required variables.
+     *
+     * <p>Placeholder: the default accepts every variable. Implement policy checks here and throw
+     * {@link IllegalArgumentException} to reject a variable set; the request then fails cleanly.
+     *
+     * @param variables the requested variables (insertion order preserved), all names valid
+     *                  identifiers and all values non-null strings
+     */
+    static void validate(Map<String, String> variables) {
+        // TODO: enforce session-variable policy (allowed names, value format/limits, per-tenant
+        // rules). No additional checks yet.
     }
 
     /** A single-quoted SQL string literal with embedded quotes doubled. */
