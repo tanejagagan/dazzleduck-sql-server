@@ -1405,13 +1405,26 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         // headers, so they cannot be overridden per-request. Applied as SET VARIABLE so queries and
         // injected RLS filters can read them via getvariable('name'). A malformed claim throws here
         // (before the connection is built) rather than failing silently.
-        sqls.addAll(SessionVariables.toSetStatements(
-                getVerifiedClaims(context).get(Headers.CLAIM_SESSION_VARIABLES)));
+        sqls.addAll(sessionSetupSqls(context));
         try {
             return ConnectionPool.getConnection(sqls.toArray(new String[0]));
         } catch (Exception e ){
             throw new NoSuchCatalogSchemaError(dbSchema);
         }
+    }
+
+    /**
+     * The {@code SET VARIABLE} statements for this request's session variables.
+     *
+     * <p>{@link #getConnection} is not the only connection that evaluates the request's query: split
+     * planning prunes partitions on its own connections, and the tree it prunes with already has the
+     * row-level-security filter injected. A filter referencing {@code getvariable('x')} evaluates
+     * against NULL on a connection that has not run these — pruning away every file and returning an
+     * empty result — so every such connection must apply them too.
+     */
+    protected static List<String> sessionSetupSqls(CallContext context) {
+        return SessionVariables.toSetStatements(
+                getVerifiedClaims(context).get(Headers.CLAIM_SESSION_VARIABLES));
     }
 
     protected static DatabaseSchema getDatabaseSchema(CallContext context, AccessMode accessMode){
