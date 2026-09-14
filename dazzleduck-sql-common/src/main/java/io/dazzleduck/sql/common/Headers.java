@@ -35,6 +35,11 @@ public class Headers {
     // columns, "true" for no row filter. Takes precedence over HEADER_FILTER when present.
     public static final String HEADER_ACCESS = "x-dd-access";
     public static final String HEADER_ACCESS_TYPE = "x-dd-access-type";
+    // Session variables applied to the DuckDB connection as SET VARIABLE, referenceable in SQL
+    // and RLS filters via getvariable('name'). JSON object of string key/values, e.g.
+    // {"tenant_id":"acme"}. Trusted from the verified JWT claim ONLY — intentionally NOT in
+    // SUPPORTED_HEADERS, so a client-supplied request header of the same name is never honored.
+    public static final String CLAIM_SESSION_VARIABLES = "x-dd-variables";
     public static final String HEADER_SPLIT_SIZE = "x-dd-split-size";
     public static final String HEADER_DATA_PARTITION = "x-dd-partition";
     public static final String HEADER_DATA_FORMAT = "x-dd-format";

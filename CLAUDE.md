@@ -119,8 +119,8 @@ Four modes set via `access_mode` config:
 **Project-specific JWT claims and HTTP headers are namespaced with the `x-dd-` prefix**
 to avoid collisions with standard claim names. The mapping is:
 `x-dd-access`, `x-dd-access-type`, `x-dd-table`, `x-dd-filter`, `x-dd-path`,
-`x-dd-function`, `x-dd-token-type`, `x-dd-redirect_url`. Connection-context names
-`database` / `schema` stay unprefixed for Flight SQL / JDBC interop, and the URL
+`x-dd-function`, `x-dd-token-type`, `x-dd-redirect_url`, `x-dd-variables`. Connection-context
+names `database` / `schema` stay unprefixed for Flight SQL / JDBC interop, and the URL
 query parameter `ingestion_queue` also keeps its short form.
 
 **JWT `x-dd-access` claim — RESTRICTED mode** (exactly one entry, preferred over legacy claims):
@@ -139,6 +139,20 @@ Legacy separate claims: `x-dd-table`, `x-dd-path`, `x-dd-filter` (backward compa
 x-dd-access = [["table","orders","*","owner_id='alice'"],["table","items","*","region='us'"]]
 ```
 Filter is injected as a CTE for every base table reference (JOINs, subqueries, EXISTS — nothing bypasses it). Only `"table"` type supported; external access disabled.
+
+**JWT `x-dd-variables` claim — session variables** (all access modes). A JSON object of string
+key/values, applied to the per-request DuckDB connection as `SET VARIABLE` and readable in SQL
+and in injected RLS filters via `getvariable('name')`:
+```
+x-dd-variables = {"tenant_id":"acme","region":"us-east"}
+```
+So a filter can reference the value as data instead of a baked-in literal, e.g. an `x-dd-access`
+entry of `["table","orders","*","tenant_id = getvariable('tenant_id')"]`. Trusted from the
+verified (signed) token **only** — it is intentionally not a recognized request header, so a
+client cannot override it per request. Every value must be a **quoted JSON string** — a bare
+number or boolean (`{"n":42}`) is rejected with a hint to quote it, since all variables are
+applied as VARCHAR literals; cast for numeric/temporal comparisons (`getvariable('n')::INT`).
+Variable names must match `[A-Za-z_][A-Za-z0-9_]*`; a malformed claim fails the request.
 
 **External access control** (for restricted modes):
 ```sql
@@ -164,7 +178,7 @@ dazzleduck_server = {
     ingestion.max_delay_ms = 2000
 
     jwt_token.expiration = 60m
-    jwt_token.claims.generate.headers = [database, schema, x-dd-table, x-dd-filter, x-dd-access, x-dd-path, x-dd-function, x-dd-access-type]
+    jwt_token.claims.generate.headers = [database, schema, x-dd-table, x-dd-filter, x-dd-access, x-dd-path, x-dd-function, x-dd-access-type, x-dd-variables]
 
     users = [{ username = admin, password = admin, groups = [admin, general] }]
 }

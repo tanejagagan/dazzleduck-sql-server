@@ -11,6 +11,7 @@ import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.common.ConfigConstants;
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
+import io.dazzleduck.sql.commons.authorization.SessionVariables;
 import io.dazzleduck.sql.commons.authorization.SqlAuthorizer;
 import io.dazzleduck.sql.commons.authorization.UnauthorizedException;
 import io.dazzleduck.sql.commons.ingestion.*;
@@ -1398,9 +1399,16 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
     protected static DuckDBConnection getConnection(final CallContext context, AccessMode accessMode) throws NoSuchCatalogSchemaError {
         var databaseSchema = getDatabaseSchema(context, accessMode);
         String dbSchema = format("%s.%s", databaseSchema.database, databaseSchema.schema);
-        String[] sqls = {format("USE %s", dbSchema)};
+        List<String> sqls = new ArrayList<>();
+        sqls.add(format("USE %s", dbSchema));
+        // Session variables are read only from the verified (signed) claims, never from client
+        // headers, so they cannot be overridden per-request. Applied as SET VARIABLE so queries and
+        // injected RLS filters can read them via getvariable('name'). A malformed claim throws here
+        // (before the connection is built) rather than failing silently.
+        sqls.addAll(SessionVariables.toSetStatements(
+                getVerifiedClaims(context).get(Headers.CLAIM_SESSION_VARIABLES)));
         try {
-            return ConnectionPool.getConnection(sqls);
+            return ConnectionPool.getConnection(sqls.toArray(new String[0]));
         } catch (Exception e ){
             throw new NoSuchCatalogSchemaError(dbSchema);
         }

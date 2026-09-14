@@ -71,6 +71,29 @@ public class HttpServerAuthorizationTest extends HttpServerTestBase {
 
     @Test
     @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testSessionVariableInFilter() throws Exception {
+        // The RESTRICTED filter references a session variable instead of a literal; the value
+        // travels in x-dd-variables and is applied as SET VARIABLE on the query connection, so
+        // getvariable('who') resolves to 'admin' when the injected filter runs.
+        var claims = Map.of(
+                Headers.HEADER_FILTER, "name = getvariable('who')",
+                Headers.HEADER_TABLE, "auth_test",
+                Headers.HEADER_PATH, warehousePath,
+                Headers.CLAIM_SESSION_VARIABLES, "{\"who\":\"admin\"}"
+        );
+        var jwtResponse = loginWithClaims(claims);
+        assertEquals(200, jwtResponse.statusCode());
+        var jwt = objectMapper.readValue(jwtResponse.body(), LoginResponse.class);
+        var inputStreamResponse = query("select * from auth_test", jwt);
+        try (var allocator = new RootAllocator();
+             ArrowReader reader = new ArrowStreamReader(inputStreamResponse.body(), allocator)) {
+            var expectedSql = "select * from auth_test where (name = 'admin')";
+            TestUtils.isEqual(expectedSql, allocator, reader);
+        }
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
     public void testUnauthorizedMissingTableClaim() throws Exception {
         var claims = Map.of(
                 Headers.HEADER_FILTER, "id = 1",
