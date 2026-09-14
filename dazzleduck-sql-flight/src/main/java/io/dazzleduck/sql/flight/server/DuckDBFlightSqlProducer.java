@@ -1409,7 +1409,10 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         try {
             return ConnectionPool.getConnection(sqls.toArray(new String[0]));
         } catch (Exception e ){
-            throw new NoSuchCatalogSchemaError(dbSchema);
+            // Only the USE can mean "no such catalog/schema". The batch also carries the session
+            // variables now, and reporting a failed SET VARIABLE as a missing schema sends the
+            // caller looking in the wrong place.
+            throw new NoSuchCatalogSchemaError(dbSchema, e);
         }
     }
 

@@ -26,7 +26,7 @@ public class SplitPlannerSessionVariableTest {
     @Test
     public void sessionVariableIsAppliedWhenPruningPartitions() throws SQLException, IOException {
         var setupSqls = SessionVariables.toSetStatements("{\"d\":\"2025-01-01\"}");
-        Assertions.assertEquals(List.of("SET VARIABLE d = '2025-01-01'"), setupSqls);
+        Assertions.assertEquals(List.of("SET VARIABLE \"d\" = '2025-01-01'"), setupSqls);
 
         var statuses = SplitPlanner.getSplitStatus(
                 Transformations.parseToTree(QUERY_FILTERED_BY_VARIABLE), 1024 * 1024 * 1024, setupSqls);

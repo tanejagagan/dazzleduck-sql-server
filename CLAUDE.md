@@ -152,18 +152,33 @@ verified (signed) token **only** — it is intentionally not a recognized reques
 client cannot override it per request. Every value must be a **quoted JSON string** — a bare
 number or boolean (`{"n":42}`) is rejected with a hint to quote it, since all variables are
 applied as VARCHAR literals; cast for numeric/temporal comparisons (`getvariable('n')::INT`).
-Variable names must match `[A-Za-z_][A-Za-z0-9_]*`; a malformed claim fails the request.
+Variable names must match `[A-Za-z_][A-Za-z0-9_]*` and are rendered as quoted identifiers, so a
+reserved word such as `table` works. Values may not contain control characters, are capped at 4096
+characters, and at most 64 variables may be sent; a malformed claim fails the request.
 
-**Trust model.** "Verified-claim only" means the value cannot be overridden per request on an
-already-issued token — the claim is not a recognized request header, so a query request cannot
-change it. It does **not** mean the value is server-authored: the claim is populated at token
-issuance, and in the Flight basic-auth path `AdvanceJWTTokenAuthenticator` copies every
-`claims.generate.headers` entry from the connection headers into the signed token — so a Flight
-client can set `x-dd-variables` via its connection string, exactly as it can for `x-dd-access` /
-`x-dd-filter`. Assigning variables from the authenticated identity (e.g. a fixed tenant per user)
-rather than trusting client-supplied values is the login/auth service's responsibility. The
-`SessionVariables.validate(...)` hook is the server-side place to enforce a variable policy
-(allowed names, value constraints) before the variables are applied.
+The claim value is the JSON **text**, i.e. a claim whose value is a string. A token minted with
+`x-dd-variables` as a nested JSON object is rejected at parse time, because claims are read as
+strings.
+
+**Trust model — the login service owns the policy.** "Verified-claim only" means the value cannot
+be overridden per request on an already-issued token: the query path resolves it from the signed
+claims, never from a request header. It does **not** mean the query server chose the value. The
+value is decided at token issuance, and deciding it is the **login service's** job:
+
+- A client *requests* variables (a Flight connection property / call header, or the `claims` map in
+  a `POST /v1/login` body).
+- `HttpCredentialValidator` forwards every `claims.generate.headers` entry — `x-dd-variables`
+  included — to the configured `login_url` as the `claims` map.
+- The login service decides what to set, override, or reject, and signs only what it approves. A
+  production one assigns variables from the authenticated identity (e.g. a fixed tenant per user).
+
+The bundled `LoginService` is a **demo**: it signs `loginRequest.claims()` as given, with no policy.
+Do not run it in production. Likewise, when the Flight server mints tokens itself
+(`jwt_token.generation = true` with no `login_url`), `AdvanceJWTTokenAuthenticator` copies the
+connection headers into the token unfiltered — also a development mode.
+
+`SessionVariables.validate(...)` on the query server is a defence-in-depth hook (allowed names,
+value constraints), not the primary control; it is an unimplemented placeholder today.
 
 **External access control** (for restricted modes):
 ```sql
