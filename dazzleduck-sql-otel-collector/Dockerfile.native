@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Multi-stage GraalVM native build of the OTel collector.
 #
 # Build from the REPO ROOT (the build stage needs the parent pom + common/commons modules):
@@ -8,8 +9,11 @@
 # native-maven-plugin automatically. Metadata is captured on linux/arm64 — an amd64 image needs its
 # own capture of the amd64 DuckDB .so, so build this on the target architecture.
 
+ARG DUCKDB_VERSION=1.5.4.0
+
 # ---- build stage: GraalVM native-image + Maven wrapper ----
 FROM ghcr.io/graalvm/native-image-community:21 AS build
+ARG DUCKDB_VERSION
 # zlib-devel provides libz.so, which the final native-image link needs (gcc ... -lz).
 RUN microdnf install -y zlib-devel && microdnf clean all
 WORKDIR /src
@@ -19,11 +23,37 @@ COPY . .
 RUN --mount=type=cache,target=/root/.m2 \
     ./mvnw -q -Pnative -pl dazzleduck-sql-otel-collector -am -DskipTests package
 
+# Pre-download the DuckDB extensions the collector uses (arrow + ducklake) for the exact engine
+# version, into /root/.duckdb, so the runtime image needs no network to load them. Extensions are
+# keyed to the engine version and platform, so this must run on the target architecture.
+RUN --mount=type=cache,target=/root/.m2 <<'SH'
+set -e
+DUCKJAR="/root/.m2/repository/org/duckdb/duckdb_jdbc/${DUCKDB_VERSION}/duckdb_jdbc-${DUCKDB_VERSION}.jar"
+mkdir -p /tmp/ext
+cat > /tmp/ext/Install.java <<'JAVA'
+import java.sql.*;
+public class Install {
+  public static void main(String[] a) throws Exception {
+    try (Connection c = DriverManager.getConnection("jdbc:duckdb:"); Statement s = c.createStatement()) {
+      for (String sql : new String[]{"INSTALL arrow FROM community","INSTALL ducklake","LOAD arrow","LOAD ducklake"})
+        s.execute(sql);
+    }
+    System.out.println("duckdb extensions installed");
+  }
+}
+JAVA
+javac -cp "$DUCKJAR" -d /tmp/ext /tmp/ext/Install.java
+java -cp "$DUCKJAR:/tmp/ext" Install
+ls -R /root/.duckdb/extensions
+SH
+
 # ---- runtime stage: glibc base with the C++/zlib libs the DuckDB .so needs ----
 # debian:12-slim carries glibc + libstdc++/libgcc + libz. distroless/cc is smaller but lacks libz.
 FROM debian:12-slim AS runtime
 LABEL org.opencontainers.image.title="dazzleduck-sql-otel-collector (native)"
 COPY --from=build /src/dazzleduck-sql-otel-collector/target/collector /usr/local/bin/collector
+# Pre-installed DuckDB extensions (arrow, ducklake) so the collector loads them without network.
+COPY --from=build /root/.duckdb /root/.duckdb
 # DuckDB extracts its bundled native library to java.io.tmpdir on first use; /tmp is writable.
 EXPOSE 4317
 ENTRYPOINT ["/usr/local/bin/collector"]

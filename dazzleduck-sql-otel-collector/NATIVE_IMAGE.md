@@ -13,17 +13,23 @@ server on 4317 in ~2 s**, both directly and inside a container.
 
 - Build: `./mvnw -Pnative -pl dazzleduck-sql-otel-collector -am -DskipTests package` (a GraalVM
   JDK 21 with `native-image` on PATH), or `docker build -f dazzleduck-sql-otel-collector/Dockerfile.native .`
-- Binary ~115 MB (embeds the DuckDB `.so`); runtime image on `debian:12-slim` ~298 MB.
+- Binary ~116 MB (embeds the DuckDB `.so`); runtime image on `debian:12-slim` ~358 MB.
 - Reachability metadata is committed under `src/main/resources/META-INF/native-image/` (captured
   by the tracing agent against this project's exact dependency versions). The shipped GraalVM
   metadata repo is **disabled** in the profile — its entries are for older versions and one fails
   to link (`ScopedMemoryAccess.closeScope0`).
-- Metadata is **linux/arm64 only** so far (the bundled DuckDB `.so` is arm64); an amd64 image needs
-  its own agent capture.
+- The metadata covers the **full ingest path**: captured by running `OtelCollectorDuckLakeTest`
+  (OTLP logs/traces/metrics → Arrow → DuckLake) under the agent, not just startup (reflect 234 →
+  379 entries).
+- The image **pre-installs the DuckDB `arrow` + `ducklake` extensions** for the pinned engine
+  version so the collector loads them without network. Extensions are keyed to engine version and
+  platform, so the build must run on the target arch.
+- **linux/arm64 only** so far (bundled DuckDB `.so` + extensions are arm64); an amd64 image needs
+  its own agent capture and extension install.
 
-Still open: exercise the actual OTLP ingest path (send an export → Parquet/DuckLake) to catch any
-message-path reflection the startup-only agent run missed; strip + tailored base for size; amd64;
-CI. See the plan below.
+Still open: a true black-box OTLP smoke (external client sends an export with a JWT carrying the
+`x-dd-ingestion-queue` claim → assert Parquet/DuckLake rows); `-H:+StripDebugInfo` + tailored base
+for size; amd64; JFR/Arrow-reflection cleanup; CI. See the plan below.
 
 ## Feasibility — proven by a spike
 
