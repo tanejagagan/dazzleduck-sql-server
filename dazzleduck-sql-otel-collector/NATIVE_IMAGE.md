@@ -24,18 +24,21 @@ server on 4317 in ~2 s**, both directly and inside a container.
 - The image **pre-installs the DuckDB `arrow` + `ducklake` extensions** for the pinned engine
   version so the collector loads them without network. Extensions are keyed to engine version and
   platform, so the build must run on the target arch.
-- **linux/arm64 only** so far (bundled DuckDB `.so` + extensions are arm64); an amd64 image needs
-  its own agent capture and extension install.
+- **Multi-arch (amd64 + arm64).** The committed metadata is arch-independent; the arch-specific
+  DuckDB `.so` is bundled via `-Dduckdb.native.arch` (the Dockerfile passes `TARGETARCH`), and the
+  extension install runs on the target arch. native-image does not cross-compile, so each arch is
+  built on a runner of that arch. **arm64 is validated locally; amd64 is validated on CI's amd64
+  runner** (native-image under local emulation is impractical).
 
-CI publishes the arm64 native image on release: `release.yml` has a `publish-native-image` job on an
-arm64 runner that builds `Dockerfile.native` and pushes `dazzleduck/dazzleduck-otel-collector-native`
-(`:$VERSION-arm64`, `:$VERSION`, `:latest`). It is an additional artifact and does not gate the
-core (jib + Central) release.
+CI publishes the native images on release: `release.yml`'s `publish-native-image` matrix builds each
+arch on its own runner (`ubuntu-latest` = amd64, `ubuntu-24.04-arm` = arm64), pushes
+`dazzleduck/dazzleduck-otel-collector-native:$VERSION-<arch>`, and `publish-native-manifest` stitches
+the multi-arch `:$VERSION` / `:latest`. Additional artifacts — these jobs do not gate the core
+(jib + Central) release.
 
 Still open: a true black-box OTLP smoke (external client sends an export with a JWT carrying the
 `x-dd-ingestion-queue` claim → assert Parquet/DuckLake rows); `-H:+StripDebugInfo` + tailored base
-for size; **amd64** (its own metadata capture + an amd64 runner, then a multi-arch manifest over
-`:$VERSION`); JFR/Arrow-reflection cleanup. See the plan below.
+for size; JFR/Arrow-reflection cleanup. See the plan below.
 
 ## Feasibility — proven by a spike
 

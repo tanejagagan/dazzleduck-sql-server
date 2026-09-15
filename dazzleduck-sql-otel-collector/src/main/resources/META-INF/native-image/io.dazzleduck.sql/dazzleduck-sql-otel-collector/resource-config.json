@@ -53,8 +53,6 @@
   }, {
     "pattern":"\\Qjunit-platform.properties\\E"
   }, {
-    "pattern":"\\Qlibduckdb_java.so_linux_arm64\\E"
-  }, {
     "pattern":"\\Qlogback-test.scmo\\E"
   }, {
     "pattern":"\\Qlogback-test.xml\\E"

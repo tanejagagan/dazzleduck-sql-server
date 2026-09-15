@@ -4,30 +4,24 @@
 # Build from the REPO ROOT (the build stage needs the parent pom + common/commons modules):
 #   docker build -f dazzleduck-sql-otel-collector/Dockerfile.native -t dazzleduck/otel-collector-native .
 #
-# Reachability metadata (reflection/JNI/resources, incl. the bundled DuckDB .so) lives in
-# dazzleduck-sql-otel-collector/src/main/resources/META-INF/native-image and is picked up by the
-# native-maven-plugin automatically. That metadata is captured on linux/arm64 (it hardcodes the
-# arm64 DuckDB .so), so this image can only be built on arm64 until amd64 metadata is captured —
-# the build fails fast on any other architecture (see the guard below).
+# Multi-arch: TARGETARCH (set by BuildKit to the build platform's arch) selects the DuckDB .so
+# bundled into the binary and the DuckDB extensions installed, so this builds correctly for whatever
+# architecture it runs on (amd64 or arm64). native-image does not cross-compile, so build each arch
+# on a runner of that arch. Reachability metadata under src/main/resources/META-INF/native-image is
+# arch-independent; the arch-specific DuckDB .so is bundled via -Dduckdb.native.arch (see the pom).
 
 # ---- build stage: GraalVM native-image + Maven wrapper ----
 FROM ghcr.io/graalvm/native-image-community:21 AS build
-# The committed reachability metadata bundles the linux/arm64 DuckDB .so. Building on another arch
-# would silently embed the wrong native library, so fail loudly instead.
-RUN arch="$(uname -m)"; \
-    if [ "$arch" != "aarch64" ]; then \
-      echo "ERROR: committed native-image metadata is linux/arm64-only (bundles the arm64 DuckDB .so)," \
-           "but this build is on $arch. Capture metadata + extensions for $arch before building here."; \
-      exit 1; \
-    fi
+ARG TARGETARCH
 # zlib-devel provides libz.so, which the final native-image link needs (gcc ... -lz).
 RUN microdnf install -y zlib-devel && microdnf clean all
 WORKDIR /src
 COPY . .
 # -Pnative binds native-maven-plugin's compile-no-fork to the package phase and emits target/collector.
-# The --mount cache keeps the Maven repo across builds so deps are not re-downloaded each time.
+# duckdb.native.arch picks the DuckDB .so for this arch. The --mount cache keeps the Maven repo.
 RUN --mount=type=cache,target=/root/.m2 \
-    ./mvnw -q -Pnative -pl dazzleduck-sql-otel-collector -am -DskipTests package
+    ./mvnw -q -Pnative -pl dazzleduck-sql-otel-collector -am -DskipTests package \
+      -Dduckdb.native.arch="${TARGETARCH}"
 
 # Pre-download the DuckDB extensions the collector uses (arrow + ducklake) for the exact engine
 # version, into /root/.duckdb, so the runtime image needs no network to load them. The engine

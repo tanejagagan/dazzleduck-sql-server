@@ -148,16 +148,28 @@ jobs:
             done
           done
 
-  # The GraalVM native image is an ADDITIONAL artifact — the jib images above stay the default.
-  # It runs in its own job because native-image does not cross-build the way jib does: it produces
-  # a binary for the runner's own architecture. The committed reachability metadata and the bundled
-  # DuckDB .so are linux/arm64, so this must run on an arm64 runner; amd64 needs its own metadata
-  # capture (see dazzleduck-sql-otel-collector/NATIVE_IMAGE.md). This job is intentionally NOT in
-  # github-release's needs, so a native build problem never blocks the core (jib + Central) release.
+  # The GraalVM native images are ADDITIONAL artifacts — the jib images above stay the default.
+  # They run in their own jobs because native-image does not cross-build the way jib does: it
+  # produces a binary for the runner's own architecture. So each (image, arch) builds on a runner of
+  # that arch; the reachability metadata is arch-independent and the arch-specific DuckDB .so is
+  # selected by TARGETARCH in the Dockerfile. These jobs are intentionally NOT in github-release's
+  # needs, so a native build problem never blocks the core (jib + Central) release.
   publish-native-image:
-    name: Publish native Docker image (arm64)
+    name: Native ${{ matrix.image }} (${{ matrix.arch }})
     needs: verify
-    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: dazzleduck/dazzleduck-otel-collector-native
+            dockerfile: dazzleduck-sql-otel-collector/Dockerfile.native
+            arch: amd64
+            runner: ubuntu-latest
+          - image: dazzleduck/dazzleduck-otel-collector-native
+            dockerfile: dazzleduck-sql-otel-collector/Dockerfile.native
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     env:
       VERSION: ${{ needs.verify.outputs.version }}
@@ -172,17 +184,38 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # Single-arch (arm64). The -arm64 tag is explicit so :$VERSION and :latest can become
-      # multi-arch manifests once an amd64 native image exists.
-      - name: Build and push native image (arm64)
+      - name: Build and push ${{ matrix.image }}:${{ env.VERSION }}-${{ matrix.arch }}
         run: |
           set -euo pipefail
-          REPO=dazzleduck/dazzleduck-otel-collector-native
-          docker build -f dazzleduck-sql-otel-collector/Dockerfile.native \
-            -t "$REPO:$VERSION-arm64" -t "$REPO:$VERSION" -t "$REPO:latest" .
-          docker push "$REPO:$VERSION-arm64"
-          docker push "$REPO:$VERSION"
-          docker push "$REPO:latest"
+          docker build -f "${{ matrix.dockerfile }}" \
+            -t "${{ matrix.image }}:$VERSION-${{ matrix.arch }}" .
+          docker push "${{ matrix.image }}:$VERSION-${{ matrix.arch }}"
+
+  # Stitch the per-arch native images into multi-arch manifests that :$VERSION and :latest point at,
+  # exactly like the jib images above.
+  publish-native-manifest:
+    name: Native multi-arch manifests
+    needs: [verify, publish-native-image]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+    steps:
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Create manifests
+        run: |
+          set -euo pipefail
+          for repo in dazzleduck/dazzleduck-otel-collector-native; do
+            for tag in "$VERSION" latest; do
+              docker buildx imagetools create -t "docker.io/$repo:$tag" \
+                "docker.io/$repo:$VERSION-amd64" \
+                "docker.io/$repo:$VERSION-arm64"
+            done
+          done
 
   # Central coordinates are immutable: once a version is published it can never be
   # replaced or withdrawn. This runs only after the tag/pom cross-check in `verify`.

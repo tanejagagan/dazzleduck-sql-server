@@ -28,6 +28,9 @@
         <exec.mainClass>io.dazzleduck.sql.otel.collector.Main</exec.mainClass>
         <!-- Override with -Djib.architecture=arm64 on Apple Silicon -->
         <jib.architecture>amd64</jib.architecture>
+        <!-- DuckDB native lib to bundle in the native image (amd64|arm64). The Dockerfile passes
+             -Dduckdb.native.arch=$TARGETARCH; defaults to arm64 for a bare local build. -->
+        <duckdb.native.arch>arm64</duckdb.native.arch>
     </properties>
 
     <dependencyManagement>
@@ -240,6 +243,10 @@
                                 <!-- Logback/SLF4J must be initialized at build time or the build aborts. -->
                                 <buildArg>--initialize-at-build-time=org.slf4j,ch.qos.logback</buildArg>
                                 <buildArg>--initialize-at-run-time=io.netty</buildArg>
+                                <!-- Bundle only the target-arch DuckDB .so (the jar ships all of them).
+                                     Kept out of resource-config so one metadata set serves both arches. -->
+                                <buildArg>-H:+UnlockExperimentalVMOptions</buildArg>
+                                <buildArg>-H:IncludeResources=libduckdb_java\.so_linux_${duckdb.native.arch}</buildArg>
                             </buildArgs>
                         </configuration>
                     </plugin>
