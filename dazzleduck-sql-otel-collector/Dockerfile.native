@@ -6,14 +6,20 @@
 #
 # Reachability metadata (reflection/JNI/resources, incl. the bundled DuckDB .so) lives in
 # dazzleduck-sql-otel-collector/src/main/resources/META-INF/native-image and is picked up by the
-# native-maven-plugin automatically. Metadata is captured on linux/arm64 — an amd64 image needs its
-# own capture of the amd64 DuckDB .so, so build this on the target architecture.
-
-ARG DUCKDB_VERSION=1.5.4.0
+# native-maven-plugin automatically. That metadata is captured on linux/arm64 (it hardcodes the
+# arm64 DuckDB .so), so this image can only be built on arm64 until amd64 metadata is captured —
+# the build fails fast on any other architecture (see the guard below).
 
 # ---- build stage: GraalVM native-image + Maven wrapper ----
 FROM ghcr.io/graalvm/native-image-community:21 AS build
-ARG DUCKDB_VERSION
+# The committed reachability metadata bundles the linux/arm64 DuckDB .so. Building on another arch
+# would silently embed the wrong native library, so fail loudly instead.
+RUN arch="$(uname -m)"; \
+    if [ "$arch" != "aarch64" ]; then \
+      echo "ERROR: committed native-image metadata is linux/arm64-only (bundles the arm64 DuckDB .so)," \
+           "but this build is on $arch. Capture metadata + extensions for $arch before building here."; \
+      exit 1; \
+    fi
 # zlib-devel provides libz.so, which the final native-image link needs (gcc ... -lz).
 RUN microdnf install -y zlib-devel && microdnf clean all
 WORKDIR /src
@@ -24,11 +30,15 @@ RUN --mount=type=cache,target=/root/.m2 \
     ./mvnw -q -Pnative -pl dazzleduck-sql-otel-collector -am -DskipTests package
 
 # Pre-download the DuckDB extensions the collector uses (arrow + ducklake) for the exact engine
-# version, into /root/.duckdb, so the runtime image needs no network to load them. Extensions are
-# keyed to the engine version and platform, so this must run on the target architecture.
+# version, into /root/.duckdb, so the runtime image needs no network to load them. The engine
+# version is read from the pom's duckdb.version property (single source of truth — no hardcoding).
+# Extensions are keyed to engine version and platform, so this must run on the target architecture.
 RUN --mount=type=cache,target=/root/.m2 <<'SH'
 set -e
+DUCKDB_VERSION="$(./mvnw -q -N help:evaluate -Dexpression=duckdb.version -DforceStdout)"
+echo "duckdb.version = ${DUCKDB_VERSION}"
 DUCKJAR="/root/.m2/repository/org/duckdb/duckdb_jdbc/${DUCKDB_VERSION}/duckdb_jdbc-${DUCKDB_VERSION}.jar"
+[ -f "$DUCKJAR" ] || { echo "ERROR: DuckDB jar not found: $DUCKJAR"; exit 1; }
 mkdir -p /tmp/ext
 cat > /tmp/ext/Install.java <<'JAVA'
 import java.sql.*;
