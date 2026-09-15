@@ -1,5 +1,11 @@
 [
 {
+  "name":"android.os.Build$VERSION"
+},
+{
+  "name":"com.fasterxml.jackson.core.JsonFactory"
+},
+{
   "name":"io.dazzleduck.sql.commons.util.CommandLineConfigUtil$Args",
   "allDeclaredFields":true,
   "queryAllDeclaredMethods":true
@@ -16,6 +22,17 @@
 {
   "name":"io.micrometer.core.instrument.distribution.TimeWindowMax",
   "fields":[{"name":"rotating"}]
+},
+{
+  "name":"io.opentelemetry.api.incubator.metrics.ExtendedDefaultMeterProvider",
+  "methods":[{"name":"getNoop","parameterTypes":[] }]
+},
+{
+  "name":"io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdk"
+},
+{
+  "name":"java.lang.String",
+  "fields":[{"name":"coder"}, {"name":"value"}]
 },
 {
   "name":"java.lang.Thread",
@@ -37,11 +54,21 @@
   "fields":[{"name":"value"}]
 },
 {
+  "name":"java.util.concurrent.atomic.DoubleAdder"
+},
+{
+  "name":"java.util.concurrent.atomic.LongAdder"
+},
+{
   "name":"java.util.concurrent.atomic.Striped64",
   "fields":[{"name":"base"}, {"name":"cellsBusy"}]
 },
 {
   "name":"jdk.jfr.FlightRecorder"
+},
+{
+  "name":"kotlin.internal.jdk8.JDK8PlatformImplementations",
+  "methods":[{"name":"<init>","parameterTypes":[] }]
 },
 {
   "name":"org.apache.maven.surefire.junitplatform.JUnitPlatformProvider",
@@ -83,6 +110,10 @@
 },
 {
   "name":"org.junit.platform.launcher.LauncherSession"
+},
+{
+  "name":"sun.misc.Unsafe",
+  "fields":[{"name":"theUnsafe"}]
 },
 {
   "name":"sun.security.provider.NativePRNG",

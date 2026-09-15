@@ -3,7 +3,13 @@
   "includes":[{
     "pattern":"\\QMETA-INF/services/com.sun.net.httpserver.spi.HttpServerProvider\\E"
   }, {
+    "pattern":"\\QMETA-INF/services/io.opentelemetry.context.ContextStorageProvider\\E"
+  }, {
+    "pattern":"\\QMETA-INF/services/io.opentelemetry.exporter.internal.grpc.GrpcSenderProvider\\E"
+  }, {
     "pattern":"\\QMETA-INF/services/java.lang.System$LoggerFinder\\E"
+  }, {
+    "pattern":"\\QMETA-INF/services/java.net.spi.InetAddressResolverProvider\\E"
   }, {
     "pattern":"\\QMETA-INF/services/java.nio.channels.spi.SelectorProvider\\E"
   }, {
@@ -32,6 +38,10 @@
     "pattern":"\\Qreference.conf\\E"
   }, {
     "pattern":"\\Qsimplelogger.properties\\E"
+  }, {
+    "pattern":"java.base:\\Qjdk/internal/icu/impl/data/icudt72b/uprops.icu\\E"
+  }, {
+    "pattern":"java.base:\\Qsun/net/idn/uidna.spp\\E"
   }, {
     "pattern":"java.base:\\Qsun/net/www/content-types.properties\\E"
   }, {
