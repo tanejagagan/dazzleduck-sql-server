@@ -1,5 +1,23 @@
 [
 {
+  "name":"android.os.Build$VERSION"
+},
+{
+  "name":"ch.qos.logback.classic.BasicConfigurator",
+  "methods":[{"name":"<init>","parameterTypes":[] }]
+},
+{
+  "name":"ch.qos.logback.classic.joran.SerializedModelConfigurator",
+  "methods":[{"name":"<init>","parameterTypes":[] }]
+},
+{
+  "name":"ch.qos.logback.classic.util.DefaultJoranConfigurator",
+  "methods":[{"name":"<init>","parameterTypes":[] }]
+},
+{
+  "name":"com.fasterxml.jackson.core.JsonFactory"
+},
+{
   "name":"io.dazzleduck.sql.commons.util.CommandLineConfigUtil$Args",
   "allDeclaredFields":true,
   "queryAllDeclaredMethods":true
@@ -18,15 +36,51 @@
   "fields":[{"name":"rotating"}]
 },
 {
+  "name":"io.opentelemetry.api.incubator.metrics.ExtendedDefaultMeterProvider",
+  "methods":[{"name":"getNoop","parameterTypes":[] }]
+},
+{
+  "name":"io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdk"
+},
+{
+  "name":"java.io.FilePermission"
+},
+{
+  "name":"java.lang.RuntimePermission"
+},
+{
+  "name":"java.lang.String",
+  "fields":[{"name":"coder"}, {"name":"value"}]
+},
+{
   "name":"java.lang.Thread",
   "fields":[{"name":"threadLocalRandomProbe"}]
+},
+{
+  "name":"java.net.NetPermission"
+},
+{
+  "name":"java.net.SocketPermission"
+},
+{
+  "name":"java.net.URLPermission",
+  "methods":[{"name":"<init>","parameterTypes":["java.lang.String","java.lang.String"] }]
+},
+{
+  "name":"java.security.AllPermission"
 },
 {
   "name":"java.security.SecureRandomParameters"
 },
 {
+  "name":"java.security.SecurityPermission"
+},
+{
   "name":"java.sql.SQLException",
   "fields":[{"name":"next"}]
+},
+{
+  "name":"java.util.PropertyPermission"
 },
 {
   "name":"java.util.concurrent.atomic.AtomicBoolean",
@@ -37,11 +91,24 @@
   "fields":[{"name":"value"}]
 },
 {
+  "name":"java.util.concurrent.atomic.DoubleAdder"
+},
+{
+  "name":"java.util.concurrent.atomic.LongAdder"
+},
+{
   "name":"java.util.concurrent.atomic.Striped64",
   "fields":[{"name":"base"}, {"name":"cellsBusy"}]
 },
 {
+  "name":"javax.smartcardio.CardPermission"
+},
+{
   "name":"jdk.jfr.FlightRecorder"
+},
+{
+  "name":"kotlin.internal.jdk8.JDK8PlatformImplementations",
+  "methods":[{"name":"<init>","parameterTypes":[] }]
 },
 {
   "name":"org.apache.maven.surefire.junitplatform.JUnitPlatformProvider",
@@ -83,6 +150,10 @@
 },
 {
   "name":"org.junit.platform.launcher.LauncherSession"
+},
+{
+  "name":"sun.misc.Unsafe",
+  "fields":[{"name":"theUnsafe"}]
 },
 {
   "name":"sun.security.provider.NativePRNG",

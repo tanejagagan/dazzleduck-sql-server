@@ -9,6 +9,10 @@
   "name":"[Lorg.duckdb.DuckDBVector;"
 },
 {
+  "name":"io.dazzleduck.sql.compaction.Main",
+  "methods":[{"name":"main","parameterTypes":["java.lang.String[]"] }]
+},
+{
   "name":"java.lang.Boolean",
   "methods":[{"name":"booleanValue","parameterTypes":[] }, {"name":"getBoolean","parameterTypes":["java.lang.String"] }]
 },
