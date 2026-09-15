@@ -169,6 +169,14 @@ jobs:
             dockerfile: dazzleduck-sql-otel-collector/Dockerfile.native
             arch: arm64
             runner: ubuntu-24.04-arm
+          - image: dazzleduck/ducklake-compactor-native
+            dockerfile: dazzleduck-sql-ducklake-compactor/Dockerfile.native
+            arch: amd64
+            runner: ubuntu-latest
+          - image: dazzleduck/ducklake-compactor-native
+            dockerfile: dazzleduck-sql-ducklake-compactor/Dockerfile.native
+            arch: arm64
+            runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     env:
@@ -209,7 +217,7 @@ jobs:
       - name: Create manifests
         run: |
           set -euo pipefail
-          for repo in dazzleduck/dazzleduck-otel-collector-native; do
+          for repo in dazzleduck/dazzleduck-otel-collector-native dazzleduck/ducklake-compactor-native; do
             for tag in "$VERSION" latest; do
               docker buildx imagetools create -t "docker.io/$repo:$tag" \
                 "docker.io/$repo:$VERSION-amd64" \
