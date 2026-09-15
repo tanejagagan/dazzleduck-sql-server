@@ -1,0 +1,63 @@
+# syntax=docker/dockerfile:1
+# Multi-stage GraalVM native build of the DuckLake compactor.
+#
+# Multi-arch: TARGETARCH (set by BuildKit to the build platform's arch) selects the DuckDB .so
+# bundled into the binary and the DuckDB extensions installed, so this builds correctly for whatever
+# architecture it runs on (amd64 or arm64). native-image does not cross-compile, so build each arch
+# on a runner of that arch.
+#
+# Build from the REPO ROOT (the build stage needs the parent pom + common/commons modules):
+#   docker build -f dazzleduck-sql-ducklake-compactor/Dockerfile.native -t dazzleduck/ducklake-compactor-native .
+#
+# Reachability metadata (reflection/JNI/resources) lives in
+# dazzleduck-sql-ducklake-compactor/src/main/resources/META-INF/native-image and is arch-independent;
+# the arch-specific DuckDB .so is bundled via -Dduckdb.native.arch (see the pom's native profile).
+
+# ---- build stage: GraalVM native-image + Maven wrapper ----
+FROM ghcr.io/graalvm/native-image-community:21 AS build
+ARG TARGETARCH
+# zlib-devel provides libz.so, which the final native-image link needs (gcc ... -lz).
+RUN microdnf install -y zlib-devel && microdnf clean all
+WORKDIR /src
+COPY . .
+# -Pnative emits target/compactor; duckdb.native.arch picks the DuckDB .so for this arch.
+RUN --mount=type=cache,target=/root/.m2 \
+    ./mvnw -q -Pnative -pl dazzleduck-sql-ducklake-compactor -am -DskipTests package \
+      -Dduckdb.native.arch="${TARGETARCH}"
+
+# Pre-download the DuckDB extensions (arrow + ducklake) for the pinned engine version and this arch,
+# into /root/.duckdb, so the runtime image loads them with no network. The engine version is read
+# from the pom (single source of truth).
+RUN --mount=type=cache,target=/root/.m2 <<'SH'
+set -e
+DUCKDB_VERSION="$(./mvnw -q -N help:evaluate -Dexpression=duckdb.version -DforceStdout)"
+echo "duckdb.version = ${DUCKDB_VERSION}, arch = ${TARGETARCH}"
+DUCKJAR="/root/.m2/repository/org/duckdb/duckdb_jdbc/${DUCKDB_VERSION}/duckdb_jdbc-${DUCKDB_VERSION}.jar"
+[ -f "$DUCKJAR" ] || { echo "ERROR: DuckDB jar not found: $DUCKJAR"; exit 1; }
+mkdir -p /tmp/ext
+cat > /tmp/ext/Install.java <<'JAVA'
+import java.sql.*;
+public class Install {
+  public static void main(String[] a) throws Exception {
+    try (Connection c = DriverManager.getConnection("jdbc:duckdb:"); Statement s = c.createStatement()) {
+      for (String sql : new String[]{"INSTALL arrow FROM community","INSTALL ducklake","LOAD arrow","LOAD ducklake"})
+        s.execute(sql);
+    }
+    System.out.println("duckdb extensions installed");
+  }
+}
+JAVA
+javac -cp "$DUCKJAR" -d /tmp/ext /tmp/ext/Install.java
+java -cp "$DUCKJAR:/tmp/ext" Install
+ls -R /root/.duckdb/extensions
+SH
+
+# ---- runtime stage: glibc base with the C++/zlib libs the DuckDB .so needs ----
+FROM debian:12-slim AS runtime
+LABEL org.opencontainers.image.title="dazzleduck ducklake-compactor (native)"
+COPY --from=build /src/dazzleduck-sql-ducklake-compactor/target/compactor /usr/local/bin/compactor
+# Pre-installed DuckDB extensions (arrow, ducklake) so the compactor loads them without network.
+COPY --from=build /root/.duckdb /root/.duckdb
+# /health HTTP server.
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/compactor"]
