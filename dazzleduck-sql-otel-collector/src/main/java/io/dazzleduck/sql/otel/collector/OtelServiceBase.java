@@ -82,6 +82,7 @@ class OtelServiceBase implements Closeable {
                     ingestionConfig.maxBatches(),
                     ingestionConfig.maxPendingWrite(),
                     ingestionConfig.maxDelay(),
+                    ingestionConfig.parquetCompression(),
                     handler,
                     flushScheduler, Clock.systemUTC());
             metrics.registerQueue(id, queue);
