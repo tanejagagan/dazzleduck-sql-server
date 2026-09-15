@@ -3,6 +3,7 @@ package io.dazzleduck.sql.commons;
 import io.minio.MinioClient;
 import org.testcontainers.containers.MinIOContainer;
 import org.testcontainers.containers.Network;
+import org.testcontainers.utility.DockerImageName;
 
 import java.net.URI;
 import java.util.Map;
@@ -25,7 +26,12 @@ public class MinioContainerTestUtil {
 
 
     public static MinIOContainer createContainer(String alias, Network network) {
-        return new MinIOContainer("minio/minio:RELEASE.2023-09-04T19-57-37Z")
+        // MinIO deprecated their Docker Hub community images (minio/minio tags are gone), so pull the
+        // same pinned release from quay.io, where MinIO still publishes it. asCompatibleSubstituteFor
+        // keeps MinIOContainer's built-in image check happy with the non-default registry.
+        var image = DockerImageName.parse("quay.io/minio/minio:RELEASE.2023-09-04T19-57-37Z")
+                .asCompatibleSubstituteFor("minio/minio");
+        return new MinIOContainer(image)
                 .withNetwork(network)
                 .withNetworkAliases(alias)
                 .withExposedPorts(MINIO_S3_PORT, MINIO_MGMT_PORT);
