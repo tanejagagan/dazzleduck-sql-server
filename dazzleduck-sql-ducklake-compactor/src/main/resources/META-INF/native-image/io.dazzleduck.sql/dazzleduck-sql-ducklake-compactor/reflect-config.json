@@ -1,0 +1,95 @@
+[
+{
+  "name":"io.dazzleduck.sql.commons.util.CommandLineConfigUtil$Args",
+  "allDeclaredFields":true,
+  "queryAllDeclaredMethods":true
+},
+{
+  "name":"io.dazzleduck.sql.compaction.CompactionIntegrationTest",
+  "allDeclaredFields":true,
+  "allDeclaredClasses":true,
+  "queryAllDeclaredMethods":true,
+  "queryAllPublicMethods":true,
+  "queryAllDeclaredConstructors":true,
+  "methods":[{"name":"<init>","parameterTypes":[] }, {"name":"fileCountDecreasesAfterCompaction","parameterTypes":[] }, {"name":"fileCountGaugesArePopulated","parameterTypes":[] }, {"name":"housekeepingTimersAreRecorded","parameterTypes":[] }, {"name":"initialFileCountIsGreaterThanZero","parameterTypes":[] }, {"name":"majorCompactionTimersAreRecorded","parameterTypes":[] }, {"name":"minorCompactionTimerIsRecorded","parameterTypes":[] }, {"name":"setUp","parameterTypes":[] }, {"name":"tearDown","parameterTypes":[] }]
+},
+{
+  "name":"io.micrometer.core.instrument.distribution.TimeWindowMax",
+  "fields":[{"name":"rotating"}]
+},
+{
+  "name":"java.lang.Thread",
+  "fields":[{"name":"threadLocalRandomProbe"}]
+},
+{
+  "name":"java.security.SecureRandomParameters"
+},
+{
+  "name":"java.sql.SQLException",
+  "fields":[{"name":"next"}]
+},
+{
+  "name":"java.util.concurrent.atomic.AtomicBoolean",
+  "fields":[{"name":"value"}]
+},
+{
+  "name":"java.util.concurrent.atomic.AtomicReference",
+  "fields":[{"name":"value"}]
+},
+{
+  "name":"java.util.concurrent.atomic.Striped64",
+  "fields":[{"name":"base"}, {"name":"cellsBusy"}]
+},
+{
+  "name":"jdk.jfr.FlightRecorder"
+},
+{
+  "name":"org.apache.maven.surefire.junitplatform.JUnitPlatformProvider",
+  "methods":[{"name":"<init>","parameterTypes":["org.apache.maven.surefire.api.provider.ProviderParameters"] }]
+},
+{
+  "name":"org.apiguardian.api.API",
+  "queryAllPublicMethods":true
+},
+{
+  "name":"org.duckdb.DuckDBDriver"
+},
+{
+  "name":"org.junit.internal.AssumptionViolatedException"
+},
+{
+  "name":"org.junit.jupiter.api.MethodOrderer$OrderAnnotation",
+  "methods":[{"name":"<init>","parameterTypes":[] }]
+},
+{
+  "name":"org.junit.jupiter.api.Order",
+  "queryAllPublicMethods":true
+},
+{
+  "name":"org.junit.jupiter.api.Test",
+  "queryAllPublicMethods":true
+},
+{
+  "name":"org.junit.jupiter.api.TestMethodOrder",
+  "queryAllPublicMethods":true
+},
+{
+  "name":"org.junit.jupiter.api.io.TempDir",
+  "queryAllPublicMethods":true
+},
+{
+  "name":"org.junit.platform.commons.annotation.Testable",
+  "queryAllPublicMethods":true
+},
+{
+  "name":"org.junit.platform.launcher.LauncherSession"
+},
+{
+  "name":"sun.security.provider.NativePRNG",
+  "methods":[{"name":"<init>","parameterTypes":[] }, {"name":"<init>","parameterTypes":["java.security.SecureRandomParameters"] }]
+},
+{
+  "name":"sun.security.provider.SHA",
+  "methods":[{"name":"<init>","parameterTypes":[] }]
+}
+]

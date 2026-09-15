@@ -1,0 +1,87 @@
+name: Native image CI
+
+# Native builds are slow, so this only runs when native-relevant files change. It validates BOTH
+# architectures (amd64 on ubuntu-latest, arm64 on ubuntu-24.04-arm) — this is where amd64 is proven,
+# since native-image does not cross-compile and the release workflow only runs on a tag.
+on:
+  pull_request:
+    paths:
+      - 'dazzleduck-sql-otel-collector/Dockerfile.native'
+      - 'dazzleduck-sql-otel-collector/pom.xml'
+      - 'dazzleduck-sql-otel-collector/src/main/resources/META-INF/native-image/**'
+      - 'dazzleduck-sql-ducklake-compactor/Dockerfile.native'
+      - 'dazzleduck-sql-ducklake-compactor/pom.xml'
+      - 'dazzleduck-sql-ducklake-compactor/src/main/resources/META-INF/native-image/**'
+      - '.github/workflows/native-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'dazzleduck-sql-otel-collector/Dockerfile.native'
+      - 'dazzleduck-sql-otel-collector/pom.xml'
+      - 'dazzleduck-sql-otel-collector/src/main/resources/META-INF/native-image/**'
+      - 'dazzleduck-sql-ducklake-compactor/Dockerfile.native'
+      - 'dazzleduck-sql-ducklake-compactor/pom.xml'
+      - 'dazzleduck-sql-ducklake-compactor/src/main/resources/META-INF/native-image/**'
+      - '.github/workflows/native-ci.yml'
+
+concurrency:
+  group: native-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  native-build:
+    name: Native ${{ matrix.name }} (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: otel-collector
+            dockerfile: dazzleduck-sql-otel-collector/Dockerfile.native
+            startup: 'gRPC server started on port 4317'
+            arch: amd64
+            runner: ubuntu-latest
+          - name: otel-collector
+            dockerfile: dazzleduck-sql-otel-collector/Dockerfile.native
+            startup: 'gRPC server started on port 4317'
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          - name: compactor
+            dockerfile: dazzleduck-sql-ducklake-compactor/Dockerfile.native
+            startup: 'publishing metrics'
+            arch: amd64
+            runner: ubuntu-latest
+          - name: compactor
+            dockerfile: dazzleduck-sql-ducklake-compactor/Dockerfile.native
+            startup: 'publishing metrics'
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      DOCKER_BUILDKIT: '1'
+      TAG: ${{ matrix.name }}-native:ci-${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Build only — no registry login, no push. This is the amd64 proof.
+      - name: Build native image
+        run: docker build -f "${{ matrix.dockerfile }}" -t "$TAG" .
+
+      # Start the container and wait for its ready line, so a runtime metadata gap (which a
+      # build-only check would miss) fails the PR too.
+      - name: Smoke — container starts
+        run: |
+          set -uo pipefail
+          docker run -d --name smoke "$TAG"
+          ok=no
+          for i in $(seq 1 30); do
+            if docker logs smoke 2>&1 | grep -qF "${{ matrix.startup }}"; then ok=yes; break; fi
+            if [ "$(docker inspect -f '{{.State.Running}}' smoke 2>/dev/null)" != "true" ]; then break; fi
+            sleep 1
+          done
+          echo "--- container logs ---"; docker logs smoke 2>&1 | tail -30
+          docker rm -f smoke >/dev/null 2>&1 || true
+          [ "$ok" = yes ] || { echo "::error::${{ matrix.name }} (${{ matrix.arch }}) did not reach '${{ matrix.startup }}'"; exit 1; }
