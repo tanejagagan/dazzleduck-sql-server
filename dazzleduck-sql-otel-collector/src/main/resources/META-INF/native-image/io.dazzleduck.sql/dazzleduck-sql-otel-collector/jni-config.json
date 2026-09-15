@@ -1,0 +1,277 @@
+[
+{
+  "name":"[B"
+},
+{
+  "name":"[Ljava.lang.String;"
+},
+{
+  "name":"[Lorg.duckdb.DuckDBArray;"
+},
+{
+  "name":"[Lorg.duckdb.DuckDBVector;"
+},
+{
+  "name":"io.dazzleduck.sql.otel.collector.Main",
+  "methods":[{"name":"main","parameterTypes":["java.lang.String[]"] }]
+},
+{
+  "name":"io.grpc.netty.shaded.io.netty.channel.ChannelException"
+},
+{
+  "name":"io.grpc.netty.shaded.io.netty.channel.DefaultFileRegion",
+  "fields":[{"name":"file"}, {"name":"transferred"}]
+},
+{
+  "name":"io.grpc.netty.shaded.io.netty.channel.epoll.LinuxSocket"
+},
+{
+  "name":"io.grpc.netty.shaded.io.netty.channel.epoll.Native"
+},
+{
+  "name":"io.grpc.netty.shaded.io.netty.channel.epoll.NativeDatagramPacketArray$NativeDatagramPacket",
+  "fields":[{"name":"count"}, {"name":"memoryAddress"}, {"name":"recipientAddr"}, {"name":"recipientAddrLen"}, {"name":"recipientPort"}, {"name":"recipientScopeId"}, {"name":"segmentSize"}, {"name":"senderAddr"}, {"name":"senderAddrLen"}, {"name":"senderPort"}, {"name":"senderScopeId"}]
+},
+{
+  "name":"io.grpc.netty.shaded.io.netty.channel.epoll.NativeStaticallyReferencedJniMethods"
+},
+{
+  "name":"io.grpc.netty.shaded.io.netty.channel.unix.Buffer"
+},
+{
+  "name":"io.grpc.netty.shaded.io.netty.channel.unix.DatagramSocketAddress",
+  "methods":[{"name":"<init>","parameterTypes":["byte[]","int","int","int","io.grpc.netty.shaded.io.netty.channel.unix.DatagramSocketAddress"] }]
+},
+{
+  "name":"io.grpc.netty.shaded.io.netty.channel.unix.DomainDatagramSocketAddress",
+  "methods":[{"name":"<init>","parameterTypes":["byte[]","int","io.grpc.netty.shaded.io.netty.channel.unix.DomainDatagramSocketAddress"] }]
+},
+{
+  "name":"io.grpc.netty.shaded.io.netty.channel.unix.ErrorsStaticallyReferencedJniMethods"
+},
+{
+  "name":"io.grpc.netty.shaded.io.netty.channel.unix.FileDescriptor"
+},
+{
+  "name":"io.grpc.netty.shaded.io.netty.channel.unix.LimitsStaticallyReferencedJniMethods"
+},
+{
+  "name":"io.grpc.netty.shaded.io.netty.channel.unix.PeerCredentials",
+  "methods":[{"name":"<init>","parameterTypes":["int","int","int[]"] }]
+},
+{
+  "name":"io.grpc.netty.shaded.io.netty.channel.unix.Socket"
+},
+{
+  "name":"java.io.FileDescriptor",
+  "fields":[{"name":"fd"}]
+},
+{
+  "name":"java.io.IOException"
+},
+{
+  "name":"java.lang.Boolean",
+  "methods":[{"name":"booleanValue","parameterTypes":[] }, {"name":"getBoolean","parameterTypes":["java.lang.String"] }]
+},
+{
+  "name":"java.lang.Byte",
+  "methods":[{"name":"byteValue","parameterTypes":[] }]
+},
+{
+  "name":"java.lang.Double",
+  "methods":[{"name":"doubleValue","parameterTypes":[] }]
+},
+{
+  "name":"java.lang.Float",
+  "methods":[{"name":"floatValue","parameterTypes":[] }]
+},
+{
+  "name":"java.lang.Integer",
+  "methods":[{"name":"intValue","parameterTypes":[] }]
+},
+{
+  "name":"java.lang.Long",
+  "methods":[{"name":"longValue","parameterTypes":[] }]
+},
+{
+  "name":"java.lang.Object",
+  "methods":[{"name":"toString","parameterTypes":[] }]
+},
+{
+  "name":"java.lang.OutOfMemoryError"
+},
+{
+  "name":"java.lang.RuntimeException"
+},
+{
+  "name":"java.lang.Short",
+  "methods":[{"name":"shortValue","parameterTypes":[] }]
+},
+{
+  "name":"java.lang.String",
+  "methods":[{"name":"getBytes","parameterTypes":["java.nio.charset.Charset"] }]
+},
+{
+  "name":"java.lang.Throwable",
+  "methods":[{"name":"getMessage","parameterTypes":[] }]
+},
+{
+  "name":"java.math.BigDecimal",
+  "methods":[{"name":"longValue","parameterTypes":[] }, {"name":"precision","parameterTypes":[] }, {"name":"scale","parameterTypes":[] }, {"name":"scaleByPowerOfTen","parameterTypes":["int"] }, {"name":"toPlainString","parameterTypes":[] }]
+},
+{
+  "name":"java.net.InetSocketAddress",
+  "methods":[{"name":"<init>","parameterTypes":["java.lang.String","int"] }]
+},
+{
+  "name":"java.net.PortUnreachableException"
+},
+{
+  "name":"java.nio.Buffer",
+  "fields":[{"name":"limit"}, {"name":"position"}],
+  "methods":[{"name":"limit","parameterTypes":[] }, {"name":"position","parameterTypes":[] }]
+},
+{
+  "name":"java.nio.ByteBuffer",
+  "methods":[{"name":"order","parameterTypes":["java.nio.ByteOrder"] }]
+},
+{
+  "name":"java.nio.ByteOrder",
+  "methods":[{"name":"nativeOrder","parameterTypes":[] }]
+},
+{
+  "name":"java.nio.CharBuffer",
+  "methods":[{"name":"toString","parameterTypes":[] }]
+},
+{
+  "name":"java.nio.DirectByteBuffer"
+},
+{
+  "name":"java.nio.channels.ClosedChannelException",
+  "methods":[{"name":"<init>","parameterTypes":[] }]
+},
+{
+  "name":"java.nio.charset.Charset",
+  "methods":[{"name":"decode","parameterTypes":["java.nio.ByteBuffer"] }]
+},
+{
+  "name":"java.nio.charset.StandardCharsets",
+  "fields":[{"name":"UTF_8"}]
+},
+{
+  "name":"java.sql.Array",
+  "methods":[{"name":"getArray","parameterTypes":[] }, {"name":"getBaseTypeName","parameterTypes":[] }]
+},
+{
+  "name":"java.sql.SQLException",
+  "methods":[{"name":"<init>","parameterTypes":["java.lang.String"] }]
+},
+{
+  "name":"java.sql.SQLTimeoutException"
+},
+{
+  "name":"java.sql.Struct",
+  "methods":[{"name":"getAttributes","parameterTypes":[] }, {"name":"getSQLTypeName","parameterTypes":[] }]
+},
+{
+  "name":"java.util.Iterator",
+  "methods":[{"name":"hasNext","parameterTypes":[] }, {"name":"next","parameterTypes":[] }]
+},
+{
+  "name":"java.util.List",
+  "methods":[{"name":"iterator","parameterTypes":[] }]
+},
+{
+  "name":"java.util.Map",
+  "methods":[{"name":"entrySet","parameterTypes":[] }]
+},
+{
+  "name":"java.util.Map$Entry",
+  "methods":[{"name":"getKey","parameterTypes":[] }, {"name":"getValue","parameterTypes":[] }]
+},
+{
+  "name":"java.util.Set",
+  "methods":[{"name":"iterator","parameterTypes":[] }]
+},
+{
+  "name":"java.util.UUID",
+  "methods":[{"name":"getLeastSignificantBits","parameterTypes":[] }, {"name":"getMostSignificantBits","parameterTypes":[] }]
+},
+{
+  "name":"org.apache.arrow.c.ArrayStreamExporter$ExportedArrayStreamPrivateData",
+  "fields":[{"name":"lastError"}],
+  "methods":[{"name":"getNext","parameterTypes":["long"] }, {"name":"getSchema","parameterTypes":["long"] }]
+},
+{
+  "name":"org.apache.arrow.c.jni.CDataJniException",
+  "methods":[{"name":"<init>","parameterTypes":["int","java.lang.String"] }]
+},
+{
+  "name":"org.apache.arrow.c.jni.PrivateData",
+  "methods":[{"name":"close","parameterTypes":[] }]
+},
+{
+  "name":"org.duckdb.DuckDBArray",
+  "methods":[{"name":"<init>","parameterTypes":["org.duckdb.DuckDBVector","int","int"] }]
+},
+{
+  "name":"org.duckdb.DuckDBDate",
+  "methods":[{"name":"getDaysSinceEpoch","parameterTypes":[] }]
+},
+{
+  "name":"org.duckdb.DuckDBHugeInt",
+  "fields":[{"name":"lower"}, {"name":"upper"}],
+  "methods":[{"name":"toBigDecimal","parameterTypes":["long","long","int"] }, {"name":"toBigInteger","parameterTypes":["long","long"] }]
+},
+{
+  "name":"org.duckdb.DuckDBResultSetMetaData",
+  "methods":[{"name":"<init>","parameterTypes":["int","int","java.lang.String[]","java.lang.String[]","java.lang.String[]","java.lang.String","java.lang.String[]","java.lang.String[]"] }]
+},
+{
+  "name":"org.duckdb.DuckDBScalarFunctionWrapper",
+  "methods":[{"name":"execute","parameterTypes":["java.nio.ByteBuffer","java.nio.ByteBuffer","java.nio.ByteBuffer"] }]
+},
+{
+  "name":"org.duckdb.DuckDBStruct",
+  "methods":[{"name":"<init>","parameterTypes":["java.lang.String[]","org.duckdb.DuckDBVector[]","int","java.lang.String"] }]
+},
+{
+  "name":"org.duckdb.DuckDBTableFunctionWrapper",
+  "methods":[{"name":"executeBind","parameterTypes":["java.nio.ByteBuffer"] }, {"name":"executeFunction","parameterTypes":["java.nio.ByteBuffer","java.nio.ByteBuffer"] }, {"name":"executeGlobalInit","parameterTypes":["java.nio.ByteBuffer"] }, {"name":"executeLocalInit","parameterTypes":["java.nio.ByteBuffer"] }]
+},
+{
+  "name":"org.duckdb.DuckDBTime"
+},
+{
+  "name":"org.duckdb.DuckDBTimestamp",
+  "methods":[{"name":"getMicrosEpoch","parameterTypes":[] }, {"name":"valueOf","parameterTypes":["java.lang.Object"] }]
+},
+{
+  "name":"org.duckdb.DuckDBTimestampTZ"
+},
+{
+  "name":"org.duckdb.DuckDBVector",
+  "fields":[{"name":"constlen_data"}, {"name":"varlen_data"}],
+  "methods":[{"name":"<init>","parameterTypes":["java.lang.String","int","boolean[]"] }, {"name":"retainConstlenData","parameterTypes":[] }]
+},
+{
+  "name":"org.duckdb.ProfilerPrintFormat",
+  "fields":[{"name":"GRAPHVIZ"}, {"name":"HTML"}, {"name":"JSON"}, {"name":"NO_OUTPUT"}, {"name":"QUERY_TREE"}, {"name":"QUERY_TREE_OPTIMIZER"}]
+},
+{
+  "name":"org.duckdb.QueryProgress",
+  "methods":[{"name":"<init>","parameterTypes":["double","long","long"] }]
+},
+{
+  "name":"org.duckdb.user.DuckDBMap",
+  "methods":[{"name":"getSQLTypeName","parameterTypes":[] }]
+},
+{
+  "name":"sun.management.VMManagementImpl",
+  "fields":[{"name":"compTimeMonitoringSupport"}, {"name":"currentThreadCpuTimeSupport"}, {"name":"objectMonitorUsageSupport"}, {"name":"otherThreadCpuTimeSupport"}, {"name":"remoteDiagnosticCommandsSupport"}, {"name":"synchronizerUsageSupport"}, {"name":"threadAllocatedMemorySupport"}, {"name":"threadContentionMonitoringSupport"}]
+},
+{
+  "name":"sun.nio.ch.FileChannelImpl",
+  "fields":[{"name":"fd"}]
+}
+]

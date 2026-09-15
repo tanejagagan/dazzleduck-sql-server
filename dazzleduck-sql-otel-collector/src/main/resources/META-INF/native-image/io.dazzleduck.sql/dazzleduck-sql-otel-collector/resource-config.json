@@ -1,0 +1,77 @@
+{
+  "resources":{
+  "includes":[{
+    "pattern":"\\QMETA-INF/io.netty.versions.properties\\E"
+  }, {
+    "pattern":"\\QMETA-INF/native/libio_grpc_netty_shaded_netty_transport_native_epoll_aarch_64.so\\E"
+  }, {
+    "pattern":"\\QMETA-INF/services/ch.qos.logback.classic.spi.Configurator\\E"
+  }, {
+    "pattern":"\\QMETA-INF/services/com.sun.net.httpserver.spi.HttpServerProvider\\E"
+  }, {
+    "pattern":"\\QMETA-INF/services/io.grpc.LoadBalancerProvider\\E"
+  }, {
+    "pattern":"\\QMETA-INF/services/io.grpc.ManagedChannelProvider\\E"
+  }, {
+    "pattern":"\\QMETA-INF/services/io.grpc.NameResolverProvider\\E"
+  }, {
+    "pattern":"\\QMETA-INF/services/io.jsonwebtoken.io.Deserializer\\E"
+  }, {
+    "pattern":"\\QMETA-INF/services/io.jsonwebtoken.io.Serializer\\E"
+  }, {
+    "pattern":"\\QMETA-INF/services/java.lang.System$LoggerFinder\\E"
+  }, {
+    "pattern":"\\QMETA-INF/services/java.net.spi.InetAddressResolverProvider\\E"
+  }, {
+    "pattern":"\\QMETA-INF/services/java.net.spi.URLStreamHandlerProvider\\E"
+  }, {
+    "pattern":"\\QMETA-INF/services/java.nio.channels.spi.SelectorProvider\\E"
+  }, {
+    "pattern":"\\QMETA-INF/services/java.sql.Driver\\E"
+  }, {
+    "pattern":"\\QMETA-INF/services/javax.xml.parsers.SAXParserFactory\\E"
+  }, {
+    "pattern":"\\QMETA-INF/services/org.apache.arrow.vector.compression.CompressionCodec$Factory\\E"
+  }, {
+    "pattern":"\\QMETA-INF/services/org.apache.maven.surefire.spi.MasterProcessChannelProcessorFactory\\E"
+  }, {
+    "pattern":"\\QMETA-INF/services/org.junit.platform.engine.TestEngine\\E"
+  }, {
+    "pattern":"\\QMETA-INF/services/org.junit.platform.launcher.TestExecutionListener\\E"
+  }, {
+    "pattern":"\\QMETA-INF/services/org.slf4j.spi.SLF4JServiceProvider\\E"
+  }, {
+    "pattern":"\\Qapplication.conf\\E"
+  }, {
+    "pattern":"\\Qapplication.json\\E"
+  }, {
+    "pattern":"\\Qapplication.properties\\E"
+  }, {
+    "pattern":"\\Qarrow_cdata_jni/aarch_64/libarrow_cdata_jni.so\\E"
+  }, {
+    "pattern":"\\Qduckdb.properties\\E"
+  }, {
+    "pattern":"\\Qjunit-platform.properties\\E"
+  }, {
+    "pattern":"\\Qlogback-test.scmo\\E"
+  }, {
+    "pattern":"\\Qlogback-test.xml\\E"
+  }, {
+    "pattern":"\\Qlogback.scmo\\E"
+  }, {
+    "pattern":"\\Qlogback.xml\\E"
+  }, {
+    "pattern":"\\Qorg/apache/arrow/memory/DefaultAllocationManagerFactory.class\\E"
+  }, {
+    "pattern":"\\Qorg/apache/arrow/memory/netty/DefaultAllocationManagerFactory.class\\E"
+  }, {
+    "pattern":"\\Qorg/apache/arrow/memory/unsafe/DefaultAllocationManagerFactory.class\\E"
+  }, {
+    "pattern":"\\Qreference.conf\\E"
+  }, {
+    "pattern":"java.base:\\Qsun/net/www/content-types.properties\\E"
+  }, {
+    "pattern":"jdk.jfr:\\Qjdk/jfr/internal/types/metadata.bin\\E"
+  }]},
+  "bundles":[]
+}

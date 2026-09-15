@@ -148,6 +148,75 @@ jobs:
             done
           done
 
+  # The GraalVM native images are ADDITIONAL artifacts — the jib images above stay the default.
+  # They run in their own jobs because native-image does not cross-build the way jib does: it
+  # produces a binary for the runner's own architecture. So each (image, arch) builds on a runner of
+  # that arch; the reachability metadata is arch-independent and the arch-specific DuckDB .so is
+  # selected by TARGETARCH in the Dockerfile. These jobs are intentionally NOT in github-release's
+  # needs, so a native build problem never blocks the core (jib + Central) release.
+  publish-native-image:
+    name: Native ${{ matrix.image }} (${{ matrix.arch }})
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: dazzleduck/dazzleduck-otel-collector-native
+            dockerfile: dazzleduck-sql-otel-collector/Dockerfile.native
+            arch: amd64
+            runner: ubuntu-latest
+          - image: dazzleduck/dazzleduck-otel-collector-native
+            dockerfile: dazzleduck-sql-otel-collector/Dockerfile.native
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+      DOCKER_BUILDKIT: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      # Only needed to push; the native Dockerfile's base images (GraalVM, debian-slim) are public.
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.image }}:${{ env.VERSION }}-${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          docker build -f "${{ matrix.dockerfile }}" \
+            -t "${{ matrix.image }}:$VERSION-${{ matrix.arch }}" .
+          docker push "${{ matrix.image }}:$VERSION-${{ matrix.arch }}"
+
+  # Stitch the per-arch native images into multi-arch manifests that :$VERSION and :latest point at,
+  # exactly like the jib images above.
+  publish-native-manifest:
+    name: Native multi-arch manifests
+    needs: [verify, publish-native-image]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+    steps:
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Create manifests
+        run: |
+          set -euo pipefail
+          for repo in dazzleduck/dazzleduck-otel-collector-native; do
+            for tag in "$VERSION" latest; do
+              docker buildx imagetools create -t "docker.io/$repo:$tag" \
+                "docker.io/$repo:$VERSION-amd64" \
+                "docker.io/$repo:$VERSION-arm64"
+            done
+          done
+
   # Central coordinates are immutable: once a version is published it can never be
   # replaced or withdrawn. This runs only after the tag/pom cross-check in `verify`.
   publish-central:
