@@ -3,6 +3,18 @@
   "name":"android.os.Build$VERSION"
 },
 {
+  "name":"ch.qos.logback.classic.BasicConfigurator",
+  "methods":[{"name":"<init>","parameterTypes":[] }]
+},
+{
+  "name":"ch.qos.logback.classic.joran.SerializedModelConfigurator",
+  "methods":[{"name":"<init>","parameterTypes":[] }]
+},
+{
+  "name":"ch.qos.logback.classic.util.DefaultJoranConfigurator",
+  "methods":[{"name":"<init>","parameterTypes":[] }]
+},
+{
   "name":"com.fasterxml.jackson.core.JsonFactory"
 },
 {
@@ -31,6 +43,12 @@
   "name":"io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdk"
 },
 {
+  "name":"java.io.FilePermission"
+},
+{
+  "name":"java.lang.RuntimePermission"
+},
+{
   "name":"java.lang.String",
   "fields":[{"name":"coder"}, {"name":"value"}]
 },
@@ -39,11 +57,30 @@
   "fields":[{"name":"threadLocalRandomProbe"}]
 },
 {
+  "name":"java.net.NetPermission"
+},
+{
+  "name":"java.net.SocketPermission"
+},
+{
+  "name":"java.net.URLPermission",
+  "methods":[{"name":"<init>","parameterTypes":["java.lang.String","java.lang.String"] }]
+},
+{
+  "name":"java.security.AllPermission"
+},
+{
   "name":"java.security.SecureRandomParameters"
+},
+{
+  "name":"java.security.SecurityPermission"
 },
 {
   "name":"java.sql.SQLException",
   "fields":[{"name":"next"}]
+},
+{
+  "name":"java.util.PropertyPermission"
 },
 {
   "name":"java.util.concurrent.atomic.AtomicBoolean",
@@ -62,6 +99,9 @@
 {
   "name":"java.util.concurrent.atomic.Striped64",
   "fields":[{"name":"base"}, {"name":"cellsBusy"}]
+},
+{
+  "name":"javax.smartcardio.CardPermission"
 },
 {
   "name":"jdk.jfr.FlightRecorder"

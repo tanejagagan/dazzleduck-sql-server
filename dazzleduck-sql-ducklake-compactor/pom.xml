@@ -21,6 +21,7 @@
         <!-- Pinned pair: instrumentation 2.16.0-alpha targets OpenTelemetry API 1.50.0. -->
         <otel.version>1.50.0</otel.version>
         <otel.instrumentation.version>2.16.0-alpha</otel.instrumentation.version>
+        <logback.version>1.5.15</logback.version>
         <!-- DuckDB native lib to bundle in the native image (amd64|arm64). Override per target arch:
              the Dockerfile passes -Dduckdb.native.arch=$TARGETARCH. -->
         <duckdb.native.arch>arm64</duckdb.native.arch>
@@ -58,6 +59,14 @@
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-core</artifactId>
             <version>1.12.7</version>
+        </dependency>
+
+        <!-- SLF4J logging backend. Without a provider on the runtime classpath SLF4J falls back to a
+             NOP logger, so the service logs nothing (in the jar image and the native image alike). -->
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <version>${logback.version}</version>
         </dependency>
 
         <!-- OTLP metric export to the collector's gRPC receiver. The gRPC framing comes from the
