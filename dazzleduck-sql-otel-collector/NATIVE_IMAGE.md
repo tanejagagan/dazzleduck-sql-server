@@ -27,9 +27,15 @@ server on 4317 in ~2 s**, both directly and inside a container.
 - **linux/arm64 only** so far (bundled DuckDB `.so` + extensions are arm64); an amd64 image needs
   its own agent capture and extension install.
 
+CI publishes the arm64 native image on release: `release.yml` has a `publish-native-image` job on an
+arm64 runner that builds `Dockerfile.native` and pushes `dazzleduck/dazzleduck-otel-collector-native`
+(`:$VERSION-arm64`, `:$VERSION`, `:latest`). It is an additional artifact and does not gate the
+core (jib + Central) release.
+
 Still open: a true black-box OTLP smoke (external client sends an export with a JWT carrying the
 `x-dd-ingestion-queue` claim → assert Parquet/DuckLake rows); `-H:+StripDebugInfo` + tailored base
-for size; amd64; JFR/Arrow-reflection cleanup; CI. See the plan below.
+for size; **amd64** (its own metadata capture + an amd64 runner, then a multi-arch manifest over
+`:$VERSION`); JFR/Arrow-reflection cleanup. See the plan below.
 
 ## Feasibility — proven by a spike
 
