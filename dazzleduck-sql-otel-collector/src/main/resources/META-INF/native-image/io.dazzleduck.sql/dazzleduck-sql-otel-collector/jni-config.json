@@ -6,6 +6,12 @@
   "name":"[Ljava.lang.String;"
 },
 {
+  "name":"[Lorg.duckdb.DuckDBArray;"
+},
+{
+  "name":"[Lorg.duckdb.DuckDBVector;"
+},
+{
   "name":"io.dazzleduck.sql.otel.collector.Main",
   "methods":[{"name":"main","parameterTypes":["java.lang.String[]"] }]
 },
@@ -157,7 +163,8 @@
   "methods":[{"name":"getArray","parameterTypes":[] }, {"name":"getBaseTypeName","parameterTypes":[] }]
 },
 {
-  "name":"java.sql.SQLException"
+  "name":"java.sql.SQLException",
+  "methods":[{"name":"<init>","parameterTypes":["java.lang.String"] }]
 },
 {
   "name":"java.sql.SQLTimeoutException"
@@ -189,6 +196,19 @@
 {
   "name":"java.util.UUID",
   "methods":[{"name":"getLeastSignificantBits","parameterTypes":[] }, {"name":"getMostSignificantBits","parameterTypes":[] }]
+},
+{
+  "name":"org.apache.arrow.c.ArrayStreamExporter$ExportedArrayStreamPrivateData",
+  "fields":[{"name":"lastError"}],
+  "methods":[{"name":"getNext","parameterTypes":["long"] }, {"name":"getSchema","parameterTypes":["long"] }]
+},
+{
+  "name":"org.apache.arrow.c.jni.CDataJniException",
+  "methods":[{"name":"<init>","parameterTypes":["int","java.lang.String"] }]
+},
+{
+  "name":"org.apache.arrow.c.jni.PrivateData",
+  "methods":[{"name":"close","parameterTypes":[] }]
 },
 {
   "name":"org.duckdb.DuckDBArray",
@@ -245,6 +265,10 @@
 {
   "name":"org.duckdb.user.DuckDBMap",
   "methods":[{"name":"getSQLTypeName","parameterTypes":[] }]
+},
+{
+  "name":"sun.management.VMManagementImpl",
+  "fields":[{"name":"compTimeMonitoringSupport"}, {"name":"currentThreadCpuTimeSupport"}, {"name":"objectMonitorUsageSupport"}, {"name":"otherThreadCpuTimeSupport"}, {"name":"remoteDiagnosticCommandsSupport"}, {"name":"synchronizerUsageSupport"}, {"name":"threadAllocatedMemorySupport"}, {"name":"threadContentionMonitoringSupport"}]
 },
 {
   "name":"sun.nio.ch.FileChannelImpl",
