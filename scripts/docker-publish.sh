@@ -10,6 +10,19 @@
 #
 # Module aliases: runtime, compactor, otel-collector, scrapper
 #
+# Native images (GraalVM) are also built for the modules that have a Dockerfile.native
+# (otel-collector, compactor). Unlike jib, native-image does NOT cross-compile, so the host
+# architecture is always built natively as <image>:<version>-<hostarch>. The other architecture is
+# then cross-built via `docker buildx build --platform` under QEMU emulation and pushed directly
+# (buildx --push; it can't load a foreign-arch image into the local daemon). Emulation is slow
+# (compactor ~6 min, otel-collector ~10-15 min on Apple Silicon under load) and memory-hungry, but
+# workable. Skip native entirely with --no-native, or skip just the emulated cross-build (host arch
+# only, as before) with --no-emulate.
+#
+# Native image manifests are built with `docker buildx imagetools create`, not `docker manifest` —
+# buildx --push attaches a provenance attestation, turning each arch tag into an OCI image index
+# rather than a plain manifest, which `docker manifest create` does not flatten correctly.
+#
 # Override version:
 #   VERSION=0.2.9 ./scripts/docker-publish.sh
 
@@ -23,6 +36,8 @@ LOCAL=false
 SKIP_BUILD=false
 SINGLE_ARCH=""
 MODULE_FILTER=""
+NO_NATIVE=false
+NO_EMULATE=false
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -30,9 +45,18 @@ while [[ $# -gt 0 ]]; do
     --skip-build)  SKIP_BUILD=true; shift ;;
     --arch)        SINGLE_ARCH="$2"; shift 2 ;;
     --module)      MODULE_FILTER="$2"; shift 2 ;;
+    --no-native)   NO_NATIVE=true; shift ;;
+    --no-emulate)  NO_EMULATE=true; shift ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
+
+# native-image builds for the host arch only; map uname -m to the Docker arch string.
+case "$(uname -m)" in
+  aarch64|arm64) HOST_ARCH=arm64 ;;
+  x86_64|amd64)  HOST_ARCH=amd64 ;;
+  *) HOST_ARCH="$(uname -m)" ;;
+esac
 
 # ── Version ───────────────────────────────────────────────────────────────────
 VERSION="${VERSION:-$(cd "$ROOT" && ./mvnw help:evaluate -Dexpression=project.version -q -DforceStdout 2>/dev/null)}"
@@ -67,6 +91,20 @@ if [[ -n "$MODULE_FILTER" ]]; then
     exit 1
   fi
   MODULES=("${filtered[@]}")
+fi
+
+# ── Native image registry ─────────────────────────────────────────────────────
+# Format: "alias|dockerfile|docker-image". Built via Dockerfile.native for the host arch only.
+NATIVE_IMAGES=(
+  "otel-collector|dazzleduck-sql-otel-collector/Dockerfile.native|dazzleduck/dazzleduck-otel-collector-native"
+  "compactor|dazzleduck-sql-ducklake-compactor/Dockerfile.native|dazzleduck/ducklake-compactor-native"
+)
+if [[ -n "$MODULE_FILTER" ]]; then
+  nfiltered=()
+  for entry in "${NATIVE_IMAGES[@]}"; do
+    [[ "${entry%%|*}" == "$MODULE_FILTER" ]] && nfiltered+=("$entry")
+  done
+  NATIVE_IMAGES=("${nfiltered[@]:-}")
 fi
 
 # ── Install all JARs to local Maven repo ──────────────────────────────────────
@@ -126,6 +164,46 @@ push_manifests() {
   done
 }
 
+build_native() {
+  local dockerfile="$1" image="$2"
+  local other_arch="amd64"
+  [[ "$HOST_ARCH" == "amd64" ]] && other_arch="arm64"
+
+  echo ""
+  echo "▶ native $image ($HOST_ARCH, native build)"
+  DOCKER_BUILDKIT=1 docker build -f "$ROOT/$dockerfile" -t "${image}:${VERSION}-${HOST_ARCH}" "$ROOT"
+  if [[ "$LOCAL" == true ]]; then
+    return
+  fi
+  docker push "${image}:${VERSION}-${HOST_ARCH}"
+
+  local have_other_arch=false
+  if [[ "$NO_EMULATE" == false ]]; then
+    echo ""
+    echo "▶ native $image ($other_arch, emulated via buildx/QEMU — slow, can take 15-20+ minutes)"
+    if docker buildx build --platform "linux/${other_arch}" --provenance=false \
+        -f "$ROOT/$dockerfile" -t "${image}:${VERSION}-${other_arch}" --push "$ROOT"; then
+      have_other_arch=true
+    else
+      echo "  ⚠ emulated $other_arch build failed; publishing $HOST_ARCH only for $image"
+    fi
+  fi
+
+  # latest-<arch> tags, by digest — buildx --push images aren't loaded locally so `docker tag`
+  # doesn't work; imagetools re-tags by referencing the registry digest directly.
+  docker buildx imagetools create -t "${image}:latest-${HOST_ARCH}" "${image}:${VERSION}-${HOST_ARCH}"
+  if [[ "$have_other_arch" == true ]]; then
+    docker buildx imagetools create -t "${image}:latest-${other_arch}" "${image}:${VERSION}-${other_arch}"
+    docker buildx imagetools create -t "${image}:${VERSION}" "${image}:${VERSION}-amd64" "${image}:${VERSION}-arm64"
+    docker buildx imagetools create -t "${image}:latest" "${image}:latest-amd64" "${image}:latest-arm64"
+    echo "  pushed ${image}:${VERSION} and :latest (multi-arch: amd64+arm64)"
+  else
+    docker buildx imagetools create -t "${image}:${VERSION}" "${image}:${VERSION}-${HOST_ARCH}"
+    docker buildx imagetools create -t "${image}:latest" "${image}:latest-${HOST_ARCH}"
+    echo "  pushed ${image}:${VERSION} and :latest ($HOST_ARCH only)"
+  fi
+}
+
 # ── Build and publish ─────────────────────────────────────────────────────────
 ARCHES=("amd64" "arm64")
 [[ -n "$SINGLE_ARCH" ]] && ARCHES=("$SINGLE_ARCH")
@@ -147,6 +225,19 @@ for entry in "${MODULES[@]}"; do
     push_manifests "$image"
   fi
 done
+
+# ── Native images (host arch native, other arch emulated) ─────────────────────
+if [[ "$NO_NATIVE" == false && ${#NATIVE_IMAGES[@]} -gt 0 && -n "${NATIVE_IMAGES[0]}" ]]; then
+  for entry in "${NATIVE_IMAGES[@]}"; do
+    IFS='|' read -r alias dockerfile image <<< "$entry"
+    build_native "$dockerfile" "$image"
+  done
+  if [[ "$NO_EMULATE" == true ]]; then
+    echo ""
+    echo "⚠ --no-emulate: native images pushed for $HOST_ARCH only. Re-run without --no-emulate,"
+    echo "  or build the other arch on a host of that arch, to get a true multi-arch manifest."
+  fi
+fi
 
 echo ""
 echo "✓ Done."

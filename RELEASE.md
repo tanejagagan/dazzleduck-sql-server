@@ -87,6 +87,8 @@ the multi-arch manifests for `X.Y.Z` and `latest`. Useful flags:
 ./scripts/docker-publish.sh --arch arm64           # one architecture, skip manifests
 ./scripts/docker-publish.sh --module compactor     # one module only
 ./scripts/docker-publish.sh --skip-build           # manifests only, no Jib
+./scripts/docker-publish.sh --no-native            # skip the GraalVM native images
+./scripts/docker-publish.sh --no-emulate           # native: host arch only, skip the emulated cross-build
 VERSION=X.Y.Z ./scripts/docker-publish.sh          # override the detected version
 ```
 
@@ -98,6 +100,15 @@ Images it publishes:
 | `otel-collector` | `dazzleduck-sql-otel-collector` | `dazzleduck/dazzleduck-otel-collector` | amd64, arm64 |
 | `compactor` | `dazzleduck-sql-ducklake-compactor` | `dazzleduck/ducklake-compactor` | amd64, arm64 |
 | `scrapper` | `dazzleduck-sql-scrapper` | `dazzleduck/dazzleduck-sql-scrapper` | single arch, no manifest |
+| `otel-collector` (native) | `dazzleduck-sql-otel-collector` | `dazzleduck/dazzleduck-otel-collector-native` | amd64, arm64 |
+| `compactor` (native) | `dazzleduck-sql-ducklake-compactor` | `dazzleduck/ducklake-compactor-native` | amd64, arm64 |
+
+The native images build the host architecture natively (GraalVM `native-image` does not cross-compile)
+and cross-build the other architecture via `docker buildx build --platform` under QEMU emulation,
+which is slow (roughly 6 minutes for the compactor, 10-15 minutes for the otel-collector, on Apple
+Silicon) and memory-hungry, but works within Docker Desktop's default resource limits. Verify with
+`docker buildx imagetools inspect`, not `docker manifest inspect` — the emulated build is pushed via
+`buildx`, which wraps it in an OCI image index that `docker manifest` does not always render fully.
 
 Then verify each published manifest reports both platforms:
 
