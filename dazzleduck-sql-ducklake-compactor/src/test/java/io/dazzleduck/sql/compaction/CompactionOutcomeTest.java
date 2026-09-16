@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -25,7 +26,11 @@ class CompactionOutcomeTest {
             512 * 1024L,
             10 * 1024 * 1024L,
             Duration.ofSeconds(5),
-            0);
+            0,
+            Duration.ofMinutes(2),
+            Duration.ofMinutes(30),
+            false,
+            Map.of());
 
     // JUnit builds a fresh test instance per method, so these are per-test state.
     private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
@@ -110,6 +115,38 @@ class CompactionOutcomeTest {
             CompactionStats.DatabaseStats ds = service.getStats().databases().get(DB);
             assertNotNull(ds.nextExecutionTime(),
                     "a failing database is still scheduled, so next execution must not be null");
+        }
+    }
+
+    @Test
+    void anIdleTimeoutShapedFailureDoesNotDestabilizeTheCycleEvenWhenEscalationItselfFails() {
+        // Escalation is configured but the connection string is fake/unreachable, so the DETACH/
+        // re-ATTACH the escalator attempts will itself fail. That failure must be swallowed inside
+        // the cycle's own catch block — it must not additionally throw, double-count the failure,
+        // or otherwise change the existing failure-handling behavior.
+        CompactionConfig adaptiveConfig = new CompactionConfig(
+                CONFIG.databases(), CONFIG.minorCompactionFrequency(), CONFIG.majorCompactionFrequency(),
+                CONFIG.housekeepingFrequency(), CONFIG.minorCompactionMaxSize(), CONFIG.majorCompactionMaxSize(),
+                CONFIG.snapshotRetention(), CONFIG.healthPort(),
+                Duration.ofMinutes(2), Duration.ofMinutes(30), true,
+                Map.of(DB, new PostgresMetadataConfig(DB, "host=unreachable port=1 dbname=x user=x password=x", "(DATA_PATH 'x')")));
+
+        MajorCompactor idleTimeoutFailure = new MajorCompactor() {
+            @Override
+            public void compact(String database) throws Exception {
+                throw new IllegalStateException("terminating connection due to idle-in-transaction timeout");
+            }
+
+            @Override
+            public void housekeep(String database) {
+            }
+        };
+
+        try (CompactionService service = new CompactionService(adaptiveConfig, idleTimeoutFailure, state)) {
+            service.runCompaction(DB);
+
+            assertEquals(1, failures(CycleKind.MAJOR));
+            assertNull(state.getLastSuccessTime(DB));
         }
     }
 

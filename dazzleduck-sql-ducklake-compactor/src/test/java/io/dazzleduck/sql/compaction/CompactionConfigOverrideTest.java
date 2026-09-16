@@ -36,6 +36,9 @@ class CompactionConfigOverrideTest {
             housekeeping_frequency = 5 minutes
             snapshot_retention = 60 minutes
             health_port = 9090
+            idle_in_transaction_timeout = 2 minutes
+            idle_in_transaction_timeout_max = 30 minutes
+            idle_in_transaction_timeout_adaptive = false
             """;
 
     @BeforeEach
@@ -137,6 +140,48 @@ class CompactionConfigOverrideTest {
         assertEquals(Duration.ofSeconds(30), config.minorCompactionFrequency());
         assertEquals(16L * 1024 * 1024, config.minorCompactionMaxSize(), "MiB is binary, MB is not");
         assertEquals(9191, config.healthPort());
+    }
+
+    @Test
+    void idleTimeoutScalarsDefaultOffAndPostgresMetadataDefaultsEmpty() throws Exception {
+        CompactionConfig config = resolve(ConfigFactory.parseString(FILE_CONFIG));
+        assertEquals(Duration.ofMinutes(2), config.idleInTransactionTimeout());
+        assertEquals(Duration.ofMinutes(30), config.idleInTransactionTimeoutMax());
+        assertFalse(config.idleInTransactionTimeoutAdaptive());
+        assertTrue(config.postgresMetadata().isEmpty(),
+                "no postgres_metadata block in the file: escalation must be inert regardless of the flag");
+    }
+
+    @Test
+    void idleTimeoutScalarsAreOverridableFromTheTable() throws Exception {
+        insert("compaction.idle_in_transaction_timeout", "1 minute");
+        insert("compaction.idle_in_transaction_timeout_max", "10 minutes");
+        insert("compaction.idle_in_transaction_timeout_adaptive", "true");
+
+        CompactionConfig config = resolve(withProvider("compaction."));
+        assertEquals(Duration.ofMinutes(1), config.idleInTransactionTimeout());
+        assertEquals(Duration.ofMinutes(10), config.idleInTransactionTimeoutMax());
+        assertTrue(config.idleInTransactionTimeoutAdaptive());
+    }
+
+    @Test
+    void postgresMetadataParsesAsAListKeyedByDatabase() throws Exception {
+        // List-of-objects, matching this repo's existing convention for per-alias override data
+        // (e.g. ingestion_queue_table_mapping) rather than a keyed HOCON map.
+        Config raw = ConfigFactory.parseString(FILE_CONFIG + """
+                postgres_metadata = [
+                  {
+                    database = "mylake"
+                    connection_string = "host=pg port=5432 dbname=ducklake user=duck password=duck"
+                    attach_options = "(DATA_PATH 's3://bucket/data', METADATA_PATH ':memory:')"
+                  }
+                ]
+                """);
+        CompactionConfig config = resolve(raw);
+        PostgresMetadataConfig mylake = config.postgresMetadata().get("mylake");
+        assertNotNull(mylake);
+        assertEquals("host=pg port=5432 dbname=ducklake user=duck password=duck", mylake.connectionString());
+        assertEquals("(DATA_PATH 's3://bucket/data', METADATA_PATH ':memory:')", mylake.attachOptions());
     }
 
     @Test

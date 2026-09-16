@@ -23,10 +23,73 @@ All settings live under the `dazzleduck_sql_compaction` HOCON root in `applicati
 | `housekeeping_frequency` | `5 minutes` | How often to expire snapshots and delete orphaned files |
 | `snapshot_retention` | `15 minutes` | Expire snapshots older than this during housekeeping |
 | `health_port` | `8080` | Port for the `GET /health` endpoint |
+| `idle_in_transaction_timeout` | `2 minutes` | Value used the first time a database's idle timeout is escalated (see below) |
+| `idle_in_transaction_timeout_max` | `30 minutes` | Escalation ceiling; doubles on each further escalation |
+| `idle_in_transaction_timeout_adaptive` | `false` | Global opt-in for idle-timeout escalation |
+| `postgres_metadata` | `[]` | Per-catalog connection info needed to escalate that catalog (see below) |
 | `startup_script_provider` | — | How to load the startup SQL (attach catalogs, load extensions) |
 | `config_provider` | — | Optional: overlay config values read from a table (see below) |
 
 The bundled defaults live in this module's `application.conf` (not `reference.conf`).
+
+### Idle-in-transaction timeout escalation
+
+A long compaction or housekeeping cycle against a Postgres-backed DuckLake catalog holds a Postgres
+metadata transaction open while it writes to object storage. If that write outlives Postgres'
+`idle_in_transaction_session_timeout`, the server kills the connection, the commit fails, the
+already-written Parquet is orphaned, and the next cycle repeats the work.
+
+When `idle_in_transaction_timeout_adaptive = true` and a catalog has a matching `postgres_metadata`
+entry, a detected idle-timeout-shaped failure for that catalog causes the compactor to `DETACH` and
+re-`ATTACH` it with a higher, **connection-scoped** timeout (via libpq's `options=-c
+idle_in_transaction_session_timeout=...`) — never `ALTER DATABASE`, so it never touches the
+database-wide default and needs no special Postgres privileges beyond what the catalog's own
+`ATTACH` already requires. Detection is deliberately conservative (message-substring matching over
+the failure's full cause chain); a failure with no Postgres-specific text anywhere in it will not
+trigger escalation. Escalation state is in-memory only and resets on restart, since nothing durable
+changes in Postgres.
+
+`postgres_metadata` is a list, one entry per catalog that needs escalation:
+
+```hocon
+postgres_metadata = [
+  {
+    database = "mylake"                 # must match an entry in `databases`
+    connection_string = "host=... port=5432 dbname=... user=... password=..."  # libpq key=value,
+                                                                                 # no `options=` key
+                                                                                 # and no `postgres:`
+                                                                                 # prefix (added
+                                                                                 # automatically)
+    attach_options = "(DATA_PATH 's3://bucket/data')"                          # verbatim clause
+                                                                                 # after `AS mylake`
+                                                                                 # — must NOT include
+                                                                                 # METADATA_PATH
+                                                                                 # ':memory:' (below)
+  }
+]
+```
+
+This lives only in `application.conf`/`--conf`, never the `config_provider` table — like
+`databases`, it's connection identity needed to reach the database, not a tunable to adjust at
+runtime.
+
+**The catalog's own startup-script `ATTACH` must use the `ducklake:postgres:...` DSN form**, not
+the bare `ducklake:host=...` form. Verified empirically: without the `postgres:` sub-scheme,
+DuckLake silently falls back to a local file catalog named after the literal connection string
+instead of storing metadata in Postgres at all (zero `ducklake_*` tables ever appear in Postgres,
+and a stray file named after the connection string appears in the working directory). A catalog
+attached the bare way has no real Postgres metadata for escalation to reconnect to — re-ATTACHing
+it here would silently produce a disconnected, empty catalog instead of raising the timeout on the
+real one.
+
+**It must also not use `METADATA_PATH ':memory:'`** — also verified incompatible with a
+same-*process* DETACH/re-ATTACH, which is exactly what escalation does: with it, the re-ATTACH
+loses visibility into the catalog's own tables; the default local metadata cache re-hydrates from
+Postgres correctly. Example of a correctly-shaped ATTACH for an escalation-enabled catalog:
+
+```sql
+ATTACH 'ducklake:postgres:host=... dbname=... user=... password=...' AS mylake (DATA_PATH '...');
+```
 
 ### Startup Script
 

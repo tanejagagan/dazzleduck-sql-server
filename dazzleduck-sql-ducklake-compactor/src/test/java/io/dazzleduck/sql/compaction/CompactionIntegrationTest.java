@@ -11,6 +11,7 @@ import java.nio.file.Path;
 import java.sql.Connection;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -56,7 +57,11 @@ class CompactionIntegrationTest {
                 512 * 1024L,              // 512KB minor max
                 10 * 1024 * 1024L,        // 10MB major max
                 Duration.ofSeconds(5),
-                0                         // 0 = OS-assigned port, health server not used in tests
+                0,                        // 0 = OS-assigned port, health server not used in tests
+                Duration.ofMinutes(2),
+                Duration.ofMinutes(30),
+                false,
+                Map.of()
         );
 
         registry = new SimpleMeterRegistry();

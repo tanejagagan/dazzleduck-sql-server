@@ -10,12 +10,14 @@ import java.sql.ResultSet;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReentrantLock;
 
 public class CompactionService implements Closeable {
 
@@ -32,10 +34,19 @@ public class CompactionService implements Closeable {
     // Tracks when major compaction was last attempted per database
     private final ConcurrentHashMap<String, AtomicLong> lastMajorAttempt = new ConcurrentHashMap<>();
 
+    // Serializes compaction and housekeeping cycles for the SAME database: an idle-timeout
+    // escalation DETACHes/re-ATTACHes a catalog, and DuckDB's catalog namespace is shared across
+    // every duplicated connection off the singleton, so a concurrent query from the other scheduler
+    // against the same catalog could otherwise break mid-flight.
+    private final ConcurrentHashMap<String, ReentrantLock> dbLocks = new ConcurrentHashMap<>();
+
+    private final IdleTimeoutEscalator idleTimeoutEscalator;
+
     public CompactionService(CompactionConfig config, MajorCompactor majorCompactor, CompactionState state) {
         this.config = config;
         this.majorCompactor = majorCompactor;
         this.state = state;
+        this.idleTimeoutEscalator = new IdleTimeoutEscalator(config);
         int dbCount = Math.max(1, config.databases().size());
         this.compactionScheduler = Executors.newScheduledThreadPool(dbCount, r -> {
             Thread t = new Thread(r, "compaction");
@@ -47,7 +58,10 @@ public class CompactionService implements Closeable {
             t.setDaemon(false);
             return t;
         });
-        config.databases().forEach(db -> lastMajorAttempt.put(db, new AtomicLong(System.currentTimeMillis())));
+        config.databases().forEach(db -> {
+            lastMajorAttempt.put(db, new AtomicLong(System.currentTimeMillis()));
+            dbLocks.put(db, new ReentrantLock());
+        });
     }
 
     public void start() {
@@ -85,56 +99,88 @@ public class CompactionService implements Closeable {
     }
 
     void runCompaction(String database) {
-        // Default so the catch below can always attribute a failure to a kind, even if determining
-        // eligibility itself throws. Keeping the whole body inside the try is what prevents a stray
-        // throwable from escaping the scheduled task — scheduleWithFixedDelay silently cancels a task
-        // whose Runnable throws, which would stop this database's compaction forever.
-        CycleKind kind = CycleKind.MINOR;
+        ReentrantLock lock = dbLocks.computeIfAbsent(database, k -> new ReentrantLock());
+        lock.lock();
         try {
-            boolean major = System.currentTimeMillis() - lastMajorAttempt.get(database).get()
-                    >= config.majorCompactionFrequency().toMillis();
-            kind = major ? CycleKind.MAJOR : CycleKind.MINOR;
+            // Default so the catch below can always attribute a failure to a kind, even if determining
+            // eligibility itself throws. Keeping the whole body inside the try is what prevents a stray
+            // throwable from escaping the scheduled task — scheduleWithFixedDelay silently cancels a task
+            // whose Runnable throws, which would stop this database's compaction forever.
+            CycleKind kind = CycleKind.MINOR;
+            try {
+                boolean major = System.currentTimeMillis() - lastMajorAttempt.get(database).get()
+                        >= config.majorCompactionFrequency().toMillis();
+                kind = major ? CycleKind.MAJOR : CycleKind.MINOR;
 
-            // Stamp the attempt before running it: a major that throws must not become eligible again
-            // on the next minor tick, or a persistent failure turns into a retry storm.
-            if (major) {
-                lastMajorAttempt.get(database).set(System.currentTimeMillis());
-            }
+                // Stamp the attempt before running it: a major that throws must not become eligible again
+                // on the next minor tick, or a persistent failure turns into a retry storm.
+                if (major) {
+                    lastMajorAttempt.get(database).set(System.currentTimeMillis());
+                }
 
-            OptionalLong filesBefore = queryTotalFiles(database);
-            if (major) {
-                majorCompactor.compact(database);
-                logger.info("Major compaction completed for {}", database);
-                state.incrementMajor(database);
-            } else {
-                runMinor(database);
-                state.incrementMinor(database);
+                OptionalLong filesBefore = queryTotalFiles(database);
+                if (major) {
+                    majorCompactor.compact(database);
+                    logger.info("Major compaction completed for {}", database);
+                    state.incrementMajor(database);
+                } else {
+                    runMinor(database);
+                    state.incrementMinor(database);
+                }
+                OptionalLong filesAfter = updateFileCounts(database);
+                // Only record a delta when both reads succeeded; a failed metadata read must not be
+                // treated as "zero files" or the cumulative counter is permanently inflated.
+                if (filesBefore.isPresent() && filesAfter.isPresent()) {
+                    state.addFilesCompacted(database, filesBefore.getAsLong() - filesAfter.getAsLong());
+                }
+                state.recordSuccess(database);
+            } catch (Throwable t) {
+                state.recordFailure(database, kind);
+                logger.error("{} compaction cycle failed for {} — scheduler will continue",
+                        kind.tag(), database, t);
+                maybeEscalateIdleTimeout(database, t);
+            } finally {
+                // Stamp every cycle's completion, success or failure, so /health can report when the
+                // fixed-delay scheduler will run this database again.
+                state.recordRunCompleted(database);
             }
-            OptionalLong filesAfter = updateFileCounts(database);
-            // Only record a delta when both reads succeeded; a failed metadata read must not be
-            // treated as "zero files" or the cumulative counter is permanently inflated.
-            if (filesBefore.isPresent() && filesAfter.isPresent()) {
-                state.addFilesCompacted(database, filesBefore.getAsLong() - filesAfter.getAsLong());
-            }
-            state.recordSuccess(database);
-        } catch (Throwable t) {
-            state.recordFailure(database, kind);
-            logger.error("{} compaction cycle failed for {} — scheduler will continue",
-                    kind.tag(), database, t);
         } finally {
-            // Stamp every cycle's completion, success or failure, so /health can report when the
-            // fixed-delay scheduler will run this database again.
-            state.recordRunCompleted(database);
+            lock.unlock();
         }
     }
 
     void runHousekeeping(String database) {
+        ReentrantLock lock = dbLocks.computeIfAbsent(database, k -> new ReentrantLock());
+        lock.lock();
         try {
             majorCompactor.housekeep(database);
             logger.info("Housekeeping completed for {}", database);
         } catch (Throwable t) {
             state.recordFailure(database, CycleKind.HOUSEKEEPING);
             logger.error("Unexpected error in housekeeping cycle for {} — scheduler will continue", database, t);
+            maybeEscalateIdleTimeout(database, t);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * Runs the DETACH/re-ATTACH built by {@link IdleTimeoutEscalator}, if this failure looks
+     * idle-timeout-shaped and the database is configured for it. A failure in the reattach itself
+     * is logged and swallowed, never rethrown — the caller is already inside a catch block whose
+     * job is to let the scheduler continue, and the in-memory escalation counter has already
+     * advanced, so the next matching failure will simply try to escalate again.
+     */
+    private void maybeEscalateIdleTimeout(String database, Throwable failure) {
+        Optional<String> script = idleTimeoutEscalator.reattachScriptIfEscalationNeeded(database, failure);
+        if (script.isEmpty()) {
+            return;
+        }
+        try {
+            ConnectionPool.executeOnSingleton(script.get());
+            logger.warn("Escalated idle_in_transaction_session_timeout for {} after a matching failure", database);
+        } catch (Throwable reattachFailure) {
+            logger.error("Failed to escalate idle_in_transaction_session_timeout for {}", database, reattachFailure);
         }
     }
 
