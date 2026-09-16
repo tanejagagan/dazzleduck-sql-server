@@ -5,23 +5,18 @@ import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.commons.util.CommandLineConfigUtil;
 
 import java.time.Duration;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 public record CompactionConfig(
         List<String> databases,
-        Duration minorCompactionFrequency,
-        Duration majorCompactionFrequency,
+        List<CompactionTier> tiers,
         Duration housekeepingFrequency,
-        long minorCompactionMaxSize,
-        long minorCompactionMaxFiles,
-        long majorCompactionMaxSize,
-        long majorCompactionMaxFiles,
         Duration snapshotRetention,
-        int healthPort,
-        boolean minorCompactionEnabled,
-        List<String> minorConnectionSettings,
-        boolean majorCompactionEnabled,
-        List<String> majorConnectionSettings
+        List<String> housekeepingConnectionSettings,
+        int healthPort
 ) {
     private static final String CONFIG_PATH = "dazzleduck_sql_compaction";
 
@@ -39,37 +34,63 @@ public record CompactionConfig(
     }
 
     static CompactionConfig from(Config c) {
-        long minorMaxSize = c.getBytes("minor_compaction_max_size");
-        long majorMaxSize = c.getBytes("major_compaction_max_size");
-        boolean minorEnabled = c.getBoolean("minor_compaction.enabled");
-        boolean majorEnabled = c.getBoolean("major_compaction.enabled");
-
-        // Minor and major run concurrently with no lock, safe only because they're fenced to
-        // disjoint file-size ranges: minor handles [0, minorMaxSize), major handles
-        // [minorMaxSize, majorMaxSize) via min_file_size/max_file_size. If both are enabled and
-        // this ordering doesn't hold, major's range is empty or inverted — refuse to start rather
-        // than run silently on a config that can never do anything (or, worse, overlap).
-        if (minorEnabled && majorEnabled && majorMaxSize <= minorMaxSize) {
-            throw new IllegalArgumentException(
-                    "major_compaction_max_size (%d) must be greater than minor_compaction_max_size (%d) when both minor and major compaction are enabled"
-                            .formatted(majorMaxSize, minorMaxSize));
-        }
+        List<CompactionTier> tiers = parseTiers(c);
+        validateTiers(tiers);
 
         return new CompactionConfig(
                 c.getStringList("databases"),
-                c.getDuration("minor_compaction_frequency"),
-                c.getDuration("major_compaction_frequency"),
+                tiers,
                 c.getDuration("housekeeping_frequency"),
-                minorMaxSize,
-                c.getLong("minor_compaction_max_files"),
-                majorMaxSize,
-                c.getLong("major_compaction_max_files"),
                 c.getDuration("snapshot_retention"),
-                c.getInt("health_port"),
-                minorEnabled,
-                c.getStringList("minor_compaction.connection_settings"),
-                majorEnabled,
-                c.getStringList("major_compaction.connection_settings")
+                c.getStringList("housekeeping_connection_settings"),
+                c.getInt("health_port")
         );
+    }
+
+    private static List<CompactionTier> parseTiers(Config c) {
+        return c.getConfigList("compaction_tiers").stream()
+                .map(t -> new CompactionTier(
+                        t.getString("name"),
+                        t.getBoolean("enabled"),
+                        t.getDuration("frequency"),
+                        t.getBytes("min_file_size"),
+                        t.getBytes("max_file_size"),
+                        t.getLong("max_compacted_files"),
+                        t.getStringList("connection_settings")))
+                .toList();
+    }
+
+    /**
+     * Tiers run concurrently with no lock between them, safe only because their file-size ranges
+     * never overlap. Refuses to start rather than run silently on a config that could race — the
+     * same "loud failure over silent misconfiguration" philosophy the rest of this config uses.
+     */
+    private static void validateTiers(List<CompactionTier> tiers) {
+        Set<String> names = new HashSet<>();
+        for (CompactionTier tier : tiers) {
+            if (!names.add(tier.name())) {
+                throw new IllegalArgumentException("Duplicate compaction tier name: " + tier.name());
+            }
+            if (tier.enabled() && tier.maxFileSize() <= tier.minFileSize()) {
+                throw new IllegalArgumentException(
+                        "Compaction tier '%s': max_file_size (%d) must be greater than min_file_size (%d)"
+                                .formatted(tier.name(), tier.maxFileSize(), tier.minFileSize()));
+            }
+        }
+
+        List<CompactionTier> enabledSorted = tiers.stream()
+                .filter(CompactionTier::enabled)
+                .sorted(Comparator.comparingLong(CompactionTier::minFileSize))
+                .toList();
+        for (int i = 1; i < enabledSorted.size(); i++) {
+            CompactionTier previous = enabledSorted.get(i - 1);
+            CompactionTier current = enabledSorted.get(i);
+            if (current.minFileSize() < previous.maxFileSize()) {
+                throw new IllegalArgumentException(
+                        "Compaction tiers '%s' [%d, %d) and '%s' [%d, %d) overlap"
+                                .formatted(previous.name(), previous.minFileSize(), previous.maxFileSize(),
+                                        current.name(), current.minFileSize(), current.maxFileSize()));
+            }
+        }
     }
 }

@@ -10,24 +10,22 @@ public record CompactionStats(
 
     /** Compaction counts are successes only; {@code lastSuccessTime} is null until one completes. */
     public record DatabaseStats(
-            long totalMinorCompactions,
-            long totalMajorCompactions,
+            Map<String, Long> tierCompactionCounts,
             long totalFailedCycles,
             long totalFilesCompacted,
             Instant lastSuccessTime,
-            Instant nextExecutionTime,
-            long currentSmallFiles,
-            long currentMediumFiles,
+            Map<String, Instant> nextExecutionTimeByTier,
+            Map<String, Long> currentTierFileCounts,
             long currentTotalFiles) {
 
         /**
-         * Fills in the one field {@link CompactionState} cannot know, so the nine-component
+         * Fills in the one field {@link CompactionState} cannot know, so the seven-component
          * constructor is spelled out in exactly one place.
          */
-        public DatabaseStats withNextExecutionTime(Instant next) {
-            return new DatabaseStats(totalMinorCompactions, totalMajorCompactions, totalFailedCycles,
+        public DatabaseStats withNextExecutionTimeByTier(Map<String, Instant> next) {
+            return new DatabaseStats(tierCompactionCounts, totalFailedCycles,
                     totalFilesCompacted, lastSuccessTime, next,
-                    currentSmallFiles, currentMediumFiles, currentTotalFiles);
+                    currentTierFileCounts, currentTotalFiles);
         }
     }
 

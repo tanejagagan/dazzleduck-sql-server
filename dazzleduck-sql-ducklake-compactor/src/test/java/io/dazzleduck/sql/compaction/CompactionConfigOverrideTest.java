@@ -30,21 +30,28 @@ class CompactionConfigOverrideTest {
     /** The bundled application.conf's shape, as the fallback layer. */
     private static final String FILE_CONFIG = """
             databases = ["mylake"]
-            minor_compaction_frequency = 1 minute
-            major_compaction_frequency = 1 hour
-            minor_compaction_max_size = 8MB
-            minor_compaction_max_files = 1000
-            major_compaction_max_size = 64MB
-            major_compaction_max_files = 1000
-            minor_compaction {
-              enabled = true
-              connection_settings = []
-            }
-            major_compaction {
-              enabled = true
-              connection_settings = []
-            }
+            compaction_tiers = [
+              {
+                name = "minor"
+                enabled = true
+                frequency = 1 minute
+                min_file_size = 0
+                max_file_size = 8MB
+                max_compacted_files = 1000
+                connection_settings = []
+              }
+              {
+                name = "major"
+                enabled = true
+                frequency = 1 hour
+                min_file_size = 8MB
+                max_file_size = 64MB
+                max_compacted_files = 1000
+                connection_settings = []
+              }
+            ]
             housekeeping_frequency = 5 minutes
+            housekeeping_connection_settings = []
             snapshot_retention = 60 minutes
             health_port = 9090
             """;
@@ -87,25 +94,28 @@ class CompactionConfigOverrideTest {
                 """.formatted(TABLE, prefix));
     }
 
+    private static CompactionTier tier(CompactionConfig config, String name) {
+        return config.tiers().stream().filter(t -> t.name().equals(name)).findFirst().orElseThrow();
+    }
+
     @Test
     void withNoProviderTheFileIsAuthoritativeAndNothingChanges() throws Exception {
         CompactionConfig config = resolve(ConfigFactory.parseString(FILE_CONFIG));
         assertEquals(Duration.ofMinutes(60), config.snapshotRetention());
-        assertEquals(8_000_000L, config.minorCompactionMaxSize());
+        assertEquals(8_000_000L, tier(config, "minor").maxFileSize());
         assertEquals(9090, config.healthPort());
     }
 
     @Test
     void tableValuesWinOverTheBakedFile() throws Exception {
         insert("compaction.snapshot_retention", "120 minutes");
-        insert("compaction.major_compaction_max_size", "128MB");
+        insert("compaction.housekeeping_frequency", "10 minutes");
 
         CompactionConfig config = resolve(withProvider("compaction."));
         assertEquals(Duration.ofMinutes(120), config.snapshotRetention(),
                 "the point of the phase: change a compaction setting without a new image");
-        assertEquals(128_000_000L, config.majorCompactionMaxSize());
+        assertEquals(Duration.ofMinutes(10), config.housekeepingFrequency());
         // untouched keys keep the file's values, so adoption is incremental
-        assertEquals(Duration.ofMinutes(1), config.minorCompactionFrequency());
         assertEquals(9090, config.healthPort());
     }
 
@@ -118,7 +128,7 @@ class CompactionConfigOverrideTest {
 
         CompactionConfig config = resolve(withProvider("compaction."));
         assertEquals(Duration.ofMinutes(120), config.snapshotRetention());
-        assertEquals(Duration.ofHours(1), config.majorCompactionFrequency(),
+        assertEquals(Duration.ofMinutes(5), config.housekeepingFrequency(),
                 "a registry shared with other services must not disturb this one");
     }
 
@@ -140,92 +150,112 @@ class CompactionConfigOverrideTest {
     @Test
     void aTypedValueIsParsedByTheServicesOwnAccessor() throws Exception {
         // Values are stored as an operator would have written them in the file; HOCON converts.
-        insert("compaction.minor_compaction_frequency", "30s");
-        insert("compaction.minor_compaction_max_size", "16MiB");
+        insert("compaction.housekeeping_frequency", "30s");
         insert("compaction.health_port", "9191");
 
         CompactionConfig config = resolve(withProvider("compaction."));
-        assertEquals(Duration.ofSeconds(30), config.minorCompactionFrequency());
-        assertEquals(16L * 1024 * 1024, config.minorCompactionMaxSize(), "MiB is binary, MB is not");
+        assertEquals(Duration.ofSeconds(30), config.housekeepingFrequency());
         assertEquals(9191, config.healthPort());
     }
 
     @Test
-    void minorAndMajorEnabledAndConnectionSettingsDefaultFromTheFile() throws Exception {
-        CompactionConfig config = resolve(ConfigFactory.parseString(FILE_CONFIG));
-        assertTrue(config.minorCompactionEnabled());
-        assertTrue(config.majorCompactionEnabled());
-        assertTrue(config.minorConnectionSettings().isEmpty());
-        assertTrue(config.majorConnectionSettings().isEmpty());
-    }
-
-    @Test
-    void connectionSettingsAreReadAsAList() throws Exception {
+    void tiersParseWithAllFieldsAndArbitraryCountIsSupported() throws Exception {
+        // Three tiers, not the usual two, proves this isn't secretly still hardcoded to minor/major.
         Config raw = ConfigFactory.parseString("""
                 databases = ["mylake"]
-                minor_compaction_frequency = 1 minute
-                major_compaction_frequency = 1 hour
-                minor_compaction_max_size = 8MB
-                minor_compaction_max_files = 1000
-                major_compaction_max_size = 64MB
-                major_compaction_max_files = 1000
-                minor_compaction {
-                  enabled = true
-                  connection_settings = ["SET memory_limit='2GB'", "SET threads=2"]
-                }
-                major_compaction {
-                  enabled = true
-                  connection_settings = []
-                }
+                compaction_tiers = [
+                  { name = "tier1", enabled = true,  frequency = 30 seconds, min_file_size = 0,    max_file_size = 1MB,  max_compacted_files = 100, connection_settings = ["SET threads=1"] }
+                  { name = "tier2", enabled = false, frequency = 5 minutes,  min_file_size = 1MB,   max_file_size = 16MB, max_compacted_files = 0,   connection_settings = [] }
+                  { name = "tier3", enabled = true,  frequency = 1 hour,     min_file_size = 16MB,  max_file_size = 1GB,  max_compacted_files = 50,  connection_settings = [] }
+                ]
                 housekeeping_frequency = 5 minutes
+                housekeeping_connection_settings = ["SET memory_limit='4GB'"]
                 snapshot_retention = 60 minutes
                 health_port = 9090
                 """);
         CompactionConfig config = resolve(raw);
-        assertEquals(List.of("SET memory_limit='2GB'", "SET threads=2"), config.minorConnectionSettings());
+
+        assertEquals(3, config.tiers().size());
+        CompactionTier tier1 = tier(config, "tier1");
+        assertTrue(tier1.enabled());
+        assertEquals(Duration.ofSeconds(30), tier1.frequency());
+        assertEquals(0L, tier1.minFileSize());
+        assertEquals(1_000_000L, tier1.maxFileSize());
+        assertEquals(100L, tier1.maxCompactedFiles());
+        assertEquals(List.of("SET threads=1"), tier1.connectionSettings());
+
+        assertFalse(tier(config, "tier2").enabled());
+        assertEquals(List.of("SET memory_limit='4GB'"), config.housekeepingConnectionSettings());
     }
 
-    /** Standalone config so this test controls minor's enabled flag and major's max size directly. */
-    private static Config configWithMajorMaxSizeAndMinorEnabled(String majorMaxSize, boolean minorEnabled) {
-        return ConfigFactory.parseString("""
+    @Test
+    void duplicateTierNamesAreRejected() {
+        Config raw = ConfigFactory.parseString("""
                 databases = ["mylake"]
-                minor_compaction_frequency = 1 minute
-                major_compaction_frequency = 1 hour
-                minor_compaction_max_size = 8MB
-                minor_compaction_max_files = 1000
-                major_compaction_max_size = %s
-                major_compaction_max_files = 1000
-                minor_compaction {
-                  enabled = %s
-                  connection_settings = []
-                }
-                major_compaction {
-                  enabled = true
-                  connection_settings = []
-                }
+                compaction_tiers = [
+                  { name = "minor", enabled = true, frequency = 1 minute, min_file_size = 0,   max_file_size = 8MB,  max_compacted_files = 0, connection_settings = [] }
+                  { name = "minor", enabled = true, frequency = 1 hour,   min_file_size = 8MB,  max_file_size = 64MB, max_compacted_files = 0, connection_settings = [] }
+                ]
                 housekeeping_frequency = 5 minutes
+                housekeeping_connection_settings = []
                 snapshot_retention = 60 minutes
                 health_port = 9090
-                """.formatted(majorMaxSize, minorEnabled));
-    }
-
-    @Test
-    void majorMaxSizeMustExceedMinorMaxSizeWhenBothEnabled() {
-        // minor_compaction_max_size = 8MB > major's 4MB here: major's fenced range [minor_max,
-        // major_max) would be empty/inverted, and minor/major run concurrently with no lock, so this
-        // must refuse to start rather than risk (or just silently waste) an overlapping/empty range.
-        Config raw = configWithMajorMaxSizeAndMinorEnabled("4MB", true);
+                """);
         var e = assertThrows(IllegalArgumentException.class, () -> resolve(raw));
-        assertTrue(e.getMessage().contains("major_compaction_max_size"), e.getMessage());
+        assertTrue(e.getMessage().contains("Duplicate"), e.getMessage());
     }
 
     @Test
-    void majorMaxSizeValidationIsSkippedWhenEitherIsDisabled() throws Exception {
-        // No exception: with minor disabled there's nothing for major's range to overlap.
-        Config raw = configWithMajorMaxSizeAndMinorEnabled("4MB", false);
+    void aTiersMaxFileSizeMustExceedItsOwnMinFileSize() {
+        Config raw = ConfigFactory.parseString("""
+                databases = ["mylake"]
+                compaction_tiers = [
+                  { name = "broken", enabled = true, frequency = 1 minute, min_file_size = 8MB, max_file_size = 4MB, max_compacted_files = 0, connection_settings = [] }
+                ]
+                housekeeping_frequency = 5 minutes
+                housekeeping_connection_settings = []
+                snapshot_retention = 60 minutes
+                health_port = 9090
+                """);
+        var e = assertThrows(IllegalArgumentException.class, () -> resolve(raw));
+        assertTrue(e.getMessage().contains("broken"), e.getMessage());
+    }
+
+    @Test
+    void overlappingEnabledTiersAreRejected() {
+        // minor's range [0, 8MB) overlaps major's [4MB, 64MB) at [4MB, 8MB) — tiers run
+        // concurrently with no lock, so overlap must refuse to start rather than risk a race.
+        Config raw = ConfigFactory.parseString("""
+                databases = ["mylake"]
+                compaction_tiers = [
+                  { name = "minor", enabled = true, frequency = 1 minute, min_file_size = 0,   max_file_size = 8MB,  max_compacted_files = 0, connection_settings = [] }
+                  { name = "major", enabled = true, frequency = 1 hour,   min_file_size = 4MB,  max_file_size = 64MB, max_compacted_files = 0, connection_settings = [] }
+                ]
+                housekeeping_frequency = 5 minutes
+                housekeeping_connection_settings = []
+                snapshot_retention = 60 minutes
+                health_port = 9090
+                """);
+        var e = assertThrows(IllegalArgumentException.class, () -> resolve(raw));
+        assertTrue(e.getMessage().contains("overlap"), e.getMessage());
+    }
+
+    @Test
+    void overlapValidationIsSkippedWhenEitherTierIsDisabled() throws Exception {
+        // No exception: with "major" disabled there's nothing for "minor"'s range to overlap.
+        Config raw = ConfigFactory.parseString("""
+                databases = ["mylake"]
+                compaction_tiers = [
+                  { name = "minor", enabled = true,  frequency = 1 minute, min_file_size = 0,   max_file_size = 8MB,  max_compacted_files = 0, connection_settings = [] }
+                  { name = "major", enabled = false, frequency = 1 hour,   min_file_size = 4MB,  max_file_size = 64MB, max_compacted_files = 0, connection_settings = [] }
+                ]
+                housekeeping_frequency = 5 minutes
+                housekeeping_connection_settings = []
+                snapshot_retention = 60 minutes
+                health_port = 9090
+                """);
         CompactionConfig config = resolve(raw);
-        assertFalse(config.minorCompactionEnabled());
-        assertEquals(4_000_000L, config.majorCompactionMaxSize());
+        assertFalse(tier(config, "major").enabled());
     }
 
     @Test

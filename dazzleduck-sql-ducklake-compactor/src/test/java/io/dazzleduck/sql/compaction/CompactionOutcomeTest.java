@@ -17,63 +17,58 @@ class CompactionOutcomeTest {
 
     private static final String DB = "outcome_test";
 
+    private static final CompactionTier MINOR = new CompactionTier(
+            "minor", true, Duration.ofSeconds(60), 0, 512 * 1024L, 0, List.of());
+    private static final CompactionTier MAJOR = new CompactionTier(
+            "major", true, Duration.ofSeconds(60), 512 * 1024L, 10 * 1024 * 1024L, 0, List.of());
+
     private static final CompactionConfig CONFIG = new CompactionConfig(
             List.of(DB),
+            List.of(MINOR, MAJOR),
             Duration.ofSeconds(60),
-            Duration.ofSeconds(60),
-            Duration.ofSeconds(60),
-            512 * 1024L,
-            0,
-            10 * 1024 * 1024L,
-            0,
             Duration.ofSeconds(5),
-            0,
-            true,
             List.of(),
-            true,
-            List.of());
+            0);
 
     // JUnit builds a fresh test instance per method, so these are per-test state.
     private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
-    private final CompactionState state = new CompactionState(registry, List.of(DB));
+    private final CompactionState state = new CompactionState(registry, List.of(DB), List.of("minor", "major"));
 
     /**
-     * Neither method touches the database. The surrounding cycle still queries DuckLake metadata for
-     * the file counts, but that catalog is not attached here and those queries swallow their own
+     * Never touches the database. The surrounding cycle still queries DuckLake metadata for the
+     * file counts, but that catalog is not attached here and those queries swallow their own
      * errors, so the logged catalog failures during this test are expected.
      */
-    private static MajorCompactor compactor(boolean fail) {
-        return new MajorCompactor() {
-            @Override
-            public void compact(String database) throws Exception {
-                if (fail) throw new IllegalStateException("major compaction blew up");
-            }
-
-            @Override
-            public void housekeep(String database) throws Exception {
-                if (fail) throw new IllegalStateException("housekeeping blew up");
-            }
+    private static TierCompactor compactor(boolean fail) {
+        return (database, tier) -> {
+            if (fail) throw new IllegalStateException("tier '" + tier.name() + "' compaction blew up");
         };
     }
 
-    private double failures(CycleKind kind) {
-        return registry.get("ducklake.compaction.failures")
-                .tag("database", DB).tag("type", kind.tag()).functionCounter().count();
+    private static Housekeeper housekeeper(boolean fail) {
+        return database -> {
+            if (fail) throw new IllegalStateException("housekeeping blew up");
+        };
     }
 
-    private double successes(String metric) {
-        return registry.get(metric).tag("database", DB).functionCounter().count();
+    private double failures(String kind) {
+        return registry.get("ducklake.compaction.failures")
+                .tag("database", DB).tag("type", kind).functionCounter().count();
+    }
+
+    private double successes(String tierName) {
+        return registry.get("ducklake.compaction.cycles")
+                .tag("database", DB).tag("tier", tierName).functionCounter().count();
     }
 
     @Test
-    void failedMajorCycleCountsAsFailureAndLeavesLastSuccessUnset() {
-        try (CompactionService service = new CompactionService(CONFIG, compactor(true), state)) {
-            service.runMajor(DB);
+    void failedTierCycleCountsAsFailureAndLeavesLastSuccessUnset() {
+        try (CompactionService service = new CompactionService(CONFIG, null, compactor(true), housekeeper(false), state)) {
+            service.runTier(DB, MAJOR);
 
-            assertEquals(1, failures(CycleKind.MAJOR), "the failed cycle should be counted");
-            assertEquals(0, successes("ducklake.compaction.major"),
-                    "a cycle that threw must not count as a successful major compaction");
-            assertEquals(0, successes("ducklake.compaction.minor"));
+            assertEquals(1, failures("major"), "the failed cycle should be counted");
+            assertEquals(0, successes("major"), "a cycle that threw must not count as a successful compaction");
+            assertEquals(0, successes("minor"));
             assertNull(state.getLastSuccessTime(DB),
                     "an alert on last success must not be satisfied by a failed cycle");
             assertEquals(1, state.getFailureCount(DB));
@@ -81,27 +76,24 @@ class CompactionOutcomeTest {
     }
 
     @Test
-    void failedMinorCycleCountsAsFailureAndLeavesLastSuccessUnset() {
-        // Unlike major, minor never goes through the injectable MajorCompactor — it builds its own
-        // ducklake_merge_adjacent_files call directly. DB is never attached in this unit test class
-        // (see the class javadoc), so this fails naturally without needing a fake to throw.
-        try (CompactionService service = new CompactionService(CONFIG, compactor(false), state)) {
-            service.runMinor(DB);
+    void differentTiersFailIndependently() {
+        try (CompactionService service = new CompactionService(CONFIG, null, compactor(true), housekeeper(false), state)) {
+            service.runTier(DB, MINOR);
 
-            assertEquals(1, failures(CycleKind.MINOR), "the failed cycle should be counted");
-            assertEquals(0, successes("ducklake.compaction.minor"));
+            assertEquals(1, failures("minor"), "the failed cycle should be counted");
+            assertEquals(0, failures("major"), "a different tier's failure must not be blamed on this one");
             assertNull(state.getLastSuccessTime(DB));
             assertEquals(1, state.getFailureCount(DB));
         }
     }
 
     @Test
-    void failedHousekeepingIsAttributedToItsOwnCycleKind() {
-        try (CompactionService service = new CompactionService(CONFIG, compactor(true), state)) {
+    void failedHousekeepingIsAttributedToItsOwnKind() {
+        try (CompactionService service = new CompactionService(CONFIG, null, compactor(false), housekeeper(true), state)) {
             service.runHousekeeping(DB);
 
-            assertEquals(1, failures(CycleKind.HOUSEKEEPING));
-            assertEquals(0, failures(CycleKind.MAJOR), "housekeeping must not be blamed on major");
+            assertEquals(1, failures(CompactionState.HOUSEKEEPING_KIND));
+            assertEquals(0, failures("major"), "housekeeping must not be blamed on a tier");
             assertNull(state.getLastSuccessTime(DB),
                     "housekeeping is not a compaction cycle and does not mark success");
         }
@@ -109,10 +101,10 @@ class CompactionOutcomeTest {
 
     @Test
     void successfulCycleCountsAndStampsLastSuccess() {
-        try (CompactionService service = new CompactionService(CONFIG, compactor(false), state)) {
-            service.runMajor(DB);
+        try (CompactionService service = new CompactionService(CONFIG, null, compactor(false), housekeeper(false), state)) {
+            service.runTier(DB, MAJOR);
 
-            assertEquals(1, successes("ducklake.compaction.major"));
+            assertEquals(1, successes("major"));
             assertEquals(0, state.getFailureCount(DB));
             assertNotNull(state.getLastSuccessTime(DB));
         }
@@ -122,49 +114,43 @@ class CompactionOutcomeTest {
     void nextExecutionTimeIsReportedAfterAFailedCycle() {
         // A database whose cycles fail is still scheduled to run again, so /health must report a
         // next-execution time rather than null just because there has been no success.
-        try (CompactionService service = new CompactionService(CONFIG, compactor(true), state)) {
-            service.runMajor(DB);
+        try (CompactionService service = new CompactionService(CONFIG, null, compactor(true), housekeeper(false), state)) {
+            service.runTier(DB, MAJOR);
 
             assertNull(state.getLastSuccessTime(DB), "the failed cycle leaves last success unset");
             assertNotNull(state.getLastRunTime(DB), "every cycle stamps its completion time");
 
             CompactionStats.DatabaseStats ds = service.getStats().databases().get(DB);
-            assertNotNull(ds.nextExecutionTime(),
-                    "a failing database is still scheduled, so next execution must not be null");
+            assertNotNull(ds.nextExecutionTimeByTier().get("major"),
+                    "a failing tier is still scheduled, so next execution must not be null");
         }
     }
 
     @Test
-    void nextExecutionTimeFallsBackToMajorFrequencyWhenMinorIsDisabled() {
-        CompactionConfig majorOnlyConfig = new CompactionConfig(
-                CONFIG.databases(), CONFIG.minorCompactionFrequency(), Duration.ofSeconds(30),
-                CONFIG.housekeepingFrequency(), CONFIG.minorCompactionMaxSize(), CONFIG.minorCompactionMaxFiles(),
-                CONFIG.majorCompactionMaxSize(), CONFIG.majorCompactionMaxFiles(), CONFIG.snapshotRetention(),
-                CONFIG.healthPort(), false, CONFIG.minorConnectionSettings(), true, CONFIG.majorConnectionSettings());
-
-        try (CompactionService service = new CompactionService(majorOnlyConfig, compactor(true), state)) {
-            service.runMajor(DB);
+    void nextExecutionTimeIsPerTierAndOnlyPopulatedForTiersThatHaveRun() {
+        try (CompactionService service = new CompactionService(CONFIG, null, compactor(true), housekeeper(false), state)) {
+            service.runTier(DB, MAJOR);
 
             CompactionStats.DatabaseStats ds = service.getStats().databases().get(DB);
             Instant lastRun = state.getLastRunTime(DB);
-            assertEquals(lastRun.plus(Duration.ofSeconds(30)), ds.nextExecutionTime(),
-                    "with minor disabled, next execution should be derived from major's own frequency");
+            assertEquals(lastRun.plus(MAJOR.frequency()), ds.nextExecutionTimeByTier().get("major"));
+            assertNull(ds.nextExecutionTimeByTier().get("minor"), "minor never ran, so it has no next-execution estimate yet");
         }
     }
 
     @Test
-    void nextExecutionTimeIsNullWhenNeitherMinorNorMajorIsEnabled() {
+    void nextExecutionTimeIsEmptyWhenNoTierIsEnabled() {
         CompactionConfig neitherEnabledConfig = new CompactionConfig(
-                CONFIG.databases(), CONFIG.minorCompactionFrequency(), CONFIG.majorCompactionFrequency(),
-                CONFIG.housekeepingFrequency(), CONFIG.minorCompactionMaxSize(), CONFIG.minorCompactionMaxFiles(),
-                CONFIG.majorCompactionMaxSize(), CONFIG.majorCompactionMaxFiles(), CONFIG.snapshotRetention(),
-                CONFIG.healthPort(), false, CONFIG.minorConnectionSettings(), false, CONFIG.majorConnectionSettings());
+                CONFIG.databases(),
+                List.of(new CompactionTier("minor", false, MINOR.frequency(), MINOR.minFileSize(), MINOR.maxFileSize(), 0, List.of()),
+                        new CompactionTier("major", false, MAJOR.frequency(), MAJOR.minFileSize(), MAJOR.maxFileSize(), 0, List.of())),
+                CONFIG.housekeepingFrequency(), CONFIG.snapshotRetention(), CONFIG.housekeepingConnectionSettings(), CONFIG.healthPort());
 
-        try (CompactionService service = new CompactionService(neitherEnabledConfig, compactor(true), state)) {
+        try (CompactionService service = new CompactionService(neitherEnabledConfig, null, compactor(true), housekeeper(false), state)) {
             service.runHousekeeping(DB);
 
             CompactionStats.DatabaseStats ds = service.getStats().databases().get(DB);
-            assertNull(ds.nextExecutionTime(), "nothing is scheduled, so there's no next execution to report");
+            assertTrue(ds.nextExecutionTimeByTier().isEmpty(), "nothing is scheduled, so there's no next execution to report");
         }
     }
 

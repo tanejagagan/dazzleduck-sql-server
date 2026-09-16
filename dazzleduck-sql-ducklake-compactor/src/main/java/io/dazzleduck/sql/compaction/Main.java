@@ -7,6 +7,8 @@ import io.dazzleduck.sql.common.StartupScriptProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.List;
+
 public class Main {
 
     private static final Logger logger = LoggerFactory.getLogger(Main.class);
@@ -16,16 +18,24 @@ public class Main {
 
         // The startup script is what ATTACHes the catalog, so it must run before a config provider
         // that reads a table in it. Ordering is the whole trick: file config -> attach -> overlay.
-        executeStartupScript(rawConfig);
+        // Run once here (via the shared commons ConnectionPool, since TableConfigProvider's own table
+        // read depends on it) purely so the config-provider table below can be read; the script text
+        // itself is captured and handed to every raw compaction/housekeeping connection too, each of
+        // which independently re-runs it on its own real DuckDB instance (see RawConnections).
+        String startupScript = readStartupScript(rawConfig);
+        if (startupScript != null) {
+            ConnectionPool.executeOnSingleton(startupScript);
+        }
 
         CompactionConfig config = CompactionConfig.from(withOverrides(rawConfig));
 
         CompactionMetrics metrics = CompactionMetrics.create(rawConfig.getConfig("metrics"));
-        CompactionState state = new CompactionState(metrics.registry(), config.databases());
-        MajorCompactor majorCompactor = new DuckDbMajorCompactor(
-                config.minorCompactionMaxSize(), config.majorCompactionMaxSize(), config.majorCompactionMaxFiles(),
-                config.snapshotRetention(), config.majorConnectionSettings(), state);
-        CompactionService service = new CompactionService(config, majorCompactor, state);
+        List<String> tierNames = config.tiers().stream().map(CompactionTier::name).toList();
+        CompactionState state = new CompactionState(metrics.registry(), config.databases(), tierNames);
+        TierCompactor tierCompactor = new DuckDbTierCompactor(startupScript, state);
+        Housekeeper housekeeper = new DuckLakeHousekeeper(
+                startupScript, config.snapshotRetention(), config.housekeepingConnectionSettings(), state);
+        CompactionService service = new CompactionService(config, startupScript, tierCompactor, housekeeper, state);
         HealthServer healthServer = new HealthServer(config.healthPort(), service::getStats);
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -63,13 +73,10 @@ public class Main {
         return overrides.withFallback(rawConfig);
     }
 
-    private static void executeStartupScript(Config config) throws Exception {
+    /** Returns the configured startup script text, or {@code null} if none is configured. */
+    private static String readStartupScript(Config config) throws Exception {
         StartupScriptProvider provider = StartupScriptProvider.load(config);
         String script = provider.getStartupScript();
-        if (script != null && !script.isBlank()) {
-            logger.info("Executing startup script");
-            ConnectionPool.executeOnSingleton(script);
-            logger.info("Startup script completed");
-        }
+        return (script != null && !script.isBlank()) ? script : null;
     }
 }
