@@ -159,7 +159,16 @@ public class CompactionState {
 
     /** Call at the end of every cycle, success or failure — it drives the next-run estimate. */
     public void recordRunCompleted(String db) {
-        lastRunTimes.computeIfAbsent(db, k -> new AtomicReference<>()).set(Instant.now());
+        recordRunCompleted(db, Instant.now());
+    }
+
+    /**
+     * Same as {@link #recordRunCompleted(String)}, but with a caller-supplied completion instant so
+     * it can be reused consistently elsewhere — e.g. CompactionService also stamps its own
+     * per-cycle-kind (minor/major) last-run tracking with the exact same instant.
+     */
+    public void recordRunCompleted(String db, Instant at) {
+        lastRunTimes.computeIfAbsent(db, k -> new AtomicReference<>()).set(at);
     }
 
     // ── Timer helpers ─────────────────────────────────────────────────────────
