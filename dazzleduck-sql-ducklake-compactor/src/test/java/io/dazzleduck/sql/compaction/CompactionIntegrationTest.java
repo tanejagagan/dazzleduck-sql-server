@@ -51,19 +51,23 @@ class CompactionIntegrationTest {
         config = new CompactionConfig(
                 List.of(CATALOG),
                 Duration.ofSeconds(60),
-                Duration.ofMillis(100),   // short so major fires quickly in tests
+                Duration.ofMillis(100),   // major's own independent cadence, unused since tests call runMajor directly
                 Duration.ofMillis(500),   // housekeeping every 500ms in tests
                 512 * 1024L,              // 512KB minor max
                 0,                        // 0 = unbounded, unchanged behavior for this test
                 10 * 1024 * 1024L,        // 10MB major max
+                0,                        // 0 = unbounded, unchanged behavior for this test
                 Duration.ofSeconds(5),
-                0                         // 0 = OS-assigned port, health server not used in tests
+                0,                        // 0 = OS-assigned port, health server not used in tests
+                true, List.of(),
+                true, List.of()
         );
 
         registry = new SimpleMeterRegistry();
         CompactionState state = new CompactionState(registry, config.databases());
         MajorCompactor majorCompactor = new DuckDbMajorCompactor(
-                config.majorCompactionMaxSize(), config.snapshotRetention(), state);
+                config.minorCompactionMaxSize(), config.majorCompactionMaxSize(), config.majorCompactionMaxFiles(),
+                config.snapshotRetention(), config.majorConnectionSettings(), state);
         service = new CompactionService(config, majorCompactor, state);
     }
 
@@ -88,7 +92,7 @@ class CompactionIntegrationTest {
     @Test
     @Order(2)
     void minorCompactionTimerIsRecorded() {
-        service.runCompaction(CATALOG);
+        service.runMinor(CATALOG);
 
         Timer timer = registry.find("ducklake.compaction.duration")
                 .tag("type", "minor")
@@ -124,9 +128,9 @@ class CompactionIntegrationTest {
     @Test
     @Order(4)
     void majorCompactionTimersAreRecorded() throws Exception {
-        // majorCompactionFrequency = 100ms, so wait for it to be eligible
-        Thread.sleep(200);
-        service.runCompaction(CATALOG);
+        // Minor and major are independently scheduled now, so runMajor fires major directly with no
+        // eligibility wait.
+        service.runMajor(CATALOG);
 
         Timer mergeTimer = registry.find("ducklake.compaction.duration")
                 .tag("type", "major")
@@ -161,9 +165,7 @@ class CompactionIntegrationTest {
                         .formatted(MD_DATABASE),
                 Long.class);
 
-        // Ensure major fires
-        Thread.sleep(200);
-        service.runCompaction(CATALOG);
+        service.runMajor(CATALOG);
 
         long after = ConnectionPool.collectFirst(
                 "SELECT COUNT(*) FROM %s.main.ducklake_data_file WHERE end_snapshot IS NULL"
@@ -171,5 +173,19 @@ class CompactionIntegrationTest {
                 Long.class);
 
         assertTrue(after <= before, "Expected file count to decrease after compaction (%d -> %d)".formatted(before, after));
+    }
+
+    @Test
+    @Order(7)
+    void connectionSettingsAreAppliedBeforeTheMergeCall() throws Exception {
+        // Proves the settings SQL actually runs on the same connection the merge uses, against a
+        // real catalog — a bad/incompatible setting would make ConnectionPool.getConnection(sqls)
+        // throw before the merge even starts.
+        CompactionState state = new CompactionState(new SimpleMeterRegistry(), config.databases());
+        MajorCompactor withSettings = new DuckDbMajorCompactor(
+                config.minorCompactionMaxSize(), config.majorCompactionMaxSize(), config.majorCompactionMaxFiles(),
+                config.snapshotRetention(), List.of("SET threads=2"), state);
+
+        assertDoesNotThrow(() -> withSettings.compact(CATALOG));
     }
 }
