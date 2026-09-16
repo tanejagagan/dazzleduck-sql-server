@@ -7,15 +7,14 @@ import org.slf4j.LoggerFactory;
 
 import java.io.Closeable;
 import java.sql.ResultSet;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.OptionalLong;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 
 public class CompactionService implements Closeable {
 
@@ -28,9 +27,6 @@ public class CompactionService implements Closeable {
     // Shared schedulers — one task submitted per database so each runs independently
     private final ScheduledExecutorService compactionScheduler;
     private final ScheduledExecutorService housekeepingScheduler;
-
-    // Tracks when major compaction was last attempted per database
-    private final ConcurrentHashMap<String, AtomicLong> lastMajorAttempt = new ConcurrentHashMap<>();
 
     public CompactionService(CompactionConfig config, MajorCompactor majorCompactor, CompactionState state) {
         this.config = config;
@@ -47,7 +43,6 @@ public class CompactionService implements Closeable {
             t.setDaemon(false);
             return t;
         });
-        config.databases().forEach(db -> lastMajorAttempt.put(db, new AtomicLong(System.currentTimeMillis())));
     }
 
     public void start() {
@@ -56,75 +51,106 @@ public class CompactionService implements Closeable {
             return;
         }
         long minorSeconds = config.minorCompactionFrequency().toSeconds();
+        long majorSeconds = config.majorCompactionFrequency().toSeconds();
         long housekeepingSeconds = config.housekeepingFrequency().toSeconds();
 
         for (String db : config.databases()) {
-            compactionScheduler.scheduleWithFixedDelay(
-                    () -> runCompaction(db), 0, minorSeconds, TimeUnit.SECONDS);
+            // Minor and major are independent schedules now — each fires on its own cadence and, when
+            // both enabled, run concurrently. That's safe only because CompactionConfig validated at
+            // startup that their file-size ranges are disjoint (min_file_size/max_file_size fencing in
+            // DuckDbMajorCompactor), so no lock is needed here.
+            //
+            // Fixed-RATE, not fixed-delay: successive runs are due at fixed_rate, 2*fixed_rate, ...
+            // from the start of scheduling, so a run that took time T waits (interval - T) before the
+            // next one starts, rather than a full interval after completion regardless of T. If a run
+            // takes longer than the interval, the next one starts immediately with no negative wait —
+            // scheduleAtFixedRate's normal saturation behavior. Both runMinor/runMajor already catch
+            // every Throwable internally, so a failing cycle never suppresses subsequent scheduled runs
+            // (a Runnable that escapes with an exception is scheduleAtFixedRate's one failure mode).
+            if (config.minorCompactionEnabled()) {
+                compactionScheduler.scheduleAtFixedRate(
+                        () -> runMinor(db), 0, minorSeconds, TimeUnit.SECONDS);
+            }
+            if (config.majorCompactionEnabled()) {
+                compactionScheduler.scheduleAtFixedRate(
+                        () -> runMajor(db), 0, majorSeconds, TimeUnit.SECONDS);
+            }
             housekeepingScheduler.scheduleWithFixedDelay(
                     () -> runHousekeeping(db), housekeepingSeconds, housekeepingSeconds, TimeUnit.SECONDS);
         }
 
-        logger.info("Compaction service started for {} database(s) — minor every {}s, major every {}s, housekeeping every {}s",
-                config.databases().size(), minorSeconds, config.majorCompactionFrequency().toSeconds(), housekeepingSeconds);
+        logger.info("Compaction service started for {} database(s) — minor {}every {}s, major {}every {}s, housekeeping every {}s",
+                config.databases().size(),
+                config.minorCompactionEnabled() ? "" : "(disabled) ", minorSeconds,
+                config.majorCompactionEnabled() ? "" : "(disabled) ", majorSeconds,
+                housekeepingSeconds);
     }
 
     public CompactionStats getStats() {
         Map<String, CompactionStats.DatabaseStats> dbStats = new HashMap<>();
         CompactionStats base = state.getSnapshot(config.databases());
+        // Minor and major now tick independently, so there's no single shared cadence to report a
+        // next-execution time against. Report against whichever is enabled (minor first, since it's
+        // the more frequent of the two) — null only when neither is running.
+        Duration cadence = config.minorCompactionEnabled() ? config.minorCompactionFrequency()
+                : config.majorCompactionEnabled() ? config.majorCompactionFrequency()
+                : null;
         base.databases().forEach((db, ds) -> {
             // The fixed-delay scheduler re-arms from the end of the last cycle, so the next run is
-            // due one minor interval after the last completion — regardless of its outcome. Deriving
-            // this from the last success would wrongly report null for a database that keeps failing
-            // even though it is still scheduled.
+            // due one interval after the last completion — regardless of its outcome. Deriving this
+            // from the last success would wrongly report null for a database that keeps failing even
+            // though it is still scheduled.
             Instant lastRun = state.getLastRunTime(db);
             dbStats.put(db, ds.withNextExecutionTime(
-                    lastRun != null ? lastRun.plus(config.minorCompactionFrequency()) : null));
+                    (lastRun != null && cadence != null) ? lastRun.plus(cadence) : null));
         });
         return new CompactionStats(base.serviceStart(), dbStats);
     }
 
-    void runCompaction(String database) {
-        // Default so the catch below can always attribute a failure to a kind, even if determining
-        // eligibility itself throws. Keeping the whole body inside the try is what prevents a stray
-        // throwable from escaping the scheduled task — scheduleWithFixedDelay silently cancels a task
-        // whose Runnable throws, which would stop this database's compaction forever.
-        CycleKind kind = CycleKind.MINOR;
+    void runMinor(String database) {
+        // Keeping the whole body inside the try is what prevents a stray throwable from escaping the
+        // scheduled task — scheduleWithFixedDelay silently cancels a task whose Runnable throws,
+        // which would stop this database's minor compaction forever.
         try {
-            boolean major = System.currentTimeMillis() - lastMajorAttempt.get(database).get()
-                    >= config.majorCompactionFrequency().toMillis();
-            kind = major ? CycleKind.MAJOR : CycleKind.MINOR;
-
-            // Stamp the attempt before running it: a major that throws must not become eligible again
-            // on the next minor tick, or a persistent failure turns into a retry storm.
-            if (major) {
-                lastMajorAttempt.get(database).set(System.currentTimeMillis());
-            }
-
             OptionalLong filesBefore = queryTotalFiles(database);
-            if (major) {
-                majorCompactor.compact(database);
-                logger.info("Major compaction completed for {}", database);
-                state.incrementMajor(database);
-            } else {
-                runMinor(database);
-                state.incrementMinor(database);
-            }
-            OptionalLong filesAfter = updateFileCounts(database);
-            // Only record a delta when both reads succeeded; a failed metadata read must not be
-            // treated as "zero files" or the cumulative counter is permanently inflated.
-            if (filesBefore.isPresent() && filesAfter.isPresent()) {
-                state.addFilesCompacted(database, filesBefore.getAsLong() - filesAfter.getAsLong());
-            }
+            runMinorMerge(database);
+            state.incrementMinor(database);
+            recordFileDelta(database, filesBefore);
             state.recordSuccess(database);
         } catch (Throwable t) {
-            state.recordFailure(database, kind);
-            logger.error("{} compaction cycle failed for {} — scheduler will continue",
-                    kind.tag(), database, t);
+            state.recordFailure(database, CycleKind.MINOR);
+            logger.error("Minor compaction cycle failed for {} — scheduler will continue", database, t);
         } finally {
             // Stamp every cycle's completion, success or failure, so /health can report when the
             // fixed-delay scheduler will run this database again.
             state.recordRunCompleted(database);
+        }
+    }
+
+    void runMajor(String database) {
+        try {
+            OptionalLong filesBefore = queryTotalFiles(database);
+            majorCompactor.compact(database);
+            logger.info("Major compaction completed for {}", database);
+            state.incrementMajor(database);
+            recordFileDelta(database, filesBefore);
+            state.recordSuccess(database);
+        } catch (Throwable t) {
+            state.recordFailure(database, CycleKind.MAJOR);
+            logger.error("Major compaction cycle failed for {} — scheduler will continue", database, t);
+        } finally {
+            state.recordRunCompleted(database);
+        }
+    }
+
+    /**
+     * Only records a delta when both the before and after reads succeeded; a failed metadata read
+     * must not be treated as "zero files" or the cumulative counter is permanently inflated.
+     */
+    private void recordFileDelta(String database, OptionalLong filesBefore) {
+        OptionalLong filesAfter = updateFileCounts(database);
+        if (filesBefore.isPresent() && filesAfter.isPresent()) {
+            state.addFilesCompacted(database, filesBefore.getAsLong() - filesAfter.getAsLong());
         }
     }
 
@@ -138,9 +164,9 @@ public class CompactionService implements Closeable {
         }
     }
 
-    private void runMinor(String database) throws Exception {
+    private void runMinorMerge(String database) throws Exception {
         Timer.Sample sample = state.startTimer();
-        try (var connection = ConnectionPool.getConnection()) {
+        try (var connection = ConnectionPool.getConnection(config.minorConnectionSettings().toArray(new String[0]))) {
             // Unbounded (max_compacted_files := 0, the default) merges every eligible file across
             // every table in the catalog in a single call — on a large catalog this can hold open a
             // transaction whose native memory footprint grows with the whole database rather than

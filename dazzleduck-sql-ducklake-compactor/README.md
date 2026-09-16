@@ -6,8 +6,21 @@ A background service that runs minor and major compaction on DuckLake catalogs t
 
 DuckLake writes small Parquet files on each insert/update. Without compaction, query performance degrades as the file count grows. This service runs two compaction strategies on a schedule:
 
-- **Minor compaction** — merges adjacent small files using `ducklake_merge_adjacent_files`. Runs frequently (default: every 1 minute).
-- **Major compaction** — merges all files, expires old snapshots, and cleans up deleted files. Runs less frequently (default: every 1 hour).
+- **Minor compaction** — merges adjacent small files using `ducklake_merge_adjacent_files`, restricted to files below `minor_compaction_max_size`. Runs frequently (default: every 1 minute).
+- **Major compaction** — merges files in the range `[minor_compaction_max_size, major_compaction_max_size)`, expires old snapshots, and cleans up deleted files. Runs less frequently (default: every 1 hour).
+
+Minor and major run on **independent schedules** and, when both enabled, run **concurrently** with
+no locking between them — safe only because DuckLake's `min_file_size`/`max_file_size` parameters
+fence them to disjoint file-size ranges (enforced at startup: `major_compaction_max_size` must
+exceed `minor_compaction_max_size` when both are enabled). Each can be disabled independently via
+`minor_compaction.enabled`/`major_compaction.enabled`, and each can run on its own DuckDB connection
+settings (e.g. different `memory_limit`/`threads`) via `minor_compaction.connection_settings`/
+`major_compaction.connection_settings`.
+
+Both are scheduled at a **fixed rate**, not a fixed delay: a cycle that takes time `T` waits
+`frequency - T` before the next one starts, rather than a full `frequency` after completion
+regardless of `T`. A cycle that runs longer than its frequency has no negative wait — the next one
+starts immediately.
 
 ## Configuration
 
@@ -20,7 +33,12 @@ All settings live under the `dazzleduck_sql_compaction` HOCON root in `applicati
 | `major_compaction_frequency` | `1 hour` | How often to run major compaction |
 | `minor_compaction_max_size` | `8MB` | Only merge files smaller than this |
 | `minor_compaction_max_files` | `1000` | Caps files merged per minor-compaction call (`0` = unbounded); bounds memory/duration of a single cycle on a large catalog, remainder picks up next cycle |
-| `major_compaction_max_size` | `64MB` | Only compact files smaller than this during major pass |
+| `major_compaction_max_size` | `64MB` | Only compact files in `[minor_compaction_max_size, major_compaction_max_size)` during major pass |
+| `major_compaction_max_files` | `1000` | Same as `minor_compaction_max_files`, for major's call |
+| `minor_compaction.enabled` | `true` | Turn minor compaction off entirely for all databases |
+| `minor_compaction.connection_settings` | `[]` | Raw SQL run on minor's connection right after opening it, e.g. `["SET memory_limit='2GB'"]` |
+| `major_compaction.enabled` | `true` | Turn major compaction off entirely for all databases |
+| `major_compaction.connection_settings` | `[]` | Same, for major's connection — also used for that catalog's housekeeping, which shares major's connection rather than getting its own settings |
 | `housekeeping_frequency` | `5 minutes` | How often to expire snapshots and delete orphaned files |
 | `snapshot_retention` | `15 minutes` | Expire snapshots older than this during housekeeping |
 | `health_port` | `8080` | Port for the `GET /health` endpoint |
@@ -28,6 +46,23 @@ All settings live under the `dazzleduck_sql_compaction` HOCON root in `applicati
 | `config_provider` | — | Optional: overlay config values read from a table (see below) |
 
 The bundled defaults live in this module's `application.conf` (not `reference.conf`).
+
+```hocon
+minor_compaction {
+  enabled = true
+  connection_settings = ["SET memory_limit='2GB'", "SET threads=2"]
+}
+major_compaction {
+  enabled = true
+  connection_settings = ["SET memory_limit='8GB'", "SET threads=4"]
+}
+```
+
+Disabling one is a legitimate way to run only the other (e.g. `major_compaction.enabled = false` to
+run only minor). Simply raising `minor_compaction_frequency` to a very large value is **not** an
+equivalent way to disable minor — with the old single-schedule design that also starved major of any
+chance to run; with independent schedules that's no longer true, but the enabled flags are still the
+direct way to express "don't run this."
 
 ### Startup Script
 

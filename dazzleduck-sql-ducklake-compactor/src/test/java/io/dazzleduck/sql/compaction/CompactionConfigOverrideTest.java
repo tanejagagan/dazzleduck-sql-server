@@ -12,6 +12,7 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Duration;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -34,6 +35,15 @@ class CompactionConfigOverrideTest {
             minor_compaction_max_size = 8MB
             minor_compaction_max_files = 1000
             major_compaction_max_size = 64MB
+            major_compaction_max_files = 1000
+            minor_compaction {
+              enabled = true
+              connection_settings = []
+            }
+            major_compaction {
+              enabled = true
+              connection_settings = []
+            }
             housekeeping_frequency = 5 minutes
             snapshot_retention = 60 minutes
             health_port = 9090
@@ -138,6 +148,84 @@ class CompactionConfigOverrideTest {
         assertEquals(Duration.ofSeconds(30), config.minorCompactionFrequency());
         assertEquals(16L * 1024 * 1024, config.minorCompactionMaxSize(), "MiB is binary, MB is not");
         assertEquals(9191, config.healthPort());
+    }
+
+    @Test
+    void minorAndMajorEnabledAndConnectionSettingsDefaultFromTheFile() throws Exception {
+        CompactionConfig config = resolve(ConfigFactory.parseString(FILE_CONFIG));
+        assertTrue(config.minorCompactionEnabled());
+        assertTrue(config.majorCompactionEnabled());
+        assertTrue(config.minorConnectionSettings().isEmpty());
+        assertTrue(config.majorConnectionSettings().isEmpty());
+    }
+
+    @Test
+    void connectionSettingsAreReadAsAList() throws Exception {
+        Config raw = ConfigFactory.parseString("""
+                databases = ["mylake"]
+                minor_compaction_frequency = 1 minute
+                major_compaction_frequency = 1 hour
+                minor_compaction_max_size = 8MB
+                minor_compaction_max_files = 1000
+                major_compaction_max_size = 64MB
+                major_compaction_max_files = 1000
+                minor_compaction {
+                  enabled = true
+                  connection_settings = ["SET memory_limit='2GB'", "SET threads=2"]
+                }
+                major_compaction {
+                  enabled = true
+                  connection_settings = []
+                }
+                housekeeping_frequency = 5 minutes
+                snapshot_retention = 60 minutes
+                health_port = 9090
+                """);
+        CompactionConfig config = resolve(raw);
+        assertEquals(List.of("SET memory_limit='2GB'", "SET threads=2"), config.minorConnectionSettings());
+    }
+
+    /** Standalone config so this test controls minor's enabled flag and major's max size directly. */
+    private static Config configWithMajorMaxSizeAndMinorEnabled(String majorMaxSize, boolean minorEnabled) {
+        return ConfigFactory.parseString("""
+                databases = ["mylake"]
+                minor_compaction_frequency = 1 minute
+                major_compaction_frequency = 1 hour
+                minor_compaction_max_size = 8MB
+                minor_compaction_max_files = 1000
+                major_compaction_max_size = %s
+                major_compaction_max_files = 1000
+                minor_compaction {
+                  enabled = %s
+                  connection_settings = []
+                }
+                major_compaction {
+                  enabled = true
+                  connection_settings = []
+                }
+                housekeeping_frequency = 5 minutes
+                snapshot_retention = 60 minutes
+                health_port = 9090
+                """.formatted(majorMaxSize, minorEnabled));
+    }
+
+    @Test
+    void majorMaxSizeMustExceedMinorMaxSizeWhenBothEnabled() {
+        // minor_compaction_max_size = 8MB > major's 4MB here: major's fenced range [minor_max,
+        // major_max) would be empty/inverted, and minor/major run concurrently with no lock, so this
+        // must refuse to start rather than risk (or just silently waste) an overlapping/empty range.
+        Config raw = configWithMajorMaxSizeAndMinorEnabled("4MB", true);
+        var e = assertThrows(IllegalArgumentException.class, () -> resolve(raw));
+        assertTrue(e.getMessage().contains("major_compaction_max_size"), e.getMessage());
+    }
+
+    @Test
+    void majorMaxSizeValidationIsSkippedWhenEitherIsDisabled() throws Exception {
+        // No exception: with minor disabled there's nothing for major's range to overlap.
+        Config raw = configWithMajorMaxSizeAndMinorEnabled("4MB", false);
+        CompactionConfig config = resolve(raw);
+        assertFalse(config.minorCompactionEnabled());
+        assertEquals(4_000_000L, config.majorCompactionMaxSize());
     }
 
     @Test
