@@ -33,6 +33,8 @@ class CompactionConfigOverrideTest {
             major_compaction_frequency = 1 hour
             minor_compaction_max_size = 8MB
             major_compaction_max_size = 64MB
+            minor_max_compacted_files = 500
+            major_max_compacted_files = 100
             housekeeping_frequency = 5 minutes
             snapshot_retention = 60 minutes
             health_port = 9090
@@ -137,6 +139,34 @@ class CompactionConfigOverrideTest {
         assertEquals(Duration.ofSeconds(30), config.minorCompactionFrequency());
         assertEquals(16L * 1024 * 1024, config.minorCompactionMaxSize(), "MiB is binary, MB is not");
         assertEquals(9191, config.healthPort());
+    }
+
+    @Test
+    void maxCompactedFilesTakesTheFilesDefaultAndIsOverridablePerCycleFromTheTable() throws Exception {
+        CompactionConfig withoutOverride = resolve(ConfigFactory.parseString(FILE_CONFIG));
+        assertEquals(500L, withoutOverride.minorMaxCompactedFiles());
+        assertEquals(100L, withoutOverride.majorMaxCompactedFiles());
+
+        insert("compaction.minor_max_compacted_files", "50");
+        insert("compaction.major_max_compacted_files", "200");
+        CompactionConfig config = resolve(withProvider("compaction."));
+        assertEquals(50L, config.minorMaxCompactedFiles());
+        assertEquals(200L, config.majorMaxCompactedFiles());
+    }
+
+    @Test
+    void missingMaxCompactedFilesFailsRatherThanRunningUncapped() {
+        Config raw = ConfigFactory.parseString("""
+                databases = ["mylake"]
+                minor_compaction_frequency = 1 minute
+                major_compaction_frequency = 1 hour
+                minor_compaction_max_size = 8MB
+                major_compaction_max_size = 64MB
+                housekeeping_frequency = 5 minutes
+                snapshot_retention = 60 minutes
+                health_port = 9090
+                """);
+        assertThrows(com.typesafe.config.ConfigException.Missing.class, () -> resolve(raw));
     }
 
     @Test

@@ -15,7 +15,9 @@ public record CompactionConfig(
         long minorCompactionMaxSize,
         long majorCompactionMaxSize,
         Duration snapshotRetention,
-        int healthPort
+        int healthPort,
+        long minorMaxCompactedFiles,
+        long majorMaxCompactedFiles
 ) {
     private static final String CONFIG_PATH = "dazzleduck_sql_compaction";
 
@@ -41,7 +43,9 @@ public record CompactionConfig(
                 c.getBytes("minor_compaction_max_size"),
                 c.getBytes("major_compaction_max_size"),
                 c.getDuration("snapshot_retention"),
-                c.getInt("health_port")
+                c.getInt("health_port"),
+                c.getLong("minor_max_compacted_files"),
+                c.getLong("major_max_compacted_files")
         );
     }
 }

@@ -13,11 +13,13 @@ public class DuckDbMajorCompactor implements MajorCompactor {
 
     private final long maxFileSizeBytes;
     private final Duration snapshotRetention;
+    private final long majorMaxCompactedFiles;
     private final CompactionState metrics;
 
-    public DuckDbMajorCompactor(long maxFileSizeBytes, Duration snapshotRetention, CompactionState metrics) {
+    public DuckDbMajorCompactor(long maxFileSizeBytes, Duration snapshotRetention, long majorMaxCompactedFiles, CompactionState metrics) {
         this.maxFileSizeBytes = maxFileSizeBytes;
         this.snapshotRetention = snapshotRetention;
+        this.majorMaxCompactedFiles = majorMaxCompactedFiles;
         this.metrics = metrics;
     }
 
@@ -25,9 +27,13 @@ public class DuckDbMajorCompactor implements MajorCompactor {
     public void compact(String database) throws Exception {
         try (var connection = ConnectionPool.getConnection()) {
             time("major", "merge", database, () -> ConnectionPool.execute(connection,
-                    "CALL ducklake_merge_adjacent_files('%s', max_file_size := %d)"
-                            .formatted(database, maxFileSizeBytes)));
+                    mergeAdjacentFilesSql(database, maxFileSizeBytes, majorMaxCompactedFiles)));
         }
+    }
+
+    static String mergeAdjacentFilesSql(String database, long maxFileSizeBytes, long maxCompactedFiles) {
+        return "CALL ducklake_merge_adjacent_files('%s', max_file_size := %d, max_compacted_files := %d)"
+                .formatted(database, maxFileSizeBytes, maxCompactedFiles);
     }
 
     @Override

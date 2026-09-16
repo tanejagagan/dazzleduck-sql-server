@@ -23,7 +23,7 @@ public class Main {
         CompactionMetrics metrics = CompactionMetrics.create(rawConfig.getConfig("metrics"));
         CompactionState state = new CompactionState(metrics.registry(), config.databases());
         MajorCompactor majorCompactor = new DuckDbMajorCompactor(
-                config.majorCompactionMaxSize(), config.snapshotRetention(), state);
+                config.majorCompactionMaxSize(), config.snapshotRetention(), config.majorMaxCompactedFiles(), state);
         CompactionService service = new CompactionService(config, majorCompactor, state);
         HealthServer healthServer = new HealthServer(config.healthPort(), service::getStats);
 

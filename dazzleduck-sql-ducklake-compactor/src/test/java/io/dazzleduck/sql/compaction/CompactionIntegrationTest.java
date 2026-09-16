@@ -56,13 +56,15 @@ class CompactionIntegrationTest {
                 512 * 1024L,              // 512KB minor max
                 10 * 1024 * 1024L,        // 10MB major max
                 Duration.ofSeconds(5),
-                0                         // 0 = OS-assigned port, health server not used in tests
+                0,                        // 0 = OS-assigned port, health server not used in tests
+                500,                      // minor max files merged per group
+                100                       // major max files merged per group
         );
 
         registry = new SimpleMeterRegistry();
         CompactionState state = new CompactionState(registry, config.databases());
         MajorCompactor majorCompactor = new DuckDbMajorCompactor(
-                config.majorCompactionMaxSize(), config.snapshotRetention(), state);
+                config.majorCompactionMaxSize(), config.snapshotRetention(), config.majorMaxCompactedFiles(), state);
         service = new CompactionService(config, majorCompactor, state);
     }
 

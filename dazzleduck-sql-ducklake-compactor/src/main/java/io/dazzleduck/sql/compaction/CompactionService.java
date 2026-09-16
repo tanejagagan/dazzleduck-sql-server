@@ -141,8 +141,8 @@ public class CompactionService implements Closeable {
     private void runMinor(String database) throws Exception {
         Timer.Sample sample = state.startTimer();
         try (var connection = ConnectionPool.getConnection()) {
-            String sql = "CALL ducklake_merge_adjacent_files('%s', max_file_size := %d)"
-                    .formatted(database, config.minorCompactionMaxSize());
+            String sql = DuckDbMajorCompactor.mergeAdjacentFilesSql(
+                    database, config.minorCompactionMaxSize(), config.minorMaxCompactedFiles());
             ConnectionPool.execute(connection, sql);
             logger.info("Minor compaction completed for {}", database);
         } finally {

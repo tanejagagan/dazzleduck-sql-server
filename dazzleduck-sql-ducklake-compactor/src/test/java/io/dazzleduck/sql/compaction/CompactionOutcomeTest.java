@@ -25,7 +25,9 @@ class CompactionOutcomeTest {
             512 * 1024L,
             10 * 1024 * 1024L,
             Duration.ofSeconds(5),
-            0);
+            0,
+            500,
+            100);
 
     // JUnit builds a fresh test instance per method, so these are per-test state.
     private final SimpleMeterRegistry registry = new SimpleMeterRegistry();

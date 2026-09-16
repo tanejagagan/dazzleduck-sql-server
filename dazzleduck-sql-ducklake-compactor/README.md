@@ -20,6 +20,8 @@ All settings live under the `dazzleduck_sql_compaction` HOCON root in `applicati
 | `major_compaction_frequency` | `1 hour` | How often to run major compaction |
 | `minor_compaction_max_size` | `8MB` | Only merge files smaller than this |
 | `major_compaction_max_size` | `64MB` | Only compact files smaller than this during major pass |
+| `minor_max_compacted_files` | `500` | Max files `ducklake_merge_adjacent_files` merges into one group during minor compaction |
+| `major_max_compacted_files` | `100` | Max files `ducklake_merge_adjacent_files` merges into one group during major compaction |
 | `housekeeping_frequency` | `5 minutes` | How often to expire snapshots and delete orphaned files |
 | `snapshot_retention` | `15 minutes` | Expire snapshots older than this during housekeeping |
 | `health_port` | `8080` | Port for the `GET /health` endpoint |
