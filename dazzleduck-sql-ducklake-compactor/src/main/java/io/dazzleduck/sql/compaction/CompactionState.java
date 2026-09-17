@@ -7,7 +7,7 @@ import io.micrometer.core.instrument.Timer;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.EnumMap;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -18,31 +18,31 @@ import java.util.concurrent.atomic.AtomicReference;
 public class CompactionState {
 
     private static final String DURATION_METRIC    = "ducklake.compaction.duration";
-    private static final String MINOR_COUNT_METRIC = "ducklake.compaction.minor";
-    private static final String MAJOR_COUNT_METRIC = "ducklake.compaction.major";
+    private static final String CYCLE_COUNT_METRIC = "ducklake.compaction.cycles";
     private static final String FAILURE_COUNT_METRIC = "ducklake.compaction.failures";
     private static final String LAST_SUCCESS_AGE_METRIC = "ducklake.compaction.last_success_age";
     private static final String FILES_COMPACTED_METRIC = "ducklake.files.compacted";
-    private static final String SMALL_FILES_METRIC  = "ducklake.files.small";
-    private static final String MEDIUM_FILES_METRIC = "ducklake.files.medium";
-    private static final String TOTAL_FILES_METRIC  = "ducklake.files.total";
+    private static final String TIER_FILES_METRIC = "ducklake.files.by_tier";
+    private static final String TOTAL_FILES_METRIC = "ducklake.files.total";
+
+    /** Failure kind used for housekeeping cycles, which aren't a tier. */
+    static final String HOUSEKEEPING_KIND = "housekeeping";
 
     private final MeterRegistry registry;
+    private final List<String> tierNames;
     private final Instant serviceStart = Instant.now();
 
-    // Per-database counters (also back Micrometer FunctionCounters)
-    private final ConcurrentHashMap<String, AtomicLong> minorCounts    = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, AtomicLong> majorCounts    = new ConcurrentHashMap<>();
+    // Per-database, per-tier successful-cycle counters (also back Micrometer FunctionCounters)
+    private final ConcurrentHashMap<String, Map<String, AtomicLong>> tierCounts = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, AtomicLong> filesCompacted = new ConcurrentHashMap<>();
 
-    // Failures are attributable to the cycle kind that threw. Each inner map is fully populated on
-    // creation, so only the counters are ever mutated — never the map structure.
-    private final ConcurrentHashMap<String, Map<CycleKind, AtomicLong>> failureCounts = new ConcurrentHashMap<>();
+    // Failures are attributable to the tier that threw, or HOUSEKEEPING_KIND. Each inner map is
+    // fully populated on creation, so only the counters are ever mutated — never the map structure.
+    private final ConcurrentHashMap<String, Map<String, AtomicLong>> failureCounts = new ConcurrentHashMap<>();
 
-    // Per-database gauges
-    private final ConcurrentHashMap<String, AtomicLong> smallFiles  = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, AtomicLong> mediumFiles = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, AtomicLong> totalFiles  = new ConcurrentHashMap<>();
+    // Per-database, per-tier current-file-count gauges, plus one whole-catalog total per database.
+    private final ConcurrentHashMap<String, Map<String, AtomicLong>> tierFiles = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, AtomicLong> totalFiles = new ConcurrentHashMap<>();
 
     // Set only when a cycle completes without throwing
     private final ConcurrentHashMap<String, AtomicReference<Instant>> lastSuccessTimes = new ConcurrentHashMap<>();
@@ -52,38 +52,44 @@ public class CompactionState {
     // database that keeps failing is still due again one interval after its last attempt.
     private final ConcurrentHashMap<String, AtomicReference<Instant>> lastRunTimes = new ConcurrentHashMap<>();
 
-    public CompactionState(MeterRegistry registry, List<String> databases) {
+    public CompactionState(MeterRegistry registry, List<String> databases, List<String> tierNames) {
         this.registry = registry;
+        this.tierNames = tierNames;
         databases.forEach(this::registerDatabase);
     }
 
     private void registerDatabase(String db) {
-        AtomicLong minor  = minorCounts.computeIfAbsent(db, k -> new AtomicLong(0));
-        AtomicLong major  = majorCounts.computeIfAbsent(db, k -> new AtomicLong(0));
-        AtomicLong files  = filesCompacted.computeIfAbsent(db, k -> new AtomicLong(0));
-        AtomicLong small  = smallFiles.computeIfAbsent(db, k -> new AtomicLong(0));
-        AtomicLong medium = mediumFiles.computeIfAbsent(db, k -> new AtomicLong(0));
-        AtomicLong total  = totalFiles.computeIfAbsent(db, k -> new AtomicLong(0));
+        Map<String, AtomicLong> counts = tierCounts.computeIfAbsent(db, k -> new ConcurrentHashMap<>());
+        Map<String, AtomicLong> files = tierFiles.computeIfAbsent(db, k -> new ConcurrentHashMap<>());
+        for (String tierName : tierNames) {
+            AtomicLong count = counts.computeIfAbsent(tierName, k -> new AtomicLong(0));
+            FunctionCounter.builder(CYCLE_COUNT_METRIC, count, AtomicLong::doubleValue)
+                    .description("Successful compaction cycles for this tier")
+                    .tag("database", db)
+                    .tag("tier", tierName)
+                    .register(registry);
+
+            AtomicLong tierFileCount = files.computeIfAbsent(tierName, k -> new AtomicLong(0));
+            Gauge.builder(TIER_FILES_METRIC, tierFileCount, AtomicLong::get)
+                    .description("Active files in this tier's file-size range")
+                    .tag("database", db)
+                    .tag("tier", tierName)
+                    .register(registry);
+        }
+
+        AtomicLong total = totalFiles.computeIfAbsent(db, k -> new AtomicLong(0));
+        AtomicLong filesCompactedTotal  = filesCompacted.computeIfAbsent(db, k -> new AtomicLong(0));
         AtomicReference<Instant> lastSuccess =
                 lastSuccessTimes.computeIfAbsent(db, k -> new AtomicReference<>());
         lastRunTimes.computeIfAbsent(db, k -> new AtomicReference<>());
 
-        FunctionCounter.builder(MINOR_COUNT_METRIC, minor, AtomicLong::doubleValue)
-                .description("Successful minor compaction cycles")
-                .tag("database", db)
-                .register(registry);
-
-        FunctionCounter.builder(MAJOR_COUNT_METRIC, major, AtomicLong::doubleValue)
-                .description("Successful major compaction cycles")
-                .tag("database", db)
-                .register(registry);
-
-        // Every kind is registered up front so a zero is visible rather than a missing series.
+        // Every kind (each tier, plus housekeeping) is registered up front so a zero is visible
+        // rather than a missing series.
         failureCounters(db).forEach((kind, failures) ->
                 FunctionCounter.builder(FAILURE_COUNT_METRIC, failures, AtomicLong::doubleValue)
                         .description("Cycles that ended in an exception")
                         .tag("database", db)
-                        .tag("type", kind.tag())
+                        .tag("type", kind)
                         .register(registry));
 
         // Falls back to service start so a compactor that has never succeeded reports a climbing
@@ -97,18 +103,8 @@ public class CompactionState {
                 .tag("database", db)
                 .register(registry);
 
-        FunctionCounter.builder(FILES_COMPACTED_METRIC, files, AtomicLong::doubleValue)
+        FunctionCounter.builder(FILES_COMPACTED_METRIC, filesCompactedTotal, AtomicLong::doubleValue)
                 .description("Total Parquet files merged by compaction")
-                .tag("database", db)
-                .register(registry);
-
-        Gauge.builder(SMALL_FILES_METRIC, small, AtomicLong::get)
-                .description("Active files smaller than minor_compaction_max_size")
-                .tag("database", db)
-                .register(registry);
-
-        Gauge.builder(MEDIUM_FILES_METRIC, medium, AtomicLong::get)
-                .description("Active files between minor and major compaction max size")
                 .tag("database", db)
                 .register(registry);
 
@@ -118,10 +114,12 @@ public class CompactionState {
                 .register(registry);
     }
 
-    private Map<CycleKind, AtomicLong> failureCounters(String db) {
+    private Map<String, AtomicLong> failureCounters(String db) {
         return failureCounts.computeIfAbsent(db, k -> {
-            Map<CycleKind, AtomicLong> counters = new EnumMap<>(CycleKind.class);
-            for (CycleKind kind : CycleKind.values()) {
+            Map<String, AtomicLong> counters = new HashMap<>();
+            List<String> kinds = new ArrayList<>(tierNames);
+            kinds.add(HOUSEKEEPING_KIND);
+            for (String kind : kinds) {
                 counters.put(kind, new AtomicLong(0));
             }
             return counters;
@@ -130,21 +128,23 @@ public class CompactionState {
 
     // ── Update methods ────────────────────────────────────────────────────────
 
-    public void incrementMinor(String db) {
-        minorCounts.computeIfAbsent(db, k -> new AtomicLong(0)).incrementAndGet();
-    }
-
-    public void incrementMajor(String db) {
-        majorCounts.computeIfAbsent(db, k -> new AtomicLong(0)).incrementAndGet();
+    public void incrementTier(String db, String tierName) {
+        tierCounts.computeIfAbsent(db, k -> new ConcurrentHashMap<>())
+                .computeIfAbsent(tierName, k -> new AtomicLong(0))
+                .incrementAndGet();
     }
 
     public void addFilesCompacted(String db, long delta) {
         if (delta > 0) filesCompacted.computeIfAbsent(db, k -> new AtomicLong(0)).addAndGet(delta);
     }
 
-    public void updateFileCounts(String db, long small, long medium, long total) {
-        smallFiles.computeIfAbsent(db, k -> new AtomicLong(0)).set(small);
-        mediumFiles.computeIfAbsent(db, k -> new AtomicLong(0)).set(medium);
+    public void updateTierFileCount(String db, String tierName, long count) {
+        tierFiles.computeIfAbsent(db, k -> new ConcurrentHashMap<>())
+                .computeIfAbsent(tierName, k -> new AtomicLong(0))
+                .set(count);
+    }
+
+    public void updateTotalFiles(String db, long total) {
         totalFiles.computeIfAbsent(db, k -> new AtomicLong(0)).set(total);
     }
 
@@ -153,7 +153,8 @@ public class CompactionState {
         lastSuccessTimes.computeIfAbsent(db, k -> new AtomicReference<>()).set(Instant.now());
     }
 
-    public void recordFailure(String db, CycleKind kind) {
+    /** {@code kind} is a tier's name, or {@link #HOUSEKEEPING_KIND} for a housekeeping failure. */
+    public void recordFailure(String db, String kind) {
         failureCounters(db).get(kind).incrementAndGet();
     }
 
@@ -165,7 +166,7 @@ public class CompactionState {
     /**
      * Same as {@link #recordRunCompleted(String)}, but with a caller-supplied completion instant so
      * it can be reused consistently elsewhere — e.g. CompactionService also stamps its own
-     * per-cycle-kind (minor/major) last-run tracking with the exact same instant.
+     * per-tier last-run tracking with the exact same instant.
      */
     public void recordRunCompleted(String db, Instant at) {
         lastRunTimes.computeIfAbsent(db, k -> new AtomicReference<>()).set(at);
@@ -191,15 +192,21 @@ public class CompactionState {
     public CompactionStats getSnapshot(List<String> databases) {
         Map<String, CompactionStats.DatabaseStats> dbStats = new HashMap<>();
         for (String db : databases) {
+            Map<String, Long> tierCompactionCounts = new HashMap<>();
+            Map<String, Long> currentTierFileCounts = new HashMap<>();
+            for (String tierName : tierNames) {
+                tierCompactionCounts.put(tierName,
+                        tierCounts.getOrDefault(db, Map.of()).getOrDefault(tierName, new AtomicLong(0)).get());
+                currentTierFileCounts.put(tierName,
+                        tierFiles.getOrDefault(db, Map.of()).getOrDefault(tierName, new AtomicLong(0)).get());
+            }
             dbStats.put(db, new CompactionStats.DatabaseStats(
-                    minorCounts.getOrDefault(db, new AtomicLong(0)).get(),
-                    majorCounts.getOrDefault(db, new AtomicLong(0)).get(),
+                    tierCompactionCounts,
                     getFailureCount(db),
                     filesCompacted.getOrDefault(db, new AtomicLong(0)).get(),
                     getLastSuccessTime(db),
-                    null, // nextExecutionTime injected by CompactionService
-                    smallFiles.getOrDefault(db, new AtomicLong(0)).get(),
-                    mediumFiles.getOrDefault(db, new AtomicLong(0)).get(),
+                    Map.of(), // nextExecutionTimeByTier injected by CompactionService
+                    currentTierFileCounts,
                     totalFiles.getOrDefault(db, new AtomicLong(0)).get()));
         }
         return new CompactionStats(serviceStart, dbStats);

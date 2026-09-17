@@ -4,20 +4,22 @@ A background service that runs minor and major compaction on DuckLake catalogs t
 
 ## Overview
 
-DuckLake writes small Parquet files on each insert/update. Without compaction, query performance degrades as the file count grows. This service runs two compaction strategies on a schedule:
+DuckLake writes small Parquet files on each insert/update. Without compaction, query performance
+degrades as the file count grows. This service compacts files via any number of configurable
+**tiers**, each a self-contained compaction level: its own file-size range, schedule, file-count
+cap, enable flag, and DuckDB connection settings. The bundled default is two tiers, "minor" and
+"major", matching what used to be hardcoded:
 
-- **Minor compaction** — merges adjacent small files using `ducklake_merge_adjacent_files`, restricted to files below `minor_compaction_max_size`. Runs frequently (default: every 1 minute).
-- **Major compaction** — merges files in the range `[minor_compaction_max_size, major_compaction_max_size)`, expires old snapshots, and cleans up deleted files. Runs less frequently (default: every 1 hour).
+- **minor** — merges adjacent small files below `8MB`. Runs frequently (every 1 minute).
+- **major** — merges files in `[8MB, 64MB)`. Runs less frequently (every 1 hour).
 
-Minor and major run on **independent schedules** and, when both enabled, run **concurrently** with
-no locking between them — safe only because DuckLake's `min_file_size`/`max_file_size` parameters
-fence them to disjoint file-size ranges (enforced at startup: `major_compaction_max_size` must
-exceed `minor_compaction_max_size` when both are enabled). Each can be disabled independently via
-`minor_compaction.enabled`/`major_compaction.enabled`, and each can run on its own DuckDB connection
-settings (e.g. different `memory_limit`/`threads`) via `minor_compaction.connection_settings`/
-`major_compaction.connection_settings`.
+There's nothing special about having exactly two — add, remove, rename, or resize tiers freely, as
+long as every **enabled** tier's `[min_file_size, max_file_size)` range is disjoint from every
+other enabled tier's. That's enforced at startup (refuses to start on overlapping ranges or
+duplicate tier names) and is what lets tiers run **concurrently with no locking between them**:
+since each only ever touches files in its own range, two tiers can never race on the same file.
 
-Both are scheduled at a **fixed rate**, not a fixed delay: a cycle that takes time `T` waits
+Every tier is scheduled at a **fixed rate**, not a fixed delay: a cycle that takes time `T` waits
 `frequency - T` before the next one starts, rather than a full `frequency` after completion
 regardless of `T`. A cycle that runs longer than its frequency has no negative wait — the next one
 starts immediately.
@@ -29,17 +31,9 @@ All settings live under the `dazzleduck_sql_compaction` HOCON root in `applicati
 | Key | Default | Description |
 |-----|---------|-------------|
 | `databases` | `[]` | DuckLake catalog names to compact (must be attached via startup script) |
-| `minor_compaction_frequency` | `1 minute` | How often to run minor compaction |
-| `major_compaction_frequency` | `1 hour` | How often to run major compaction |
-| `minor_compaction_max_size` | `8MB` | Only merge files smaller than this |
-| `minor_compaction_max_files` | `1000` | Caps files merged per minor-compaction call (`0` = unbounded); bounds memory/duration of a single cycle on a large catalog, remainder picks up next cycle |
-| `major_compaction_max_size` | `64MB` | Only compact files in `[minor_compaction_max_size, major_compaction_max_size)` during major pass |
-| `major_compaction_max_files` | `1000` | Same as `minor_compaction_max_files`, for major's call |
-| `minor_compaction.enabled` | `true` | Turn minor compaction off entirely for all databases |
-| `minor_compaction.connection_settings` | `[]` | Raw SQL run on minor's connection right after opening it, e.g. `["SET memory_limit='2GB'"]` |
-| `major_compaction.enabled` | `true` | Turn major compaction off entirely for all databases |
-| `major_compaction.connection_settings` | `[]` | Same, for major's connection — also used for that catalog's housekeeping, which shares major's connection rather than getting its own settings |
+| `compaction_tiers` | see below | List of compaction tiers (see below) |
 | `housekeeping_frequency` | `5 minutes` | How often to expire snapshots and delete orphaned files |
+| `housekeeping_connection_settings` | `[]` | Raw SQL run on housekeeping's connection right after opening it — independent of any tier |
 | `snapshot_retention` | `15 minutes` | Expire snapshots older than this during housekeeping |
 | `health_port` | `8080` | Port for the `GET /health` endpoint |
 | `startup_script_provider` | — | How to load the startup SQL (attach catalogs, load extensions) |
@@ -47,22 +41,66 @@ All settings live under the `dazzleduck_sql_compaction` HOCON root in `applicati
 
 The bundled defaults live in this module's `application.conf` (not `reference.conf`).
 
+### Compaction tiers
+
 ```hocon
-minor_compaction {
-  enabled = true
-  connection_settings = ["SET memory_limit='2GB'", "SET threads=2"]
-}
-major_compaction {
-  enabled = true
-  connection_settings = ["SET memory_limit='8GB'", "SET threads=4"]
-}
+compaction_tiers = [
+  {
+    name = "minor"
+    enabled = true
+    frequency = 1 minute
+    min_file_size = 0
+    max_file_size = 8MB
+    max_compacted_files = 1000   # 0 = unbounded
+    connection_settings = ["SET memory_limit='2GB'", "SET threads=2"]
+  }
+  {
+    name = "major"
+    enabled = true
+    frequency = 1 hour
+    min_file_size = 8MB
+    max_file_size = 64MB
+    max_compacted_files = 1000
+    connection_settings = ["SET memory_limit='8GB'", "SET threads=4"]
+  }
+]
 ```
 
-Disabling one is a legitimate way to run only the other (e.g. `major_compaction.enabled = false` to
-run only minor). Simply raising `minor_compaction_frequency` to a very large value is **not** an
-equivalent way to disable minor — with the old single-schedule design that also starved major of any
-chance to run; with independent schedules that's no longer true, but the enabled flags are still the
-direct way to express "don't run this."
+Per-tier fields:
+
+| Field | Description |
+|-------|-------------|
+| `name` | Identifies the tier in metrics/health output and logs. Must be unique. |
+| `enabled` | Set `false` to turn this tier off entirely, for all databases, without removing it from config |
+| `frequency` | How often this tier runs |
+| `min_file_size` / `max_file_size` | This tier only touches files in `[min_file_size, max_file_size)`. Always required, including `0` for the lowest tier |
+| `max_compacted_files` | Caps files merged per cycle (passed through as `ducklake_merge_adjacent_files`'s own `max_compacted_files`); `0` = unbounded, and a catalog with more eligible files than the cap just finishes over several ticks instead of one |
+| `connection_settings` | Raw SQL run on this tier's own connection right after opening it, e.g. to set `memory_limit`/`threads` differently per tier |
+
+Disabling a tier (`enabled = false`) is the direct way to turn it off. Simply raising a tier's
+`frequency` to a very large value is **not** equivalent — with the old hardcoded minor/major design
+that could starve the other tier of any chance to run at all; with independent per-tier schedules
+that's no longer true, but `enabled` is still the explicit way to say "don't run this."
+
+### Connections
+
+Each tier, plus housekeeping, gets its own **real, independent DuckDB connection** — not
+`io.dazzleduck.sql.commons.ConnectionPool`, whose `getConnection()` returns duplicates of one shared
+process-wide instance. That matters because DuckDB's `memory_limit`, `threads`, and
+`temp_directory` are all **GLOBAL**-scoped (confirmed via `duckdb_settings()`): a `SET` on one
+duplicate silently changes it for every other duplicate of the same instance, which would make two
+concurrently-running tiers with different `connection_settings` race and clobber each other's
+global config instead of each getting its own value. Each connection independently re-runs the
+startup script before applying its own `connection_settings`, so the script must be safe to run
+more than once (plain `ATTACH`/`INSTALL`/`LOAD` are; one-time DDL like `CREATE TABLE` is not).
+
+**This means a local file-based DuckLake catalog (`ATTACH 'ducklake:/path/...'`) cannot have more
+than one tier enabled at a time** (nor a tier running alongside housekeeping) — DuckDB only allows
+one attach of a given local catalog file at a time (`Unique file handle conflict`, verified
+empirically), and separate raw connections trying to attach the same file concurrently will hit
+that error as soon as more than one is opened. Server-backed catalogs (Postgres) have no such
+restriction and are what any real multi-tier deployment wanting per-tier connection isolation
+should use.
 
 ### Startup Script
 
@@ -99,15 +137,22 @@ dazzleduck_sql_compaction.config_provider {
 }
 ```
 
+Only scalar keys can be overridden this way — `housekeeping_frequency`, `snapshot_retention`, and
+`health_port`. List-valued keys can't (same restriction `databases` already has): that rules out
+`housekeeping_connection_settings` and, notably, all of `compaction_tiers` — an individual tier's
+`frequency`, `max_file_size`, etc. can't be retuned from this table; changing a tier requires a
+config file change and redeploy.
+
 A configured table that cannot be read is a fatal startup error by design — silently falling
 back to file defaults would hide a broken override source.
 
 ## Health Check
 
-`GET /health` on `health_port` (default 8080) returns uptime plus per-database compaction
-counters (total minor/major compactions, files compacted, last/next execution time, current
-small/medium/total file counts). Note: the status is always `UP` while the process is running —
-it does not reflect failing compaction cycles.
+`GET /health` on `health_port` (default 8080) returns uptime plus per-database stats, with one
+nested object per configured tier (`totalCompactions`, `currentFiles`, `nextExecutionTime`) plus
+whole-catalog totals (`totalFailedCycles`, `totalFilesCompacted`, `lastSuccessTime`,
+`currentTotalFiles`). Note: the status is always `UP` while the process is running — it does not
+reflect failing compaction cycles.
 
 ## Build
 
@@ -150,10 +195,9 @@ Micrometer metrics are emitted via the logging registry by default:
 
 | Metric | Tags | Description |
 |--------|------|-------------|
-| `ducklake.compaction.duration` | `type` (minor/major/housekeeping), `step` (merge/expire/cleanup), `database` | Time per compaction step |
-| `ducklake.compaction.minor` | `database` | Total minor compactions run |
-| `ducklake.compaction.major` | `database` | Total major compactions run |
-| `ducklake.files.compacted` | `database` | Total files compacted |
+| `ducklake.compaction.duration` | `type` (tier name, or `housekeeping`), `step` (merge/expire/cleanup), `database` | Time per compaction step |
+| `ducklake.compaction.cycles` | `tier`, `database` | Successful compaction cycles for this tier |
+| `ducklake.compaction.failures` | `type` (tier name, or `housekeeping`), `database` | Cycles that ended in an exception |
+| `ducklake.files.compacted` | `database` | Total files compacted, across all tiers |
 | `ducklake.files.total` | `database` | Total active Parquet files |
-| `ducklake.files.small` | `database` | Files below `minor_compaction_max_size` |
-| `ducklake.files.medium` | `database` | Files between minor and major thresholds |
+| `ducklake.files.by_tier` | `tier`, `database` | Active files in this tier's file-size range |
