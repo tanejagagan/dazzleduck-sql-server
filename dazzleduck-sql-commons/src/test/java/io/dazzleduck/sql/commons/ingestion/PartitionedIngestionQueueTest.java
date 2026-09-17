@@ -141,7 +141,12 @@ public class PartitionedIngestionQueueTest {
             var future = queue.add(createBatch(sourceFile.toString(), "producer1", 0, DEFAULT_MIN_BATCH_SIZE + 1));
             service.tick(1, TimeUnit.MILLISECONDS);
 
-            assertThrows(Exception.class, () -> future.get(5, SECONDS));
+            var thrown = assertThrows(Exception.class, () -> future.get(5, SECONDS));
+            String message = thrown.getCause() != null ? thrown.getCause().getMessage() : thrown.getMessage();
+            assertNotNull(message);
+            assertTrue(message.contains("3 of 3 shard(s) failed"), "message must name how many/of how many shards failed: " + message);
+            assertTrue(message.contains("shard 0 [hash"), "message must name the failing shard and its routing filter: " + message);
+            assertTrue(message.contains("no_such_column"), "message must surface the underlying per-shard error: " + message);
             assertEquals(0, commitCount.get(), "no shard's post-ingestion task may run when any shard's COPY fails");
         }
     }

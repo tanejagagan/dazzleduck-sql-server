@@ -141,18 +141,18 @@ public class PartitionedIngestionQueue extends ParquetIngestionQueue {
                 results.add(futures.get(i).get());
             } catch (ExecutionException ee) {
                 Throwable cause = ee.getCause() != null ? ee.getCause() : ee;
-                failures.add("shard " + i + ": " + cause.getMessage());
+                failures.add("shard %d [%s]: %s".formatted(i, shardFilter(i), cause.getMessage()));
                 if (firstFailure == null) firstFailure = cause;
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
-                failures.add("shard " + i + ": interrupted");
+                failures.add("shard %d [%s]: interrupted".formatted(i, shardFilter(i)));
                 if (firstFailure == null) firstFailure = ie;
             }
         }
         if (!failures.isEmpty()) {
             throw new RuntimeException(
-                    "Partitioned write failed for queue '%s': %d of %d shard(s) failed before any commit "
-                            + "(no partial commit occurred): %s"
+                    ("Partitioned write failed for queue '%s': %d of %d shard(s) failed before any commit "
+                            + "(no partial commit occurred): %s")
                             .formatted(queueId, failures.size(), parallelWriters, String.join("; ", failures)),
                     firstFailure);
         }
@@ -161,9 +161,13 @@ public class PartitionedIngestionQueue extends ParquetIngestionQueue {
 
     private IngestionResult tryWriteShard(WriteTask<String, IngestionResult> writeTask, int shard,
                                           List<Runnable> shardCancelHooks) throws Exception {
-        String filter = "hash(%s) %% %d = %d".formatted(HeaderUtils.quoteIdentifier(partitionColumn), parallelWriters, shard);
         String filenamePattern = "dd_shard%d_{uuid}".formatted(shard);
-        return tryWrite(writeTask, filter, filenamePattern, shardCancelHooks::add);
+        return tryWrite(writeTask, shardFilter(shard), filenamePattern, shardCancelHooks::add);
+    }
+
+    /** The row-routing filter for {@code shard}, shared between the actual write and failure messages. */
+    private String shardFilter(int shard) {
+        return "hash(%s) %% %d = %d".formatted(HeaderUtils.quoteIdentifier(partitionColumn), parallelWriters, shard);
     }
 
     /**
@@ -178,12 +182,14 @@ public class PartitionedIngestionQueue extends ParquetIngestionQueue {
                 postIngestionHandler.createPostIngestionTask(shardResults.get(i)).execute();
             } catch (Exception e) {
                 if (i > 0) {
-                    logger.error("Partitioned write for queue '{}': shard {} of {} failed to commit AFTER "
+                    logger.error("Partitioned write for queue '{}': shard {} [{}] of {} failed to commit AFTER "
                                     + "shards 0..{} already committed — PARTIAL COMMIT: their data is durable "
                                     + "in the catalog even though this batch is being reported as failed",
-                            queueId, i, shardResults.size(), i - 1, e);
+                            queueId, i, shardFilter(i), shardResults.size(), i - 1, e);
                 }
-                throw e instanceof RuntimeException re ? re : new RuntimeException(e);
+                throw new RuntimeException(
+                        "Partitioned write for queue '%s': shard %d [%s] failed to commit (%s)"
+                                .formatted(queueId, i, shardFilter(i), e.getMessage()), e);
             }
         }
     }
