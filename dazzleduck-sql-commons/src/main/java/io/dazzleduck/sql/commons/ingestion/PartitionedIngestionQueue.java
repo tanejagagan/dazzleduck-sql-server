@@ -1,5 +1,6 @@
 package io.dazzleduck.sql.commons.ingestion;
 
+import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.util.HeaderUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -7,8 +8,13 @@ import org.slf4j.LoggerFactory;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -28,11 +34,22 @@ import java.util.stream.Collectors;
  * {@link DuckLakePostIngestionTask} call), so there is no way to make all N shards commit
  * atomically without 2-phase-commit machinery DuckLake does not expose. To still guarantee "no
  * partial commit" for the common failure mode, every shard's {@code COPY} is run to completion
- * <b>before any</b> shard's post-ingestion task runs: {@link #writeAllShards} does the writes and
- * fails the whole batch (nothing committed) if any shard's COPY fails, and only once every shard
- * has written successfully does {@link #commitAllShards} register them with the catalog. A failure
- * during that second phase, after some shards already committed, is a genuine residual risk this
- * design cannot remove — it is logged loudly as a partial-commit anomaly rather than hidden.
+ * before any shard's post-ingestion task runs — {@link #writeAllShards} does the writes first, and
+ * only shards that succeeded are then registered with the catalog. A failure during that second
+ * phase, after some shards already committed, is a genuine residual risk this design cannot remove
+ * — it is logged loudly as a partial-commit anomaly rather than hidden.
+ *
+ * <p><b>Failure attribution.</b> When some shards fail and others succeed, {@link #write} does not
+ * simply fail the whole flushed bucket: {@link #attributeAffectedFiles} re-evaluates just the failed
+ * shards' routing filters against the raw (pre-transformation) input, tagged with each row's source
+ * file, to determine exactly which input batches had rows routed to a failed shard. Batches with no
+ * rows in any failed shard have their futures completed normally; only the affected batches' futures
+ * fail, via {@link PartialWriteFailure} so {@link BulkIngestQueue} accounts for and rolls back
+ * producer sequences for just that subset. Attribution can itself be unavailable (e.g. the
+ * partition column doesn't exist pre-transformation, every shard failed, or the same broken
+ * expression that failed a shard also breaks this query) — in that case every batch in the flush is
+ * conservatively treated as affected, i.e. the whole-bucket failure behavior from before this
+ * attribution existed.
  *
  * <p>No cross-shard merge of watermark rows or snapshot ids is needed: each shard computes its own
  * watermark rows over its own filtered relation, and its own {@link DuckLakePostIngestionTask}
@@ -80,6 +97,9 @@ public class PartitionedIngestionQueue extends ParquetIngestionQueue {
                 : null;
     }
 
+    /** Every shard's outcome from {@link #writeAllShards}, keyed by shard index in submission order. */
+    private record ShardOutcome(Map<Integer, IngestionResult> succeeded, Map<Integer, Throwable> failed) {}
+
     @Override
     public void write(WriteTask<String, IngestionResult> writeTask) {
         if (parallelWriters <= 1 || partitionColumn == null) {
@@ -98,21 +118,45 @@ public class PartitionedIngestionQueue extends ParquetIngestionQueue {
             }
 
             long start = System.nanoTime();
-            List<IngestionResult> shardResults = writeAllShards(writeTask, shardCancelHooks);
+            ShardOutcome copyOutcome = writeAllShards(writeTask, shardCancelHooks);
             long copyDone = System.nanoTime();
-            commitAllShards(shardResults);
+
+            // Commit only the shards whose COPY succeeded; a commit failure joins failedShards too,
+            // scoped to that one shard exactly like a COPY failure would be.
+            List<IngestionResult> committedResults = new ArrayList<>();
+            Map<Integer, Throwable> failedShards = new LinkedHashMap<>(copyOutcome.failed());
+            for (var entry : copyOutcome.succeeded().entrySet()) {
+                int shard = entry.getKey();
+                try {
+                    postIngestionHandler.createPostIngestionTask(entry.getValue()).execute();
+                    committedResults.add(entry.getValue());
+                } catch (Exception e) {
+                    if (!committedResults.isEmpty()) {
+                        logger.error("Partitioned write for queue '{}': shard {} [{}] failed to commit AFTER {} "
+                                        + "other shard(s) already committed — PARTIAL COMMIT: their data is durable "
+                                        + "in the catalog regardless of how this batch is ultimately reported",
+                                queueId, shard, shardFilter(shard), committedResults.size(), e);
+                    }
+                    failedShards.put(shard, e);
+                }
+            }
             long postIngestDone = System.nanoTime();
             accumulatePhaseTimings(copyDone - start, postIngestDone - copyDone);
             logger.debug("Queue '{}' partitioned commit phases: data(COPY)={}ms, postIngest(catalog)={}ms, shards={}",
                     queueId, (copyDone - start) / 1_000_000, (postIngestDone - copyDone) / 1_000_000, parallelWriters);
 
-            IngestionResult merged = mergeResults(shardResults, writeTask);
-            writeTask.bucket().futures().forEach(action -> action.complete(merged));
+            if (failedShards.isEmpty()) {
+                IngestionResult merged = mergeResults(committedResults, writeTask);
+                writeTask.bucket().futures().forEach(action -> action.complete(merged));
+                return;
+            }
+            handleShardFailures(writeTask, committedResults, failedShards);
         } catch (Exception e) {
             logger.atError().setCause(e).log("Failed partitioned write to queue {} ({} shards)", queueId, parallelWriters);
             // Same propagation contract as ParquetIngestionQueue.write(): rethrow so
-            // BulkIngestQueue.processWriteQueue accounts this bucket as failed and rolls back
-            // producer sequences before the futures complete.
+            // BulkIngestQueue.processWriteQueue accounts this bucket as failed (in full, or scoped
+            // to PartialWriteFailure.failedBatches() when attribution found a genuine split) and
+            // rolls back the corresponding producer sequences.
             if (e instanceof RuntimeException re) {
                 throw re;
             }
@@ -124,39 +168,27 @@ public class PartitionedIngestionQueue extends ParquetIngestionQueue {
 
     /**
      * Runs every shard's {@code COPY} concurrently. Nothing is committed to the catalog here — a
-     * shard failure at this stage means zero catalog registrations happened for this batch.
+     * shard failure at this stage means zero catalog registrations happened for that shard's data.
      */
-    private List<IngestionResult> writeAllShards(WriteTask<String, IngestionResult> writeTask,
-                                                  List<Runnable> shardCancelHooks) {
+    private ShardOutcome writeAllShards(WriteTask<String, IngestionResult> writeTask, List<Runnable> shardCancelHooks) {
         List<Future<IngestionResult>> futures = new ArrayList<>(parallelWriters);
         for (int i = 0; i < parallelWriters; i++) {
             int shard = i;
             futures.add(shardExecutor.submit(() -> tryWriteShard(writeTask, shard, shardCancelHooks)));
         }
-        List<IngestionResult> results = new ArrayList<>(parallelWriters);
-        List<String> failures = new ArrayList<>();
-        Throwable firstFailure = null;
+        Map<Integer, IngestionResult> succeeded = new LinkedHashMap<>();
+        Map<Integer, Throwable> failed = new LinkedHashMap<>();
         for (int i = 0; i < futures.size(); i++) {
             try {
-                results.add(futures.get(i).get());
+                succeeded.put(i, futures.get(i).get());
             } catch (ExecutionException ee) {
-                Throwable cause = ee.getCause() != null ? ee.getCause() : ee;
-                failures.add("shard %d [%s]: %s".formatted(i, shardFilter(i), cause.getMessage()));
-                if (firstFailure == null) firstFailure = cause;
+                failed.put(i, ee.getCause() != null ? ee.getCause() : ee);
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
-                failures.add("shard %d [%s]: interrupted".formatted(i, shardFilter(i)));
-                if (firstFailure == null) firstFailure = ie;
+                failed.put(i, ie);
             }
         }
-        if (!failures.isEmpty()) {
-            throw new RuntimeException(
-                    ("Partitioned write failed for queue '%s': %d of %d shard(s) failed before any commit "
-                            + "(no partial commit occurred): %s")
-                            .formatted(queueId, failures.size(), parallelWriters, String.join("; ", failures)),
-                    firstFailure);
-        }
-        return results;
+        return new ShardOutcome(succeeded, failed);
     }
 
     private IngestionResult tryWriteShard(WriteTask<String, IngestionResult> writeTask, int shard,
@@ -171,32 +203,110 @@ public class PartitionedIngestionQueue extends ParquetIngestionQueue {
     }
 
     /**
-     * Registers every shard with the catalog, in order. If shard {@code k} fails after shards
-     * {@code 0..k-1} already committed, those commits cannot be rolled back — logged loudly as a
-     * partial-commit anomaly (their data is durable, just not what "no partial commits" promised)
-     * and rethrown so the failure is visible rather than swallowed.
+     * Handles a non-empty {@code failedShards}: tries to attribute the failure(s) to specific input
+     * batches so unaffected ones can still succeed, then completes every future in the bucket and
+     * throws to signal the outcome to {@link BulkIngestQueue}.
+     *
+     * <p>Throws a plain {@link RuntimeException} (whole-bucket failure, the pre-attribution behavior)
+     * when every batch turns out to be affected — either because every shard failed, or because
+     * attribution itself was unavailable. Throws {@link PartialWriteFailure} only for a genuine
+     * split, after completing every future in {@code writeTask}'s bucket itself.
      */
-    private void commitAllShards(List<IngestionResult> shardResults) {
-        for (int i = 0; i < shardResults.size(); i++) {
-            try {
-                postIngestionHandler.createPostIngestionTask(shardResults.get(i)).execute();
-            } catch (Exception e) {
-                if (i > 0) {
-                    logger.error("Partitioned write for queue '{}': shard {} [{}] of {} failed to commit AFTER "
-                                    + "shards 0..{} already committed — PARTIAL COMMIT: their data is durable "
-                                    + "in the catalog even though this batch is being reported as failed",
-                            queueId, i, shardFilter(i), shardResults.size(), i - 1, e);
-                }
-                throw new RuntimeException(
-                        "Partitioned write for queue '%s': shard %d [%s] failed to commit (%s)"
-                                .formatted(queueId, i, shardFilter(i), e.getMessage()), e);
+    private void handleShardFailures(WriteTask<String, IngestionResult> writeTask,
+                                     List<IngestionResult> committedResults,
+                                     Map<Integer, Throwable> failedShards) {
+        String failureSummary = failedShards.entrySet().stream()
+                .map(e -> "shard %d [%s]: %s".formatted(e.getKey(), shardFilter(e.getKey()), e.getValue().getMessage()))
+                .collect(Collectors.joining("; "));
+
+        boolean allShardsFailed = failedShards.size() == parallelWriters;
+        Set<String> affectedFiles = allShardsFailed ? null : attributeAffectedFiles(writeTask, failedShards.keySet());
+        boolean attributionAvailable = affectedFiles != null;
+
+        List<Batch<String>> allBatches = writeTask.bucket().batches();
+        List<Integer> failedIndices = new ArrayList<>();
+        List<Integer> successfulIndices = new ArrayList<>();
+        for (int i = 0; i < allBatches.size(); i++) {
+            boolean affected = !attributionAvailable || affectedFiles.contains(allBatches.get(i).record());
+            (affected ? failedIndices : successfulIndices).add(i);
+        }
+
+        if (successfulIndices.isEmpty()) {
+            throw new RuntimeException(
+                    ("Partitioned write failed for queue '%s': %d of %d shard(s) failed before any commit "
+                            + "(no partial commit occurred)%s: %s")
+                            .formatted(queueId, failedShards.size(), parallelWriters,
+                                    attributionAvailable ? "" : ", attribution unavailable so every batch in this flush is affected",
+                                    failureSummary),
+                    failedShards.values().iterator().next());
+        }
+
+        // Genuine split: unaffected batches succeed with the committed shards' data; affected
+        // batches fail with an error naming exactly which shard(s)/filter(s) they were routed to.
+        List<CompletableFuture<IngestionResult>> allFutures = writeTask.bucket().futures();
+        IngestionResult merged = mergeResults(committedResults, writeTask);
+        for (int idx : successfulIndices) {
+            allFutures.get(idx).complete(merged);
+        }
+        RuntimeException perBatchError = new RuntimeException(
+                "Partitioned write for queue '%s': this batch's rows were routed to a failed shard: %s"
+                        .formatted(queueId, failureSummary));
+        for (int idx : failedIndices) {
+            allFutures.get(idx).completeExceptionally(perBatchError);
+        }
+
+        logger.error("Partitioned write for queue '{}': {} of {} batches affected by {} failed shard(s) "
+                        + "(rest committed successfully): {}",
+                queueId, failedIndices.size(), allBatches.size(), failedShards.size(), failureSummary);
+
+        throw new PartialWriteFailure(
+                "Partitioned write for queue '%s': %d of %d batches failed (%s)"
+                        .formatted(queueId, failedIndices.size(), allBatches.size(), failureSummary),
+                failedShards.values().iterator().next(),
+                failedIndices.stream().<Batch<?>>map(allBatches::get).toList());
+    }
+
+    /**
+     * Determines which of this flush's input files (batches) contributed at least one row to any of
+     * {@code failedShardIndices}, by re-evaluating just those shards' routing filters against the
+     * raw (pre-transformation) input relation tagged with its source file via {@code filename=true}
+     * — the same {@code read_%s(...)} function {@link ParquetIngestionQueue#constructSourceRelation}
+     * uses, so filenames match {@link Batch#record()} exactly.
+     *
+     * <p>Deliberately bypasses the configured transformation: {@code partitionColumn} must be a raw
+     * input column for this to work, since a transformation can project it away, derive it, or (in
+     * principle) change row cardinality, none of which this simple re-evaluation can account for.
+     * A queue routing on a transformation-derived column will see every failure attributed to every
+     * batch (via the {@code null} return below), i.e. the same whole-bucket behavior as before this
+     * attribution existed — not a regression, just not narrowed for that configuration.
+     *
+     * @return the affected file paths, or {@code null} if the query itself failed (attribution
+     *         unavailable — caller falls back to treating every batch as affected)
+     */
+    private Set<String> attributeAffectedFiles(WriteTask<String, IngestionResult> writeTask, Set<Integer> failedShardIndices) {
+        var batches = writeTask.bucket().batches();
+        var files = batches.stream().map(Batch::record).map("'%s'"::formatted).collect(Collectors.joining(","));
+        String combinedFilter = failedShardIndices.stream().map(this::shardFilter).collect(Collectors.joining(" OR "));
+        String query = "SELECT DISTINCT filename FROM read_%s([%s], filename=true) WHERE %s"
+                .formatted(inputFormat, files, combinedFilter);
+        try (var conn = ConnectionPool.getConnection();
+             var stmt = conn.createStatement();
+             var rs = stmt.executeQuery(query)) {
+            Set<String> affected = new HashSet<>();
+            while (rs.next()) {
+                affected.add(rs.getString("filename"));
             }
+            return affected;
+        } catch (Exception e) {
+            logger.warn("Queue '{}': could not attribute the failed shard(s) to specific batches ({}); "
+                    + "every batch in this flush will be treated as affected", queueId, e.getMessage());
+            return null;
         }
     }
 
     /**
-     * One caller-facing {@link IngestionResult} for {@code writeTask}'s futures. The real DuckLake
-     * commits already happened per-shard in {@link #commitAllShards}; this is purely informational.
+     * One caller-facing {@link IngestionResult}. The real DuckLake commits already happened
+     * per-shard in {@link #write}; this is purely informational.
      */
     private IngestionResult mergeResults(List<IngestionResult> shardResults, WriteTask<String, IngestionResult> writeTask) {
         long totalRows = shardResults.stream().mapToLong(IngestionResult::rowCount).sum();

@@ -13,6 +13,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -152,6 +153,81 @@ public class PartitionedIngestionQueueTest {
     }
 
     @Test
+    public void testPartialFailureNotifiesOnlyAffectedBatches() throws Exception {
+        var service = new DeterministicScheduler();
+        var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
+        int parallelWriters = 3;
+        int failingShard = 1;
+
+        // Partition a range of ids by which shard they route to, so the "unaffected" and
+        // "affected" batches below are built from real hash(id) % N routing, not guesswork.
+        List<Long> unaffectedIds = new ArrayList<>();
+        List<Long> affectedIds = new ArrayList<>();
+        try (var conn = ConnectionPool.getConnection();
+             var stmt = conn.createStatement();
+             var rs = stmt.executeQuery("SELECT range AS id, hash(range) %% %d AS shard FROM range(0, 50)".formatted(parallelWriters))) {
+            while (rs.next()) {
+                (rs.getLong("shard") == failingShard ? affectedIds : unaffectedIds).add(rs.getLong("id"));
+            }
+        }
+        assertFalse(unaffectedIds.isEmpty());
+        assertFalse(affectedIds.isEmpty());
+
+        Path unaffectedFile = writeIdRows("unaffected.parquet", unaffectedIds);
+        // Only needs to contain at least one row landing in the failing shard.
+        Path affectedFile = writeIdRows("affected.parquet", affectedIds.subList(0, 1));
+
+        var commitCount = new AtomicInteger();
+        var handler = new IngestionHandler() {
+            @Override
+            public PostIngestionTask createPostIngestionTask(IngestionResult ingestionResult) {
+                boolean isFailingShard = ingestionResult.filesCreated().stream()
+                        .anyMatch(f -> f.contains("dd_shard" + failingShard + "_"));
+                return () -> {
+                    if (isFailingShard) {
+                        throw new RuntimeException("simulated catalog failure for shard " + failingShard);
+                    }
+                    commitCount.incrementAndGet();
+                };
+            }
+
+            @Override
+            public String getTargetPath(String queueId) { return null; }
+
+            @Override
+            public String[] getPartitionBy(String queueId) { return new String[0]; }
+        };
+
+        try (var queue = new PartitionedIngestionQueue(
+                TEST_APP_ID, INPUT_FORMAT, targetPath.toString(), "test-queue",
+                DEFAULT_MIN_BATCH_SIZE, Long.MAX_VALUE, Integer.MAX_VALUE, Long.MAX_VALUE,
+                DEFAULT_MAX_DELAY, null, handler, service, clock, "id", parallelWriters)) {
+
+            // Both batches must land in the SAME flushed bucket for this to exercise attribution:
+            // the first stays under minBucketSize, the second pushes the bucket over it, so add()
+            // flushes both together in one write().
+            var unaffectedFuture = queue.add(createBatch(unaffectedFile.toString(), "producer-safe", 0, DEFAULT_MIN_BATCH_SIZE / 2));
+            var affectedFuture = queue.add(createBatch(affectedFile.toString(), "producer-affected", 0, DEFAULT_MIN_BATCH_SIZE + 1));
+            service.tick(1, TimeUnit.MILLISECONDS);
+
+            // The unaffected producer's batch succeeds even though another batch in the same flush
+            // was routed (in part) to a shard whose commit failed.
+            var result = unaffectedFuture.get(5, SECONDS);
+            assertTrue(result.rowCount() > 0);
+
+            // The affected producer's batch fails, naming exactly which shard/filter it hit.
+            var thrown = assertThrows(Exception.class, () -> affectedFuture.get(5, SECONDS));
+            String message = thrown.getCause() != null ? thrown.getCause().getMessage() : thrown.getMessage();
+            assertNotNull(message);
+            assertTrue(message.contains("routed to a failed shard"), message);
+            assertTrue(message.contains("shard " + failingShard + " ["), message);
+
+            // Every shard except the failing one committed (2 of 3).
+            assertEquals(parallelWriters - 1, commitCount.get());
+        }
+    }
+
+    @Test
     public void testWatermarkRowsComputedPerShard() throws Exception {
         var service = new DeterministicScheduler();
         var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
@@ -177,6 +253,13 @@ public class PartitionedIngestionQueueTest {
                     .sum();
             assertEquals(100L, totalCounted, "sum of per-shard, per-group row counts must equal total rows written");
         }
+    }
+
+    private Path writeIdRows(String filename, List<Long> ids) throws Exception {
+        Path file = tempDir.resolve(filename);
+        String idList = ids.stream().map(String::valueOf).collect(Collectors.joining(","));
+        ConnectionPool.execute("COPY (SELECT UNNEST([%s]) AS id) TO '%s' (FORMAT PARQUET)".formatted(idList, file));
+        return file;
     }
 
     private Path createTestParquetFile(String filename, int rowCount) throws Exception {

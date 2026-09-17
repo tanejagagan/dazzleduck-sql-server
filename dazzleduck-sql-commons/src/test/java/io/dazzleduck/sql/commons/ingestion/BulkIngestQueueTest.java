@@ -362,6 +362,55 @@ public class BulkIngestQueueTest {
     }
 
     @Test
+    public void testPartialWriteFailureAccountsAndRollsBackOnlyAffectedBatches() throws Exception {
+        var service = new DeterministicScheduler();
+        var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
+        long batchSize = DEFAULT_MIN_BATCH_SIZE / 2 + 1; // two of these fill the bucket
+        // A write() that completes each batch's future itself, failing only the "bad" producer's —
+        // and only its first batch, so the retry below exercises rollback rather than failing again.
+        var failOnce = new java.util.concurrent.atomic.AtomicBoolean(true);
+        var queue = new PartiallyFailingMockQueue(
+                b -> "bad".equals(b.producerId()) && failOnce.getAndSet(false), service, clock);
+
+        var goodFuture = queue.add(mockBatch("good", 0, batchSize));
+        var badFuture = queue.add(mockBatch("bad", 0, batchSize)); // fills the bucket, triggers write()
+        service.tick(1, TimeUnit.MILLISECONDS);
+
+        assertNotNull(goodFuture.get(5, TimeUnit.SECONDS), "the unaffected producer's batch must succeed");
+        var thrown = assertThrows(java.util.concurrent.ExecutionException.class,
+                () -> badFuture.get(5, TimeUnit.SECONDS));
+        assertEquals("simulated per-batch failure", thrown.getCause().getMessage());
+
+        // write() completes futures itself, before returning via throw — accounting in
+        // processWriteQueue's catch settles a moment later on the write thread, so poll rather
+        // than assume it's already visible the instant the futures above unblocked.
+        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        while (queue.getFailedWriteBatches() == 0 && System.nanoTime() < deadline) {
+            Thread.sleep(5);
+        }
+
+        // Accounting is split exactly along the affected/unaffected line, not the whole bucket.
+        assertEquals(batchSize, queue.getFailedWriteBytes());
+        assertEquals(1, queue.getFailedWriteBatches());
+        assertEquals(1, queue.getFailedWriteBuckets());
+        assertEquals(batchSize, queue.getTotalWriteBytes());
+        assertEquals(1, queue.getTotalWriteBatches());
+        assertEquals(0, queue.pendingWrite());
+        assertEquals(0, queue.getPendingBatches());
+
+        // Only the failed batch's producer sequence rolled back: the same id is retriable.
+        var retry = queue.add(mockBatch("bad", 0, batchSize));
+        // The unaffected producer's sequence was never touched — its next id proceeds normally
+        // and, combined with the retry above, fills the next bucket.
+        var next = queue.add(mockBatch("good", 1, batchSize));
+        service.tick(1, TimeUnit.MILLISECONDS);
+        assertNotNull(retry.get(5, TimeUnit.SECONDS));
+        assertNotNull(next.get(5, TimeUnit.SECONDS));
+
+        queue.close();
+    }
+
+    @Test
     public void testProducerIdEvictionIsCounted() throws Exception {
         withServiceAndQueue((service, queue, clock) -> {
             int maxProducerIds = 10_000; // MAX_PRODUCER_IDS in BulkIngestQueue
@@ -411,6 +460,40 @@ public class BulkIngestQueueTest {
             }
             for (var future : writeTask.bucket().futures()) {
                 future.complete(new MockWriteResult(writeTask.taskId(), writeTask.size()));
+            }
+        }
+    }
+
+    /**
+     * Queue whose write() completes every batch's future itself — successful ones normally, the
+     * ones matching {@code shouldFail} exceptionally — then throws {@link PartialWriteFailure}
+     * naming just the latter, exercising {@link BulkIngestQueue}'s partial-outcome accounting path.
+     */
+    private static final class PartiallyFailingMockQueue extends BulkIngestQueue<String, MockWriteResult> {
+        private final java.util.function.Predicate<Batch<String>> shouldFail;
+
+        PartiallyFailingMockQueue(java.util.function.Predicate<Batch<String>> shouldFail,
+                                  ScheduledExecutorService executorService, Clock clock) {
+            super("", DEFAULT_MIN_BATCH_SIZE, Long.MAX_VALUE, Integer.MAX_VALUE, Long.MAX_VALUE,
+                    DEFAULT_MAX_DELAY, executorService, clock);
+            this.shouldFail = shouldFail;
+        }
+
+        @Override
+        public void write(WriteTask<String, MockWriteResult> writeTask) {
+            var batches = writeTask.bucket().batches();
+            var futures = writeTask.bucket().futures();
+            List<Batch<?>> failedBatches = new ArrayList<>();
+            for (int i = 0; i < batches.size(); i++) {
+                if (shouldFail.test(batches.get(i))) {
+                    futures.get(i).completeExceptionally(new RuntimeException("simulated per-batch failure"));
+                    failedBatches.add(batches.get(i));
+                } else {
+                    futures.get(i).complete(new MockWriteResult(writeTask.taskId(), batches.get(i).totalSize()));
+                }
+            }
+            if (!failedBatches.isEmpty()) {
+                throw new PartialWriteFailure("simulated partial failure", null, failedBatches);
             }
         }
     }

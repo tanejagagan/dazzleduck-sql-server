@@ -246,6 +246,24 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
                     totalWrite.accumulate(bucketToWrite.size());
                     totalWriteBuckets.accumulate(bucketsToCombine.size());
                     timeSpentWriting.accumulate(Duration.between(start, end).toMillis());
+                } catch (PartialWriteFailure pwf) {
+                    // write() determined only SOME of this bucket's batches were affected and
+                    // already completed every future itself (successful ones normally,
+                    // pwf.failedBatches() exceptionally) before throwing — so, unlike the generic
+                    // catch below, futures are left untouched here; only accounting and producer-
+                    // sequence rollback are scoped to exactly the batches it names as failed.
+                    @SuppressWarnings("unchecked")
+                    List<Batch<T>> failedBatches = (List<Batch<T>>) (List<?>) pwf.failedBatches();
+                    long failedBytes = failedBatches.stream().mapToLong(Batch::totalSize).sum();
+                    logger.error("Partial write failure for queue '{}': {} of {} batches failed, rest already written",
+                            identifier, failedBatches.size(), bucketToWrite.batchCount(), pwf);
+                    failedWriteBytes.accumulate(failedBytes);
+                    failedWriteBatches.accumulate(failedBatches.size());
+                    failedWriteBuckets.accumulate(1);
+                    totalWrite.accumulate(bucketToWrite.size() - failedBytes);
+                    totalWriteBatches.accumulate(bucketToWrite.batchCount() - failedBatches.size());
+                    totalWriteBuckets.accumulate(bucketsToCombine.size());
+                    rollbackProducerSequences(failedBatches);
                 } catch (Exception e) {
                     logger.error("Write failed for queue '{}': dropping bucket of {} batches / {} bytes",
                             identifier, bucketToWrite.batchCount(), bucketToWrite.size(), e);
@@ -257,7 +275,7 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
                     failedWriteBytes.accumulate(bucketToWrite.size());
                     failedWriteBatches.accumulate(bucketToWrite.batchCount());
                     failedWriteBuckets.accumulate(1);
-                    rollbackProducerSequences(bucketToWrite);
+                    rollbackProducerSequences(bucketToWrite.batches());
                     // Complete futures with exception but continue processing remaining tasks
                     for (var future : bucketToWrite.futures()) {
                         if (!future.isDone()) {
@@ -276,18 +294,25 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
     }
 
     /**
-     * Rolls each producer's sequence entry back below the smallest id that failed in this bucket,
-     * so the client can resubmit exactly the batches whose futures failed; without this a retry is
-     * rejected as {@link OutOfSequenceBatch} and a recoverable write failure becomes data loss.
-     * Runs under the queue lock because {@link #add} reads and writes {@link #inProgressBatchIds}
-     * under the same lock, and before the futures are completed so a client observing the failure
-     * can retry immediately. Ids of later batches from the same producer still queued behind the
-     * failed bucket become re-submittable too; they either succeed (so dedup is only weakened for
-     * batches the client was told failed) or fail and legitimately need the same retry window.
+     * Rolls each producer's sequence entry back below the smallest id among {@code batches}, so the
+     * client can resubmit exactly the batches whose futures failed; without this a retry is rejected
+     * as {@link OutOfSequenceBatch} and a recoverable write failure becomes data loss. Runs under the
+     * queue lock because {@link #add} reads and writes {@link #inProgressBatchIds} under the same
+     * lock. Ids of later batches from the same producer still queued behind the failed ones become
+     * re-submittable too; they either succeed (so dedup is only weakened for batches the client was
+     * told failed) or fail and legitimately need the same retry window.
+     *
+     * <p>Called with the whole bucket's batches, before its futures complete, for an ordinary
+     * write failure — and with just {@link PartialWriteFailure#failedBatches()} for one, after
+     * {@code write()} has already completed every future itself (it alone has the information to
+     * split them). That reopens a narrow, best-effort race for the partial case: a retry arriving in
+     * the microseconds between a future's exceptional completion and this rollback running would be
+     * spuriously rejected as out-of-sequence once — recoverable by the client's normal retry, not a
+     * correctness issue, but a strictly weaker guarantee than the whole-bucket path's.
      */
-    private synchronized void rollbackProducerSequences(Bucket<T, R> bucket) {
+    private synchronized void rollbackProducerSequences(List<Batch<T>> batches) {
         var minFailedByProducer = new HashMap<String, Long>();
-        for (var batch : bucket.batches()) {
+        for (var batch : batches) {
             if (batch.producerId() != null) {
                 minFailedByProducer.merge(batch.producerId(), batch.producerBatchId(), Math::min);
             }
