@@ -69,8 +69,15 @@ public class DynamicQueueRepository implements AutoCloseable {
                     input_schema     TEXT,
                     partition_by     TEXT,
                     min_bucket_size  INTEGER,
-                    max_delay_ms     INTEGER
+                    max_delay_ms     INTEGER,
+                    partition_column TEXT,
+                    parallel_writers INTEGER
                 )""".formatted(ATTACHMENT));
+            // Migration for a registry created before partition_column/parallel_writers existed:
+            // CREATE TABLE IF NOT EXISTS above is a no-op against an already-existing file, so an
+            // already-deployed registry needs these added explicitly.
+            st.execute("ALTER TABLE %s.ingestion_queues ADD COLUMN IF NOT EXISTS partition_column TEXT".formatted(ATTACHMENT));
+            st.execute("ALTER TABLE %s.ingestion_queues ADD COLUMN IF NOT EXISTS parallel_writers INTEGER".formatted(ATTACHMENT));
             st.execute("""
                 CREATE TABLE IF NOT EXISTS %s.schema_version (
                     id      INTEGER PRIMARY KEY CHECK (id = 1),
@@ -179,19 +186,22 @@ public class DynamicQueueRepository implements AutoCloseable {
      * Loads all rows from {@code ingestion_queues} via the supplied connection
      * (which must have {@value ATTACHMENT} already attached).
      *
-     * <p>The write location and partition columns are <strong>not</strong> read from the registry —
-     * {@link DynamicIngestionHandler} (via {@link DuckLakeIngestionHandler}) derives them from the
-     * DuckLake table's own metadata. The registry supplies {@code catalog}/{@code schema}/
+     * <p>The write location and Hive partition columns are <strong>not</strong> read from the
+     * registry — {@link DynamicIngestionHandler} (via {@link DuckLakeIngestionHandler}) derives them
+     * from the DuckLake table's own metadata. The registry supplies {@code catalog}/{@code schema}/
      * {@code table} (plus optional {@code transformation}/{@code view}/{@code input_table} and
      * {@code input_schema}, the latter used only by {@code manageTables} to derive the table columns);
      * the {@code partition_by} column is reserved for future use and not read here.
+     * {@code partition_column}/{@code parallel_writers} (write-time sharding, unrelated to
+     * {@code partition_by}) are read and applied via {@link QueueIdToTableMapping#withPartitioning}.
      */
     public static Map<String, QueueIdToTableMapping> loadAll(Connection conn) throws SQLException {
         Map<String, QueueIdToTableMapping> result = new LinkedHashMap<>();
         try (Statement st = conn.createStatement();
              ResultSet rs = st.executeQuery(
                      "SELECT ingestion_queue, catalog, schema_name, table_name," +
-                     " transformation, view_name, input_table, input_schema FROM " + ATTACHMENT + ".ingestion_queues")) {
+                     " transformation, view_name, input_table, input_schema, partition_column, parallel_writers" +
+                     " FROM " + ATTACHMENT + ".ingestion_queues")) {
             while (rs.next()) {
                 String queueId     = rs.getString("ingestion_queue");
                 String catalog     = rs.getString("catalog");
@@ -201,10 +211,13 @@ public class DynamicQueueRepository implements AutoCloseable {
                 String view        = rs.getString("view_name");
                 String inputTable  = rs.getString("input_table");
                 String inputSchema = rs.getString("input_schema");
+                String partitionColumn = rs.getString("partition_column");
+                int parallelWriters = rs.getObject("parallel_writers") == null ? 1 : rs.getInt("parallel_writers");
                 // outputPath omitted: derived from DuckLake metadata by the handler.
                 result.put(queueId, new QueueIdToTableMapping(
                         queueId, catalog, schema, table, Map.of(), transform, view, inputTable)
-                        .withInputSchema(inputSchema));
+                        .withInputSchema(inputSchema)
+                        .withPartitioning(partitionColumn, parallelWriters));
             }
         }
         return result;

@@ -24,6 +24,11 @@ import java.util.Map;
  *                    is described to derive the target table's columns
  * @param extractClaims when true, ingested rows carry a {@code claims} MAP column from the
  *                      caller's JWT (see {@code IngestionHandler#extractClaims})
+ * @param partitionColumn column {@link PartitionedIngestionQueue} routes rows by
+ *                        ({@code hash(partitionColumn) % parallelWriters}), nullable; required
+ *                        when {@code parallelWriters > 1}
+ * @param parallelWriters number of concurrent write shards; {@code 1} (the default) means the
+ *                        plain single-writer {@link ParquetIngestionQueue} path
  */
 public record QueueIdToTableMapping(
         String ingestionQueue,
@@ -36,7 +41,9 @@ public record QueueIdToTableMapping(
         String view,
         String inputTable,
         String inputSchema,
-        boolean extractClaims) {
+        boolean extractClaims,
+        String partitionColumn,
+        int parallelWriters) {
 
     /** Validates invariants on every construction path. */
     public QueueIdToTableMapping {
@@ -50,6 +57,20 @@ public record QueueIdToTableMapping(
                     "Queue '%s': 'transformation' and 'view'/'input_table' are mutually exclusive"
                             .formatted(ingestionQueue));
         }
+        if (parallelWriters < 1) {
+            throw new IllegalArgumentException(
+                    "Queue '%s': 'parallel_writers' must be >= 1, got %d".formatted(ingestionQueue, parallelWriters));
+        }
+        if (parallelWriters > 1 && (partitionColumn == null || partitionColumn.isBlank())) {
+            throw new IllegalArgumentException(
+                    "Queue '%s': 'parallel_writers' > 1 requires a non-blank 'partition_column'"
+                            .formatted(ingestionQueue));
+        }
+        if (parallelWriters == 1 && partitionColumn != null && !partitionColumn.isBlank()) {
+            throw new IllegalArgumentException(
+                    "Queue '%s': 'partition_column' is set but 'parallel_writers' is 1 — set parallel_writers > 1"
+                            .formatted(ingestionQueue));
+        }
         // Fail at config load, not per batch: a malformed watermark spec (partial/blank/typo'd
         // keys) would otherwise write each batch's output and then orphan it at post-ingestion.
         WatermarkSpec.fromParameters(ingestionQueue, additionalParameters);
@@ -59,13 +80,13 @@ public record QueueIdToTableMapping(
     public QueueIdToTableMapping(String ingestionQueue, String catalog, String schema, String table,
                                  Map<String, String> additionalParameters, String transformation,
                                  String view, String inputTable) {
-        this(ingestionQueue, null, catalog, schema, table, additionalParameters, transformation, view, inputTable, null, false);
+        this(ingestionQueue, null, catalog, schema, table, additionalParameters, transformation, view, inputTable, null, false, null, 1);
     }
 
     /** Convenience constructor for mappings that use an explicit transformation or none at all. */
     public QueueIdToTableMapping(String ingestionQueue, String catalog, String schema, String table,
                                  Map<String, String> additionalParameters, String transformation) {
-        this(ingestionQueue, null, catalog, schema, table, additionalParameters, transformation, null, null, null, false);
+        this(ingestionQueue, null, catalog, schema, table, additionalParameters, transformation, null, null, null, false, null, 1);
     }
 
     public boolean hasViewTransformation() {
@@ -75,12 +96,18 @@ public record QueueIdToTableMapping(
     /** Returns a copy of this mapping with {@code inputSchema} set (registry-sourced field). */
     public QueueIdToTableMapping withInputSchema(String inputSchema) {
         return new QueueIdToTableMapping(ingestionQueue, outputPath, catalog, schema, table,
-                additionalParameters, transformation, view, inputTable, inputSchema, extractClaims);
+                additionalParameters, transformation, view, inputTable, inputSchema, extractClaims, partitionColumn, parallelWriters);
     }
 
     /** Returns a copy of this mapping with {@code extractClaims} set. */
     public QueueIdToTableMapping withExtractClaims(boolean extractClaims) {
         return new QueueIdToTableMapping(ingestionQueue, outputPath, catalog, schema, table,
-                additionalParameters, transformation, view, inputTable, inputSchema, extractClaims);
+                additionalParameters, transformation, view, inputTable, inputSchema, extractClaims, partitionColumn, parallelWriters);
+    }
+
+    /** Returns a copy of this mapping with {@code partitionColumn}/{@code parallelWriters} set. */
+    public QueueIdToTableMapping withPartitioning(String partitionColumn, int parallelWriters) {
+        return new QueueIdToTableMapping(ingestionQueue, outputPath, catalog, schema, table,
+                additionalParameters, transformation, view, inputTable, inputSchema, extractClaims, partitionColumn, parallelWriters);
     }
 }

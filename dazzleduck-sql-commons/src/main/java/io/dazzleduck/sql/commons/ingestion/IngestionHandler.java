@@ -32,6 +32,16 @@ public interface IngestionHandler {
     /** Whether ingested rows carry a {@value #CLAIMS_COLUMN} MAP column from the caller's JWT. */
     default boolean extractClaims(String queueId) { return false; }
 
+    /**
+     * Column {@link PartitionedIngestionQueue} routes rows by ({@code hash(column) % getParallelWriters(queueId)}),
+     * or {@code null} for the plain single-writer {@link ParquetIngestionQueue} path. Unrelated to
+     * {@link #getPartitionBy}, which names the output's Hive {@code PARTITION_BY} columns.
+     */
+    default String getPartitionColumn(String queueId) { return null; }
+
+    /** Number of concurrent write shards for {@code queueId}; {@code 1} means single-writer. */
+    default int getParallelWriters(String queueId) { return 1; }
+
     // -----------------------------------------------------------------------
     // Queue lifecycle
     // -----------------------------------------------------------------------

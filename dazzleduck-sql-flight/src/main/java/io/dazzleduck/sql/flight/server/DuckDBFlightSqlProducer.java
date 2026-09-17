@@ -914,16 +914,30 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
 
     public static ParquetIngestionQueue createQueue(String producerId, String localQueueId, String path, IngestionHandler ingestionHandler,
                                                     IngestionConfig bulkIngestionConfig, FlightRecorder flightRecorder) {
-        var queue = new ParquetIngestionQueue(producerId, TEMP_WRITE_FORMAT, path, localQueueId,
-                bulkIngestionConfig.minBucketSize(),
-                bulkIngestionConfig.maxBucketSize(),
-                bulkIngestionConfig.maxBatches(),
-                bulkIngestionConfig.maxPendingWrite(),
-                bulkIngestionConfig.maxDelay(),
-                bulkIngestionConfig.parquetCompression(),
-                ingestionHandler,
-                Executors.newSingleThreadScheduledExecutor(),
-                Clock.systemDefaultZone());
+        String partitionColumn = ingestionHandler.getPartitionColumn(localQueueId);
+        int parallelWriters = ingestionHandler.getParallelWriters(localQueueId);
+        var queue = (partitionColumn != null && parallelWriters > 1)
+                ? new PartitionedIngestionQueue(producerId, TEMP_WRITE_FORMAT, path, localQueueId,
+                        bulkIngestionConfig.minBucketSize(),
+                        bulkIngestionConfig.maxBucketSize(),
+                        bulkIngestionConfig.maxBatches(),
+                        bulkIngestionConfig.maxPendingWrite(),
+                        bulkIngestionConfig.maxDelay(),
+                        bulkIngestionConfig.parquetCompression(),
+                        ingestionHandler,
+                        Executors.newSingleThreadScheduledExecutor(),
+                        Clock.systemDefaultZone(),
+                        partitionColumn, parallelWriters)
+                : new ParquetIngestionQueue(producerId, TEMP_WRITE_FORMAT, path, localQueueId,
+                        bulkIngestionConfig.minBucketSize(),
+                        bulkIngestionConfig.maxBucketSize(),
+                        bulkIngestionConfig.maxBatches(),
+                        bulkIngestionConfig.maxPendingWrite(),
+                        bulkIngestionConfig.maxDelay(),
+                        bulkIngestionConfig.parquetCompression(),
+                        ingestionHandler,
+                        Executors.newSingleThreadScheduledExecutor(),
+                        Clock.systemDefaultZone());
         flightRecorder.registerWriteQueue(localQueueId,
                 Map.of("write_batches", queue::getTotalWriteBatches,
                         "write_buckets", queue::getTotalWriteBuckets,

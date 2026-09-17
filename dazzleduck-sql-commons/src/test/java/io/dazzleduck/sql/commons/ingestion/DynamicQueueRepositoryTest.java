@@ -120,6 +120,73 @@ class DynamicQueueRepositoryTest {
     }
 
     @Test
+    void loadAllReadsPartitioningColumns() throws Exception {
+        String dbPath = tempDir.resolve("partitioning.db").toString();
+        try (DynamicQueueRepository repo = new DynamicQueueRepository(dbPath)) {
+            repo.init();
+
+            writeToDb(dbPath, "INSERT INTO " + DynamicQueueRepository.ATTACHMENT + ".ingestion_queues " +
+                    "(ingestion_queue, catalog, schema_name, table_name, partition_column, parallel_writers) " +
+                    "VALUES ('sharded', 'my_catalog', 'main', 'sharded', 'id', 4)");
+            // A queue with no partitioning set (both columns NULL) must default to parallelWriters=1.
+            writeToDb(dbPath, "INSERT INTO " + DynamicQueueRepository.ATTACHMENT + ".ingestion_queues " +
+                    "(ingestion_queue, catalog, schema_name, table_name) " +
+                    "VALUES ('plain', 'my_catalog', 'main', 'plain')");
+
+            try (Connection conn = repo.openReadOnlyConnection()) {
+                Map<String, QueueIdToTableMapping> mappings = DynamicQueueRepository.loadAll(conn);
+
+                QueueIdToTableMapping sharded = mappings.get("sharded");
+                assertEquals("id", sharded.partitionColumn());
+                assertEquals(4, sharded.parallelWriters());
+
+                QueueIdToTableMapping plain = mappings.get("plain");
+                assertNull(plain.partitionColumn());
+                assertEquals(1, plain.parallelWriters());
+            }
+        }
+    }
+
+    @Test
+    void initMigratesAPreExistingRegistryMissingPartitioningColumns() throws Exception {
+        // Simulates a registry created before partition_column/parallel_writers existed: the old
+        // table shape, with no ALTER TABLE run yet.
+        String dbPath = tempDir.resolve("legacy.db").toString();
+        String safePath = dbPath.replace("'", "''");
+        try (Connection conn = java.sql.DriverManager.getConnection("jdbc:duckdb:");
+             Statement st = conn.createStatement()) {
+            st.execute("LOAD sqlite");
+            st.execute("ATTACH '" + safePath + "' AS " + DynamicQueueRepository.ATTACHMENT + " (TYPE sqlite)");
+            st.execute("""
+                CREATE TABLE %s.ingestion_queues (
+                    ingestion_queue  TEXT PRIMARY KEY,
+                    catalog          TEXT NOT NULL,
+                    schema_name      TEXT NOT NULL,
+                    table_name       TEXT NOT NULL,
+                    transformation   TEXT,
+                    view_name        TEXT,
+                    input_table      TEXT,
+                    input_schema     TEXT,
+                    partition_by     TEXT,
+                    min_bucket_size  INTEGER,
+                    max_delay_ms     INTEGER
+                )""".formatted(DynamicQueueRepository.ATTACHMENT));
+            st.execute("INSERT INTO " + DynamicQueueRepository.ATTACHMENT + ".ingestion_queues " +
+                    "(ingestion_queue, catalog, schema_name, table_name) VALUES ('old', 'cat', 'main', 'old')");
+        }
+
+        try (DynamicQueueRepository repo = new DynamicQueueRepository(dbPath)) {
+            repo.init(); // must ALTER TABLE ADD COLUMN IF NOT EXISTS the two new columns in place
+            try (Connection conn = repo.openReadOnlyConnection()) {
+                QueueIdToTableMapping m = DynamicQueueRepository.loadAll(conn).get("old");
+                assertNotNull(m, "pre-existing row must survive the migration");
+                assertNull(m.partitionColumn());
+                assertEquals(1, m.parallelWriters());
+            }
+        }
+    }
+
+    @Test
     void dynamicHandlerReflectsHotReload() throws Exception {
         String dbPath = tempDir.resolve("hot.db").toString();
         try (DynamicQueueRepository repo = new DynamicQueueRepository(dbPath)) {

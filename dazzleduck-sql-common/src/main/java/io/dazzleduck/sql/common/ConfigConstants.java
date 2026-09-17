@@ -110,6 +110,11 @@ public class ConfigConstants {
 
     public static final String PARTITION_BY_KEY = "partition_by";
 
+    // PartitionedIngestionQueue routing keys — distinct from PARTITION_BY_KEY, which is the
+    // output's Hive PARTITION_BY list, not the write-time sharding column.
+    public static final String PARTITION_COLUMN_KEY = "partition_column";
+    public static final String PARALLEL_WRITERS_KEY = "parallel_writers";
+
     // Feature flags
     public static final String ENABLED_KEY = "enabled";
     public static final String CAPTURE_CALLER_DATA_KEY = "capture_caller_data";

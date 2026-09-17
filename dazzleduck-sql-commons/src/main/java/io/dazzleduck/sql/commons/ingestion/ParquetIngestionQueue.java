@@ -25,12 +25,12 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
      */
     private static final ExecutorService CLEANUP_EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
 
-    private final String outputPath;
-    private final String queueId;
-    private final IngestionHandler postIngestionHandler;
-    private final String applicationId;
-    private final String inputFormat;
-    private final String parquetCompression;
+    protected final String outputPath;
+    protected final String queueId;
+    protected final IngestionHandler postIngestionHandler;
+    protected final String applicationId;
+    protected final String inputFormat;
+    protected final String parquetCompression;
 
     /**
      * Per-phase commit timings. The write is two phases with different parallelism potential:
@@ -148,12 +148,19 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
         return postIngestPhaseNanos.get();
     }
 
+    /** Feeds the same per-phase timing accumulators {@link #write} updates, for subclasses that
+     * override {@code write} with a different commit shape (e.g. multiple parallel shards). */
+    protected void accumulatePhaseTimings(long dataPhaseElapsedNanos, long postIngestPhaseElapsedNanos) {
+        dataPhaseNanos.accumulate(dataPhaseElapsedNanos);
+        postIngestPhaseNanos.accumulate(postIngestPhaseElapsedNanos);
+    }
+
     /**
      * Asynchronously cleans up input files using virtual threads.
      * This is fire-and-forget - we don't wait for deletion to complete
      * since it doesn't affect the write result.
      */
-    private void cleanupInputFiles(WriteTask<String, IngestionResult> writeTask) {
+    protected void cleanupInputFiles(WriteTask<String, IngestionResult> writeTask) {
         writeTask.bucket().batches().forEach(this::onBatchAbandoned);
     }
 
@@ -169,7 +176,7 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
         });
     }
 
-    private String getClause(String[] values, String clause){
+    protected String getClause(String[] values, String clause){
         if(values == null || values.length == 0){
             return "";
         } else {
@@ -184,7 +191,16 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
      * watermark rows are computed over — same schema, same rows as the written output, read
      * while the input files are still local.
      */
-    private String constructSourceRelation(WriteTask<String, IngestionResult> writeTask) {
+    protected String constructSourceRelation(WriteTask<String, IngestionResult> writeTask) {
+        return constructSourceRelation(writeTask, null);
+    }
+
+    /**
+     * @param additionalFilter extra SQL boolean expression the relation is filtered by (e.g. a
+     *                         shard's {@code hash(col) % N = i} routing predicate), or {@code null}
+     *                         for the whole relation
+     */
+    protected String constructSourceRelation(WriteTask<String, IngestionResult> writeTask, String additionalFilter) {
         var batches = writeTask.bucket().batches();
         // All Arrow files
         var arrowFiles = batches.stream().map(Batch::record).map("'%s'"::formatted).collect(Collectors.joining(","));
@@ -212,10 +228,26 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
                         String.join(", ", partitionProjections), querySql);
             }
         }
+        if (additionalFilter != null) {
+            querySql = "SELECT * FROM (%s) WHERE %s".formatted(querySql, additionalFilter);
+        }
         return querySql;
     }
 
-    private String constructWriteQuery(WriteTask<String, IngestionResult> writeTask) {
+    protected String constructWriteQuery(WriteTask<String, IngestionResult> writeTask) {
+        return constructWriteQuery(writeTask, null, null);
+    }
+
+    /**
+     * @param additionalFilter extra filter applied to the source relation, or {@code null}
+     * @param filenamePattern  {@code FILENAME_PATTERN} value for the COPY statement, or {@code null}
+     *                         to omit the clause (the unpartitioned branch below already generates
+     *                         a unique file name per call). Required whenever more than one COPY can
+     *                         target the same output directory concurrently (see
+     *                         {@link PartitionedIngestionQueue}), since DuckDB's default per-COPY
+     *                         file counter can otherwise collide across concurrent invocations.
+     */
+    protected String constructWriteQuery(WriteTask<String, IngestionResult> writeTask, String additionalFilter, String filenamePattern) {
         var batches = writeTask.bucket().batches();
         String[] batchPartitionBy = batches.get(0).partitionBy();
         boolean hasBatchPartitionBy = batchPartitionBy != null && batchPartitionBy.length > 0;
@@ -226,17 +258,24 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
         // Last format
         var outputFormat = batches.isEmpty() ? "" : batches.get(batches.size() - 1).format();
         String fullFilePath;
+        // FILENAME_PATTERN only applies to COPY's directory form (PARTITION_BY set below); the
+        // unpartitioned form writes to one explicit file path, so a caller-supplied pattern (e.g. a
+        // shard prefix) is honored here directly, keeping file naming consistent either way.
         if (partitionByClause.isEmpty()) {
-            String uniqueFileName = "dd_" + UUID.randomUUID() + "." + outputFormat;
+            String uniqueFileName = (filenamePattern != null
+                    ? filenamePattern.replace("{uuid}", UUID.randomUUID().toString())
+                    : "dd_" + UUID.randomUUID()) + "." + outputFormat;
             fullFilePath = this.outputPath + "/" + uniqueFileName;
         } else {
             fullFilePath = this.outputPath;
         }
 
-        var querySql = constructSourceRelation(writeTask);
+        var querySql = constructSourceRelation(writeTask, additionalFilter);
 
         String compressionClause = parquetCompression != null && "parquet".equalsIgnoreCase(outputFormat)
                 ? ", COMPRESSION %s".formatted(parquetCompression) : "";
+        String filenamePatternClause = filenamePattern != null && !partitionByClause.isEmpty()
+                ? ", FILENAME_PATTERN '%s'".formatted(filenamePattern) : "";
 
         // Build SQL
         // https://duckdb.org/docs/stable/sql/statements/copy
@@ -244,13 +283,32 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
                 COPY
                     (%s)
                     TO '%s'
-                    (FORMAT %s%s %s, RETURN_FILES, APPEND);
-                """.formatted(querySql, fullFilePath, outputFormat, compressionClause, partitionByClause);
+                    (FORMAT %s%s %s, RETURN_FILES, APPEND%s);
+                """.formatted(querySql, fullFilePath, outputFormat, compressionClause, partitionByClause, filenamePatternClause);
         return sql;
     }
 
-    private IngestionResult tryWrite(WriteTask<String, IngestionResult> writeTask) throws Exception {
-        var sql = constructWriteQuery(writeTask);
+    protected IngestionResult tryWrite(WriteTask<String, IngestionResult> writeTask) throws Exception {
+        return tryWrite(writeTask, null, null);
+    }
+
+    protected IngestionResult tryWrite(WriteTask<String, IngestionResult> writeTask, String additionalFilter, String filenamePattern) throws Exception {
+        return tryWrite(writeTask, additionalFilter, filenamePattern, writeTask::setCancelHook);
+    }
+
+    /**
+     * @param cancelHookInstaller registers this call's cancel action, returning {@code false} (and
+     *                            aborting before the COPY runs) if the task was already cancelled —
+     *                            same contract as {@link WriteTask#setCancelHook}, which is exactly
+     *                            what the single-shard overload above passes. A subclass running
+     *                            several shards concurrently over the same {@link WriteTask} passes
+     *                            an installer that fans a single external {@code cancel()} call out
+     *                            to every shard's statement, since {@code WriteTask} only holds one
+     *                            hook and concurrent shards would otherwise overwrite each other's.
+     */
+    protected IngestionResult tryWrite(WriteTask<String, IngestionResult> writeTask, String additionalFilter,
+                                        String filenamePattern, java.util.function.Predicate<Runnable> cancelHookInstaller) throws Exception {
+        var sql = constructWriteQuery(writeTask, additionalFilter, filenamePattern);
         logger.debug("Executing COPY SQL: {}", sql);
         List<String> files = new ArrayList<>();
         long count = 0;
@@ -264,11 +322,11 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
              var stmt = conn.createStatement()) {
 
             if (watermarkSpec != null) {
-                watermarkRows = watermarkSpec.computeRows(conn, constructSourceRelation(writeTask));
+                watermarkRows = watermarkSpec.computeRows(conn, constructSourceRelation(writeTask, additionalFilter));
             }
 
             // Set up cancellation hook
-            var cancelHookSet = writeTask.setCancelHook(() -> {
+            var cancelHookSet = cancelHookInstaller.test(() -> {
                 try {
                     stmt.cancel();
                 } catch (Exception e) {
