@@ -50,6 +50,14 @@ public class CompactionService implements Closeable {
     /** Synthetic "tier" key for the off-control-path whole-catalog file-count refresh connection. */
     private static final String FILE_COUNT_REFRESH_KEY = "__filecount_refresh__";
 
+    /**
+     * Cadence for the whole-catalog file-count gauge refresh, off the compaction control path (spec:
+     * "30–60 s"). Fixed rather than configurable — it is an internal gauge-maintenance interval, not a
+     * control parameter. If a very large catalog ever makes the COUNT(*) FILTER aggregate expensive,
+     * reintroduce a config key here.
+     */
+    private static final long FILE_COUNT_REFRESH_SECONDS = 30;
+
     public CompactionService(CompactionConfig config, String startupScript, TierCompactor tierCompactor,
                              Housekeeper housekeeper, CompactionState state, CompactionRunLog runLog) {
         this.config = config;
@@ -83,7 +91,7 @@ public class CompactionService implements Closeable {
             return;
         }
         long housekeepingSeconds = config.housekeepingFrequency().toSeconds();
-        long fileCountSeconds = Math.max(1, config.fileCountRefreshFrequency().toSeconds());
+        long fileCountSeconds = FILE_COUNT_REFRESH_SECONDS;
 
         for (String db : config.databases()) {
             for (CompactionTier tier : config.tiers()) {

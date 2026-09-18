@@ -17,11 +17,8 @@ public record CompactionConfig(
         Duration snapshotRetention,
         List<String> housekeepingConnectionSettings,
         int healthPort,
-        Duration fileCountRefreshFrequency,
         int runHistorySize
 ) {
-    /** Slow cadence for the whole-catalog file-count gauge refresh (off the compaction control path). */
-    private static final Duration DEFAULT_FILE_COUNT_REFRESH = Duration.ofSeconds(30);
     private static final String CONFIG_PATH = "dazzleduck_sql_compaction";
 
     public static Config rawConfig(String[] args) throws Exception {
@@ -48,8 +45,6 @@ public record CompactionConfig(
                 c.getDuration("snapshot_retention"),
                 c.getStringList("housekeeping_connection_settings"),
                 c.getInt("health_port"),
-                c.hasPath("file_count_refresh_frequency")
-                        ? c.getDuration("file_count_refresh_frequency") : DEFAULT_FILE_COUNT_REFRESH,
                 c.hasPath("run_history_size")
                         ? c.getInt("run_history_size") : CompactionRunLog.DEFAULT_CAPACITY
         );
