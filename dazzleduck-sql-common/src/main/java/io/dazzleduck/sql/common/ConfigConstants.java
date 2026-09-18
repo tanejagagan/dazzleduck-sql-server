@@ -48,7 +48,8 @@ public class ConfigConstants {
     // Ingestion queue partitioning keys — split a queue into N hash-routed sub-queues.
     // NUM_PARTITIONS_KEY: number of partitions (>= 1; 1 disables partitioning).
     // PARTITION_EXPRESSION_KEY: SQL expression over the raw input row that the partition index is
-    // computed from as hash(expr) % num_partitions (e.g. "source_ip" or "substr(source_ip, 1, 10)").
+    // computed from as hash(expr) % num_partitions — e.g. a column "user_id", a map/struct field
+    // access "resource['user_id']", or "claims['user_id']" when the batch carries a claims column.
     public static final String NUM_PARTITIONS_KEY        = "num_partitions";
     public static final String PARTITION_EXPRESSION_KEY  = "partition_expression";
 

@@ -30,9 +30,10 @@ import java.util.Map;
  *                      target path; a batch is routed to the single partition its rows map to and
  *                      rejected if its rows span more than one partition.
  * @param partitionExpression SQL expression over the raw input row that the partition index is
- *                      derived from as {@code hash(partitionExpression) % numPartitions} (e.g.
- *                      {@code "source_ip"} or {@code "substr(source_ip, 1, 10)"}); required when
- *                      {@code numPartitions > 1}, ignored otherwise
+ *                      derived from as {@code hash(partitionExpression) % numPartitions} — e.g. a
+ *                      column {@code "user_id"}, a map/struct field access
+ *                      {@code "resource['user_id']"}, or {@code "claims['user_id']"} when the batch
+ *                      carries a claims column; required when {@code numPartitions > 1}, ignored otherwise
  */
 public record QueueIdToTableMapping(
         String ingestionQueue,
