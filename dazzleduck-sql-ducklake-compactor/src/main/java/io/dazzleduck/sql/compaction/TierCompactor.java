@@ -11,14 +11,13 @@ public interface TierCompactor extends Closeable {
     MergeOutcome compact(String database, CompactionTier tier) throws Exception;
 
     /**
-     * Timing of one merge call.
+     * Timing of one merge call. There is no separate commit time — DuckLake merges and commits inside
+     * the single CALL (see {@link CompactionRun}), so {@code durationMergeMs} covers both.
      *
-     * @param durationMergeMs  wall-clock ms of {@code CALL ducklake_merge_adjacent_files(...)}
-     * @param durationCommitMs {@code -1} — DuckLake merges and commits inside the single CALL, so
-     *                         there is no separate commit to time (see {@link CompactionRun})
-     * @param groupsMerged     merge groups the engine reported, or {@code null} if it surfaces none
+     * @param durationMergeMs wall-clock ms of {@code CALL ducklake_merge_adjacent_files(...)}
+     * @param groupsMerged    merge groups the engine reported, or {@code null} if it surfaces none
      */
-    record MergeOutcome(long durationMergeMs, long durationCommitMs, Long groupsMerged) {}
+    record MergeOutcome(long durationMergeMs, Long groupsMerged) {}
 
     @Override
     default void close() throws IOException {

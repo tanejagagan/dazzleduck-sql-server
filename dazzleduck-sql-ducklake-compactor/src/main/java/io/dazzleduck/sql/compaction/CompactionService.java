@@ -208,7 +208,6 @@ public class CompactionService implements Closeable {
                     tier.maxCompactedFiles(), merge != null ? merge.groupsMerged() : null,
                     Duration.between(startedAt, endedAt).toMillis(),
                     merge != null ? merge.durationMergeMs() : -1,
-                    merge != null ? merge.durationCommitMs() : -1,
                     outcome, failureClass, errorMessage,
                     ResourceSampler.rssPeakBytes(),
                     ResourceSampler.dirSizeBytes(tempDir),

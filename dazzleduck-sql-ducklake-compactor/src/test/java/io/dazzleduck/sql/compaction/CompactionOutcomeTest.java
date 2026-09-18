@@ -45,7 +45,7 @@ class CompactionOutcomeTest {
     private static TierCompactor compactor(boolean fail) {
         return (database, tier) -> {
             if (fail) throw new IllegalStateException("tier '" + tier.name() + "' compaction blew up");
-            return new TierCompactor.MergeOutcome(1, -1, null);
+            return new TierCompactor.MergeOutcome(1, null);
         };
     }
 

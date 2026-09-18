@@ -16,7 +16,7 @@ final class TestRuns {
                 60_000, gapMs,
                 filesBefore, filesAfter, retired, bytesBefore, bytesAfter,
                 10, null,
-                (endSec - startSec) * 1000, (endSec - startSec) * 1000, -1,
+                (endSec - startSec) * 1000, (endSec - startSec) * 1000,
                 outcome, failureClass, failureClass == CompactionRun.FailureClass.NONE ? null : "err",
                 -1, -1, -1, CompactionRun.DEFAULT_COMMIT_TIMEOUT_MS);
     }

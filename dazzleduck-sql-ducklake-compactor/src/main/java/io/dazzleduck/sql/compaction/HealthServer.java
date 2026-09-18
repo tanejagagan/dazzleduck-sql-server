@@ -65,7 +65,12 @@ public class HealthServer implements Closeable {
 
     public void start() {
         server.start();
-        logger.info("Health server listening on port {}", server.getAddress().getPort());
+        logger.info("Health server listening on port {} (/health, /ui)", server.getAddress().getPort());
+    }
+
+    /** The actual bound port — useful when started on port 0 (ephemeral) in tests. */
+    public int boundPort() {
+        return server.getAddress().getPort();
     }
 
     @Override

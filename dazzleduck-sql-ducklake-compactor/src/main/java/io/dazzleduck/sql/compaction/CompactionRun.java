@@ -13,12 +13,12 @@ import java.time.Instant;
  * from a real zero. {@code -1} on the {@code long} resource fields means "not measurable here"
  * (e.g. {@code /proc} is Linux-only; a tier with no {@code memory_limit} set).
  *
- * <p><b>Deviation from the spec, by design.</b> {@code durationCommitMs} is {@code -1}: the compactor
- * runs {@code CALL ducklake_merge_adjacent_files(...)} as a single autocommit statement, so DuckLake
- * performs the merge and the catalog commit inside one call with no separate JDBC commit to time.
- * {@code durationMergeMs} is the whole {@code execute()} (merge + its internal commit). Splitting the
- * two would require switching the connection to manual commit — a behaviour change the spec's
- * "capture only" scope forbids.
+ * <p><b>Deviation from the spec, by design.</b> The spec's duration split (merge vs commit) is not
+ * captured: the compactor runs {@code CALL ducklake_merge_adjacent_files(...)} as a single autocommit
+ * statement, so DuckLake performs the merge and the catalog commit inside one call with no separate
+ * JDBC commit to time. {@code durationMergeMs} is therefore the whole {@code execute()} (merge + its
+ * internal commit); there is no {@code durationCommitMs} field because it could never be captured
+ * (splitting would require manual commit — a behaviour change the "capture only" scope forbids).
  */
 public record CompactionRun(
         long runId,
@@ -38,7 +38,6 @@ public record CompactionRun(
         Long groupsMerged,
         long durationTotalMs,
         long durationMergeMs,
-        long durationCommitMs,
         Outcome outcome,
         FailureClass failureClass,
         String errorMessage,

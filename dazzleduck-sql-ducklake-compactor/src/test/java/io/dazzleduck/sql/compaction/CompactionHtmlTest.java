@@ -44,7 +44,7 @@ class CompactionHtmlTest {
         CompactionRunLog log = new CompactionRunLog(50);
         CompactionRun run = new CompactionRun(1, "db", "tier",
                 java.time.Instant.now(), java.time.Instant.now(), java.time.Instant.now(),
-                60000, 100, null, null, null, null, null, 10, null, 5, 5, -1,
+                60000, 100, null, null, null, null, null, 10, null, 5, 5,
                 CompactionRun.Outcome.FAILED, CompactionRun.FailureClass.OTHER, "<script>alert(1)</script>",
                 -1, -1, -1, CompactionRun.DEFAULT_COMMIT_TIMEOUT_MS);
         log.record(run);

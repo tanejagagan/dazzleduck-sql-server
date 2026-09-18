@@ -54,8 +54,8 @@ public class DuckDbTierCompactor implements TierCompactor {
         }
         long durationMergeMs = (System.nanoTime() - start) / 1_000_000;
         logger.debug("Tier '{}' merge completed for {} in {}ms", tier.name(), database, durationMergeMs);
-        // durationCommitMs = -1: merge + catalog commit are one atomic CALL here (see CompactionRun).
-        return new MergeOutcome(durationMergeMs, -1, groupsMerged);
+        // No separate commit time: merge + catalog commit are one atomic CALL here (see CompactionRun).
+        return new MergeOutcome(durationMergeMs, groupsMerged);
     }
 
     private Connection connectionFor(String database, CompactionTier tier) throws SQLException {
