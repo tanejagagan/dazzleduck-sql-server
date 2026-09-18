@@ -7,6 +7,7 @@ import io.dazzleduck.sql.commons.ingestion.Batch;
 import io.dazzleduck.sql.commons.ingestion.IngestionConfig;
 import io.dazzleduck.sql.commons.ingestion.IngestionHandler;
 import io.dazzleduck.sql.commons.ingestion.ParquetIngestionQueue;
+import io.dazzleduck.sql.commons.ingestion.PartitionedIngestionQueue;
 import io.dazzleduck.sql.commons.ingestion.PendingWriteExceededException;
 import io.dazzleduck.sql.otel.collector.auth.JwtServerInterceptor;
 import io.grpc.Status;
@@ -74,17 +75,43 @@ class OtelServiceBase implements Closeable {
         this.handler = handler;
         this.metrics = metrics;
         // Build the queue (sharing the collector-wide flush scheduler) and register its metrics.
+        // A partitioned queue (num_partitions > 1) fans batches out to child queues by
+        // hash(partition_expression); the metric accessors it exposes aggregate across those children.
         this.creator = (id, targetPath) -> {
-            ParquetIngestionQueue queue = new ParquetIngestionQueue(
-                    "otel-collector", "arrow", targetPath, id,
-                    ingestionConfig.minBucketSize(),
-                    ingestionConfig.maxBucketSize(),
-                    ingestionConfig.maxBatches(),
-                    ingestionConfig.maxPendingWrite(),
-                    ingestionConfig.maxDelay(),
-                    ingestionConfig.parquetCompression(),
-                    handler,
-                    flushScheduler, Clock.systemUTC());
+            int numPartitions = handler.getNumPartitions(id);
+            ParquetIngestionQueue queue = numPartitions > 1
+                    ? new PartitionedIngestionQueue(
+                            "otel-collector", "arrow", targetPath, id,
+                            ingestionConfig.minBucketSize(),
+                            ingestionConfig.maxBucketSize(),
+                            ingestionConfig.maxBatches(),
+                            ingestionConfig.maxPendingWrite(),
+                            ingestionConfig.maxDelay(),
+                            ingestionConfig.parquetCompression(),
+                            handler,
+                            flushScheduler, Clock.systemUTC(),
+                            numPartitions,
+                            handler.getPartitionExpression(id),
+                            (childId, childPath) -> new ParquetIngestionQueue(
+                                    "otel-collector", "arrow", childPath, childId,
+                                    ingestionConfig.minBucketSize(),
+                                    ingestionConfig.maxBucketSize(),
+                                    ingestionConfig.maxBatches(),
+                                    ingestionConfig.maxPendingWrite(),
+                                    ingestionConfig.maxDelay(),
+                                    ingestionConfig.parquetCompression(),
+                                    handler,
+                                    flushScheduler, Clock.systemUTC()))
+                    : new ParquetIngestionQueue(
+                            "otel-collector", "arrow", targetPath, id,
+                            ingestionConfig.minBucketSize(),
+                            ingestionConfig.maxBucketSize(),
+                            ingestionConfig.maxBatches(),
+                            ingestionConfig.maxPendingWrite(),
+                            ingestionConfig.maxDelay(),
+                            ingestionConfig.parquetCompression(),
+                            handler,
+                            flushScheduler, Clock.systemUTC());
             metrics.registerQueue(id, queue);
             return queue;
         };

@@ -45,6 +45,13 @@ public class ConfigConstants {
     public static final String INPUT_TABLE_KEY    = "input_table";
     public static final String EXTRACT_CLAIMS_KEY = "extract_claims";
 
+    // Ingestion queue partitioning keys — split a queue into N hash-routed sub-queues.
+    // NUM_PARTITIONS_KEY: number of partitions (>= 1; 1 disables partitioning).
+    // PARTITION_EXPRESSION_KEY: SQL expression over the raw input row that the partition index is
+    // computed from as hash(expr) % num_partitions (e.g. "source_ip" or "substr(source_ip, 1, 10)").
+    public static final String NUM_PARTITIONS_KEY        = "num_partitions";
+    public static final String PARTITION_EXPRESSION_KEY  = "partition_expression";
+
     // Cursor / open-query protection keys
     public static final String CURSOR_TTL_MS_KEY              = "cursor_ttl_ms";
     public static final String MAX_CURSORS_PER_IDENTITY_KEY   = "max_cursors_per_identity";

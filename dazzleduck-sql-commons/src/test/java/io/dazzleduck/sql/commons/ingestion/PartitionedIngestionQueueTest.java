@@ -1,0 +1,183 @@
+package io.dazzleduck.sql.commons.ingestion;
+
+import io.dazzleduck.sql.commons.ConnectionPool;
+import io.dazzleduck.sql.commons.util.MutableClock;
+import org.jmock.lib.concurrent.DeterministicScheduler;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+import static java.util.concurrent.TimeUnit.SECONDS;
+import static org.junit.jupiter.api.Assertions.*;
+
+/**
+ * Tests for {@link PartitionedIngestionQueue}: single-partition batches route to the correct child
+ * (its own {@code p<index>} sub-directory), and batches whose rows span more than one partition are
+ * rejected and their input file deleted.
+ */
+public class PartitionedIngestionQueueTest {
+
+    private static final String TEST_APP_ID = "test-app";
+    private static final String INPUT_FORMAT = "parquet";
+    private static final String PARTITION_EXPRESSION = "pkey";
+    private static final int NUM_PARTITIONS = 4;
+    private static final long MIN_BATCH_SIZE = 1024;
+    private static final Duration MAX_DELAY = Duration.ofSeconds(5);
+
+    @TempDir
+    Path tempDir;
+
+    private Path targetPath;
+
+    @BeforeEach
+    public void setup() throws Exception {
+        targetPath = tempDir.resolve("output");
+        Files.createDirectories(targetPath);
+    }
+
+    /** A parquet file whose every row shares the same partition key value. */
+    private Path singleKeyFile(String name, int pkey, int rows) throws Exception {
+        Path file = tempDir.resolve(name);
+        ConnectionPool.execute(
+                "COPY (SELECT %d AS pkey, i AS id FROM range(0, %d) t(i)) TO '%s' (FORMAT PARQUET)"
+                        .formatted(pkey, rows, file));
+        return file;
+    }
+
+    /** A parquet file with many distinct partition key values (spans multiple partitions). */
+    private Path multiKeyFile(String name, int rows) throws Exception {
+        Path file = tempDir.resolve(name);
+        ConnectionPool.execute(
+                "COPY (SELECT i AS pkey, i AS id FROM range(0, %d) t(i)) TO '%s' (FORMAT PARQUET)"
+                        .formatted(rows, file));
+        return file;
+    }
+
+    private int expectedPartition(int pkey) throws Exception {
+        return ConnectionPool.collectFirst(
+                "SELECT (hash(%d) %% %d)::INTEGER".formatted(pkey, NUM_PARTITIONS), Integer.class);
+    }
+
+    private Batch<String> batch(Path file, String producerId, long batchId, long size) {
+        return new Batch<>(null, null, file.toString(), producerId, batchId, size, "parquet", Instant.now());
+    }
+
+    private IngestionHandler noopHandler() {
+        return new IngestionHandler() {
+            @Override public PostIngestionTask createPostIngestionTask(IngestionResult r) { return PostIngestionTask.NOOP; }
+            @Override public String getTargetPath(String queueId) { return targetPath.toString(); }
+            @Override public String[] getPartitionBy(String queueId) { return new String[0]; }
+            @Override public int getNumPartitions(String queueId) { return NUM_PARTITIONS; }
+            @Override public String getPartitionExpression(String queueId) { return PARTITION_EXPRESSION; }
+        };
+    }
+
+    private PartitionedIngestionQueue newQueue(ScheduledExecutorService scheduler, MutableClock clock) {
+        IngestionHandler handler = noopHandler();
+        return new PartitionedIngestionQueue(
+                TEST_APP_ID, INPUT_FORMAT, targetPath.toString(), "test-queue",
+                MIN_BATCH_SIZE, Long.MAX_VALUE, Integer.MAX_VALUE, Long.MAX_VALUE,
+                MAX_DELAY, null, handler, scheduler, clock, NUM_PARTITIONS, PARTITION_EXPRESSION,
+                (childId, childPath) -> new ParquetIngestionQueue(
+                        TEST_APP_ID, INPUT_FORMAT, childPath, childId,
+                        MIN_BATCH_SIZE, Long.MAX_VALUE, Integer.MAX_VALUE, Long.MAX_VALUE,
+                        MAX_DELAY, null, handler, scheduler, clock));
+    }
+
+    @Test
+    public void singlePartitionBatchIsWrittenToItsChildSubdir() throws Exception {
+        var scheduler = new DeterministicScheduler();
+        var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
+        int pkey = 7;
+        Path source = singleKeyFile("single.parquet", pkey, 100);
+
+        try (var queue = newQueue(scheduler, clock)) {
+            assertEquals(NUM_PARTITIONS, queue.children().size());
+
+            var future = queue.add(batch(source, "producer1", 0, MIN_BATCH_SIZE + 1));
+            scheduler.tick(1, TimeUnit.MILLISECONDS);
+            var result = future.get(5, SECONDS);
+
+            assertEquals(100, result.rowCount());
+            assertFalse(result.filesCreated().isEmpty());
+            String expectedDir = "/p" + expectedPartition(pkey) + "/";
+            assertTrue(result.filesCreated().get(0).contains(expectedDir),
+                    "expected output under " + expectedDir + " but was " + result.filesCreated().get(0));
+        }
+    }
+
+    @Test
+    public void batchesRouteToDistinctChildrenByPartition() throws Exception {
+        var scheduler = new DeterministicScheduler();
+        var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
+        // Two keys that hash to different partitions.
+        int keyA = 0, keyB = -1;
+        for (int candidate = 1; candidate < 1000 && expectedPartition(keyB) == expectedPartition(keyA); candidate++) {
+            keyB = candidate;
+        }
+        assertNotEquals(expectedPartition(keyA), expectedPartition(keyB), "test needs two keys in different partitions");
+
+        Path fileA = singleKeyFile("a.parquet", keyA, 20);
+        Path fileB = singleKeyFile("b.parquet", keyB, 20);
+
+        try (var queue = newQueue(scheduler, clock)) {
+            var fa = queue.add(batch(fileA, "pa", 0, MIN_BATCH_SIZE + 1));
+            var fb = queue.add(batch(fileB, "pb", 0, MIN_BATCH_SIZE + 1));
+            scheduler.tick(1, TimeUnit.MILLISECONDS);
+
+            String outA = fa.get(5, SECONDS).filesCreated().get(0);
+            String outB = fb.get(5, SECONDS).filesCreated().get(0);
+
+            assertTrue(outA.contains("/p" + expectedPartition(keyA) + "/"), outA);
+            assertTrue(outB.contains("/p" + expectedPartition(keyB) + "/"), outB);
+            assertNotEquals(outA, outB);
+        }
+    }
+
+    @Test
+    public void multiPartitionBatchIsRejectedAndInputDeleted() throws Exception {
+        var scheduler = new DeterministicScheduler();
+        var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
+        Path source = multiKeyFile("multi.parquet", 100);
+
+        try (var queue = newQueue(scheduler, clock)) {
+            var future = queue.add(batch(source, "producer1", 0, MIN_BATCH_SIZE + 1));
+            // Rejection is synchronous — no scheduler tick required.
+            var ex = assertThrows(ExecutionException.class, () -> future.get(5, SECONDS));
+            assertInstanceOf(IllegalArgumentException.class, ex.getCause());
+            assertTrue(ex.getCause().getMessage().contains("more than one partition"),
+                    ex.getCause().getMessage());
+            assertFalse(Files.exists(source), "rejected batch's input file should be deleted");
+        }
+    }
+
+    @Test
+    public void constructorRejectsInvalidPartitioning() {
+        var scheduler = new DeterministicScheduler();
+        var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
+        IngestionHandler handler = noopHandler();
+        PartitionedIngestionQueue.ChildQueueFactory childFactory =
+                (id, path) -> { throw new AssertionError("should not build children"); };
+
+        // Blank expression with >1 partitions.
+        assertThrows(IllegalArgumentException.class, () -> new PartitionedIngestionQueue(
+                TEST_APP_ID, INPUT_FORMAT, targetPath.toString(), "q",
+                MIN_BATCH_SIZE, Long.MAX_VALUE, Integer.MAX_VALUE, Long.MAX_VALUE,
+                MAX_DELAY, null, handler, scheduler, clock, NUM_PARTITIONS, "  ", childFactory));
+
+        // numPartitions <= 1 is not a partitioned queue.
+        assertThrows(IllegalArgumentException.class, () -> new PartitionedIngestionQueue(
+                TEST_APP_ID, INPUT_FORMAT, targetPath.toString(), "q",
+                MIN_BATCH_SIZE, Long.MAX_VALUE, Integer.MAX_VALUE, Long.MAX_VALUE,
+                MAX_DELAY, null, handler, scheduler, clock, 1, PARTITION_EXPRESSION, childFactory));
+    }
+}

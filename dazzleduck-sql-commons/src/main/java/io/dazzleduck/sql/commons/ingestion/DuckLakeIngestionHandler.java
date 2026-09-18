@@ -190,6 +190,18 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
         return mapping != null && mapping.extractClaims();
     }
 
+    @Override
+    public int getNumPartitions(String queueId) {
+        QueueIdToTableMapping mapping = mappingFor(queueId);
+        return mapping == null ? 1 : mapping.numPartitions();
+    }
+
+    @Override
+    public String getPartitionExpression(String queueId) {
+        QueueIdToTableMapping mapping = mappingFor(queueId);
+        return mapping == null ? null : mapping.partitionExpression();
+    }
+
     /** Mapping for {@code queueId}, resolved exact-first with the path-suffix fallback. */
     private QueueIdToTableMapping mappingFor(String queueId) {
         String key = resolveStateKey(queueId);

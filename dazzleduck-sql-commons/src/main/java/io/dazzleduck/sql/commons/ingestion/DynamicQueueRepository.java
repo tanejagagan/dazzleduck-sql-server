@@ -59,18 +59,30 @@ public class DynamicQueueRepository implements AutoCloseable {
             st.execute("ATTACH '" + safePath + "' AS " + ATTACHMENT + " (TYPE sqlite)");
             st.execute("""
                 CREATE TABLE IF NOT EXISTS %s.ingestion_queues (
-                    ingestion_queue  TEXT PRIMARY KEY,
-                    catalog          TEXT NOT NULL,
-                    schema_name      TEXT NOT NULL,
-                    table_name       TEXT NOT NULL,
-                    transformation   TEXT,
-                    view_name        TEXT,
-                    input_table      TEXT,
-                    input_schema     TEXT,
-                    partition_by     TEXT,
-                    min_bucket_size  INTEGER,
-                    max_delay_ms     INTEGER
+                    ingestion_queue      TEXT PRIMARY KEY,
+                    catalog              TEXT NOT NULL,
+                    schema_name          TEXT NOT NULL,
+                    table_name           TEXT NOT NULL,
+                    transformation       TEXT,
+                    view_name            TEXT,
+                    input_table          TEXT,
+                    input_schema         TEXT,
+                    partition_by         TEXT,
+                    num_partitions       INTEGER,
+                    partition_expression TEXT,
+                    min_bucket_size      INTEGER,
+                    max_delay_ms         INTEGER
                 )""".formatted(ATTACHMENT));
+            // Migrate registries created before the partitioning columns existed. SQLite's
+            // ADD COLUMN has no IF NOT EXISTS, so probe the existing columns first and only add
+            // the missing ones (a failed ALTER would otherwise close the shared statement).
+            java.util.Set<String> existing = existingColumns(conn);
+            if (!existing.contains("num_partitions")) {
+                st.execute("ALTER TABLE " + ATTACHMENT + ".ingestion_queues ADD COLUMN num_partitions INTEGER");
+            }
+            if (!existing.contains("partition_expression")) {
+                st.execute("ALTER TABLE " + ATTACHMENT + ".ingestion_queues ADD COLUMN partition_expression TEXT");
+            }
             st.execute("""
                 CREATE TABLE IF NOT EXISTS %s.schema_version (
                     id      INTEGER PRIMARY KEY CHECK (id = 1),
@@ -82,6 +94,19 @@ public class DynamicQueueRepository implements AutoCloseable {
                        "(SELECT 1 FROM " + ATTACHMENT + ".schema_version WHERE id = 1)");
         }
         logger.debug("SQLite ingestion repository initialised at {}", dbPath);
+    }
+
+    /** Lower-cased column names currently on {@code ingestion_queues}, via its own statement. */
+    private static java.util.Set<String> existingColumns(Connection conn) throws SQLException {
+        java.util.Set<String> cols = new java.util.HashSet<>();
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT * FROM " + ATTACHMENT + ".ingestion_queues LIMIT 0")) {
+            var meta = rs.getMetaData();
+            for (int i = 1; i <= meta.getColumnCount(); i++) {
+                cols.add(meta.getColumnName(i).toLowerCase(java.util.Locale.ROOT));
+            }
+        }
+        return cols;
     }
 
     /**
@@ -184,14 +209,17 @@ public class DynamicQueueRepository implements AutoCloseable {
      * DuckLake table's own metadata. The registry supplies {@code catalog}/{@code schema}/
      * {@code table} (plus optional {@code transformation}/{@code view}/{@code input_table} and
      * {@code input_schema}, the latter used only by {@code manageTables} to derive the table columns);
-     * the {@code partition_by} column is reserved for future use and not read here.
+     * the {@code partition_by} column is reserved for future use and not read here. The
+     * {@code num_partitions}/{@code partition_expression} columns split a queue into hash-routed
+     * sub-queues (see {@link PartitionedIngestionQueue}).
      */
     public static Map<String, QueueIdToTableMapping> loadAll(Connection conn) throws SQLException {
         Map<String, QueueIdToTableMapping> result = new LinkedHashMap<>();
         try (Statement st = conn.createStatement();
              ResultSet rs = st.executeQuery(
                      "SELECT ingestion_queue, catalog, schema_name, table_name," +
-                     " transformation, view_name, input_table, input_schema FROM " + ATTACHMENT + ".ingestion_queues")) {
+                     " transformation, view_name, input_table, input_schema," +
+                     " num_partitions, partition_expression FROM " + ATTACHMENT + ".ingestion_queues")) {
             while (rs.next()) {
                 String queueId     = rs.getString("ingestion_queue");
                 String catalog     = rs.getString("catalog");
@@ -201,10 +229,16 @@ public class DynamicQueueRepository implements AutoCloseable {
                 String view        = rs.getString("view_name");
                 String inputTable  = rs.getString("input_table");
                 String inputSchema = rs.getString("input_schema");
+                int numPartitions  = rs.getInt("num_partitions");
+                if (rs.wasNull() || numPartitions < 1) {
+                    numPartitions = 1; // NULL (legacy row) / unset means "not partitioned"
+                }
+                String partitionExpr = rs.getString("partition_expression");
                 // outputPath omitted: derived from DuckLake metadata by the handler.
                 result.put(queueId, new QueueIdToTableMapping(
                         queueId, catalog, schema, table, Map.of(), transform, view, inputTable)
-                        .withInputSchema(inputSchema));
+                        .withInputSchema(inputSchema)
+                        .withPartitioning(numPartitions, partitionExpr));
             }
         }
         return result;
