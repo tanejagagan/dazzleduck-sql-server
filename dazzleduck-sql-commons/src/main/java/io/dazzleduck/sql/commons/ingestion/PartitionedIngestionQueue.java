@@ -105,8 +105,11 @@ public class PartitionedIngestionQueue extends ParquetIngestionQueue {
         try {
             partition = resolvePartition(batch);
         } catch (Exception e) {
+            // A failure to evaluate the expression is a server-side problem (transient read/connection
+            // error, or a misconfigured expression), not the caller's fault — surface it as a retryable
+            // error (HTTP 503 / Flight UNAVAILABLE) so the producer resends rather than dropping.
             deleteInput(batch);
-            return CompletableFuture.failedFuture(new IllegalArgumentException(
+            return CompletableFuture.failedFuture(new PartitionEvaluationException(
                     "Queue '%s': failed to evaluate partition expression '%s' for batch: %s"
                             .formatted(queueId, partitionExpression, e.getMessage()), e));
         }

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.google.protobuf.InvalidProtocolBufferException;
 import io.dazzleduck.sql.commons.authorization.UnauthorizedException;
+import io.dazzleduck.sql.commons.ingestion.PartitionEvaluationException;
 import io.dazzleduck.sql.commons.ingestion.PendingWriteExceededException;
 import org.apache.arrow.flight.*;
 import org.slf4j.Logger;
@@ -62,6 +63,12 @@ public class ErrorHandling {
             handleSqlException(s);
         } else if (t instanceof IOException io) {
             handleIOException(io);
+        } else if (t instanceof PartitionEvaluationException e) {
+            // Server-side failure to route a batch — retryable, so the producer resends.
+            throw CallStatus.UNAVAILABLE
+                    .withDescription(e.getMessage())
+                    .withCause(e)
+                    .toRuntimeException();
         } else if (t instanceof IllegalArgumentException e) {
             // Mirrors the ServerStreamListener overload: a rejected request (an unsupported
             // LIMIT form, an offset past the query's own bound) is the caller's mistake, so it
@@ -170,6 +177,12 @@ public class ErrorHandling {
             handleSQLSyntaxErrorException(listener, e);
         } else if (t instanceof SQLException s) {
             handleSqlException(listener, s);
+        } else if (t instanceof PartitionEvaluationException e) {
+            // Server-side failure to route a batch — retryable, so the producer resends.
+            listener.onError(CallStatus.UNAVAILABLE
+                    .withDescription(e.getMessage())
+                    .withCause(e)
+                    .toRuntimeException());
         } else if (t instanceof IllegalArgumentException e) {
             listener.onError(CallStatus.INVALID_ARGUMENT
                     .withDescription(e.getMessage())

@@ -82,11 +82,15 @@ public class PartitionedIngestionQueueTest {
     }
 
     private PartitionedIngestionQueue newQueue(ScheduledExecutorService scheduler, MutableClock clock) {
+        return newQueue(scheduler, clock, PARTITION_EXPRESSION);
+    }
+
+    private PartitionedIngestionQueue newQueue(ScheduledExecutorService scheduler, MutableClock clock, String expression) {
         IngestionHandler handler = noopHandler();
         return new PartitionedIngestionQueue(
                 TEST_APP_ID, INPUT_FORMAT, targetPath.toString(), "test-queue",
                 MIN_BATCH_SIZE, Long.MAX_VALUE, Integer.MAX_VALUE, Long.MAX_VALUE,
-                MAX_DELAY, null, handler, scheduler, clock, NUM_PARTITIONS, PARTITION_EXPRESSION,
+                MAX_DELAY, null, handler, scheduler, clock, NUM_PARTITIONS, expression,
                 (childId, childPath) -> new ParquetIngestionQueue(
                         TEST_APP_ID, INPUT_FORMAT, childPath, childId,
                         MIN_BATCH_SIZE, Long.MAX_VALUE, Integer.MAX_VALUE, Long.MAX_VALUE,
@@ -193,6 +197,23 @@ public class PartitionedIngestionQueueTest {
             assertThrows(ExecutionException.class, () -> future.get(5, SECONDS));
             assertEquals(1, queue.getRejectedMultiPartition());
             assertEquals(1, queue.getStats().rejectedMultiPartition());
+        }
+    }
+
+    @Test
+    public void unevaluablePartitionExpressionIsRetryableNotRejected() throws Exception {
+        var scheduler = new DeterministicScheduler();
+        var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
+        Path source = singleKeyFile("ok.parquet", 7, 10);
+
+        // Expression references a column that does not exist -> evaluation fails.
+        try (var queue = newQueue(scheduler, clock, "no_such_column")) {
+            var future = queue.add(batch(source, "p", 0, MIN_BATCH_SIZE + 1));
+            var ex = assertThrows(ExecutionException.class, () -> future.get(5, SECONDS));
+            // Retryable server-side failure, NOT a multi-partition (IllegalArgumentException) reject.
+            assertInstanceOf(PartitionEvaluationException.class, ex.getCause());
+            assertEquals(0, queue.getRejectedMultiPartition(), "eval failure must not count as a multi-partition reject");
+            assertFalse(Files.exists(source), "the staged input is cleaned up");
         }
     }
 

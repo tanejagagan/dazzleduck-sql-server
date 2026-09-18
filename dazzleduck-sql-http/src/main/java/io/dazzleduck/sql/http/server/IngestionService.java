@@ -1,5 +1,6 @@
 package io.dazzleduck.sql.http.server;
 
+import io.dazzleduck.sql.commons.ingestion.PartitionEvaluationException;
 import io.dazzleduck.sql.commons.ingestion.PendingWriteExceededException;
 import io.dazzleduck.sql.flight.ingestion.IngestionParameters;
 import io.dazzleduck.sql.flight.server.HttpFlightAdaptor;
@@ -163,9 +164,19 @@ public class IngestionService implements HttpService, ParameterUtils, Controller
             if (current instanceof PendingWriteExceededException) {
                 return TOO_MANY_REQUESTS_429;
             }
+            // A partition-routing evaluation failure is a retryable server-side error. It usually
+            // reaches here already mapped to Flight UNAVAILABLE by ErrorHandling, but the raw type
+            // is matched too for the direct path.
+            if (current instanceof PartitionEvaluationException) {
+                return Status.SERVICE_UNAVAILABLE_503;
+            }
             if (current instanceof FlightRuntimeException flightEx) {
-                if (flightEx.status().code() == FlightStatusCode.RESOURCE_EXHAUSTED) {
+                FlightStatusCode code = flightEx.status().code();
+                if (code == FlightStatusCode.RESOURCE_EXHAUSTED) {
                     return TOO_MANY_REQUESTS_429;
+                }
+                if (code == FlightStatusCode.UNAVAILABLE) {
+                    return Status.SERVICE_UNAVAILABLE_503;
                 }
             }
             current = current.getCause();
