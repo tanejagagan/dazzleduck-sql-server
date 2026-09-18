@@ -109,13 +109,13 @@ public final class CompactionRunLog {
         double throughputFiles = durationMsForFiles > 0 ? filesRetired * 1000.0 / durationMsForFiles : 0;
         double throughputBytes = durationMsForBytes > 0 ? bytesRetired * 1000.0 / durationMsForBytes : 0;
 
-        // Arrivals: files that appeared in the band between one cycle's end and the next cycle's start
-        // (gap between run[n].bandFilesAfter and run[n+1].bandFilesBefore). No extra capture.
+        // Arrivals: files that appeared in the tier's file-size range between one cycle's end and the next cycle's start
+        // (gap between run[n].activeFilesAfter and run[n+1].activeFilesBefore). No extra capture.
         long arrivals = 0, arrivalGapMs = 0;
         for (int i = 0; i + 1 < runs.size(); i++) {
             CompactionRun a = runs.get(i), b = runs.get(i + 1);
-            if (a.bandFilesAfter() != null && b.bandFilesBefore() != null) {
-                long delta = b.bandFilesBefore() - a.bandFilesAfter();
+            if (a.activeFilesAfter() != null && b.activeFilesBefore() != null) {
+                long delta = b.activeFilesBefore() - a.activeFilesAfter();
                 if (delta > 0) {
                     arrivals += delta;
                 }

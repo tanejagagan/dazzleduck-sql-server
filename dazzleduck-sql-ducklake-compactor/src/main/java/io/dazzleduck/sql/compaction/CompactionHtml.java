@@ -119,8 +119,8 @@ final class CompactionHtml {
                 escape(key.tierName()), badge, escape(key.database()),
                 latest.runId(), age(latest.endedAt()), gap(latest.actualGapMs()),
                 agg.saturated() ? "<span class=\"warn\">yes</span>" : "no",
-                metric("files", (latest.bandFilesBefore() != null ? latest.bandFilesBefore() : "?")
-                        + " → " + (latest.bandFilesAfter() != null ? latest.bandFilesAfter() : "?"), null),
+                metric("files", (latest.activeFilesBefore() != null ? latest.activeFilesBefore() : "?")
+                        + " → " + (latest.activeFilesAfter() != null ? latest.activeFilesAfter() : "?"), null),
                 metric("retired", latest.filesRetired() != null ? latest.filesRetired() + " files" : "?", null),
                 metric("throughput", fmt1(agg.throughputFilesPerSec()) + " f/s", null),
                 metric("bytes/s", formatBytes((long) agg.throughputBytesPerSec()) + "/s", null),

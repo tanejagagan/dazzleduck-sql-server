@@ -132,9 +132,9 @@ public class CompactionService implements Closeable {
         return next;
     }
 
-    /** Before/after counts and total bytes for a tier's file-size band; null components on read failure. */
-    private record Band(Long files, Long bytes) {
-        static final Band UNKNOWN = new Band(null, null);
+    /** Before/after counts and total bytes for a tier's file-size range; null components on read failure. */
+    private record ActiveFiles(Long files, Long bytes) {
+        static final ActiveFiles UNKNOWN = new ActiveFiles(null, null);
     }
 
     void runTier(String database, CompactionTier tier) {
@@ -144,8 +144,8 @@ public class CompactionService implements Closeable {
         long actualGapMs = prevEnded != null ? Duration.between(prevEnded, startedAt).toMillis() : -1;
         long runId = runIds.computeIfAbsent(runKey(database, tier.name()), k -> new AtomicLong()).incrementAndGet();
 
-        Band before = Band.UNKNOWN;
-        Band after = Band.UNKNOWN;
+        ActiveFiles before = ActiveFiles.UNKNOWN;
+        ActiveFiles after = ActiveFiles.UNKNOWN;
         TierCompactor.MergeOutcome merge = null;
         CompactionRun.Outcome outcome = CompactionRun.Outcome.FAILED; // overwritten below; keeps `finally` definitely-assigned
         CompactionRun.FailureClass failureClass = CompactionRun.FailureClass.NONE;
@@ -154,9 +154,9 @@ public class CompactionService implements Closeable {
         // Keeping the whole body inside the try is what prevents a stray throwable from escaping the
         // scheduled task — a Runnable that throws would cancel this tier's schedule forever.
         try {
-            before = queryBand(database, tier.name(), tier.minFileSize(), tier.maxFileSize());
+            before = queryActiveFiles(database, tier.name(), tier.minFileSize(), tier.maxFileSize());
             merge = tierCompactor.compact(database, tier);
-            after = queryBand(database, tier.name(), tier.minFileSize(), tier.maxFileSize());
+            after = queryActiveFiles(database, tier.name(), tier.minFileSize(), tier.maxFileSize());
             state.incrementTier(database, tier.name());
 
             Long filesRetired = (before.files() != null && after.files() != null) ? before.files() - after.files() : null;
@@ -189,7 +189,7 @@ public class CompactionService implements Closeable {
     }
 
     private void recordRun(String database, CompactionTier tier, long runId, Instant scheduledAt, Instant startedAt,
-                           Instant endedAt, long actualGapMs, Band before, Band after,
+                           Instant endedAt, long actualGapMs, ActiveFiles before, ActiveFiles after,
                            TierCompactor.MergeOutcome merge, CompactionRun.Outcome outcome,
                            CompactionRun.FailureClass failureClass, String errorMessage) {
         try {
@@ -245,9 +245,9 @@ public class CompactionService implements Closeable {
      * Counts live files and sums their bytes in {@code [minSizeInclusive, maxSizeExclusive)} in one
      * query — the COUNT the compactor already ran, now with a same-round-trip {@code SUM(file_size_bytes)}
      * (spec: bytes, not file counts, are the real cost driver). Scoped to the tier's own range so
-     * concurrently-running tiers each measure only their own band.
+     * concurrently-running tiers each measure only their own file-size range.
      */
-    private Band queryBand(String database, String tierName, long minSizeInclusive, long maxSizeExclusive) {
+    private ActiveFiles queryActiveFiles(String database, String tierName, long minSizeInclusive, long maxSizeExclusive) {
         String mdDatabase = "\"__ducklake_metadata_" + database + "\"";
         String sql = ("SELECT COUNT(*) AS total, COALESCE(SUM(file_size_bytes), 0) AS total_bytes "
                 + "FROM %s.ducklake_data_file WHERE end_snapshot IS NULL "
@@ -256,11 +256,11 @@ public class CompactionService implements Closeable {
         try (var statement = countingConnectionFor(database, tierName).createStatement()) {
             statement.execute(sql);
             try (ResultSet rs = statement.getResultSet()) {
-                return rs.next() ? new Band(rs.getLong("total"), rs.getLong("total_bytes")) : Band.UNKNOWN;
+                return rs.next() ? new ActiveFiles(rs.getLong("total"), rs.getLong("total_bytes")) : ActiveFiles.UNKNOWN;
             }
         } catch (Exception e) {
-            logger.warn("Could not query file band for {}", database, e);
-            return Band.UNKNOWN;
+            logger.warn("Could not read active files for {}", database, e);
+            return ActiveFiles.UNKNOWN;
         }
     }
 

@@ -5,7 +5,7 @@ import java.time.Instant;
 /**
  * One per-cycle telemetry record for a {@code (database, tier)} compaction run — the unit defined by
  * COMPACTION_TELEMETRY_SPEC.md. Capture only: assembling one adds no catalog round-trips beyond the
- * counts the compactor already ran (the band-size query now returns {@code SUM(file_size_bytes)}
+ * counts the compactor already ran (the active-file query now returns {@code SUM(file_size_bytes)}
  * alongside the {@code COUNT} it already issued).
  *
  * <p>Nullable ({@link Long}) fields are values that can be genuinely unknown for a cycle — a metadata
@@ -29,11 +29,11 @@ public record CompactionRun(
         Instant endedAt,
         long intendedDelayMs,
         long actualGapMs,
-        Long bandFilesBefore,
-        Long bandFilesAfter,
+        Long activeFilesBefore,
+        Long activeFilesAfter,
         Long filesRetired,
-        Long bandBytesBefore,
-        Long bandBytesAfter,
+        Long activeBytesBefore,
+        Long activeBytesAfter,
         long maxCompactedFiles,
         Long filesProcessed,
         Long filesCreated,
@@ -103,9 +103,9 @@ public record CompactionRun(
         return m.length() > MAX_ERROR_LEN ? m.substring(0, MAX_ERROR_LEN) + "…" : m;
     }
 
-    /** Bytes retired = before - after, only when both band-byte reads succeeded; else null. */
+    /** Bytes retired = before - after, only when both active-byte reads succeeded; else null. */
     public Long bytesRetired() {
-        return (bandBytesBefore != null && bandBytesAfter != null)
-                ? bandBytesBefore - bandBytesAfter : null;
+        return (activeBytesBefore != null && activeBytesAfter != null)
+                ? activeBytesBefore - activeBytesAfter : null;
     }
 }

@@ -116,7 +116,7 @@ public class CompactionState {
                 .description("Files retired per second minus files arriving per second (< 0 = losing ground)")
                 .tag("database", db).tag("tier", tierName).register(registry);
         Gauge.builder(ARRIVAL_RATE_METRIC, g, h -> h.arrivalRatePerSec)
-                .description("Files arriving into this tier's band per second (from consecutive cycles)")
+                .description("Files arriving into this tier's file-size range per second (from consecutive cycles)")
                 .tag("database", db).tag("tier", tierName).register(registry);
         Gauge.builder(SATURATED_METRIC, g, h -> h.saturated)
                 .description("1 when cycles run back-to-back (cadence no longer a control variable)")
