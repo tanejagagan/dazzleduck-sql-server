@@ -28,6 +28,7 @@ public class CompactionService implements Closeable {
     private final Housekeeper housekeeper;
     private final CompactionState state;
     private final CompactionRunLog runLog;
+    private final long commitTimeoutMs;
 
     // Shared schedulers
     private final ScheduledExecutorService compactionScheduler;
@@ -58,6 +59,7 @@ public class CompactionService implements Closeable {
         this.housekeeper = housekeeper;
         this.state = state;
         this.runLog = runLog;
+        this.commitTimeoutMs = config.commitTimeoutLimit().toMillis();
         long enabledTiers = config.tiers().stream().filter(CompactionTier::enabled).count();
         int compactionThreads = Math.max(1, (int) (config.databases().size() * Math.max(enabledTiers, 1)));
         int housekeepingThreads = Math.max(1, config.databases().size());
@@ -208,6 +210,15 @@ public class CompactionService implements Closeable {
                     ResourceSampler.dirSizeBytes(tempDir),
                     ResourceSampler.memoryLimitBytes(tier.connectionSettings()));
             runLog.record(run);
+
+            // Push this cycle's control inputs + derived quantities to the OTLP-exported gauges/counters.
+            // groups_requested and tier_frequency are emitted now so making them dynamic later is visible.
+            CompactionRunLog.DerivedAggregates agg =
+                    runLog.aggregates(new CompactionRunLog.Key(database, tier.name()), commitTimeoutMs);
+            state.recordOutcome(database, tier.name(), outcome);
+            state.updateTierGauges(database, tier.name(), tier.maxCompactedFiles(), tier.frequency().toMillis(),
+                    agg.drainFilesPerSec(), agg.arrivalFilesPerSec(), agg.saturated(), run.spillPeakBytes());
+            state.updateRssPeak(run.rssPeakBytes());
         } catch (Exception e) {
             // Telemetry assembly must never take down a compaction cycle.
             logger.warn("Failed to record compaction telemetry for {} tier '{}'", database, tier.name(), e);

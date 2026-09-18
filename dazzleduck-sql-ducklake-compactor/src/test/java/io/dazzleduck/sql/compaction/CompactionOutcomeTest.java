@@ -161,6 +161,30 @@ class CompactionOutcomeTest {
     }
 
     @Test
+    void cycleUpdatesOutcomeCounterAndControlInputGauges() {
+        try (CompactionService service = new CompactionService(CONFIG, null, compactor(false), housekeeper(false), state, runLog)) {
+            service.runTier(DB, MAJOR);
+
+            assertEquals(1, registry.get("ducklake.compaction.cycles_by_outcome")
+                    .tag("database", DB).tag("tier", "major").tag("outcome", "SUCCESS").functionCounter().count());
+            // Control inputs are emitted now (they become dynamic later): frequency reflects the tier.
+            assertEquals(MAJOR.frequency().toMillis(), registry.get("ducklake.compaction.tier_frequency")
+                    .tag("database", DB).tag("tier", "major").gauge().value());
+            assertEquals(MAJOR.maxCompactedFiles(), registry.get("ducklake.compaction.groups_requested")
+                    .tag("database", DB).tag("tier", "major").gauge().value());
+        }
+    }
+
+    @Test
+    void failedCycleIsCountedByOutcomeToo() {
+        try (CompactionService service = new CompactionService(CONFIG, null, compactor(true), housekeeper(false), state, runLog)) {
+            service.runTier(DB, MAJOR);
+            assertEquals(1, registry.get("ducklake.compaction.cycles_by_outcome")
+                    .tag("database", DB).tag("tier", "major").tag("outcome", "FAILED").functionCounter().count());
+        }
+    }
+
+    @Test
     void lastSuccessAgeIsRegisteredBeforeAnySuccessHasHappened() {
         // Registered up front rather than on first success, so a compactor that has never
         // succeeded still reports an age instead of no series at all.

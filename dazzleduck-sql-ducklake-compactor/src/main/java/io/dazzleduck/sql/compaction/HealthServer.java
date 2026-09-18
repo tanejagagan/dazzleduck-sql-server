@@ -21,17 +21,22 @@ public class HealthServer implements Closeable {
     private static final int UI_REFRESH_SECONDS = 5;
 
     private final HttpServer server;
+    private final CompactionRunLog runLog;
+    private final long commitTimeoutMs;
 
     public HealthServer(int port, Supplier<CompactionStats> statsSupplier) throws IOException {
         this(port, statsSupplier, null, 0);
     }
 
     /**
-     * @param runLog          per-cycle telemetry ring buffer for the {@code /ui} dashboard (null disables it)
+     * @param runLog          per-cycle telemetry ring buffer for the {@code /ui} dashboard and the
+     *                        {@code /health} telemetry section (null disables both)
      * @param commitTimeoutMs external commit timeout used for the durationHeadroom aggregate
      */
     public HealthServer(int port, Supplier<CompactionStats> statsSupplier,
                         CompactionRunLog runLog, long commitTimeoutMs) throws IOException {
+        this.runLog = runLog;
+        this.commitTimeoutMs = commitTimeoutMs;
         server = HttpServer.create(new InetSocketAddress(port), 0);
         server.createContext("/health", exchange -> handle(exchange, statsSupplier));
         if (runLog != null) {
@@ -103,7 +108,11 @@ public class HealthServer implements Closeable {
                 sb.append("\n        \"").append(tierName).append("\": {\n");
                 sb.append("          \"totalCompactions\": ").append(ds.tierCompactionCounts().get(tierName)).append(",\n");
                 sb.append("          \"currentFiles\": ").append(ds.currentTierFileCounts().getOrDefault(tierName, 0L)).append(",\n");
-                sb.append("          \"nextExecutionTime\": ").append(instant(ds.nextExecutionTimeByTier().get(tierName))).append("\n");
+                sb.append("          \"nextExecutionTime\": ").append(instant(ds.nextExecutionTimeByTier().get(tierName)))
+                        .append(runLog != null ? ",\n" : "\n");
+                if (runLog != null) {
+                    sb.append("          \"telemetry\": ").append(telemetryJson(entry.getKey(), tierName)).append("\n");
+                }
                 sb.append("        }").append(j < tierNames.size() - 1 ? "," : "");
             }
             sb.append(tierNames.isEmpty() ? "" : "\n      ");
@@ -122,5 +131,46 @@ public class HealthServer implements Closeable {
 
     private static String instant(Instant i) {
         return i == null ? "null" : "\"" + i + "\"";
+    }
+
+    /**
+     * The spec's {@code /health} extension: the latest run plus the derived aggregates for a tier,
+     * or {@code null} when nothing has run yet. Compact inline JSON on one object.
+     */
+    private String telemetryJson(String db, String tierName) {
+        CompactionRunLog.Key key = new CompactionRunLog.Key(db, tierName);
+        CompactionRun r = runLog.latest(key);
+        if (r == null) {
+            return "null";
+        }
+        CompactionRunLog.DerivedAggregates a = runLog.aggregates(key, commitTimeoutMs);
+        return "{"
+                + "\"runId\": " + r.runId()
+                + ", \"outcome\": \"" + r.outcome() + "\""
+                + ", \"failureClass\": \"" + r.failureClass() + "\""
+                + ", \"durationTotalMs\": " + r.durationTotalMs()
+                + ", \"durationMergeMs\": " + r.durationMergeMs()
+                + ", \"filesRetired\": " + r.filesRetired()
+                + ", \"bytesRetired\": " + r.bytesRetired()
+                + ", \"actualGapMs\": " + r.actualGapMs()
+                + ", \"groupsRequested\": " + r.groupsRequested()
+                + ", \"rssPeakBytes\": " + r.rssPeakBytes()
+                + ", \"spillPeakBytes\": " + r.spillPeakBytes()
+                + ", \"memoryLimitBytes\": " + r.memoryLimitBytes()
+                + ", \"derived\": {"
+                + "\"windowSize\": " + a.windowSize()
+                + ", \"throughputFilesPerSec\": " + round(a.throughputFilesPerSec())
+                + ", \"throughputBytesPerSec\": " + round(a.throughputBytesPerSec())
+                + ", \"arrivalFilesPerSec\": " + round(a.arrivalFilesPerSec())
+                + ", \"drainFilesPerSec\": " + round(a.drainFilesPerSec())
+                + ", \"p95DurationMs\": " + a.p95DurationMs()
+                + ", \"durationHeadroom\": " + round(a.durationHeadroom())
+                + ", \"saturated\": " + a.saturated()
+                + ", \"idleRatio\": " + round(a.idleRatio())
+                + "}}";
+    }
+
+    private static double round(double d) {
+        return Math.round(d * 1000.0) / 1000.0;
     }
 }
