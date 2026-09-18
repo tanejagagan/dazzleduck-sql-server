@@ -22,37 +22,35 @@ public class HealthServer implements Closeable {
 
     private final HttpServer server;
     private final CompactionRunLog runLog;
-    private final long commitTimeoutMs;
 
     public HealthServer(int port, Supplier<CompactionStats> statsSupplier) throws IOException {
-        this(port, statsSupplier, null, 0);
+        this(port, statsSupplier, null);
     }
 
     /**
-     * @param runLog          per-cycle telemetry ring buffer for the {@code /ui} dashboard and the
-     *                        {@code /health} telemetry section (null disables both)
-     * @param commitTimeoutMs external commit timeout used for the durationHeadroom aggregate
+     * @param runLog per-cycle telemetry ring buffer for the {@code /ui} dashboard and the
+     *               {@code /health} telemetry section (null disables both). The durationHeadroom
+     *               denominator is carried on each run, so no timeout parameter is needed here.
      */
     public HealthServer(int port, Supplier<CompactionStats> statsSupplier,
-                        CompactionRunLog runLog, long commitTimeoutMs) throws IOException {
+                        CompactionRunLog runLog) throws IOException {
         this.runLog = runLog;
-        this.commitTimeoutMs = commitTimeoutMs;
         server = HttpServer.create(new InetSocketAddress(port), 0);
         server.createContext("/health", exchange -> handle(exchange, statsSupplier));
         if (runLog != null) {
-            server.createContext("/ui", exchange -> handleUi(exchange, runLog, commitTimeoutMs));
+            server.createContext("/ui", exchange -> handleUi(exchange, runLog));
         }
         server.setExecutor(null);
     }
 
-    private void handleUi(HttpExchange exchange, CompactionRunLog runLog, long commitTimeoutMs) throws IOException {
+    private void handleUi(HttpExchange exchange, CompactionRunLog runLog) throws IOException {
         if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
             exchange.sendResponseHeaders(405, -1);
             return;
         }
         byte[] body;
         try {
-            body = CompactionHtml.renderPage(runLog, commitTimeoutMs, UI_REFRESH_SECONDS)
+            body = CompactionHtml.renderPage(runLog, UI_REFRESH_SECONDS)
                     .getBytes(StandardCharsets.UTF_8);
         } catch (RuntimeException e) {
             logger.warn("Failed to render compaction telemetry UI", e);
@@ -143,7 +141,7 @@ public class HealthServer implements Closeable {
         if (r == null) {
             return "null";
         }
-        CompactionRunLog.DerivedAggregates a = runLog.aggregates(key, commitTimeoutMs);
+        CompactionRunLog.DerivedAggregates a = runLog.aggregates(key);
         return "{"
                 + "\"runId\": " + r.runId()
                 + ", \"outcome\": \"" + r.outcome() + "\""

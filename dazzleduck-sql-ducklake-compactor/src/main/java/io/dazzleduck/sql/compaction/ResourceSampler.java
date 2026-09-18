@@ -90,6 +90,44 @@ final class ResourceSampler {
         return null;
     }
 
+    // e.g. "-c idle_in_transaction_session_timeout=600000", "SET idle_in_transaction_session_timeout='10min'"
+    private static final Pattern IDLE_TX_TIMEOUT =
+            Pattern.compile("idle_in_transaction_session_timeout\\s*(?::=|=)?\\s*'?([0-9]+\\s*[a-zA-Z]*)'?",
+                    Pattern.CASE_INSENSITIVE);
+
+    /**
+     * The catalog's {@code idle_in_transaction_session_timeout} in ms, parsed from a tier's
+     * connection_settings (this is the external timeout a cycle races, and the natural denominator
+     * for durationHeadroom), or {@code -1} if the tier does not set one — in which case the caller
+     * should fall back to the server default. Bare numbers are milliseconds (the Postgres unit);
+     * a unit suffix ({@code ms}/{@code s}/{@code min}/{@code h}) is honoured.
+     */
+    static long idleInTransactionTimeoutMs(List<String> connectionSettings) {
+        for (String s : connectionSettings) {
+            Matcher m = IDLE_TX_TIMEOUT.matcher(s);
+            if (m.find()) {
+                return parseDurationMs(m.group(1).trim());
+            }
+        }
+        return -1;
+    }
+
+    /** Parses "600000" / "600000ms" / "10min" / "30s" / "1h" to milliseconds, or -1. */
+    static long parseDurationMs(String value) {
+        Matcher m = Pattern.compile("([0-9]+)\\s*([a-zA-Z]*)").matcher(value);
+        if (!m.matches()) {
+            return -1;
+        }
+        long n = Long.parseLong(m.group(1));
+        return switch (m.group(2).toLowerCase(java.util.Locale.ROOT)) {
+            case "", "ms" -> n;
+            case "s" -> n * 1000;
+            case "min", "m" -> n * 60_000;
+            case "h" -> n * 3_600_000;
+            default -> -1L;
+        };
+    }
+
     /** Parses "2GB" / "512 MB" / "1073741824" to bytes (1024-based units), or -1 on a bad value. */
     static long parseSize(String value) {
         Matcher m = Pattern.compile("([0-9.]+)\\s*([a-zA-Z]*)").matcher(value);

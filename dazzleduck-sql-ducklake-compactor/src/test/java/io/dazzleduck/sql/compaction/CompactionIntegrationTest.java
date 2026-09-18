@@ -89,8 +89,7 @@ class CompactionIntegrationTest {
                 List.of(),
                 0,                        // 0 = OS-assigned port, health server not used in tests
                 Duration.ofSeconds(30),
-                CompactionRunLog.DEFAULT_CAPACITY,
-                Duration.ofMinutes(2)
+                CompactionRunLog.DEFAULT_CAPACITY
         );
 
         registry = new SimpleMeterRegistry();

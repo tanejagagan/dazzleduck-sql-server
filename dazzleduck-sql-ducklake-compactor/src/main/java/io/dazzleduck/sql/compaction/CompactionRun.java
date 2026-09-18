@@ -44,7 +44,11 @@ public record CompactionRun(
         String errorMessage,
         long rssPeakBytes,
         long spillPeakBytes,
-        long memoryLimitBytes) {
+        long memoryLimitBytes,
+        long commitTimeoutMs) {
+
+    /** Postgres server default for {@code idle_in_transaction_session_timeout} (spec Q3). */
+    public static final long DEFAULT_COMMIT_TIMEOUT_MS = 120_000;
 
     public enum Outcome { SUCCESS, EMPTY, FAILED }
 

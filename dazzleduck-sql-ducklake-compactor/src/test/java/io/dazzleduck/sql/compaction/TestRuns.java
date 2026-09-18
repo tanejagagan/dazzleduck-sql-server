@@ -18,6 +18,6 @@ final class TestRuns {
                 10, null,
                 (endSec - startSec) * 1000, (endSec - startSec) * 1000, -1,
                 outcome, failureClass, failureClass == CompactionRun.FailureClass.NONE ? null : "err",
-                -1, -1, -1);
+                -1, -1, -1, CompactionRun.DEFAULT_COMMIT_TIMEOUT_MS);
     }
 }

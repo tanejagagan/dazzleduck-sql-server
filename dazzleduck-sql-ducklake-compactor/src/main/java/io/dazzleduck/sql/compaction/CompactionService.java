@@ -28,7 +28,6 @@ public class CompactionService implements Closeable {
     private final Housekeeper housekeeper;
     private final CompactionState state;
     private final CompactionRunLog runLog;
-    private final long commitTimeoutMs;
 
     // Shared schedulers
     private final ScheduledExecutorService compactionScheduler;
@@ -59,7 +58,6 @@ public class CompactionService implements Closeable {
         this.housekeeper = housekeeper;
         this.state = state;
         this.runLog = runLog;
-        this.commitTimeoutMs = config.commitTimeoutLimit().toMillis();
         long enabledTiers = config.tiers().stream().filter(CompactionTier::enabled).count();
         int compactionThreads = Math.max(1, (int) (config.databases().size() * Math.max(enabledTiers, 1)));
         int housekeepingThreads = Math.max(1, config.databases().size());
@@ -197,6 +195,12 @@ public class CompactionService implements Closeable {
         try {
             Long filesRetired = (before.files() != null && after.files() != null) ? before.files() - after.files() : null;
             String tempDir = ResourceSampler.tempDirectory(tier.connectionSettings());
+            // The commit timeout the cycle races comes from the tier's connection settings; fall back
+            // to the Postgres server default when the tier does not set one (spec Q3).
+            long tierCommitTimeoutMs = ResourceSampler.idleInTransactionTimeoutMs(tier.connectionSettings());
+            if (tierCommitTimeoutMs <= 0) {
+                tierCommitTimeoutMs = CompactionRun.DEFAULT_COMMIT_TIMEOUT_MS;
+            }
             CompactionRun run = new CompactionRun(
                     runId, database, tier.name(), scheduledAt, startedAt, endedAt,
                     tier.frequency().toMillis(), actualGapMs,
@@ -208,13 +212,14 @@ public class CompactionService implements Closeable {
                     outcome, failureClass, errorMessage,
                     ResourceSampler.rssPeakBytes(),
                     ResourceSampler.dirSizeBytes(tempDir),
-                    ResourceSampler.memoryLimitBytes(tier.connectionSettings()));
+                    ResourceSampler.memoryLimitBytes(tier.connectionSettings()),
+                    tierCommitTimeoutMs);
             runLog.record(run);
 
             // Push this cycle's control inputs + derived quantities to the OTLP-exported gauges/counters.
             // groups_requested and tier_frequency are emitted now so making them dynamic later is visible.
             CompactionRunLog.DerivedAggregates agg =
-                    runLog.aggregates(new CompactionRunLog.Key(database, tier.name()), commitTimeoutMs);
+                    runLog.aggregates(new CompactionRunLog.Key(database, tier.name()));
             state.recordOutcome(database, tier.name(), outcome);
             state.updateTierGauges(database, tier.name(), tier.maxCompactedFiles(), tier.frequency().toMillis(),
                     agg.drainFilesPerSec(), agg.arrivalFilesPerSec(), agg.saturated(), run.spillPeakBytes());

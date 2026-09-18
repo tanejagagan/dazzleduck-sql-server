@@ -72,16 +72,16 @@ public final class CompactionRunLog {
     /**
      * The spec's derived quantities over the retained window. Rates are computed over the runs that
      * carry the needed fields, so a window with some failed metadata reads still yields a figure from
-     * the runs that succeeded.
-     *
-     * @param timeoutLimitMs the external commit-timeout the cycle races (for {@code durationHeadroom});
-     *                       {@code idle_in_transaction_session_timeout}, ~120000 by default
+     * the runs that succeeded. {@code durationHeadroom}'s denominator is the external commit timeout
+     * carried on the latest run ({@code idle_in_transaction_session_timeout}), so it always reflects
+     * the value the cycle actually raced — no separate config to drift.
      */
-    public DerivedAggregates aggregates(Key key, long timeoutLimitMs) {
+    public DerivedAggregates aggregates(Key key) {
         List<CompactionRun> runs = recent(key);
         if (runs.isEmpty()) {
             return DerivedAggregates.EMPTY;
         }
+        long timeoutLimitMs = runs.get(runs.size() - 1).commitTimeoutMs();
 
         long filesRetired = 0, durationMsForFiles = 0, bytesRetired = 0, durationMsForBytes = 0;
         long empties = 0;

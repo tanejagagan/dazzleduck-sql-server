@@ -17,14 +17,14 @@ final class CompactionHtml {
 
     private CompactionHtml() {}
 
-    static String renderPage(CompactionRunLog log, long commitTimeoutMs, int refreshSeconds) {
+    static String renderPage(CompactionRunLog log, int refreshSeconds) {
         List<CompactionRunLog.Key> keys = log.keys();
         StringBuilder cards = new StringBuilder();
         if (keys.isEmpty()) {
             cards.append("<div class=\"empty\">No compaction cycles recorded yet.</div>");
         } else {
             for (CompactionRunLog.Key key : keys) {
-                cards.append(card(key, log.latest(key), log.recent(key), log.aggregates(key, commitTimeoutMs)));
+                cards.append(card(key, log.latest(key), log.recent(key), log.aggregates(key)));
             }
         }
         return """

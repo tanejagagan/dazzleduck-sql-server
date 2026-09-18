@@ -32,6 +32,24 @@ class ResourceSamplerTest {
     }
 
     @Test
+    void parsesIdleInTransactionTimeoutFromConnectionSettings() {
+        assertEquals(600_000, ResourceSampler.idleInTransactionTimeoutMs(
+                List.of("ATTACH 'pg' AS cat (TYPE ducklake, options='-c idle_in_transaction_session_timeout=600000')")));
+        assertEquals(600_000, ResourceSampler.idleInTransactionTimeoutMs(
+                List.of("SET idle_in_transaction_session_timeout='10min'")));
+        assertEquals(-1, ResourceSampler.idleInTransactionTimeoutMs(List.of("SET memory_limit='2GB'")));
+    }
+
+    @Test
+    void parsesDurationUnits() {
+        assertEquals(600_000, ResourceSampler.parseDurationMs("600000"));
+        assertEquals(600_000, ResourceSampler.parseDurationMs("600000ms"));
+        assertEquals(30_000, ResourceSampler.parseDurationMs("30s"));
+        assertEquals(600_000, ResourceSampler.parseDurationMs("10min"));
+        assertEquals(3_600_000, ResourceSampler.parseDurationMs("1h"));
+    }
+
+    @Test
     void dirSizeOfMissingPathIsSentinelOrZero() {
         assertEquals(-1, ResourceSampler.dirSizeBytes(null));
         assertEquals(-1, ResourceSampler.dirSizeBytes("  "));

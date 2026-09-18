@@ -38,7 +38,7 @@ class CompactionRunLogTest {
         // run3: [20s,21s] retired 0 -> EMPTY; 15 files arrived over the 7s gap since run2 ended
         log.record(TestRuns.run(3, 20, 21, 7000, 25L, 25L, 250L, 250L, CompactionRun.Outcome.EMPTY, CompactionRun.FailureClass.NONE));
 
-        var agg = log.aggregates(KEY, 120_000);
+        var agg = log.aggregates(KEY);
         assertEquals(3, agg.windowSize());
         // throughput = (80+40+0) files / (2+3+1) s = 20 f/s
         assertEquals(20.0, agg.throughputFilesPerSec(), 0.001);
@@ -55,7 +55,7 @@ class CompactionRunLogTest {
     void saturatedWhenLatestGapNearZero() {
         CompactionRunLog log = new CompactionRunLog(10);
         log.record(TestRuns.run(1, 0, 5, 0, 100L, 10L, 0L, 0L, CompactionRun.Outcome.SUCCESS, CompactionRun.FailureClass.NONE));
-        assertTrue(log.aggregates(KEY, 120_000).saturated());
+        assertTrue(log.aggregates(KEY).saturated());
     }
 
     @Test
@@ -64,7 +64,7 @@ class CompactionRunLogTest {
         log.record(TestRuns.run(1, 0, 1, 100, null, null, null, null, CompactionRun.Outcome.FAILED, CompactionRun.FailureClass.OUT_OF_MEMORY));
         log.record(TestRuns.run(2, 2, 3, 100, null, null, null, null, CompactionRun.Outcome.FAILED, CompactionRun.FailureClass.OUT_OF_MEMORY));
         log.record(TestRuns.run(3, 4, 5, 100, null, null, null, null, CompactionRun.Outcome.FAILED, CompactionRun.FailureClass.COMMIT_TIMEOUT));
-        var byClass = log.aggregates(KEY, 120_000).failuresByClass();
+        var byClass = log.aggregates(KEY).failuresByClass();
         assertEquals(2L, byClass.get(CompactionRun.FailureClass.OUT_OF_MEMORY));
         assertEquals(1L, byClass.get(CompactionRun.FailureClass.COMMIT_TIMEOUT));
     }
@@ -72,7 +72,7 @@ class CompactionRunLogTest {
     @Test
     void emptyKeyYieldsEmptyAggregates() {
         CompactionRunLog log = new CompactionRunLog(10);
-        assertEquals(0, log.aggregates(KEY, 120_000).windowSize());
+        assertEquals(0, log.aggregates(KEY).windowSize());
         assertTrue(log.recent(KEY).isEmpty());
         assertNull(log.latest(KEY));
     }

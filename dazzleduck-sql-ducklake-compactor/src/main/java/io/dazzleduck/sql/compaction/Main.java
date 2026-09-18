@@ -37,8 +37,7 @@ public class Main {
                 startupScript, config.snapshotRetention(), config.housekeepingConnectionSettings(), state);
         CompactionRunLog runLog = new CompactionRunLog(config.runHistorySize());
         CompactionService service = new CompactionService(config, startupScript, tierCompactor, housekeeper, state, runLog);
-        HealthServer healthServer = new HealthServer(config.healthPort(), service::getStats,
-                runLog, config.commitTimeoutLimit().toMillis());
+        HealthServer healthServer = new HealthServer(config.healthPort(), service::getStats, runLog);
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             logger.info("Shutdown signal received");

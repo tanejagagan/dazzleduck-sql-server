@@ -30,8 +30,7 @@ class CompactionOutcomeTest {
             List.of(),
             0,
             Duration.ofSeconds(30),
-            CompactionRunLog.DEFAULT_CAPACITY,
-            Duration.ofMinutes(2));
+            CompactionRunLog.DEFAULT_CAPACITY);
 
     // JUnit builds a fresh test instance per method, so these are per-test state.
     private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
@@ -150,7 +149,7 @@ class CompactionOutcomeTest {
                 List.of(new CompactionTier("minor", false, MINOR.frequency(), MINOR.minFileSize(), MINOR.maxFileSize(), 0, List.of()),
                         new CompactionTier("major", false, MAJOR.frequency(), MAJOR.minFileSize(), MAJOR.maxFileSize(), 0, List.of())),
                 CONFIG.housekeepingFrequency(), CONFIG.snapshotRetention(), CONFIG.housekeepingConnectionSettings(),
-                CONFIG.healthPort(), CONFIG.fileCountRefreshFrequency(), CONFIG.runHistorySize(), CONFIG.commitTimeoutLimit());
+                CONFIG.healthPort(), CONFIG.fileCountRefreshFrequency(), CONFIG.runHistorySize());
 
         try (CompactionService service = new CompactionService(neitherEnabledConfig, null, compactor(true), housekeeper(false), state, runLog)) {
             service.runHousekeeping(DB);
