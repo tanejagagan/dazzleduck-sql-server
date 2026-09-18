@@ -15,9 +15,10 @@ public interface TierCompactor extends Closeable {
      * the single CALL (see {@link CompactionRun}), so {@code durationMergeMs} covers both.
      *
      * @param durationMergeMs wall-clock ms of {@code CALL ducklake_merge_adjacent_files(...)}
-     * @param groupsMerged    merge groups the engine reported, or {@code null} if it surfaces none
+     * @param compactedFiles  files the merge reported compacting (bounded by {@code max_compacted_files}),
+     *                        or {@code null} if the engine surfaces none
      */
-    record MergeOutcome(long durationMergeMs, Long groupsMerged) {}
+    record MergeOutcome(long durationMergeMs, Long compactedFiles) {}
 
     @Override
     default void close() throws IOException {

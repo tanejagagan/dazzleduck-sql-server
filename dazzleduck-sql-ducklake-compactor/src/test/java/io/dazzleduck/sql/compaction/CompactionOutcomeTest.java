@@ -169,8 +169,21 @@ class CompactionOutcomeTest {
             // Control inputs are emitted now (they become dynamic later): frequency reflects the tier.
             assertEquals(MAJOR.frequency().toMillis(), registry.get("ducklake.compaction.tier_frequency")
                     .tag("database", DB).tag("tier", "major").gauge().value());
-            assertEquals(MAJOR.maxCompactedFiles(), registry.get("ducklake.compaction.groups_requested")
+            assertEquals(MAJOR.maxCompactedFiles(), registry.get("ducklake.compaction.max_compacted_files")
                     .tag("database", DB).tag("tier", "major").gauge().value());
+        }
+    }
+
+    @Test
+    void mergeOutcomeCompactedFilesAndDurationReachTheRecord() {
+        TierCompactor c = (database, tier) -> new TierCompactor.MergeOutcome(5, 7L);
+        try (CompactionService service = new CompactionService(CONFIG, null, c, housekeeper(false), state, runLog)) {
+            service.runTier(DB, MAJOR);
+            CompactionRun latest = runLog.latest(new CompactionRunLog.Key(DB, "major"));
+            assertNotNull(latest);
+            assertEquals(7L, latest.compactedFiles());
+            assertEquals(5, latest.durationMergeMs());
+            assertEquals(MAJOR.maxCompactedFiles(), latest.maxCompactedFiles());
         }
     }
 

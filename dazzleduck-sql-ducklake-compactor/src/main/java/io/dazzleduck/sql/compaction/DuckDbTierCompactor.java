@@ -5,6 +5,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.concurrent.ConcurrentHashMap;
@@ -36,26 +38,57 @@ public class DuckDbTierCompactor implements TierCompactor {
         String sql = mergeAdjacentFilesSql(database, tier.minFileSize(), tier.maxFileSize(), tier.maxCompactedFiles());
         Timer.Sample sample = metrics.startTimer();
         long start = System.nanoTime();
-        Long groupsMerged = null;
+        Long compactedFiles = null;
         try (Statement statement = connection.createStatement()) {
             boolean hasResultSet = statement.execute(sql);
-            // Q2 (spec): the result shape of ducklake_merge_adjacent_files is not relied on yet — drain
-            // any result set so the statement completes cleanly, but leave groupsMerged null rather than
-            // guessing at a column meaning. Revisit once the function's output is confirmed.
             if (hasResultSet) {
                 try (var rs = statement.getResultSet()) {
-                    while (rs.next()) {
-                        // intentionally consumed, not interpreted (see above)
-                    }
+                    compactedFiles = readCompactedFiles(rs, tier);
                 }
             }
         } finally {
             metrics.stopTimer(sample, tier.name(), "merge", database);
         }
         long durationMergeMs = (System.nanoTime() - start) / 1_000_000;
-        logger.debug("Tier '{}' merge completed for {} in {}ms", tier.name(), database, durationMergeMs);
+        logger.debug("Tier '{}' merge completed for {} in {}ms (compactedFiles={})",
+                tier.name(), database, durationMergeMs, compactedFiles);
         // No separate commit time: merge + catalog commit are one atomic CALL here (see CompactionRun).
-        return new MergeOutcome(durationMergeMs, groupsMerged);
+        return new MergeOutcome(durationMergeMs, compactedFiles);
+    }
+
+    // Logged once so the actual ducklake_merge_adjacent_files result shape (spec Q2) can be confirmed
+    // against a live DuckLake+catalog, since it can't be verified in unit tests.
+    private volatile boolean loggedMergeResultShape = false;
+
+    /**
+     * Best-effort {@code compacted_files} from the merge's result set. The function's exact result
+     * shape is unconfirmed (spec Q2), so this is <b>provisional</b>: it uses the returned row count as
+     * a stand-in for files compacted, only when the merge was bounded ({@code max_compacted_files > 0}),
+     * and logs the real shape once at INFO so it can be verified/corrected against a live catalog.
+     */
+    private Long readCompactedFiles(ResultSet rs, CompactionTier tier) throws SQLException {
+        ResultSetMetaData md = rs.getMetaData();
+        int cols = md.getColumnCount();
+        long rows = 0;
+        String firstRow = null;
+        while (rs.next()) {
+            if (rows == 0 && !loggedMergeResultShape) {
+                StringBuilder sb = new StringBuilder();
+                for (int i = 1; i <= cols; i++) {
+                    if (i > 1) sb.append(", ");
+                    sb.append(md.getColumnName(i)).append('=').append(rs.getString(i));
+                }
+                firstRow = sb.toString();
+            }
+            rows++;
+        }
+        if (!loggedMergeResultShape) {
+            loggedMergeResultShape = true;
+            logger.info("ducklake_merge_adjacent_files result shape for tier '{}': {} column(s), {} row(s){}"
+                            + " — compactedFiles captured provisionally as the row count (spec Q2; confirm)",
+                    tier.name(), cols, rows, firstRow != null ? "; first row: [" + firstRow + "]" : "");
+        }
+        return tier.maxCompactedFiles() > 0 && rows > 0 ? rows : null;
     }
 
     private Connection connectionFor(String database, CompactionTier tier) throws SQLException {

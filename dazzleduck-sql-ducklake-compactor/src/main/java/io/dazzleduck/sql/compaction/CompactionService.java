@@ -205,7 +205,7 @@ public class CompactionService implements Closeable {
                     runId, database, tier.name(), scheduledAt, startedAt, endedAt,
                     tier.frequency().toMillis(), actualGapMs,
                     before.files(), after.files(), filesRetired, before.bytes(), after.bytes(),
-                    tier.maxCompactedFiles(), merge != null ? merge.groupsMerged() : null,
+                    tier.maxCompactedFiles(), merge != null ? merge.compactedFiles() : null,
                     Duration.between(startedAt, endedAt).toMillis(),
                     merge != null ? merge.durationMergeMs() : -1,
                     outcome, failureClass, errorMessage,
@@ -216,7 +216,7 @@ public class CompactionService implements Closeable {
             runLog.record(run);
 
             // Push this cycle's control inputs + derived quantities to the OTLP-exported gauges/counters.
-            // groups_requested and tier_frequency are emitted now so making them dynamic later is visible.
+            // max_compacted_files and tier_frequency are emitted now so making them dynamic later is visible.
             CompactionRunLog.DerivedAggregates agg =
                     runLog.aggregates(new CompactionRunLog.Key(database, tier.name()));
             state.recordOutcome(database, tier.name(), outcome);

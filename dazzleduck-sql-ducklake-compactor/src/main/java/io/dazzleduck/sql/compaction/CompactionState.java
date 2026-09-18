@@ -29,7 +29,7 @@ public class CompactionState {
     private static final String CYCLES_BY_OUTCOME_METRIC = "ducklake.compaction.cycles_by_outcome";
     // Control inputs the future adaptive controller will make dynamic — emitted now so the change is
     // observable when it lands. Holder-backed, so whatever value a cycle actually used is reflected.
-    private static final String GROUPS_REQUESTED_METRIC = "ducklake.compaction.groups_requested";
+    private static final String MAX_COMPACTED_FILES_METRIC = "ducklake.compaction.max_compacted_files";
     private static final String FREQUENCY_METRIC = "ducklake.compaction.tier_frequency";
     // Derived, per-cycle. arrival/drain are NOT reconstructable from cumulative counters, so they are
     // emitted rather than left for the backend to rate.
@@ -62,7 +62,7 @@ public class CompactionState {
 
     /** Mutable backing for the per-(database, tier) gauges, updated once per cycle. */
     private static final class TierGauges {
-        volatile long groupsRequested;
+        volatile long maxCompactedFiles;
         volatile long frequencyMs;
         volatile long spillPeakBytes;
         volatile double drainRatePerSec;
@@ -98,15 +98,15 @@ public class CompactionState {
     }
 
     /**
-     * Registers the per-(database, tier) control-input gauges (groups_requested, tier_frequency),
+     * Registers the per-(database, tier) control-input gauges (max_compacted_files, tier_frequency),
      * the derived per-cycle gauges (drain/arrival rate, saturated, spill peak), and the
      * outcome-tagged cycle counters. All read from mutable holders updated once per cycle.
      */
     private void registerTierGaugesAndOutcomes(String db, String tierName) {
         TierGauges g = tierGauges.computeIfAbsent(db, k -> new ConcurrentHashMap<>())
                 .computeIfAbsent(tierName, k -> new TierGauges());
-        Gauge.builder(GROUPS_REQUESTED_METRIC, g, h -> h.groupsRequested)
-                .description("max_compacted_files requested for this tier (will become dynamic)")
+        Gauge.builder(MAX_COMPACTED_FILES_METRIC, g, h -> h.maxCompactedFiles)
+                .description("max_compacted_files configured for this tier (will become dynamic)")
                 .tag("database", db).tag("tier", tierName).register(registry);
         Gauge.builder(FREQUENCY_METRIC, g, h -> h.frequencyMs)
                 .description("Configured cycle interval for this tier (will become dynamic)")
@@ -281,12 +281,12 @@ public class CompactionState {
      * Pushes one cycle's control inputs and derived quantities into the per-(database, tier) gauge
      * holders. Called once per cycle so the gauges never recompute on scrape.
      */
-    public void updateTierGauges(String db, String tierName, long groupsRequested, long frequencyMs,
+    public void updateTierGauges(String db, String tierName, long maxCompactedFiles, long frequencyMs,
                                  double drainRatePerSec, double arrivalRatePerSec, boolean saturated,
                                  long spillPeakBytes) {
         TierGauges g = tierGauges.computeIfAbsent(db, k -> new ConcurrentHashMap<>())
                 .computeIfAbsent(tierName, k -> new TierGauges());
-        g.groupsRequested = groupsRequested;
+        g.maxCompactedFiles = maxCompactedFiles;
         g.frequencyMs = frequencyMs;
         g.drainRatePerSec = drainRatePerSec;
         g.arrivalRatePerSec = arrivalRatePerSec;
