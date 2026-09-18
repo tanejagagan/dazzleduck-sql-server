@@ -51,12 +51,13 @@ public class CompactionService implements Closeable {
     private static final String FILE_COUNT_REFRESH_KEY = "__filecount_refresh__";
 
     /**
-     * Cadence for the whole-catalog file-count gauge refresh, off the compaction control path (spec:
-     * "30–60 s"). Fixed rather than configurable — it is an internal gauge-maintenance interval, not a
-     * control parameter. If a very large catalog ever makes the COUNT(*) FILTER aggregate expensive,
-     * reintroduce a config key here.
+     * Cadence for the whole-catalog file-count gauge refresh, off the compaction control path. Fixed
+     * rather than configurable — it is an internal gauge-maintenance interval, not a control
+     * parameter. Set to 2 minutes: these gauges are a coarse backlog indicator, so a slow cadence
+     * keeps the COUNT(*) FILTER aggregate off the shared catalog's back. If a future need arises to
+     * tune it, reintroduce a config key here.
      */
-    private static final long FILE_COUNT_REFRESH_SECONDS = 30;
+    private static final long FILE_COUNT_REFRESH_SECONDS = 120;
 
     public CompactionService(CompactionConfig config, String startupScript, TierCompactor tierCompactor,
                              Housekeeper housekeeper, CompactionState state, CompactionRunLog runLog) {
