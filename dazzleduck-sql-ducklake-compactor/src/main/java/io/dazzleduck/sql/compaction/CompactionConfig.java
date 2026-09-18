@@ -16,7 +16,8 @@ public record CompactionConfig(
         Duration housekeepingFrequency,
         Duration snapshotRetention,
         List<String> housekeepingConnectionSettings,
-        int healthPort
+        int healthPort,
+        int runHistorySize
 ) {
     private static final String CONFIG_PATH = "dazzleduck_sql_compaction";
 
@@ -43,7 +44,9 @@ public record CompactionConfig(
                 c.getDuration("housekeeping_frequency"),
                 c.getDuration("snapshot_retention"),
                 c.getStringList("housekeeping_connection_settings"),
-                c.getInt("health_port")
+                c.getInt("health_port"),
+                c.hasPath("run_history_size")
+                        ? c.getInt("run_history_size") : CompactionRunLog.DEFAULT_CAPACITY
         );
     }
 

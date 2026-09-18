@@ -22,8 +22,22 @@ public class CompactionState {
     private static final String FAILURE_COUNT_METRIC = "ducklake.compaction.failures";
     private static final String LAST_SUCCESS_AGE_METRIC = "ducklake.compaction.last_success_age";
     private static final String FILES_COMPACTED_METRIC = "ducklake.files.compacted";
+    private static final String BYTES_COMPACTED_METRIC = "ducklake.bytes.compacted";
     private static final String TIER_FILES_METRIC = "ducklake.files.by_tier";
     private static final String TOTAL_FILES_METRIC = "ducklake.files.total";
+    private static final String FAILURE_BY_CLASS_METRIC = "ducklake.compaction.failures_by_class";
+    private static final String CYCLES_BY_OUTCOME_METRIC = "ducklake.compaction.cycles_by_outcome";
+    // Control inputs the future adaptive controller will make dynamic — emitted now so the change is
+    // observable when it lands. Holder-backed, so whatever value a cycle actually used is reflected.
+    private static final String MAX_COMPACTED_FILES_METRIC = "ducklake.compaction.max_compacted_files";
+    private static final String FREQUENCY_METRIC = "ducklake.compaction.tier_frequency";
+    // Derived, per-cycle. arrival/drain are NOT reconstructable from cumulative counters, so they are
+    // emitted rather than left for the backend to rate.
+    private static final String DRAIN_RATE_METRIC = "ducklake.compaction.drain_rate";
+    private static final String ARRIVAL_RATE_METRIC = "ducklake.compaction.arrival_rate";
+    private static final String SATURATED_METRIC = "ducklake.compaction.saturated";
+    private static final String SPILL_PEAK_METRIC = "ducklake.compaction.spill_peak_bytes";
+    private static final String RSS_PEAK_METRIC = "ducklake.compaction.rss_peak_bytes";
 
     /** Failure kind used for housekeeping cycles, which aren't a tier. */
     static final String HOUSEKEEPING_KIND = "housekeeping";
@@ -35,6 +49,26 @@ public class CompactionState {
     // Per-database, per-tier successful-cycle counters (also back Micrometer FunctionCounters)
     private final ConcurrentHashMap<String, Map<String, AtomicLong>> tierCounts = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, AtomicLong> filesCompacted = new ConcurrentHashMap<>();
+    // Per-database, per-tier cumulative bytes retired (bytes are the real cost driver, per spec).
+    private final ConcurrentHashMap<String, Map<String, AtomicLong>> bytesCompacted = new ConcurrentHashMap<>();
+    // Per-database, per-failure-class cumulative counters, tagged so opposite failure modes stay distinct.
+    private final ConcurrentHashMap<String, Map<CompactionRun.FailureClass, AtomicLong>> failureClassCounts = new ConcurrentHashMap<>();
+    // Per-(database, tier) cumulative cycle counters, tagged by outcome (SUCCESS/EMPTY/FAILED).
+    private final ConcurrentHashMap<String, Map<String, Map<CompactionRun.Outcome, AtomicLong>>> outcomeCounts = new ConcurrentHashMap<>();
+    // Per-(database, tier) holder for the latest control inputs + derived per-cycle gauges.
+    private final ConcurrentHashMap<String, Map<String, TierGauges>> tierGauges = new ConcurrentHashMap<>();
+    // Process-wide peak RSS (VmHWM is monotonic), so a single series rather than one per tier.
+    private final AtomicLong rssPeakBytes = new AtomicLong(0);
+
+    /** Mutable backing for the per-(database, tier) gauges, updated once per cycle. */
+    private static final class TierGauges {
+        volatile long maxCompactedFiles;
+        volatile long frequencyMs;
+        volatile long spillPeakBytes;
+        volatile double drainRatePerSec;
+        volatile double arrivalRatePerSec;
+        volatile double saturated; // 0.0 / 1.0
+    }
 
     // Failures are attributable to the tier that threw, or HOUSEKEEPING_KIND. Each inner map is
     // fully populated on creation, so only the counters are ever mutated — never the map structure.
@@ -56,11 +90,65 @@ public class CompactionState {
         this.registry = registry;
         this.tierNames = tierNames;
         databases.forEach(this::registerDatabase);
+        // Process-wide peak RSS (VmHWM) — one series, updated by whichever cycle sampled it last.
+        Gauge.builder(RSS_PEAK_METRIC, rssPeakBytes, AtomicLong::get)
+                .description("Peak process RSS observed at a cycle end (/proc VmHWM)")
+                .baseUnit("bytes")
+                .register(registry);
+    }
+
+    /**
+     * Registers the per-(database, tier) control-input gauges (max_compacted_files, tier_frequency),
+     * the derived per-cycle gauges (drain/arrival rate, saturated, spill peak), and the
+     * outcome-tagged cycle counters. All read from mutable holders updated once per cycle.
+     */
+    private void registerTierGaugesAndOutcomes(String db, String tierName) {
+        TierGauges g = tierGauges.computeIfAbsent(db, k -> new ConcurrentHashMap<>())
+                .computeIfAbsent(tierName, k -> new TierGauges());
+        Gauge.builder(MAX_COMPACTED_FILES_METRIC, g, h -> h.maxCompactedFiles)
+                .description("max_compacted_files configured for this tier (will become dynamic)")
+                .tag("database", db).tag("tier", tierName).register(registry);
+        Gauge.builder(FREQUENCY_METRIC, g, h -> h.frequencyMs)
+                .description("Configured cycle interval for this tier (will become dynamic)")
+                .baseUnit("milliseconds")
+                .tag("database", db).tag("tier", tierName).register(registry);
+        Gauge.builder(DRAIN_RATE_METRIC, g, h -> h.drainRatePerSec)
+                .description("Files retired per second minus files arriving per second (< 0 = losing ground)")
+                .tag("database", db).tag("tier", tierName).register(registry);
+        Gauge.builder(ARRIVAL_RATE_METRIC, g, h -> h.arrivalRatePerSec)
+                .description("Files arriving into this tier's file-size range per second (from consecutive cycles)")
+                .tag("database", db).tag("tier", tierName).register(registry);
+        Gauge.builder(SATURATED_METRIC, g, h -> h.saturated)
+                .description("1 when cycles run back-to-back (cadence no longer a control variable)")
+                .tag("database", db).tag("tier", tierName).register(registry);
+        Gauge.builder(SPILL_PEAK_METRIC, g, h -> h.spillPeakBytes)
+                .description("Temp-directory (spill) bytes at the last cycle end")
+                .baseUnit("bytes")
+                .tag("database", db).tag("tier", tierName).register(registry);
+
+        Map<CompactionRun.Outcome, AtomicLong> outcomes = outcomeCounters(db, tierName);
+        outcomes.forEach((outcome, counter) ->
+                FunctionCounter.builder(CYCLES_BY_OUTCOME_METRIC, counter, AtomicLong::doubleValue)
+                        .description("Compaction cycles by outcome")
+                        .tag("database", db).tag("tier", tierName).tag("outcome", outcome.name())
+                        .register(registry));
+    }
+
+    private Map<CompactionRun.Outcome, AtomicLong> outcomeCounters(String db, String tierName) {
+        return outcomeCounts.computeIfAbsent(db, k -> new ConcurrentHashMap<>())
+                .computeIfAbsent(tierName, k -> {
+                    Map<CompactionRun.Outcome, AtomicLong> m = new java.util.EnumMap<>(CompactionRun.Outcome.class);
+                    for (CompactionRun.Outcome o : CompactionRun.Outcome.values()) {
+                        m.put(o, new AtomicLong(0));
+                    }
+                    return m;
+                });
     }
 
     private void registerDatabase(String db) {
         Map<String, AtomicLong> counts = tierCounts.computeIfAbsent(db, k -> new ConcurrentHashMap<>());
         Map<String, AtomicLong> files = tierFiles.computeIfAbsent(db, k -> new ConcurrentHashMap<>());
+        Map<String, AtomicLong> bytes = bytesCompacted.computeIfAbsent(db, k -> new ConcurrentHashMap<>());
         for (String tierName : tierNames) {
             AtomicLong count = counts.computeIfAbsent(tierName, k -> new AtomicLong(0));
             FunctionCounter.builder(CYCLE_COUNT_METRIC, count, AtomicLong::doubleValue)
@@ -75,7 +163,26 @@ public class CompactionState {
                     .tag("database", db)
                     .tag("tier", tierName)
                     .register(registry);
+
+            AtomicLong tierBytes = bytes.computeIfAbsent(tierName, k -> new AtomicLong(0));
+            FunctionCounter.builder(BYTES_COMPACTED_METRIC, tierBytes, AtomicLong::doubleValue)
+                    .description("Cumulative bytes retired by compaction for this tier")
+                    .baseUnit("bytes")
+                    .tag("database", db)
+                    .tag("tier", tierName)
+                    .register(registry);
+
+            registerTierGaugesAndOutcomes(db, tierName);
         }
+
+        // Failure-by-class counters, one series per class (except NONE) so a zero is visible.
+        Map<CompactionRun.FailureClass, AtomicLong> byClass = failureClassCounters(db);
+        byClass.forEach((cls, counter) ->
+                FunctionCounter.builder(FAILURE_BY_CLASS_METRIC, counter, AtomicLong::doubleValue)
+                        .description("Compaction cycle failures by classified cause")
+                        .tag("database", db)
+                        .tag("class", cls.name())
+                        .register(registry));
 
         AtomicLong total = totalFiles.computeIfAbsent(db, k -> new AtomicLong(0));
         AtomicLong filesCompactedTotal  = filesCompacted.computeIfAbsent(db, k -> new AtomicLong(0));
@@ -126,6 +233,18 @@ public class CompactionState {
         });
     }
 
+    private Map<CompactionRun.FailureClass, AtomicLong> failureClassCounters(String db) {
+        return failureClassCounts.computeIfAbsent(db, k -> {
+            Map<CompactionRun.FailureClass, AtomicLong> counters = new java.util.EnumMap<>(CompactionRun.FailureClass.class);
+            for (CompactionRun.FailureClass cls : CompactionRun.FailureClass.values()) {
+                if (cls != CompactionRun.FailureClass.NONE) {
+                    counters.put(cls, new AtomicLong(0));
+                }
+            }
+            return counters;
+        });
+    }
+
     // ── Update methods ────────────────────────────────────────────────────────
 
     public void incrementTier(String db, String tierName) {
@@ -136,6 +255,52 @@ public class CompactionState {
 
     public void addFilesCompacted(String db, long delta) {
         if (delta > 0) filesCompacted.computeIfAbsent(db, k -> new AtomicLong(0)).addAndGet(delta);
+    }
+
+    public void addBytesCompacted(String db, String tierName, long delta) {
+        if (delta > 0) {
+            bytesCompacted.computeIfAbsent(db, k -> new ConcurrentHashMap<>())
+                    .computeIfAbsent(tierName, k -> new AtomicLong(0))
+                    .addAndGet(delta);
+        }
+    }
+
+    /** Increments the per-class failure counter. {@link CompactionRun.FailureClass#NONE} is ignored. */
+    public void recordFailureClass(String db, CompactionRun.FailureClass failureClass) {
+        if (failureClass != CompactionRun.FailureClass.NONE) {
+            failureClassCounters(db).get(failureClass).incrementAndGet();
+        }
+    }
+
+    /** Increments the outcome-tagged cycle counter (SUCCESS/EMPTY/FAILED). */
+    public void recordOutcome(String db, String tierName, CompactionRun.Outcome outcome) {
+        outcomeCounters(db, tierName).get(outcome).incrementAndGet();
+    }
+
+    /**
+     * Pushes one cycle's control inputs and derived quantities into the per-(database, tier) gauge
+     * holders. Called once per cycle so the gauges never recompute on scrape.
+     */
+    public void updateTierGauges(String db, String tierName, long maxCompactedFiles, long frequencyMs,
+                                 double drainRatePerSec, double arrivalRatePerSec, boolean saturated,
+                                 long spillPeakBytes) {
+        TierGauges g = tierGauges.computeIfAbsent(db, k -> new ConcurrentHashMap<>())
+                .computeIfAbsent(tierName, k -> new TierGauges());
+        g.maxCompactedFiles = maxCompactedFiles;
+        g.frequencyMs = frequencyMs;
+        g.drainRatePerSec = drainRatePerSec;
+        g.arrivalRatePerSec = arrivalRatePerSec;
+        g.saturated = saturated ? 1.0 : 0.0;
+        if (spillPeakBytes >= 0) {
+            g.spillPeakBytes = spillPeakBytes;
+        }
+    }
+
+    /** Records a process RSS sample (VmHWM); keeps the max seen. Ignores unavailable (-1) readings. */
+    public void updateRssPeak(long rssBytes) {
+        if (rssBytes >= 0) {
+            rssPeakBytes.accumulateAndGet(rssBytes, Math::max);
+        }
     }
 
     public void updateTierFileCount(String db, String tierName, long count) {

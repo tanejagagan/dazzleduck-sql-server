@@ -31,16 +31,41 @@ public class DuckDbTierCompactor implements TierCompactor {
     }
 
     @Override
-    public void compact(String database, CompactionTier tier) throws Exception {
+    public MergeOutcome compact(String database, CompactionTier tier) throws Exception {
         Connection connection = connectionFor(database, tier);
         String sql = mergeAdjacentFilesSql(database, tier.minFileSize(), tier.maxFileSize(), tier.maxCompactedFiles());
         Timer.Sample sample = metrics.startTimer();
+        long start = System.nanoTime();
+        // ducklake_merge_adjacent_files returns one row per compacted table:
+        // (schema_name, table_name, files_processed, files_created). Sum across tables; null when the
+        // call returned no rows (nothing merged). Confirmed against DuckLake on DuckDB v1.5.x.
+        Long filesProcessed = null;
+        Long filesCreated = null;
         try (Statement statement = connection.createStatement()) {
-            statement.execute(sql);
+            boolean hasResultSet = statement.execute(sql);
+            if (hasResultSet) {
+                try (var rs = statement.getResultSet()) {
+                    long processed = 0, created = 0;
+                    boolean anyRows = false;
+                    while (rs.next()) {
+                        processed += rs.getLong("files_processed");
+                        created += rs.getLong("files_created");
+                        anyRows = true;
+                    }
+                    if (anyRows) {
+                        filesProcessed = processed;
+                        filesCreated = created;
+                    }
+                }
+            }
         } finally {
             metrics.stopTimer(sample, tier.name(), "merge", database);
         }
-        logger.debug("Tier '{}' merge completed for {}", tier.name(), database);
+        long durationMergeMs = (System.nanoTime() - start) / 1_000_000;
+        logger.debug("Tier '{}' merge completed for {} in {}ms (filesProcessed={}, filesCreated={})",
+                tier.name(), database, durationMergeMs, filesProcessed, filesCreated);
+        // No separate commit time: merge + catalog commit are one atomic CALL here (see CompactionRun).
+        return new MergeOutcome(durationMergeMs, filesProcessed, filesCreated);
     }
 
     private Connection connectionFor(String database, CompactionTier tier) throws SQLException {

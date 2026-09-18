@@ -35,8 +35,9 @@ public class Main {
         TierCompactor tierCompactor = new DuckDbTierCompactor(startupScript, state);
         Housekeeper housekeeper = new DuckLakeHousekeeper(
                 startupScript, config.snapshotRetention(), config.housekeepingConnectionSettings(), state);
-        CompactionService service = new CompactionService(config, startupScript, tierCompactor, housekeeper, state);
-        HealthServer healthServer = new HealthServer(config.healthPort(), service::getStats);
+        CompactionRunLog runLog = new CompactionRunLog(config.runHistorySize());
+        CompactionService service = new CompactionService(config, startupScript, tierCompactor, housekeeper, state, runLog);
+        HealthServer healthServer = new HealthServer(config.healthPort(), service::getStats, runLog);
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             logger.info("Shutdown signal received");
