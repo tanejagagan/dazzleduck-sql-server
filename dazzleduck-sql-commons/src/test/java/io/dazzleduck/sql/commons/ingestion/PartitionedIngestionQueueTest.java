@@ -161,6 +161,42 @@ public class PartitionedIngestionQueueTest {
     }
 
     @Test
+    public void statsAggregateChildrenAndExposePartitionRows() throws Exception {
+        var scheduler = new DeterministicScheduler();
+        var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
+        Path source = singleKeyFile("s.parquet", 7, 100);
+
+        try (var queue = newQueue(scheduler, clock)) {
+            queue.add(batch(source, "p", 0, MIN_BATCH_SIZE + 1));
+            scheduler.tick(1, TimeUnit.MILLISECONDS);
+            queue.drain();
+
+            var stats = queue.getStats();
+            assertEquals("test-queue", stats.identifier());
+            assertEquals(NUM_PARTITIONS, stats.partitions().size(), "one child row per partition");
+            assertEquals(100, stats.rowsWritten(), "rows aggregated across children");
+            assertTrue(stats.totalWriteBytes() > 0);
+            // Exactly one child (the routed partition) did the write.
+            long childrenWithRows = stats.partitions().stream().filter(p -> p.rowsWritten() > 0).count();
+            assertEquals(1, childrenWithRows);
+        }
+    }
+
+    @Test
+    public void multiPartitionRejectIsCounted() throws Exception {
+        var scheduler = new DeterministicScheduler();
+        var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
+        Path source = multiKeyFile("m.parquet", 100);
+
+        try (var queue = newQueue(scheduler, clock)) {
+            var future = queue.add(batch(source, "p", 0, MIN_BATCH_SIZE + 1));
+            assertThrows(ExecutionException.class, () -> future.get(5, SECONDS));
+            assertEquals(1, queue.getRejectedMultiPartition());
+            assertEquals(1, queue.getStats().rejectedMultiPartition());
+        }
+    }
+
+    @Test
     public void constructorRejectsInvalidPartitioning() {
         var scheduler = new DeterministicScheduler();
         var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());

@@ -100,7 +100,7 @@ Core DuckDB abstraction (JDK 21). Key classes:
 Shared constants and small utilities (JDK 11): `ConfigConstants.java` (all config key constants — there is no `ConfigUtils`), `Headers.java` (all HTTP/Flight header + JWT claim constants + type extractors), `ContentTypes.java`, `SslUtils.java` (env-aware SSL via `DD_TRUST_SELF_SIGNED_CERTS`), `StartupScriptProvider.java` (env-var substitution in startup SQL), `auth/JwtClaimsExtractor.java`, `types/` Arrow row writers. (`CryptoUtils` lives in the flight module.)
 
 ### dazzleduck-sql-otel-collector
-OTLP gRPC receiver (default port 4317) for logs/traces/metrics → flattened Arrow schemas → `ParquetIngestionQueue` → Parquet/DuckLake. JWT auth mandatory; queue routing via the `x-dd-ingestion-queue` JWT claim (no default fallback). Embedded `/health` endpoint with MAINTENANCE-aware graceful shutdown. Config root `otel_collector`.
+OTLP gRPC receiver (default port 4317) for logs/traces/metrics → flattened Arrow schemas → `ParquetIngestionQueue` → Parquet/DuckLake. JWT auth mandatory; queue routing via the `x-dd-ingestion-queue` JWT claim (no default fallback). Embedded HTTP server (health port, default 8081) serves `/health` (MAINTENANCE-aware graceful shutdown) and `/stats` (auto-refreshing per-queue ingestion dashboard, shared `StatsHtml` renderer with the main server's `/v1/ui`). Config root `otel_collector`.
 
 ### dazzleduck-sql-ducklake-compactor
 Standalone service running `ducklake_merge_adjacent_files` (minor/major) plus snapshot expiry and file cleanup on schedules. Config root `dazzleduck_sql_compaction`; `/health` on port 8080 (always UP). Docker image `dazzleduck/ducklake-compactor`.

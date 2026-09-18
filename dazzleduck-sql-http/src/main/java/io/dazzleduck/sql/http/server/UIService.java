@@ -241,54 +241,10 @@ public class UIService implements HttpService {
     }
 
     private String buildRunningBulkIngestTable() {
-        List<Stats> stats = producerMBean.getIngestionDetails();
-        String rows = stats.isEmpty()
-                ? "<tr><td colspan=\"7\" style=\"text-align: center;\">No running bulk ingestion</td></tr>"
-                : stats.stream()
-                .map(this::buildBulkIngestRow)
-                .collect(Collectors.joining());
-
-        return """
-            <table>
-                <caption>Running Bulk Ingestion</caption>
-                <thead>
-                    <tr>
-                        <th>Identifier</th>
-                        <th>Bytes Written</th>
-                        <th>Total Batches</th>
-                        <th>Total Buckets</th>
-                        <th>Time Writing (ms)</th>
-                        <th>Pending Batches</th>
-                        <th>Pending Buckets</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    %s
-                </tbody>
-            </table>
-            """.formatted(rows);
-    }
-
-    private String buildBulkIngestRow(Stats stats) {
-        return """
-            <tr>
-                <td>%s</td>
-                <td>%s</td>
-                <td>%d</td>
-                <td>%d</td>
-                <td>%d</td>
-                <td>%d</td>
-                <td>%d</td>
-            </tr>
-            """.formatted(
-                escapeHtml(stats.identifier()),
-                formatBytes(stats.totalWriteBytes()),
-                stats.totalWriteBatches(),
-                stats.totalWriteBuckets(),
-                stats.timeSpentWriting(),
-                stats.pendingBatches(),
-                stats.pendingBuckets()
-        );
+        // Shared renderer (io.dazzleduck.sql.commons.ingestion.StatsHtml) so this table and the OTLP
+        // collector's /stats page show identical columns, including per-partition child rows.
+        return io.dazzleduck.sql.commons.ingestion.StatsHtml.renderTable(
+                producerMBean.getIngestionDetails(), "Bulk Ingestion — per queue");
     }
 
     private String buildStatementRow(RunningStatementInfo info, boolean withCancelButton) {

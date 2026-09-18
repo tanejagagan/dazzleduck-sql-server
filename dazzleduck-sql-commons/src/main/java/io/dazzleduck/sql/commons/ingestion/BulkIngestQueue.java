@@ -161,6 +161,15 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
     private final LongAccumulator failedWriteBatches = new LongAccumulator(Long::sum, 0L);
     private final LongAccumulator failedWriteBuckets = new LongAccumulator(Long::sum, 0L);
     private final LongAccumulator timeSpentWriting = new LongAccumulator(Long::sum, 0L);
+    // Rejection counters, split by reason, so an operator can tell backpressure (429) from a
+    // duplicate/out-of-order producer from (partitioned queues) a mixed-partition batch.
+    private final LongAccumulator rejected429 = new LongAccumulator(Long::sum, 0L);
+    private final LongAccumulator rejectedOutOfSequence = new LongAccumulator(Long::sum, 0L);
+    // Freshness + last-error, for staleness detection on the dashboard (0 epoch = never).
+    private volatile long lastReceiveEpochMs = 0L;
+    private volatile long lastWriteEpochMs = 0L;
+    private volatile long lastErrorEpochMs = 0L;
+    private volatile String lastError = null;
 
     public BulkIngestQueue(String identifier,
                            long minBucketSize,
@@ -246,7 +255,10 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
                     totalWrite.accumulate(bucketToWrite.size());
                     totalWriteBuckets.accumulate(bucketsToCombine.size());
                     timeSpentWriting.accumulate(Duration.between(start, end).toMillis());
+                    lastWriteEpochMs = clock.millis();
                 } catch (Exception e) {
+                    lastError = e.getMessage() != null ? e.getMessage() : e.toString();
+                    lastErrorEpochMs = clock.millis();
                     logger.error("Write failed for queue '{}': dropping bucket of {} batches / {} bytes",
                             identifier, bucketToWrite.batchCount(), bucketToWrite.size(), e);
                     // A failed bucket is no longer outstanding work: account it separately so
@@ -302,11 +314,65 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
 
     @Override
     public Stats getStats(){
-        return new Stats(identifier, totalWrite.get(), totalWriteBatches.get(), totalWriteBuckets.get(),
-                timeSpentWriting.get(), getPendingBatches(), getPendingBuckets(),
-                failedWriteBytes.get(), failedWriteBatches.get(), failedWriteBuckets.get(),
-                producerIdEvictions.get());
+        return Stats.builder(identifier)
+                .totalWriteBytes(totalWrite.get())
+                .totalWriteBatches(totalWriteBatches.get())
+                .totalWriteBuckets(totalWriteBuckets.get())
+                .timeSpentWriting(timeSpentWriting.get())
+                .pendingBatches(getPendingBatches())
+                .pendingBuckets(getPendingBuckets())
+                .pendingBytes(pendingWrite())
+                .maxPendingWrite(maxPendingWrite)
+                .failedWriteBytes(failedWriteBytes.get())
+                .failedWriteBatches(failedWriteBatches.get())
+                .failedWriteBuckets(failedWriteBuckets.get())
+                .producerIdEvictions(producerIdEvictions.get())
+                .rowsWritten(rowsWritten())
+                .dataPhaseMillis(dataPhaseMillis())
+                .postIngestMillis(postIngestMillis())
+                .rejected429(rejected429.get())
+                .rejectedOutOfSequence(rejectedOutOfSequence.get())
+                .rejectedMultiPartition(rejectedMultiPartition())
+                .lastWriteEpochMs(lastWriteEpochMs)
+                .lastReceiveEpochMs(lastReceiveEpochMs)
+                .lastErrorEpochMs(lastErrorEpochMs)
+                .lastError(lastError)
+                .partitions(partitionStats())
+                .build();
     }
+
+    // --- Subclass-supplied metrics (defaults keep ordinary queues correct) --------------------
+
+    /** Cumulative rows written; {@link ParquetIngestionQueue} supplies the real value. */
+    protected long rowsWritten() { return 0L; }
+
+    /** Cumulative ms in the data (COPY) phase; overridden by {@link ParquetIngestionQueue}. */
+    protected long dataPhaseMillis() { return 0L; }
+
+    /** Cumulative ms in the post-ingestion phase; overridden by {@link ParquetIngestionQueue}. */
+    protected long postIngestMillis() { return 0L; }
+
+    /** Batches rejected for spanning multiple partitions; only {@link PartitionedIngestionQueue} counts these. */
+    protected long rejectedMultiPartition() { return 0L; }
+
+    /** Per-partition child stats; empty unless this is a {@link PartitionedIngestionQueue}. */
+    protected java.util.List<Stats> partitionStats() { return java.util.List.of(); }
+
+    public long getRejected429() { return rejected429.get(); }
+
+    public long getRejectedOutOfSequence() { return rejectedOutOfSequence.get(); }
+
+    public long getMaxPendingWrite() { return maxPendingWrite; }
+
+    /** Epoch ms of the most recent completed bucket write, or 0 if none. */
+    public long getLastWriteEpochMs() { return lastWriteEpochMs; }
+
+    /** Epoch ms of the most recent accepted batch, or 0 if none. */
+    public long getLastReceiveEpochMs() { return lastReceiveEpochMs; }
+
+    public long getLastErrorEpochMs() { return lastErrorEpochMs; }
+
+    public String getLastError() { return lastError; }
 
     public long getTotalWriteBatches() {
         return totalWriteBatches.get();
@@ -392,12 +458,14 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
         long currentPending = pendingWrite();
         if (currentPending + batch.totalSize() > maxPendingWrite) {
             int retryAfterSeconds = calculateRetryAfterSeconds(currentPending);
+            rejected429.accumulate(1);
             return CompletableFuture.failedFuture(
                     new PendingWriteExceededException(currentPending, maxPendingWrite, retryAfterSeconds));
         }
         if (batch.producerId() != null) {
             var progressBatch = inProgressBatchIds.get(batch.producerId());
             if (progressBatch != null && progressBatch >= batch.producerBatchId()) {
+                rejectedOutOfSequence.accumulate(1);
                 return CompletableFuture.failedFuture(
                         new OutOfSequenceBatch(progressBatch, batch.producerBatchId()));
             }
@@ -406,6 +474,7 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
         currentBucket.add(batch, result);
         acceptedBatches.accumulate(1);
         acceptedBytes.accumulate(batch.totalSize());
+        lastReceiveEpochMs = clock.millis();
         if (batch.producerId() != null) {
             inProgressBatchIds.put(batch.producerId(), batch.producerBatchId());
         }

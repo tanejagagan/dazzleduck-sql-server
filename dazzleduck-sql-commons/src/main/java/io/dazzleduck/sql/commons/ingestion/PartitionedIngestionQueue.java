@@ -49,6 +49,8 @@ public class PartitionedIngestionQueue extends ParquetIngestionQueue {
     private final int numPartitions;
     private final String partitionExpression;
     private final List<ParquetIngestionQueue> children;
+    private final java.util.concurrent.atomic.LongAccumulator rejectedMultiPartition =
+            new java.util.concurrent.atomic.LongAccumulator(Long::sum, 0L);
 
     public PartitionedIngestionQueue(String applicationId,
                                      String inputFormat,
@@ -109,6 +111,7 @@ public class PartitionedIngestionQueue extends ParquetIngestionQueue {
                             .formatted(queueId, partitionExpression, e.getMessage()), e));
         }
         if (partition == MULTIPLE_PARTITIONS) {
+            rejectedMultiPartition.accumulate(1);
             deleteInput(batch);
             return CompletableFuture.failedFuture(new IllegalArgumentException(
                     ("Queue '%s': batch rejected — its rows span more than one partition "
@@ -201,10 +204,43 @@ public class PartitionedIngestionQueue extends ParquetIngestionQueue {
 
     @Override
     public Stats getStats() {
-        return new Stats(queueId, getTotalWriteBytes(), getTotalWriteBatches(), getTotalWriteBuckets(),
-                getTimeSpentWriting(), getPendingBatches(), getPendingBuckets(),
-                getFailedWriteBytes(), getFailedWriteBatches(), getFailedWriteBuckets(),
-                getProducerIdEvictions());
+        // Fold each child's own Stats (relabeled p0..pN-1) into one aggregated row; the children
+        // carry every per-queue counter already, so summing their Stats keeps this in lockstep with
+        // whatever BulkIngestQueue/ParquetIngestionQueue expose without re-deriving each field here.
+        List<Stats> childStats = new ArrayList<>(children.size());
+        Stats.Builder agg = Stats.builder(queueId);
+        long bytes = 0, batches = 0, buckets = 0, timeW = 0, pBatches = 0, pBuckets = 0, pBytes = 0, maxPend = 0;
+        long fBytes = 0, fBatches = 0, fBuckets = 0, evict = 0, rows = 0, dataMs = 0, postMs = 0, r429 = 0, rOos = 0;
+        long lastWrite = 0, lastReceive = 0, lastErrMs = 0;
+        String lastErr = null;
+        for (int i = 0; i < children.size(); i++) {
+            Stats c = children.get(i).getStats();
+            childStats.add(c.withIdentifier("p" + i));
+            bytes += c.totalWriteBytes();       batches += c.totalWriteBatches();   buckets += c.totalWriteBuckets();
+            timeW += c.timeSpentWriting();       pBatches += c.pendingBatches();     pBuckets += c.pendingBuckets();
+            pBytes += c.pendingBytes();          maxPend += c.maxPendingWrite();     fBytes += c.failedWriteBytes();
+            fBatches += c.failedWriteBatches();  fBuckets += c.failedWriteBuckets(); evict += c.producerIdEvictions();
+            rows += c.rowsWritten();             dataMs += c.dataPhaseMillis();      postMs += c.postIngestMillis();
+            r429 += c.rejected429();             rOos += c.rejectedOutOfSequence();
+            lastWrite = Math.max(lastWrite, c.lastWriteEpochMs());
+            lastReceive = Math.max(lastReceive, c.lastReceiveEpochMs());
+            if (c.lastErrorEpochMs() > lastErrMs) { lastErrMs = c.lastErrorEpochMs(); lastErr = c.lastError(); }
+        }
+        return agg.totalWriteBytes(bytes).totalWriteBatches(batches).totalWriteBuckets(buckets)
+                .timeSpentWriting(timeW).pendingBatches(pBatches).pendingBuckets(pBuckets)
+                .pendingBytes(pBytes).maxPendingWrite(maxPend).failedWriteBytes(fBytes)
+                .failedWriteBatches(fBatches).failedWriteBuckets(fBuckets).producerIdEvictions(evict)
+                .rowsWritten(rows).dataPhaseMillis(dataMs).postIngestMillis(postMs)
+                .rejected429(r429).rejectedOutOfSequence(rOos).rejectedMultiPartition(rejectedMultiPartition.get())
+                .lastWriteEpochMs(lastWrite).lastReceiveEpochMs(lastReceive)
+                .lastErrorEpochMs(lastErrMs).lastError(lastErr)
+                .partitions(childStats)
+                .build();
+    }
+
+    /** Batches rejected because their rows spanned more than one partition. */
+    public long getRejectedMultiPartition() {
+        return rejectedMultiPartition.get();
     }
 
     @Override
