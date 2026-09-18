@@ -45,7 +45,7 @@ class CompactionOutcomeTest {
     private static TierCompactor compactor(boolean fail) {
         return (database, tier) -> {
             if (fail) throw new IllegalStateException("tier '" + tier.name() + "' compaction blew up");
-            return new TierCompactor.MergeOutcome(1, null);
+            return new TierCompactor.MergeOutcome(1, null, null);
         };
     }
 
@@ -176,12 +176,13 @@ class CompactionOutcomeTest {
 
     @Test
     void mergeOutcomeCompactedFilesAndDurationReachTheRecord() {
-        TierCompactor c = (database, tier) -> new TierCompactor.MergeOutcome(5, 7L);
+        TierCompactor c = (database, tier) -> new TierCompactor.MergeOutcome(5, 7L, 2L);
         try (CompactionService service = new CompactionService(CONFIG, null, c, housekeeper(false), state, runLog)) {
             service.runTier(DB, MAJOR);
             CompactionRun latest = runLog.latest(new CompactionRunLog.Key(DB, "major"));
             assertNotNull(latest);
-            assertEquals(7L, latest.compactedFiles());
+            assertEquals(7L, latest.filesProcessed());
+            assertEquals(2L, latest.filesCreated());
             assertEquals(5, latest.durationMergeMs());
             assertEquals(MAJOR.maxCompactedFiles(), latest.maxCompactedFiles());
         }

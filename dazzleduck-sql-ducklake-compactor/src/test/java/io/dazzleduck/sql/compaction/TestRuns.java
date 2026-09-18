@@ -15,7 +15,7 @@ final class TestRuns {
                 Instant.ofEpochSecond(startSec), Instant.ofEpochSecond(startSec), Instant.ofEpochSecond(endSec),
                 60_000, gapMs,
                 filesBefore, filesAfter, retired, bytesBefore, bytesAfter,
-                10, null,
+                10, null, null,
                 (endSec - startSec) * 1000, (endSec - startSec) * 1000,
                 outcome, failureClass, failureClass == CompactionRun.FailureClass.NONE ? null : "err",
                 -1, -1, -1, CompactionRun.DEFAULT_COMMIT_TIMEOUT_MS);

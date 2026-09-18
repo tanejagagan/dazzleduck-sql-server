@@ -15,10 +15,10 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Verifies compactedFiles extraction against a real DuckLake merge, using a DuckDB file as the
- * catalog so no Postgres/Testcontainers is needed. Confirms {@code ducklake_merge_adjacent_files}
- * returns {@code (schema_name, table_name, files_processed, files_created)} and that
- * {@link DuckDbTierCompactor} reads {@code files_processed} as compactedFiles.
+ * Verifies files_processed / files_created extraction against a real DuckLake merge, using a DuckDB
+ * file as the catalog so no Postgres/Testcontainers is needed. Confirms
+ * {@code ducklake_merge_adjacent_files} returns {@code (schema_name, table_name, files_processed,
+ * files_created)} and that {@link DuckDbTierCompactor} sums both.
  */
 class DuckDbTierCompactorMergeTest {
 
@@ -58,13 +58,15 @@ class DuckDbTierCompactorMergeTest {
         CompactionTier tier = new CompactionTier("all", true, Duration.ofSeconds(60), 0, 1_000_000_000L, 10, List.of());
         try (DuckDbTierCompactor compactor = new DuckDbTierCompactor(startup, state)) {
             TierCompactor.MergeOutcome out = compactor.compact("lake", tier);
-            assertNotNull(out.compactedFiles(), "a merge happened, so compactedFiles is captured");
-            assertEquals(4L, out.compactedFiles(), "4 input files compacted (files_processed)");
+            assertNotNull(out.filesProcessed(), "a merge happened, so counts are captured");
+            assertEquals(4L, out.filesProcessed(), "4 input files compacted (files_processed)");
+            assertEquals(1L, out.filesCreated(), "merged into 1 output file (files_created)");
             assertTrue(out.durationMergeMs() >= 0);
 
             // A second cycle finds a single merged file — nothing adjacent to merge -> no rows -> null.
             TierCompactor.MergeOutcome noop = compactor.compact("lake", tier);
-            assertNull(noop.compactedFiles(), "nothing merged the second time");
+            assertNull(noop.filesProcessed(), "nothing merged the second time");
+            assertNull(noop.filesCreated());
         }
     }
 }

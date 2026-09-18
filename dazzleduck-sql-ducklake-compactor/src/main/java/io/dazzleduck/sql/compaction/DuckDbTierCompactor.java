@@ -5,7 +5,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.sql.Connection;
-import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.concurrent.ConcurrentHashMap;
@@ -37,39 +36,36 @@ public class DuckDbTierCompactor implements TierCompactor {
         String sql = mergeAdjacentFilesSql(database, tier.minFileSize(), tier.maxFileSize(), tier.maxCompactedFiles());
         Timer.Sample sample = metrics.startTimer();
         long start = System.nanoTime();
-        Long compactedFiles = null;
+        // ducklake_merge_adjacent_files returns one row per compacted table:
+        // (schema_name, table_name, files_processed, files_created). Sum across tables; null when the
+        // call returned no rows (nothing merged). Confirmed against DuckLake on DuckDB v1.5.x.
+        Long filesProcessed = null;
+        Long filesCreated = null;
         try (Statement statement = connection.createStatement()) {
             boolean hasResultSet = statement.execute(sql);
             if (hasResultSet) {
                 try (var rs = statement.getResultSet()) {
-                    compactedFiles = readCompactedFiles(rs);
+                    long processed = 0, created = 0;
+                    boolean anyRows = false;
+                    while (rs.next()) {
+                        processed += rs.getLong("files_processed");
+                        created += rs.getLong("files_created");
+                        anyRows = true;
+                    }
+                    if (anyRows) {
+                        filesProcessed = processed;
+                        filesCreated = created;
+                    }
                 }
             }
         } finally {
             metrics.stopTimer(sample, tier.name(), "merge", database);
         }
         long durationMergeMs = (System.nanoTime() - start) / 1_000_000;
-        logger.debug("Tier '{}' merge completed for {} in {}ms (compactedFiles={})",
-                tier.name(), database, durationMergeMs, compactedFiles);
+        logger.debug("Tier '{}' merge completed for {} in {}ms (filesProcessed={}, filesCreated={})",
+                tier.name(), database, durationMergeMs, filesProcessed, filesCreated);
         // No separate commit time: merge + catalog commit are one atomic CALL here (see CompactionRun).
-        return new MergeOutcome(durationMergeMs, compactedFiles);
-    }
-
-    /**
-     * Total files compacted this cycle, from the merge's result set. {@code ducklake_merge_adjacent_files}
-     * returns one row per compacted table — {@code (schema_name, table_name, files_processed,
-     * files_created)} — so this sums {@code files_processed} (the input files merged away) across
-     * tables. Returns {@code null} when the call returned no rows (nothing was merged). Confirmed
-     * against DuckLake on DuckDB v1.5.x.
-     */
-    private static Long readCompactedFiles(ResultSet rs) throws SQLException {
-        long processed = 0;
-        boolean anyRows = false;
-        while (rs.next()) {
-            processed += rs.getLong("files_processed");
-            anyRows = true;
-        }
-        return anyRows ? processed : null;
+        return new MergeOutcome(durationMergeMs, filesProcessed, filesCreated);
     }
 
     private Connection connectionFor(String database, CompactionTier tier) throws SQLException {
