@@ -31,16 +31,31 @@ public class DuckDbTierCompactor implements TierCompactor {
     }
 
     @Override
-    public void compact(String database, CompactionTier tier) throws Exception {
+    public MergeOutcome compact(String database, CompactionTier tier) throws Exception {
         Connection connection = connectionFor(database, tier);
         String sql = mergeAdjacentFilesSql(database, tier.minFileSize(), tier.maxFileSize(), tier.maxCompactedFiles());
         Timer.Sample sample = metrics.startTimer();
+        long start = System.nanoTime();
+        Long groupsMerged = null;
         try (Statement statement = connection.createStatement()) {
-            statement.execute(sql);
+            boolean hasResultSet = statement.execute(sql);
+            // Q2 (spec): the result shape of ducklake_merge_adjacent_files is not relied on yet — drain
+            // any result set so the statement completes cleanly, but leave groupsMerged null rather than
+            // guessing at a column meaning. Revisit once the function's output is confirmed.
+            if (hasResultSet) {
+                try (var rs = statement.getResultSet()) {
+                    while (rs.next()) {
+                        // intentionally consumed, not interpreted (see above)
+                    }
+                }
+            }
         } finally {
             metrics.stopTimer(sample, tier.name(), "merge", database);
         }
-        logger.debug("Tier '{}' merge completed for {}", tier.name(), database);
+        long durationMergeMs = (System.nanoTime() - start) / 1_000_000;
+        logger.debug("Tier '{}' merge completed for {} in {}ms", tier.name(), database, durationMergeMs);
+        // durationCommitMs = -1: merge + catalog commit are one atomic CALL here (see CompactionRun).
+        return new MergeOutcome(durationMergeMs, -1, groupsMerged);
     }
 
     private Connection connectionFor(String database, CompactionTier tier) throws SQLException {

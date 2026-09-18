@@ -87,14 +87,17 @@ class CompactionIntegrationTest {
                 Duration.ofMillis(500),   // housekeeping every 500ms in tests
                 Duration.ofSeconds(5),
                 List.of(),
-                0                         // 0 = OS-assigned port, health server not used in tests
+                0,                        // 0 = OS-assigned port, health server not used in tests
+                Duration.ofSeconds(30),
+                CompactionRunLog.DEFAULT_CAPACITY,
+                Duration.ofMinutes(2)
         );
 
         registry = new SimpleMeterRegistry();
         CompactionState state = new CompactionState(registry, config.databases(), List.of("minor", "major"));
         TierCompactor tierCompactor = new DuckDbTierCompactor(startupScript, state);
         Housekeeper housekeeper = new DuckLakeHousekeeper(startupScript, config.snapshotRetention(), config.housekeepingConnectionSettings(), state);
-        service = new CompactionService(config, startupScript, tierCompactor, housekeeper, state);
+        service = new CompactionService(config, startupScript, tierCompactor, housekeeper, state, new CompactionRunLog(50));
     }
 
     @AfterAll

@@ -18,12 +18,46 @@ public class HealthServer implements Closeable {
 
     private static final Logger logger = LoggerFactory.getLogger(HealthServer.class);
 
+    private static final int UI_REFRESH_SECONDS = 5;
+
     private final HttpServer server;
 
     public HealthServer(int port, Supplier<CompactionStats> statsSupplier) throws IOException {
+        this(port, statsSupplier, null, 0);
+    }
+
+    /**
+     * @param runLog          per-cycle telemetry ring buffer for the {@code /ui} dashboard (null disables it)
+     * @param commitTimeoutMs external commit timeout used for the durationHeadroom aggregate
+     */
+    public HealthServer(int port, Supplier<CompactionStats> statsSupplier,
+                        CompactionRunLog runLog, long commitTimeoutMs) throws IOException {
         server = HttpServer.create(new InetSocketAddress(port), 0);
         server.createContext("/health", exchange -> handle(exchange, statsSupplier));
+        if (runLog != null) {
+            server.createContext("/ui", exchange -> handleUi(exchange, runLog, commitTimeoutMs));
+        }
         server.setExecutor(null);
+    }
+
+    private void handleUi(HttpExchange exchange, CompactionRunLog runLog, long commitTimeoutMs) throws IOException {
+        if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+            exchange.sendResponseHeaders(405, -1);
+            return;
+        }
+        byte[] body;
+        try {
+            body = CompactionHtml.renderPage(runLog, commitTimeoutMs, UI_REFRESH_SECONDS)
+                    .getBytes(StandardCharsets.UTF_8);
+        } catch (RuntimeException e) {
+            logger.warn("Failed to render compaction telemetry UI", e);
+            body = ("<!doctype html><p>telemetry unavailable: " + e.getMessage() + "</p>").getBytes(StandardCharsets.UTF_8);
+        }
+        exchange.getResponseHeaders().set("Content-Type", "text/html; charset=UTF-8");
+        exchange.sendResponseHeaders(200, body.length);
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(body);
+        }
     }
 
     public void start() {

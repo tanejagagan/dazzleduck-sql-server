@@ -16,8 +16,15 @@ public record CompactionConfig(
         Duration housekeepingFrequency,
         Duration snapshotRetention,
         List<String> housekeepingConnectionSettings,
-        int healthPort
+        int healthPort,
+        Duration fileCountRefreshFrequency,
+        int runHistorySize,
+        Duration commitTimeoutLimit
 ) {
+    /** Slow cadence for the whole-catalog file-count gauge refresh (off the compaction control path). */
+    private static final Duration DEFAULT_FILE_COUNT_REFRESH = Duration.ofSeconds(30);
+    /** External commit timeout a cycle races (idle_in_transaction_session_timeout), for durationHeadroom. */
+    private static final Duration DEFAULT_COMMIT_TIMEOUT_LIMIT = Duration.ofMinutes(2);
     private static final String CONFIG_PATH = "dazzleduck_sql_compaction";
 
     public static Config rawConfig(String[] args) throws Exception {
@@ -43,7 +50,13 @@ public record CompactionConfig(
                 c.getDuration("housekeeping_frequency"),
                 c.getDuration("snapshot_retention"),
                 c.getStringList("housekeeping_connection_settings"),
-                c.getInt("health_port")
+                c.getInt("health_port"),
+                c.hasPath("file_count_refresh_frequency")
+                        ? c.getDuration("file_count_refresh_frequency") : DEFAULT_FILE_COUNT_REFRESH,
+                c.hasPath("run_history_size")
+                        ? c.getInt("run_history_size") : CompactionRunLog.DEFAULT_CAPACITY,
+                c.hasPath("commit_timeout_limit")
+                        ? c.getDuration("commit_timeout_limit") : DEFAULT_COMMIT_TIMEOUT_LIMIT
         );
     }
 

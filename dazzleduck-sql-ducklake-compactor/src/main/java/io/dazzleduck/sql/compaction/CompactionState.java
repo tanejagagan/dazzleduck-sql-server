@@ -22,8 +22,10 @@ public class CompactionState {
     private static final String FAILURE_COUNT_METRIC = "ducklake.compaction.failures";
     private static final String LAST_SUCCESS_AGE_METRIC = "ducklake.compaction.last_success_age";
     private static final String FILES_COMPACTED_METRIC = "ducklake.files.compacted";
+    private static final String BYTES_COMPACTED_METRIC = "ducklake.bytes.compacted";
     private static final String TIER_FILES_METRIC = "ducklake.files.by_tier";
     private static final String TOTAL_FILES_METRIC = "ducklake.files.total";
+    private static final String FAILURE_BY_CLASS_METRIC = "ducklake.compaction.failures_by_class";
 
     /** Failure kind used for housekeeping cycles, which aren't a tier. */
     static final String HOUSEKEEPING_KIND = "housekeeping";
@@ -35,6 +37,10 @@ public class CompactionState {
     // Per-database, per-tier successful-cycle counters (also back Micrometer FunctionCounters)
     private final ConcurrentHashMap<String, Map<String, AtomicLong>> tierCounts = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, AtomicLong> filesCompacted = new ConcurrentHashMap<>();
+    // Per-database, per-tier cumulative bytes retired (bytes are the real cost driver, per spec).
+    private final ConcurrentHashMap<String, Map<String, AtomicLong>> bytesCompacted = new ConcurrentHashMap<>();
+    // Per-database, per-failure-class cumulative counters, tagged so opposite failure modes stay distinct.
+    private final ConcurrentHashMap<String, Map<CompactionRun.FailureClass, AtomicLong>> failureClassCounts = new ConcurrentHashMap<>();
 
     // Failures are attributable to the tier that threw, or HOUSEKEEPING_KIND. Each inner map is
     // fully populated on creation, so only the counters are ever mutated — never the map structure.
@@ -61,6 +67,7 @@ public class CompactionState {
     private void registerDatabase(String db) {
         Map<String, AtomicLong> counts = tierCounts.computeIfAbsent(db, k -> new ConcurrentHashMap<>());
         Map<String, AtomicLong> files = tierFiles.computeIfAbsent(db, k -> new ConcurrentHashMap<>());
+        Map<String, AtomicLong> bytes = bytesCompacted.computeIfAbsent(db, k -> new ConcurrentHashMap<>());
         for (String tierName : tierNames) {
             AtomicLong count = counts.computeIfAbsent(tierName, k -> new AtomicLong(0));
             FunctionCounter.builder(CYCLE_COUNT_METRIC, count, AtomicLong::doubleValue)
@@ -75,7 +82,24 @@ public class CompactionState {
                     .tag("database", db)
                     .tag("tier", tierName)
                     .register(registry);
+
+            AtomicLong tierBytes = bytes.computeIfAbsent(tierName, k -> new AtomicLong(0));
+            FunctionCounter.builder(BYTES_COMPACTED_METRIC, tierBytes, AtomicLong::doubleValue)
+                    .description("Cumulative bytes retired by compaction for this tier")
+                    .baseUnit("bytes")
+                    .tag("database", db)
+                    .tag("tier", tierName)
+                    .register(registry);
         }
+
+        // Failure-by-class counters, one series per class (except NONE) so a zero is visible.
+        Map<CompactionRun.FailureClass, AtomicLong> byClass = failureClassCounters(db);
+        byClass.forEach((cls, counter) ->
+                FunctionCounter.builder(FAILURE_BY_CLASS_METRIC, counter, AtomicLong::doubleValue)
+                        .description("Compaction cycle failures by classified cause")
+                        .tag("database", db)
+                        .tag("class", cls.name())
+                        .register(registry));
 
         AtomicLong total = totalFiles.computeIfAbsent(db, k -> new AtomicLong(0));
         AtomicLong filesCompactedTotal  = filesCompacted.computeIfAbsent(db, k -> new AtomicLong(0));
@@ -126,6 +150,18 @@ public class CompactionState {
         });
     }
 
+    private Map<CompactionRun.FailureClass, AtomicLong> failureClassCounters(String db) {
+        return failureClassCounts.computeIfAbsent(db, k -> {
+            Map<CompactionRun.FailureClass, AtomicLong> counters = new java.util.EnumMap<>(CompactionRun.FailureClass.class);
+            for (CompactionRun.FailureClass cls : CompactionRun.FailureClass.values()) {
+                if (cls != CompactionRun.FailureClass.NONE) {
+                    counters.put(cls, new AtomicLong(0));
+                }
+            }
+            return counters;
+        });
+    }
+
     // ── Update methods ────────────────────────────────────────────────────────
 
     public void incrementTier(String db, String tierName) {
@@ -136,6 +172,21 @@ public class CompactionState {
 
     public void addFilesCompacted(String db, long delta) {
         if (delta > 0) filesCompacted.computeIfAbsent(db, k -> new AtomicLong(0)).addAndGet(delta);
+    }
+
+    public void addBytesCompacted(String db, String tierName, long delta) {
+        if (delta > 0) {
+            bytesCompacted.computeIfAbsent(db, k -> new ConcurrentHashMap<>())
+                    .computeIfAbsent(tierName, k -> new AtomicLong(0))
+                    .addAndGet(delta);
+        }
+    }
+
+    /** Increments the per-class failure counter. {@link CompactionRun.FailureClass#NONE} is ignored. */
+    public void recordFailureClass(String db, CompactionRun.FailureClass failureClass) {
+        if (failureClass != CompactionRun.FailureClass.NONE) {
+            failureClassCounters(db).get(failureClass).incrementAndGet();
+        }
     }
 
     public void updateTierFileCount(String db, String tierName, long count) {
