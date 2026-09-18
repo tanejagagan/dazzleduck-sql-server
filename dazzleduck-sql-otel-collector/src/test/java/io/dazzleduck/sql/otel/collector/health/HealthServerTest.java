@@ -23,7 +23,7 @@ class HealthServerTest {
     @BeforeEach
     void setUp() throws Exception {
         health = new CollectorHealth(() -> 2, () -> 5);
-        server = new HealthServer(0, health, GRPC_PORT);
+        server = new HealthServer(0, health, GRPC_PORT, java.util.List::of);
         server.start();
         client = HttpClient.newHttpClient();
     }
@@ -58,6 +58,18 @@ class HealthServerTest {
         HttpResponse<String> resp = get();
         assertEquals(503, resp.statusCode());
         assertTrue(resp.body().contains("\"status\": \"DOWN\""));
+    }
+
+    @Test
+    void statsServesHtmlDashboard() throws Exception {
+        HttpRequest req = HttpRequest.newBuilder(URI.create("http://localhost:" + server.getPort() + "/stats"))
+                .GET().build();
+        HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, resp.statusCode());
+        assertTrue(resp.headers().firstValue("Content-Type").orElse("").contains("text/html"));
+        assertTrue(resp.body().contains("<!DOCTYPE html>"));
+        // Empty supplier (List::of) -> the placeholder row, not an error.
+        assertTrue(resp.body().contains("No active ingestion queues"));
     }
 
     private HttpResponse<String> get() throws Exception {

@@ -151,6 +151,60 @@ public class DuckLakeIngestionHandlerProviderTest {
         assertTrue(ex.getMessage().contains("log"));
     }
 
+    // -------------------------------------------------------------------------
+    // Partitioning config
+    // -------------------------------------------------------------------------
+
+    @Test
+    public void testLoadsPartitioningFromHocon() {
+        var provider = providerFromHocon("""
+            ingestion_queue_table_mapping = [{
+                ingestion_queue = "events"
+                catalog = "loglake"
+                schema  = "main"
+                table   = "events"
+                num_partitions = 4
+                partition_expression = "substr(source_ip, 1, 10)"
+            }]
+            """);
+        var mapping = provider.loadMappings().get("events");
+        assertNotNull(mapping);
+        assertEquals(4, mapping.numPartitions());
+        assertEquals("substr(source_ip, 1, 10)", mapping.partitionExpression());
+        assertTrue(mapping.isPartitioned());
+    }
+
+    @Test
+    public void testDefaultsToNoPartitioning() {
+        var provider = providerFromHocon("""
+            ingestion_queue_table_mapping = [{
+                ingestion_queue = "events"
+                catalog = "loglake"
+                schema  = "main"
+                table   = "events"
+            }]
+            """);
+        var mapping = provider.loadMappings().get("events");
+        assertEquals(1, mapping.numPartitions());
+        assertNull(mapping.partitionExpression());
+        assertFalse(mapping.isPartitioned());
+    }
+
+    @Test
+    public void testPartitioningWithoutExpressionIsRejected() {
+        var provider = providerFromHocon("""
+            ingestion_queue_table_mapping = [{
+                ingestion_queue = "events"
+                catalog = "loglake"
+                schema  = "main"
+                table   = "events"
+                num_partitions = 4
+            }]
+            """);
+        var ex = assertThrows(IllegalArgumentException.class, provider::loadMappings);
+        assertTrue(ex.getMessage().contains("partition_expression"), ex.getMessage());
+    }
+
     @Test
     public void testValidateChecksAllQueues() {
         // First queue is valid, second is invalid — validate() must catch the second

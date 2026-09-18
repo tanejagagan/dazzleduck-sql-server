@@ -269,6 +269,21 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
 
     private final ScheduledExecutorService scheduledExecutorService;
 
+    /**
+     * Single shared scheduler for every bulk-ingest queue's time-based flush trigger — including all
+     * partition children of a {@link PartitionedIngestionQueue}. Daemon-threaded and shut down in
+     * {@link #close()}. Previously each queue (and each partition child) created its own
+     * {@code Executors.newSingleThreadScheduledExecutor()} that was never shut down, leaking one
+     * non-daemon thread per queue — N+1 per partitioned queue — on every queue eviction. Mirrors the
+     * OTLP collector, which already shares one flush scheduler across its queues.
+     */
+    private final ScheduledExecutorService bulkIngestFlushScheduler =
+            Executors.newScheduledThreadPool(2, r -> {
+                Thread t = new Thread(r, "dd-bulk-ingest-flush");
+                t.setDaemon(true);
+                return t;
+            });
+
     private final Duration defaultQueryTimeout;
 
     private final Duration maxQueryTimeout;
@@ -901,7 +916,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
     protected ParquetIngestionQueue getOrCreateIngestionQueue(String queueId) {
         return ingestionHandler.getOrCreateQueue(
                 queueId,
-                (id, path) -> createQueue(producerId, id, path, ingestionHandler, bulkIngestionConfig, recorder),
+                (id, path) -> createQueue(producerId, id, path, ingestionHandler, bulkIngestionConfig, recorder,
+                        bulkIngestFlushScheduler),
                 new IngestionHandler.QueueEventListener() {
                     @Override public void onCreated(String id)   { recorder.recordQueueCreated(id);   }
                     @Override public void onRefreshed(String id) { recorder.recordQueueRefreshed(id); }
@@ -913,17 +929,45 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
     }
 
     public static ParquetIngestionQueue createQueue(String producerId, String localQueueId, String path, IngestionHandler ingestionHandler,
-                                                    IngestionConfig bulkIngestionConfig, FlightRecorder flightRecorder) {
-        var queue = new ParquetIngestionQueue(producerId, TEMP_WRITE_FORMAT, path, localQueueId,
-                bulkIngestionConfig.minBucketSize(),
-                bulkIngestionConfig.maxBucketSize(),
-                bulkIngestionConfig.maxBatches(),
-                bulkIngestionConfig.maxPendingWrite(),
-                bulkIngestionConfig.maxDelay(),
-                bulkIngestionConfig.parquetCompression(),
-                ingestionHandler,
-                Executors.newSingleThreadScheduledExecutor(),
-                Clock.systemDefaultZone());
+                                                    IngestionConfig bulkIngestionConfig, FlightRecorder flightRecorder,
+                                                    ScheduledExecutorService flushScheduler) {
+        int numPartitions = ingestionHandler.getNumPartitions(localQueueId);
+        // One shared flush scheduler is used for the queue and, for a partitioned queue, all its
+        // partition children — see the bulkIngestFlushScheduler field for why this must not be a
+        // per-queue executor.
+        ParquetIngestionQueue queue = numPartitions > 1
+                ? new PartitionedIngestionQueue(producerId, TEMP_WRITE_FORMAT, path, localQueueId,
+                        bulkIngestionConfig.minBucketSize(),
+                        bulkIngestionConfig.maxBucketSize(),
+                        bulkIngestionConfig.maxBatches(),
+                        bulkIngestionConfig.maxPendingWrite(),
+                        bulkIngestionConfig.maxDelay(),
+                        bulkIngestionConfig.parquetCompression(),
+                        ingestionHandler,
+                        flushScheduler,
+                        Clock.systemDefaultZone(),
+                        numPartitions,
+                        ingestionHandler.getPartitionExpression(localQueueId),
+                        (childId, childPath) -> new ParquetIngestionQueue(producerId, TEMP_WRITE_FORMAT, childPath, childId,
+                                bulkIngestionConfig.minBucketSize(),
+                                bulkIngestionConfig.maxBucketSize(),
+                                bulkIngestionConfig.maxBatches(),
+                                bulkIngestionConfig.maxPendingWrite(),
+                                bulkIngestionConfig.maxDelay(),
+                                bulkIngestionConfig.parquetCompression(),
+                                ingestionHandler,
+                                flushScheduler,
+                                Clock.systemDefaultZone()))
+                : new ParquetIngestionQueue(producerId, TEMP_WRITE_FORMAT, path, localQueueId,
+                        bulkIngestionConfig.minBucketSize(),
+                        bulkIngestionConfig.maxBucketSize(),
+                        bulkIngestionConfig.maxBatches(),
+                        bulkIngestionConfig.maxPendingWrite(),
+                        bulkIngestionConfig.maxDelay(),
+                        bulkIngestionConfig.parquetCompression(),
+                        ingestionHandler,
+                        flushScheduler,
+                        Clock.systemDefaultZone());
         flightRecorder.registerWriteQueue(localQueueId,
                 Map.of("write_batches", queue::getTotalWriteBatches,
                         "write_buckets", queue::getTotalWriteBuckets,
@@ -1227,6 +1271,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         }
 
         ingestionHandler.closeQueues();
+        // Shut down after the queues have drained/closed — draining does not depend on the scheduler,
+        // but this keeps any in-flight flush trigger valid until the queues are gone.
+        bulkIngestFlushScheduler.shutdownNow();
 
         allocator.close();
 

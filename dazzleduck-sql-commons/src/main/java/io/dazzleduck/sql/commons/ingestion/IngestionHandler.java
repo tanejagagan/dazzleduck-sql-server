@@ -32,6 +32,20 @@ public interface IngestionHandler {
     /** Whether ingested rows carry a {@value #CLAIMS_COLUMN} MAP column from the caller's JWT. */
     default boolean extractClaims(String queueId) { return false; }
 
+    /**
+     * Number of hash-routed sub-queues {@code queueId} is split into ({@code >= 1}; {@code 1} means
+     * not partitioned). When {@code > 1}, {@link #getOrCreateQueue}'s creator is expected to build a
+     * {@link PartitionedIngestionQueue} that routes each batch by
+     * {@code hash(getPartitionExpression) % numPartitions}.
+     */
+    default int getNumPartitions(String queueId) { return 1; }
+
+    /**
+     * SQL expression over the raw input row that the partition index is derived from (see
+     * {@link #getNumPartitions}). Non-null only when the queue is partitioned.
+     */
+    default String getPartitionExpression(String queueId) { return null; }
+
     // -----------------------------------------------------------------------
     // Queue lifecycle
     // -----------------------------------------------------------------------

@@ -24,6 +24,16 @@ import java.util.Map;
  *                    is described to derive the target table's columns
  * @param extractClaims when true, ingested rows carry a {@code claims} MAP column from the
  *                      caller's JWT (see {@code IngestionHandler#extractClaims})
+ * @param numPartitions number of hash-routed sub-queues the queue is split into ({@code >= 1};
+ *                      {@code 1} disables partitioning). When {@code > 1} the queue owns that many
+ *                      child queues, each writing to its own {@code p<index>} sub-directory of the
+ *                      target path; a batch is routed to the single partition its rows map to and
+ *                      rejected if its rows span more than one partition.
+ * @param partitionExpression SQL expression over the raw input row that the partition index is
+ *                      derived from as {@code hash(partitionExpression) % numPartitions} — e.g. a
+ *                      column {@code "user_id"}, a map/struct field access
+ *                      {@code "resource['user_id']"}, or {@code "claims['user_id']"} when the batch
+ *                      carries a claims column; required when {@code numPartitions > 1}, ignored otherwise
  */
 public record QueueIdToTableMapping(
         String ingestionQueue,
@@ -36,7 +46,9 @@ public record QueueIdToTableMapping(
         String view,
         String inputTable,
         String inputSchema,
-        boolean extractClaims) {
+        boolean extractClaims,
+        int numPartitions,
+        String partitionExpression) {
 
     /** Validates invariants on every construction path. */
     public QueueIdToTableMapping {
@@ -50,6 +62,16 @@ public record QueueIdToTableMapping(
                     "Queue '%s': 'transformation' and 'view'/'input_table' are mutually exclusive"
                             .formatted(ingestionQueue));
         }
+        if (numPartitions < 1) {
+            throw new IllegalArgumentException(
+                    "Queue '%s': 'num_partitions' must be >= 1, got %d"
+                            .formatted(ingestionQueue, numPartitions));
+        }
+        if (numPartitions > 1 && (partitionExpression == null || partitionExpression.isBlank())) {
+            throw new IllegalArgumentException(
+                    "Queue '%s': 'num_partitions' > 1 requires a non-blank 'partition_expression'"
+                            .formatted(ingestionQueue));
+        }
         // Fail at config load, not per batch: a malformed watermark spec (partial/blank/typo'd
         // keys) would otherwise write each batch's output and then orphan it at post-ingestion.
         WatermarkSpec.fromParameters(ingestionQueue, additionalParameters);
@@ -59,28 +81,42 @@ public record QueueIdToTableMapping(
     public QueueIdToTableMapping(String ingestionQueue, String catalog, String schema, String table,
                                  Map<String, String> additionalParameters, String transformation,
                                  String view, String inputTable) {
-        this(ingestionQueue, null, catalog, schema, table, additionalParameters, transformation, view, inputTable, null, false);
+        this(ingestionQueue, null, catalog, schema, table, additionalParameters, transformation, view, inputTable, null, false, 1, null);
     }
 
     /** Convenience constructor for mappings that use an explicit transformation or none at all. */
     public QueueIdToTableMapping(String ingestionQueue, String catalog, String schema, String table,
                                  Map<String, String> additionalParameters, String transformation) {
-        this(ingestionQueue, null, catalog, schema, table, additionalParameters, transformation, null, null, null, false);
+        this(ingestionQueue, null, catalog, schema, table, additionalParameters, transformation, null, null, null, false, 1, null);
     }
 
     public boolean hasViewTransformation() {
         return view != null; // inputTable non-null is guaranteed by the constructor invariant
     }
 
+    /** Whether this queue is split into more than one hash-routed sub-queue. */
+    public boolean isPartitioned() {
+        return numPartitions > 1;
+    }
+
     /** Returns a copy of this mapping with {@code inputSchema} set (registry-sourced field). */
     public QueueIdToTableMapping withInputSchema(String inputSchema) {
         return new QueueIdToTableMapping(ingestionQueue, outputPath, catalog, schema, table,
-                additionalParameters, transformation, view, inputTable, inputSchema, extractClaims);
+                additionalParameters, transformation, view, inputTable, inputSchema, extractClaims,
+                numPartitions, partitionExpression);
     }
 
     /** Returns a copy of this mapping with {@code extractClaims} set. */
     public QueueIdToTableMapping withExtractClaims(boolean extractClaims) {
         return new QueueIdToTableMapping(ingestionQueue, outputPath, catalog, schema, table,
-                additionalParameters, transformation, view, inputTable, inputSchema, extractClaims);
+                additionalParameters, transformation, view, inputTable, inputSchema, extractClaims,
+                numPartitions, partitionExpression);
+    }
+
+    /** Returns a copy of this mapping with the partitioning fields set. */
+    public QueueIdToTableMapping withPartitioning(int numPartitions, String partitionExpression) {
+        return new QueueIdToTableMapping(ingestionQueue, outputPath, catalog, schema, table,
+                additionalParameters, transformation, view, inputTable, inputSchema, extractClaims,
+                numPartitions, partitionExpression);
     }
 }

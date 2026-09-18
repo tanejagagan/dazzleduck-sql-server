@@ -136,13 +136,16 @@ public class OtelCollectorServer implements Closeable {
 
             grpcServer = builder.build().start();
 
-            healthServer = new HealthServer(props.getHealthPort(), health, props.getGrpcPort());
+            IngestionHandler statsHandler = handler;
+            healthServer = new HealthServer(props.getHealthPort(), health, props.getGrpcPort(),
+                    statsHandler::getQueueStats);
             healthServer.start();
             health.transitionTo(CollectorHealthStatus.HEALTHY);
             started = true;
 
-            log.info("OTLP gRPC server started on port {} — known queues: {} (writers created lazily on first use)",
-                    props.getGrpcPort(), handler.getKnownQueues());
+            log.info("OTLP gRPC server started on port {} — known queues: {} (writers created lazily on first use); "
+                            + "stats dashboard at http://<host>:{}/stats",
+                    props.getGrpcPort(), handler.getKnownQueues(), props.getHealthPort());
         } catch (Exception e) {
             close();
             if (e instanceof IOException ioe) throw ioe;

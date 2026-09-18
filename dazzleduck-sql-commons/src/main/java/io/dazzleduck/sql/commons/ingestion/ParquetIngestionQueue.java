@@ -45,6 +45,10 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
     private final java.util.concurrent.atomic.LongAccumulator postIngestPhaseNanos =
             new java.util.concurrent.atomic.LongAccumulator(Long::sum, 0L);
 
+    /** Cumulative rows written to output (from each {@link IngestionResult#rowCount()}). */
+    private final java.util.concurrent.atomic.LongAccumulator rowsWritten =
+            new java.util.concurrent.atomic.LongAccumulator(Long::sum, 0L);
+
     /**
      * @param applicationId    producer identifier
      * @param inputFormat      source file format (e.g. {@code "parquet"}, {@code "arrow"})
@@ -117,6 +121,8 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
             long postIngestDone = System.nanoTime();
             dataPhaseNanos.accumulate(copyDone - start);
             postIngestPhaseNanos.accumulate(postIngestDone - copyDone);
+            rowsWritten.accumulate(ingestionResult.rowCount());
+            recordRowsWritten(ingestionResult.rowCount());
             logger.debug("Queue '{}' commit phases: data(COPY)={}ms, postIngest(catalog)={}ms",
                     queueId, (copyDone - start) / 1_000_000, (postIngestDone - copyDone) / 1_000_000);
             writeTask.bucket().futures().forEach(action -> action.complete(ingestionResult));
@@ -146,6 +152,26 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
     /** Cumulative nanoseconds spent in the post-ingestion phase (e.g. DuckLake catalog commit). */
     public long getPostIngestPhaseNanos() {
         return postIngestPhaseNanos.get();
+    }
+
+    /** Cumulative rows written to output. */
+    public long getRowsWritten() {
+        return rowsWritten.get();
+    }
+
+    @Override
+    protected long rowsWritten() {
+        return rowsWritten.get();
+    }
+
+    @Override
+    protected long dataPhaseMillis() {
+        return getDataPhaseNanos() / 1_000_000;
+    }
+
+    @Override
+    protected long postIngestMillis() {
+        return getPostIngestPhaseNanos() / 1_000_000;
     }
 
     /**
