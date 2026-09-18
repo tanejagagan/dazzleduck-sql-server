@@ -6,7 +6,6 @@ import org.slf4j.LoggerFactory;
 
 import java.sql.Connection;
 import java.sql.ResultSet;
-import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.concurrent.ConcurrentHashMap;
@@ -43,7 +42,7 @@ public class DuckDbTierCompactor implements TierCompactor {
             boolean hasResultSet = statement.execute(sql);
             if (hasResultSet) {
                 try (var rs = statement.getResultSet()) {
-                    compactedFiles = readCompactedFiles(rs, tier);
+                    compactedFiles = readCompactedFiles(rs);
                 }
             }
         } finally {
@@ -56,39 +55,21 @@ public class DuckDbTierCompactor implements TierCompactor {
         return new MergeOutcome(durationMergeMs, compactedFiles);
     }
 
-    // Logged once so the actual ducklake_merge_adjacent_files result shape (spec Q2) can be confirmed
-    // against a live DuckLake+catalog, since it can't be verified in unit tests.
-    private volatile boolean loggedMergeResultShape = false;
-
     /**
-     * Best-effort {@code compacted_files} from the merge's result set. The function's exact result
-     * shape is unconfirmed (spec Q2), so this is <b>provisional</b>: it uses the returned row count as
-     * a stand-in for files compacted, only when the merge was bounded ({@code max_compacted_files > 0}),
-     * and logs the real shape once at INFO so it can be verified/corrected against a live catalog.
+     * Total files compacted this cycle, from the merge's result set. {@code ducklake_merge_adjacent_files}
+     * returns one row per compacted table — {@code (schema_name, table_name, files_processed,
+     * files_created)} — so this sums {@code files_processed} (the input files merged away) across
+     * tables. Returns {@code null} when the call returned no rows (nothing was merged). Confirmed
+     * against DuckLake on DuckDB v1.5.x.
      */
-    private Long readCompactedFiles(ResultSet rs, CompactionTier tier) throws SQLException {
-        ResultSetMetaData md = rs.getMetaData();
-        int cols = md.getColumnCount();
-        long rows = 0;
-        String firstRow = null;
+    private static Long readCompactedFiles(ResultSet rs) throws SQLException {
+        long processed = 0;
+        boolean anyRows = false;
         while (rs.next()) {
-            if (rows == 0 && !loggedMergeResultShape) {
-                StringBuilder sb = new StringBuilder();
-                for (int i = 1; i <= cols; i++) {
-                    if (i > 1) sb.append(", ");
-                    sb.append(md.getColumnName(i)).append('=').append(rs.getString(i));
-                }
-                firstRow = sb.toString();
-            }
-            rows++;
+            processed += rs.getLong("files_processed");
+            anyRows = true;
         }
-        if (!loggedMergeResultShape) {
-            loggedMergeResultShape = true;
-            logger.info("ducklake_merge_adjacent_files result shape for tier '{}': {} column(s), {} row(s){}"
-                            + " — compactedFiles captured provisionally as the row count (spec Q2; confirm)",
-                    tier.name(), cols, rows, firstRow != null ? "; first row: [" + firstRow + "]" : "");
-        }
-        return tier.maxCompactedFiles() > 0 && rows > 0 ? rows : null;
+        return anyRows ? processed : null;
     }
 
     private Connection connectionFor(String database, CompactionTier tier) throws SQLException {
