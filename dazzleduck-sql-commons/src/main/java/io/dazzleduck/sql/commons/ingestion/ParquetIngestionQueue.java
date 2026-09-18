@@ -122,6 +122,7 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
             dataPhaseNanos.accumulate(copyDone - start);
             postIngestPhaseNanos.accumulate(postIngestDone - copyDone);
             rowsWritten.accumulate(ingestionResult.rowCount());
+            recordRowsWritten(ingestionResult.rowCount());
             logger.debug("Queue '{}' commit phases: data(COPY)={}ms, postIngest(catalog)={}ms",
                     queueId, (copyDone - start) / 1_000_000, (postIngestDone - copyDone) / 1_000_000);
             writeTask.bucket().futures().forEach(action -> action.complete(ingestionResult));

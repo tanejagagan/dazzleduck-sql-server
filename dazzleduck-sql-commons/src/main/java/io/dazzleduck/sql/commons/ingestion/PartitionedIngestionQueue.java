@@ -216,6 +216,8 @@ public class PartitionedIngestionQueue extends ParquetIngestionQueue {
         long fBytes = 0, fBatches = 0, fBuckets = 0, evict = 0, rows = 0, dataMs = 0, postMs = 0, r429 = 0, rOos = 0;
         long lastWrite = 0, lastReceive = 0, lastErrMs = 0;
         String lastErr = null;
+        long[] rowsPerMin = new long[BulkIngestQueue.HISTORY_MINUTES];
+        long[] batchesPerMin = new long[BulkIngestQueue.HISTORY_MINUTES];
         for (int i = 0; i < children.size(); i++) {
             Stats c = children.get(i).getStats();
             childStats.add(c.withIdentifier("p" + i));
@@ -228,6 +230,8 @@ public class PartitionedIngestionQueue extends ParquetIngestionQueue {
             lastWrite = Math.max(lastWrite, c.lastWriteEpochMs());
             lastReceive = Math.max(lastReceive, c.lastReceiveEpochMs());
             if (c.lastErrorEpochMs() > lastErrMs) { lastErrMs = c.lastErrorEpochMs(); lastErr = c.lastError(); }
+            addElementwise(rowsPerMin, c.rowsWrittenPerMinute());
+            addElementwise(batchesPerMin, c.batchesReceivedPerMinute());
         }
         return agg.totalWriteBytes(bytes).totalWriteBatches(batches).totalWriteBuckets(buckets)
                 .timeSpentWriting(timeW).pendingBatches(pBatches).pendingBuckets(pBuckets)
@@ -237,8 +241,17 @@ public class PartitionedIngestionQueue extends ParquetIngestionQueue {
                 .rejected429(r429).rejectedOutOfSequence(rOos).rejectedMultiPartition(rejectedMultiPartition.get())
                 .lastWriteEpochMs(lastWrite).lastReceiveEpochMs(lastReceive)
                 .lastErrorEpochMs(lastErrMs).lastError(lastErr)
+                .rowsWrittenPerMinute(rowsPerMin).batchesReceivedPerMinute(batchesPerMin)
                 .partitions(childStats)
                 .build();
+    }
+
+    /** Adds {@code src} into {@code dst} element-wise (aligned indices; ignores a length mismatch tail). */
+    private static void addElementwise(long[] dst, long[] src) {
+        int n = Math.min(dst.length, src.length);
+        for (int i = 0; i < n; i++) {
+            dst[i] += src[i];
+        }
     }
 
     /** Batches rejected because their rows spanned more than one partition. */

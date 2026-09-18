@@ -24,6 +24,10 @@ import java.util.List;
  * @param lastReceiveEpochMs     instant the most recent batch was accepted (0 = never)
  * @param lastErrorEpochMs       instant of the most recent write failure (0 = never)
  * @param lastError              message of the most recent write failure, or null
+ * @param rowsWrittenPerMinute   rows written in each of the last 15 wall-clock minutes, oldest first
+ *                               (divide a value by 60 for that minute's average rows/sec); may be empty
+ * @param batchesReceivedPerMinute batches accepted in each of the last 15 minutes, oldest first — the
+ *                               "arrival" view (row counts are only known at write time); may be empty
  * @param partitions             per-partition child stats (empty unless this is a partitioned queue)
  */
 public record Stats(String identifier,
@@ -49,10 +53,16 @@ public record Stats(String identifier,
                     long lastReceiveEpochMs,
                     long lastErrorEpochMs,
                     String lastError,
+                    long[] rowsWrittenPerMinute,
+                    long[] batchesReceivedPerMinute,
                     List<Stats> partitions) {
+
+    private static final long[] EMPTY = new long[0];
 
     public Stats {
         partitions = partitions == null ? List.of() : List.copyOf(partitions);
+        rowsWrittenPerMinute = rowsWrittenPerMinute == null ? EMPTY : rowsWrittenPerMinute.clone();
+        batchesReceivedPerMinute = batchesReceivedPerMinute == null ? EMPTY : batchesReceivedPerMinute.clone();
     }
 
     /** Returns a copy with a different {@code identifier} (used to label partition child rows). */
@@ -61,7 +71,8 @@ public record Stats(String identifier,
                 timeSpentWriting, pendingBatches, pendingBuckets, failedWriteBytes, failedWriteBatches,
                 failedWriteBuckets, producerIdEvictions, rowsWritten, pendingBytes, maxPendingWrite,
                 dataPhaseMillis, postIngestMillis, rejected429, rejectedOutOfSequence, rejectedMultiPartition,
-                lastWriteEpochMs, lastReceiveEpochMs, lastErrorEpochMs, lastError, partitions);
+                lastWriteEpochMs, lastReceiveEpochMs, lastErrorEpochMs, lastError,
+                rowsWrittenPerMinute, batchesReceivedPerMinute, partitions);
     }
 
     public static Builder builder(String identifier) {
@@ -78,6 +89,8 @@ public record Stats(String identifier,
         private long rejected429, rejectedOutOfSequence, rejectedMultiPartition;
         private long lastWriteEpochMs, lastReceiveEpochMs, lastErrorEpochMs;
         private String lastError;
+        private long[] rowsWrittenPerMinute = EMPTY;
+        private long[] batchesReceivedPerMinute = EMPTY;
         private List<Stats> partitions = List.of();
 
         private Builder(String identifier) { this.identifier = identifier; }
@@ -104,6 +117,8 @@ public record Stats(String identifier,
         public Builder lastReceiveEpochMs(long v)   { this.lastReceiveEpochMs = v; return this; }
         public Builder lastErrorEpochMs(long v)     { this.lastErrorEpochMs = v; return this; }
         public Builder lastError(String v)          { this.lastError = v; return this; }
+        public Builder rowsWrittenPerMinute(long[] v)     { this.rowsWrittenPerMinute = v; return this; }
+        public Builder batchesReceivedPerMinute(long[] v) { this.batchesReceivedPerMinute = v; return this; }
         public Builder partitions(List<Stats> v)    { this.partitions = v == null ? List.of() : v; return this; }
 
         public Stats build() {
@@ -111,7 +126,8 @@ public record Stats(String identifier,
                     timeSpentWriting, pendingBatches, pendingBuckets, failedWriteBytes, failedWriteBatches,
                     failedWriteBuckets, producerIdEvictions, rowsWritten, pendingBytes, maxPendingWrite,
                     dataPhaseMillis, postIngestMillis, rejected429, rejectedOutOfSequence, rejectedMultiPartition,
-                    lastWriteEpochMs, lastReceiveEpochMs, lastErrorEpochMs, lastError, partitions);
+                    lastWriteEpochMs, lastReceiveEpochMs, lastErrorEpochMs, lastError,
+                    rowsWrittenPerMinute, batchesReceivedPerMinute, partitions);
         }
     }
 }

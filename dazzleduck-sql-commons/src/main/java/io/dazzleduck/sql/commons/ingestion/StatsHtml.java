@@ -18,6 +18,7 @@ public final class StatsHtml {
             "Queue", "Rows", "Bytes", "Batches", "Buckets",
             "Pending (b/bk)", "Pending bytes (% max)", "Avg write ms/bucket", "Data ms", "Post ms",
             "Failed (b/bytes)", "Rej 429", "Rej out-of-seq", "Rej multi-part", "Evictions",
+            "Rows/min (15m)", "Arrivals/min (15m)",
             "Last write", "Last receive", "Last error"
     };
 
@@ -106,6 +107,8 @@ public final class StatsHtml {
         cellClass(sb, Long.toString(s.rejectedOutOfSequence()), s.rejectedOutOfSequence() > 0 ? "warn" : null);
         cellClass(sb, Long.toString(s.rejectedMultiPartition()), s.rejectedMultiPartition() > 0 ? "bad" : null);
         cell(sb, Long.toString(s.producerIdEvictions()), false);
+        sb.append(sparklineCell(s.rowsWrittenPerMinute(), "rows/min"));
+        sb.append(sparklineCell(s.batchesReceivedPerMinute(), "batches/min"));
         cell(sb, age(s.lastWriteEpochMs(), now), false);
         cell(sb, age(s.lastReceiveEpochMs(), now), false);
         String err = s.lastError() == null ? "" : escape(s.lastError());
@@ -124,6 +127,46 @@ public final class StatsHtml {
         } else {
             sb.append("<td class=\"").append(cssClass).append("\">").append(value).append("</td>");
         }
+    }
+
+    /**
+     * A table cell holding a tiny inline-SVG sparkline of a per-minute series (oldest→newest), with
+     * an emphasized latest-point dot. Renders "—" when the series is empty or all zero. Kept as inline
+     * SVG (no library) so it works in the collector's dependency-free HttpServer page too.
+     */
+    private static String sparklineCell(long[] values, String label) {
+        if (values == null || values.length == 0) {
+            return "<td>—</td>";
+        }
+        long max = 0, last = values[values.length - 1];
+        for (long v : values) {
+            if (v > max) max = v;
+        }
+        if (max == 0) {
+            return "<td title=\"" + escape(label) + ": no activity in the last " + values.length + " min\">—</td>";
+        }
+        int w = 110, h = 22, n = values.length;
+        double innerH = h - 4;
+        StringBuilder pts = new StringBuilder();
+        double lastX = 0, lastY = 0;
+        for (int i = 0; i < n; i++) {
+            double x = n == 1 ? w / 2.0 : (double) i / (n - 1) * (w - 2) + 1;
+            double y = h - 2 - innerH * ((double) values[i] / max);
+            pts.append(fmt(x)).append(',').append(fmt(y)).append(' ');
+            lastX = x;
+            lastY = y;
+        }
+        String title = "%s — peak %d/min (~%d/s), now %d/min".formatted(label, max, max / 60, last);
+        return "<td title=\"" + escape(title) + "\">"
+                + "<svg width=\"" + w + "\" height=\"" + h + "\" viewBox=\"0 0 " + w + " " + h + "\" "
+                + "preserveAspectRatio=\"none\" style=\"vertical-align:middle\">"
+                + "<polyline fill=\"none\" stroke=\"#2b6cb0\" stroke-width=\"1.5\" points=\"" + pts.toString().trim() + "\"/>"
+                + "<circle cx=\"" + fmt(lastX) + "\" cy=\"" + fmt(lastY) + "\" r=\"2\" fill=\"#2b6cb0\"/>"
+                + "</svg></td>";
+    }
+
+    private static String fmt(double d) {
+        return String.format(java.util.Locale.ROOT, "%.1f", d);
     }
 
     private static String pctSuffix(long pending, long max) {

@@ -180,6 +180,11 @@ public class PartitionedIngestionQueueTest {
             assertEquals(NUM_PARTITIONS, stats.partitions().size(), "one child row per partition");
             assertEquals(100, stats.rowsWritten(), "rows aggregated across children");
             assertTrue(stats.totalWriteBytes() > 0);
+            // Rolling per-minute series is aggregated across children; all writes here land in the
+            // fixed clock's minute, so the whole 100 rows show up in the series total.
+            assertEquals(BulkIngestQueue.HISTORY_MINUTES, stats.rowsWrittenPerMinute().length);
+            assertEquals(100, java.util.Arrays.stream(stats.rowsWrittenPerMinute()).sum());
+            assertEquals(1, java.util.Arrays.stream(stats.batchesReceivedPerMinute()).sum(), "one batch received");
             // Exactly one child (the routed partition) did the write.
             long childrenWithRows = stats.partitions().stream().filter(p -> p.rowsWritten() > 0).count();
             assertEquals(1, childrenWithRows);

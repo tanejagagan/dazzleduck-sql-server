@@ -69,6 +69,29 @@ public class StatsHtmlTest {
     }
 
     @Test
+    public void perMinuteSeriesRenderAsSparklines() {
+        Stats s = Stats.builder("logs")
+                .rowsWrittenPerMinute(new long[]{10, 20, 40, 30, 60})
+                .batchesReceivedPerMinute(new long[]{1, 2, 3, 2, 4})
+                .build();
+        String html = StatsHtml.renderTable(List.of(s), null);
+        assertTrue(html.contains("Rows/min (15m)"));
+        assertTrue(html.contains("Arrivals/min (15m)"));
+        assertTrue(html.contains("<svg"), "expected an inline sparkline svg");
+        assertTrue(html.contains("<polyline"));
+        assertTrue(html.contains("rows/min — peak 60/min"), html);
+    }
+
+    @Test
+    public void emptyOrAllZeroSeriesRenderDash() {
+        Stats none = Stats.builder("q").build(); // empty arrays
+        Stats zero = Stats.builder("q2").rowsWrittenPerMinute(new long[]{0, 0, 0}).build();
+        assertFalse(StatsHtml.renderTable(List.of(none), null).contains("<svg"), "empty series -> no svg");
+        String zeroHtml = StatsHtml.renderTable(List.of(zero), null);
+        assertTrue(zeroHtml.contains("no activity"), zeroHtml);
+    }
+
+    @Test
     public void escapesHtmlInIdentifierAndError() {
         Stats s = Stats.builder("<script>").lastError("<bad> & \"stuff\"").lastErrorEpochMs(1).build();
         String html = StatsHtml.renderTable(List.of(s), null);

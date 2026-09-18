@@ -170,6 +170,10 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
     private volatile long lastWriteEpochMs = 0L;
     private volatile long lastErrorEpochMs = 0L;
     private volatile String lastError = null;
+    /** Minutes of rolling history exposed for sparklines (rows written / batches received per minute). */
+    static final int HISTORY_MINUTES = 15;
+    private final MinuteRing rowsWrittenRing = new MinuteRing(HISTORY_MINUTES);
+    private final MinuteRing batchesReceivedRing = new MinuteRing(HISTORY_MINUTES);
 
     public BulkIngestQueue(String identifier,
                            long minBucketSize,
@@ -337,8 +341,19 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
                 .lastReceiveEpochMs(lastReceiveEpochMs)
                 .lastErrorEpochMs(lastErrorEpochMs)
                 .lastError(lastError)
+                .rowsWrittenPerMinute(rowsWrittenRing.snapshot(clock.millis(), HISTORY_MINUTES))
+                .batchesReceivedPerMinute(batchesReceivedRing.snapshot(clock.millis(), HISTORY_MINUTES))
                 .partitions(partitionStats())
                 .build();
+    }
+
+    /**
+     * Records {@code rows} written at the current instant into the rolling per-minute history.
+     * Called by {@link ParquetIngestionQueue} after a successful write, since the row count is only
+     * known there.
+     */
+    protected void recordRowsWritten(long rows) {
+        rowsWrittenRing.add(clock.millis(), rows);
     }
 
     // --- Subclass-supplied metrics (defaults keep ordinary queues correct) --------------------
@@ -474,7 +489,9 @@ public abstract class BulkIngestQueue<T, R> implements BulkIngestQueueInterface<
         currentBucket.add(batch, result);
         acceptedBatches.accumulate(1);
         acceptedBytes.accumulate(batch.totalSize());
-        lastReceiveEpochMs = clock.millis();
+        long receivedAt = clock.millis();
+        lastReceiveEpochMs = receivedAt;
+        batchesReceivedRing.add(receivedAt, 1);
         if (batch.producerId() != null) {
             inProgressBatchIds.put(batch.producerId(), batch.producerBatchId());
         }
