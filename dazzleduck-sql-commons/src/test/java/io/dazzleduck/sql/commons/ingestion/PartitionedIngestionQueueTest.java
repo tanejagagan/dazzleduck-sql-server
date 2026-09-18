@@ -228,6 +228,90 @@ public class PartitionedIngestionQueueTest {
     }
 
     @Test
+    public void testAttributionUsesTransformedValueNotRawColumnOfSameName() throws Exception {
+        // Regression test: attribution must evaluate the routing column on the same (transformed)
+        // relation a real write uses, not a raw pre-transformation guess. Here the transformation
+        // redefines "id" (the routing column) from a "real_key" input column, while the RAW input
+        // also happens to carry its own unrelated "id" column under the same name. If attribution
+        // used that raw column, it could report success or failure for the wrong reason entirely.
+        var service = new DeterministicScheduler();
+        var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
+        int parallelWriters = 3;
+        int failingShard = 1;
+
+        List<Long> unaffectedKeys = new ArrayList<>();
+        List<Long> affectedKeys = new ArrayList<>();
+        try (var conn = ConnectionPool.getConnection();
+             var stmt = conn.createStatement();
+             var rs = stmt.executeQuery("SELECT range AS k, hash(range) %% %d AS shard FROM range(0, 50)".formatted(parallelWriters))) {
+            while (rs.next()) {
+                (rs.getLong("shard") == failingShard ? affectedKeys : unaffectedKeys).add(rs.getLong("k"));
+            }
+        }
+        assertFalse(unaffectedKeys.isEmpty());
+        assertFalse(affectedKeys.isEmpty());
+
+        // A raw "id" constant whose hash does NOT land in the failing shard — the value a
+        // raw-relation attribution shortcut would have used instead of the transformed one. If the
+        // fix regressed to that shortcut, both batches below would be reported successful even
+        // though "affected"'s real (post-transformation) id lands in the shard whose commit fails.
+        long rawIdConstant;
+        try (var conn = ConnectionPool.getConnection();
+             var stmt = conn.createStatement();
+             var rs = stmt.executeQuery("SELECT c FROM range(1000, 1100) t(c) WHERE hash(c) %% %d <> %d LIMIT 1"
+                     .formatted(parallelWriters, failingShard))) {
+            assertTrue(rs.next());
+            rawIdConstant = rs.getLong("c");
+        }
+
+        Path unaffectedFile = writeConflictingIdRows("unaffected.parquet", rawIdConstant, unaffectedKeys);
+        Path affectedFile = writeConflictingIdRows("affected.parquet", rawIdConstant, affectedKeys.subList(0, 1));
+
+        var commitCount = new AtomicInteger();
+        var handler = new IngestionHandler() {
+            @Override
+            public PostIngestionTask createPostIngestionTask(IngestionResult ingestionResult) {
+                boolean isFailingShard = ingestionResult.filesCreated().stream()
+                        .anyMatch(f -> f.contains("dd_shard" + failingShard + "_"));
+                return () -> {
+                    if (isFailingShard) {
+                        throw new RuntimeException("simulated catalog failure for shard " + failingShard);
+                    }
+                    commitCount.incrementAndGet();
+                };
+            }
+
+            @Override
+            public String getTargetPath(String queueId) { return null; }
+
+            @Override
+            public String[] getPartitionBy(String queueId) { return new String[0]; }
+
+            @Override
+            public String getTransformation(String queueId) { return "SELECT real_key AS id, value FROM __this"; }
+        };
+
+        try (var queue = new PartitionedIngestionQueue(
+                TEST_APP_ID, INPUT_FORMAT, targetPath.toString(), "test-queue",
+                DEFAULT_MIN_BATCH_SIZE, Long.MAX_VALUE, Integer.MAX_VALUE, Long.MAX_VALUE,
+                DEFAULT_MAX_DELAY, null, handler, service, clock, "id", parallelWriters)) {
+
+            var unaffectedFuture = queue.add(createBatch(unaffectedFile.toString(), "producer-safe", 0, DEFAULT_MIN_BATCH_SIZE / 2));
+            var affectedFuture = queue.add(createBatch(affectedFile.toString(), "producer-affected", 0, DEFAULT_MIN_BATCH_SIZE + 1));
+            service.tick(1, TimeUnit.MILLISECONDS);
+
+            var result = unaffectedFuture.get(5, SECONDS);
+            assertTrue(result.rowCount() > 0);
+
+            var thrown = assertThrows(Exception.class, () -> affectedFuture.get(5, SECONDS));
+            String message = thrown.getCause() != null ? thrown.getCause().getMessage() : thrown.getMessage();
+            assertNotNull(message);
+            assertTrue(message.contains("routed to a failed shard"),
+                    "attribution must use the transformed id (real_key), not the colliding raw id column: " + message);
+        }
+    }
+
+    @Test
     public void testWatermarkRowsComputedPerShard() throws Exception {
         var service = new DeterministicScheduler();
         var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
@@ -259,6 +343,16 @@ public class PartitionedIngestionQueueTest {
         Path file = tempDir.resolve(filename);
         String idList = ids.stream().map(String::valueOf).collect(Collectors.joining(","));
         ConnectionPool.execute("COPY (SELECT UNNEST([%s]) AS id) TO '%s' (FORMAT PARQUET)".formatted(idList, file));
+        return file;
+    }
+
+    /** Every row carries a constant raw "id" (colliding with the transformation-derived routing
+     * column's name) alongside "real_key", the value the transformation actually renames to "id". */
+    private Path writeConflictingIdRows(String filename, long rawId, List<Long> realKeys) throws Exception {
+        Path file = tempDir.resolve(filename);
+        String keyList = realKeys.stream().map(String::valueOf).collect(Collectors.joining(","));
+        ConnectionPool.execute("COPY (SELECT %d AS id, UNNEST([%s]) AS real_key, 1 AS value) TO '%s' (FORMAT PARQUET)"
+                .formatted(rawId, keyList, file));
         return file;
     }
 

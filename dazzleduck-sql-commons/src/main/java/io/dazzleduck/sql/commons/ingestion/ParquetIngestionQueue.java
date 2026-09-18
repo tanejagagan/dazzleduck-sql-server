@@ -201,7 +201,15 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
      *                         for the whole relation
      */
     protected String constructSourceRelation(WriteTask<String, IngestionResult> writeTask, String additionalFilter) {
-        var batches = writeTask.bucket().batches();
+        return constructSourceRelation(writeTask.bucket().batches(), additionalFilter);
+    }
+
+    /**
+     * @param batches the specific batches to read — normally the whole flushed bucket, but a
+     *                subclass verifying which individual batch(es) match a condition (e.g.
+     *                {@link PartitionedIngestionQueue}'s failure attribution) can pass just one
+     */
+    protected String constructSourceRelation(List<Batch<String>> batches, String additionalFilter) {
         // All Arrow files
         var arrowFiles = batches.stream().map(Batch::record).map("'%s'"::formatted).collect(Collectors.joining(","));
         String[] batchPartitionBy = batches.get(0).partitionBy();

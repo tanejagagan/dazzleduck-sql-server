@@ -194,6 +194,14 @@ public class DynamicQueueRepository implements AutoCloseable {
      * the {@code partition_by} column is reserved for future use and not read here.
      * {@code partition_column}/{@code parallel_writers} (write-time sharding, unrelated to
      * {@code partition_by}) are read and applied via {@link QueueIdToTableMapping#withPartitioning}.
+     * An inconsistent pair (e.g. {@code partition_column} set without {@code parallel_writers} > 1,
+     * however that came to be — a partial/non-atomic external update, an operator typo) degrades
+     * that one queue to single-writer rather than failing the whole method: unlike the static HOCON
+     * mapping (checked once at startup, where failing loud is right), this is read on every poll of
+     * a live, externally-writable registry, so one bad row must not block reloading every other
+     * queue's changes too — {@link DynamicIngestionHandler#checkAndReload} only advances past a
+     * failed {@code loadAll} on the next successful one, so an uncaught exception here would retry
+     * and fail identically, forever, until the row is fixed.
      */
     public static Map<String, QueueIdToTableMapping> loadAll(Connection conn) throws SQLException {
         Map<String, QueueIdToTableMapping> result = new LinkedHashMap<>();
@@ -214,10 +222,17 @@ public class DynamicQueueRepository implements AutoCloseable {
                 String partitionColumn = rs.getString("partition_column");
                 int parallelWriters = rs.getObject("parallel_writers") == null ? 1 : rs.getInt("parallel_writers");
                 // outputPath omitted: derived from DuckLake metadata by the handler.
-                result.put(queueId, new QueueIdToTableMapping(
+                QueueIdToTableMapping mapping = new QueueIdToTableMapping(
                         queueId, catalog, schema, table, Map.of(), transform, view, inputTable)
-                        .withInputSchema(inputSchema)
-                        .withPartitioning(partitionColumn, parallelWriters));
+                        .withInputSchema(inputSchema);
+                try {
+                    mapping = mapping.withPartitioning(partitionColumn, parallelWriters);
+                } catch (IllegalArgumentException e) {
+                    logger.warn("Queue '{}': ignoring inconsistent partition_column/parallel_writers "
+                            + "('{}', {}) — {}; falling back to single-writer for this queue",
+                            queueId, partitionColumn, parallelWriters, e.getMessage());
+                }
+                result.put(queueId, mapping);
             }
         }
         return result;
