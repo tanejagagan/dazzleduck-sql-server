@@ -1,0 +1,41 @@
+name: Build Patched DuckLake Extension
+
+# Manually-triggered, not part of the automatic release pipeline: the patched
+# DuckLake extension is built once per patch/DuckDB-version change and the
+# resulting linux_amd64/linux_arm64 binaries are committed into this repo
+# (dazzleduck-sql-ducklake-compactor/extensions/), so every release just bakes
+# in whatever was last committed. Re-run this manually and re-commit the
+# artifacts whenever the backport branch or duckdb.version changes.
+#
+# Delegates to DuckDB's own extension-ci-tools reusable workflow so the build
+# happens in the same manylinux-style environment official extensions use —
+# building on a bare GitHub-hosted runner would link against a newer glibc
+# than our runtime images (debian:12-slim / ubuntu noble) ship, risking a
+# dynamic-linking failure at container startup.
+on:
+  workflow_dispatch:
+    inputs:
+      ducklake_ref:
+        description: "Branch/ref in dazzleduck-web/ducklake to build"
+        required: true
+        default: "backport/1453-file-level-compaction-conflict"
+      duckdb_version:
+        description: "DuckDB version to build against (must match this repo's duckdb.version)"
+        required: true
+        default: "v1.5.5"
+
+jobs:
+  build:
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5-variegata
+    with:
+      extension_name: ducklake
+      duckdb_version: ${{ inputs.duckdb_version }}
+      ci_tools_version: v1.5-variegata
+      # Matches the override ducklake's own CI currently pins (see duckdb/ducklake
+      # MainDistributionPipeline.yml); remove once extension-ci-tools' default catches up.
+      vcpkg_commit: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3
+      override_repository: dazzleduck-web/ducklake
+      override_ref: ${{ inputs.ducklake_ref }}
+      # Only linux_amd64/linux_arm64 are consumed by dazzleduck-sql-ducklake-compactor's images.
+      exclude_archs: "osx_amd64;osx_arm64;windows_amd64;windows_amd64_mingw;wasm_mvp;wasm_eh;wasm_threads"
+      reduced_ci_mode: disabled
