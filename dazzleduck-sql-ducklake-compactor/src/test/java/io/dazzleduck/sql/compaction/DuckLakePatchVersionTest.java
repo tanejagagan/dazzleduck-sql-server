@@ -29,6 +29,7 @@ class DuckLakePatchVersionTest {
         String duckdbVersion = properties.getProperty("duckdb.version");
         String patchedForVersion = properties.getProperty("ducklake.patch.built.for.duckdb.version");
         String patchRelease = properties.getProperty("ducklake.patch.release");
+        String cacheVersion = properties.getProperty("ducklake.extension.cache.version");
 
         assertEquals(duckdbVersion, patchedForVersion, () -> """
                 duckdb.version (%s) no longer matches ducklake.patch.built.for.duckdb.version (%s).
@@ -44,5 +45,19 @@ class DuckLakePatchVersionTest {
                      ducklake.extension.cache.version, and ducklake.patch.built.for.duckdb.version.
                 See DUCKLAKE_PATCH.md for the full procedure.
                 """.formatted(duckdbVersion, patchedForVersion, patchRelease));
+
+        // DuckDB's extension cache directory is named "v<major>.<minor>.<patch>" (verified via
+        // `pragma_version().library_version`), which is duckdb.version truncated to its first
+        // three components. Getting this wrong doesn't fail loudly: curl still succeeds, the image
+        // still builds, and the container either fails at runtime or silently falls back to
+        // network-installing the stock (unpatched) extension -- exactly the failure mode this test
+        // exists to catch.
+        String[] parts = duckdbVersion.split("\\.");
+        String expectedCacheVersion = "v" + parts[0] + "." + parts[1] + "." + parts[2];
+        assertEquals(expectedCacheVersion, cacheVersion, () -> """
+                ducklake.extension.cache.version (%s) does not match the value DuckDB %s actually \
+                uses for its extension cache directory (%s). Update ducklake.extension.cache.version \
+                in pom.xml; see DUCKLAKE_PATCH.md.
+                """.formatted(cacheVersion, duckdbVersion, expectedCacheVersion));
     }
 }

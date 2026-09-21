@@ -37,8 +37,8 @@ select extension_version from duckdb_extensions() where extension_name = 'duckla
 | Build + publish workflow | same repo, `.github/workflows/build-and-publish-extension.yml` (manually triggered) |
 | Published binaries | GitHub Releases on that repo, e.g. [`v1.5.5-dazzleduck.1`](https://github.com/dazzleduck-web/ducklake/releases/tag/v1.5.5-dazzleduck.1), assets `ducklake-linux_amd64.duckdb_extension` / `ducklake-linux_arm64.duckdb_extension` |
 | Version pins in this repo | `dazzleduck-sql-ducklake-compactor/pom.xml`: `ducklake.patch.release`, `ducklake.patch.built.for.duckdb.version`, `ducklake.extension.cache.version` |
-| Drift guard | `DuckLakePatchVersionTest` (fails the build if `duckdb.version` and `ducklake.patch.built.for.duckdb.version` diverge) |
-| Runtime enablement | `RawConnections.java` sets the `allow_unsigned_extensions` JDBC connection property (the build isn't signed with DuckDB Labs' key) |
+| Drift guard | `DuckLakePatchVersionTest` (fails the build if `duckdb.version` diverges from `ducklake.patch.built.for.duckdb.version`, or if `ducklake.extension.cache.version` no longer matches `duckdb.version`'s first three components) |
+| Runtime enablement | Two separate connections need it, both set as a JDBC connection **property** (not a `SET` statement — DuckDB rejects changing it once the instance is running): `RawConnections.java` for the compaction/housekeeping connections, and `src/main/resources/duckdb.properties` for the shared commons singleton `Main.java` runs the startup script against first (`ConnectionPool.executeOnSingleton` has no other hook for connection properties) |
 
 The build itself runs via DuckDB's own official `duckdb/extension-ci-tools` reusable workflow —
 the same manylinux-style environment official extensions use — so the binaries link against an
@@ -52,13 +52,19 @@ just download the two published release assets and place them at the exact local
 resolves `LOAD ducklake` from: `~/.duckdb/extensions/<ducklake.extension.cache.version>/linux_<arch>/ducklake.duckdb_extension`.
 
 - **`Dockerfile.native`** reads `ducklake.patch.release` and `ducklake.extension.cache.version`
-  from the pom, `curl`s the matching-arch asset into that path, then a small Java program calls
-  `SET allow_unsigned_extensions = true; LOAD ducklake;` to confirm it loads before baking it into
-  the runtime stage.
+  from the pom, `curl`s the matching-arch asset into that path, then a small Java program opens its
+  verification connection with `allow_unsigned_extensions=true` as a **connection property** (not a
+  `SET` statement — see "Runtime enablement" above) and calls `LOAD ducklake` to confirm it loads
+  before baking it into the runtime stage.
 - **Jib packaging** (`pom.xml`) runs an `exec-maven-plugin` execution bound to `generate-resources`
   that `curl`s the asset for whichever `jib.architecture` is being built into
-  `target/ducklake-extension/linux_<arch>/`, then Jib's `extraDirectories` copies that into the
-  image at the same cache path.
+  `target/ducklake-extension/linux_<arch>/`, then Jib's `extraDirectories` copies that arch's
+  subdirectory into the image at the same cache path. This download is **skipped by default**
+  (`ducklake.extension.download.skip=true`) since `generate-resources` also runs for plain
+  `test`/`install`/`verify` and the native profile's own `package`, none of which need this ~36MB
+  asset — callers that actually build the jib image pass
+  `-Dducklake.extension.download.skip=false` (see `release.yml`, `scripts/docker-publish.sh`, this
+  module's own README, `.claude/commands/publish-docker.md`).
 
 Both paths therefore need re-running (a normal Docker/Jib build) whenever the release tag changes
 — nothing else to wire up.
@@ -127,6 +133,10 @@ already contains the fix, this whole mechanism can be removed:
 
 - `Dockerfile.native`: replace the `curl`-and-place block with a plain `INSTALL ducklake` again.
 - `pom.xml`: remove the `download-patched-ducklake-extension` execution, the `extraDirectories`
-  block, and the three `ducklake.patch.*`/`ducklake.extension.cache.version` properties.
+  block, and the `ducklake.patch.*`/`ducklake.extension.cache.version`/
+  `ducklake.extension.download.skip` properties.
 - `RawConnections.java`: remove the `allow_unsigned_extensions` connection property.
+- Delete `src/main/resources/duckdb.properties`.
 - Delete `DuckLakePatchVersionTest` and `src/test/resources-filtered/`.
+- Revert the `-Dducklake.extension.download.skip=false` flag added to `release.yml`,
+  `scripts/docker-publish.sh`, this module's README, and `.claude/commands/publish-docker.md`.

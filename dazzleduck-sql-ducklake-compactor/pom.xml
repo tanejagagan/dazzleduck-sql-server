@@ -42,6 +42,9 @@
              extension cache directory, e.g. ~/.duckdb/extensions/v1.5.5/linux_amd64/. Verified via
              `select * from pragma_version()` against duckdb_jdbc:${duckdb.version}. -->
         <ducklake.extension.cache.version>v1.5.5</ducklake.extension.cache.version>
+        <!-- See the exec-maven-plugin execution below: false only for the specific commands that
+             build this module's jib image. -->
+        <ducklake.extension.download.skip>true</ducklake.extension.download.skip>
     </properties>
 
     <dependencyManagement>
@@ -182,10 +185,16 @@
 
             <!-- Downloads the patched DuckLake extension for the arch being built (jib.architecture)
                  from the dazzleduck-web/ducklake release, before jib packages it below. Mirrors
-                 Dockerfile.native's curl step for the same binary; see DUCKLAKE_PATCH.md. Bound to
-                 generate-resources so it always runs ahead of the explicit `jib:build`/
+                 Dockerfile.native's curl step for the same binary; see DUCKLAKE_PATCH.md.
+
+                 Skipped by default (ducklake.extension.download.skip=true): this execution is bound
+                 to generate-resources purely to sequence ahead of the explicit `jib:build`/
                  `jib:dockerBuild` goal invocation (which isn't itself phase-bound in this repo's
-                 build commands). -->
+                 build commands), but generate-resources is also part of `mvn test`/`install`/
+                 `verify` and the native profile's own `package`, none of which need this 36MB
+                 asset. Callers that actually build this module's jib image must pass
+                 -Dducklake.extension.download.skip=false (see release.yml, scripts/docker-publish.sh,
+                 this module's README, .claude/commands/publish-docker.md). -->
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
@@ -198,6 +207,7 @@
                             <goal>exec</goal>
                         </goals>
                         <configuration>
+                            <skip>${ducklake.extension.download.skip}</skip>
                             <executable>curl</executable>
                             <arguments>
                                 <argument>-fsSL</argument>
@@ -241,14 +251,17 @@
                     </container>
                     <!-- Bakes the just-downloaded patched extension into the exact local cache path
                          DuckDB resolves LOAD from, so the compactor's startup script's `LOAD ducklake`
-                         finds it with no network access. RawConnections sets
-                         allow_unsigned_extensions=true first, since this build isn't signed with
-                         DuckDB Labs' key. -->
+                         finds it with no network access. RawConnections and duckdb.properties set
+                         allow_unsigned_extensions=true, since this build isn't signed with DuckDB
+                         Labs' key. Scoped to this arch's own subdirectory, not the whole
+                         ducklake-extension/ tree, so a target/ left over from building the other
+                         architecture first (e.g. release.yml's amd64-then-arm64 loop, no `clean`
+                         between them) doesn't bake an unused ~36MB binary into this image too. -->
                     <extraDirectories>
                         <paths>
                             <path>
-                                <from>${project.build.directory}/ducklake-extension</from>
-                                <into>/root/.duckdb/extensions/${ducklake.extension.cache.version}</into>
+                                <from>${project.build.directory}/ducklake-extension/linux_${jib.architecture}</from>
+                                <into>/root/.duckdb/extensions/${ducklake.extension.cache.version}/linux_${jib.architecture}</into>
                             </path>
                         </paths>
                     </extraDirectories>
