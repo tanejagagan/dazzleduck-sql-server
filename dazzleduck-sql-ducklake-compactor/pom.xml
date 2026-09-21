@@ -28,6 +28,20 @@
         <!-- Override with -Djib.architecture=arm64 on Apple Silicon -->
         <jib.architecture>amd64</jib.architecture>
         <testcontainer.version>1.21.2</testcontainer.version>
+
+        <!-- Patched DuckLake extension (backports duckdb/ducklake#1453: concurrent compactions on
+             disjoint files in the same table falsely conflict) onto d8a1881e, the commit the
+             parent pom's duckdb.version pins via duckdb/duckdb's own ducklake.cmake. Built and
+             published by dazzleduck-web/ducklake's build-and-publish-extension.yml workflow. See
+             DUCKLAKE_PATCH.md for how these three properties relate and how to update them.
+             ducklake.patch.built.for.duckdb.version MUST equal the parent pom's duckdb.version,
+             enforced by DuckLakePatchVersionTest. -->
+        <ducklake.patch.release>v1.5.5-dazzleduck.1</ducklake.patch.release>
+        <ducklake.patch.built.for.duckdb.version>1.5.5.1</ducklake.patch.built.for.duckdb.version>
+        <!-- The DuckDB library-version string (not duckdb.version) DuckDB uses to name its
+             extension cache directory, e.g. ~/.duckdb/extensions/v1.5.5/linux_amd64/. Verified via
+             `select * from pragma_version()` against duckdb_jdbc:${duckdb.version}. -->
+        <ducklake.extension.cache.version>v1.5.5</ducklake.extension.cache.version>
     </properties>
 
     <dependencyManagement>
@@ -111,6 +125,19 @@
     </dependencies>
 
     <build>
+        <!-- Only ducklake-patch-version.properties is filtered (it exists purely to smuggle pom
+             properties into a test); everything else in src/test/resources stays literal, since
+             application.conf-style ${?ENV_VAR} HOCON syntax elsewhere must not be touched by Maven's
+             resource filtering. -->
+        <testResources>
+            <testResource>
+                <directory>src/test/resources</directory>
+            </testResource>
+            <testResource>
+                <directory>src/test/resources-filtered</directory>
+                <filtering>true</filtering>
+            </testResource>
+        </testResources>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -153,6 +180,37 @@
                 </executions>
             </plugin>
 
+            <!-- Downloads the patched DuckLake extension for the arch being built (jib.architecture)
+                 from the dazzleduck-web/ducklake release, before jib packages it below. Mirrors
+                 Dockerfile.native's curl step for the same binary; see DUCKLAKE_PATCH.md. Bound to
+                 generate-resources so it always runs ahead of the explicit `jib:build`/
+                 `jib:dockerBuild` goal invocation (which isn't itself phase-bound in this repo's
+                 build commands). -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.3.0</version>
+                <executions>
+                    <execution>
+                        <id>download-patched-ducklake-extension</id>
+                        <phase>generate-resources</phase>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <executable>curl</executable>
+                            <arguments>
+                                <argument>-fsSL</argument>
+                                <argument>--create-dirs</argument>
+                                <argument>-o</argument>
+                                <argument>${project.build.directory}/ducklake-extension/linux_${jib.architecture}/ducklake.duckdb_extension</argument>
+                                <argument>https://github.com/dazzleduck-web/ducklake/releases/download/${ducklake.patch.release}/ducklake-linux_${jib.architecture}.duckdb_extension</argument>
+                            </arguments>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
             <!-- Docker image -->
             <plugin>
                 <groupId>com.google.cloud.tools</groupId>
@@ -181,6 +239,19 @@
                             <jvmFlag>--add-opens=java.base/sun.nio.ch=ALL-UNNAMED</jvmFlag>
                         </jvmFlags>
                     </container>
+                    <!-- Bakes the just-downloaded patched extension into the exact local cache path
+                         DuckDB resolves LOAD from, so the compactor's startup script's `LOAD ducklake`
+                         finds it with no network access. RawConnections sets
+                         allow_unsigned_extensions=true first, since this build isn't signed with
+                         DuckDB Labs' key. -->
+                    <extraDirectories>
+                        <paths>
+                            <path>
+                                <from>${project.build.directory}/ducklake-extension</from>
+                                <into>/root/.duckdb/extensions/${ducklake.extension.cache.version}</into>
+                            </path>
+                        </paths>
+                    </extraDirectories>
                 </configuration>
             </plugin>
         </plugins>
