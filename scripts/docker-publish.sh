@@ -125,18 +125,23 @@ build_multi_arch() {
   local maven_module="$1"
   local arch="$2"
   local goal
+  # Only the compactor bakes in the patched DuckLake extension (see DUCKLAKE_PATCH.md); the
+  # download step is skipped by default so plain test/install/verify don't need network access
+  # to a GitHub release.
+  local extra_args=()
+  [[ "$maven_module" == "dazzleduck-sql-ducklake-compactor" ]] && extra_args+=("-Dducklake.extension.download.skip=false")
 
   # runtime uses named executions with arch hardcoded; others use -Djib.architecture
   if [[ "$maven_module" == "dazzleduck-sql-runtime" ]]; then
     goal=$(jib_goal "jib:build@docker-${arch}")
     echo ""
     echo "▶ $maven_module ($arch)"
-    "$MVN" "$goal" -pl "$maven_module" -DskipTests -f "$ROOT/pom.xml"
+    "$MVN" "$goal" -pl "$maven_module" -DskipTests -f "$ROOT/pom.xml" "${extra_args[@]}"
   else
     goal=$(jib_goal "jib:build")
     echo ""
     echo "▶ $maven_module ($arch)"
-    "$MVN" "$goal" -pl "$maven_module" -Djib.architecture="$arch" -DskipTests -f "$ROOT/pom.xml"
+    "$MVN" "$goal" -pl "$maven_module" -Djib.architecture="$arch" -DskipTests -f "$ROOT/pom.xml" "${extra_args[@]}"
   fi
 }
 
