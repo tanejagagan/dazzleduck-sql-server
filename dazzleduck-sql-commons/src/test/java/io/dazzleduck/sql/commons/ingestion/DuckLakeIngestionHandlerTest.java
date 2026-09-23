@@ -10,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
@@ -373,5 +374,309 @@ class DuckLakeIngestionHandlerTest {
                     ConnectionPool.execute(conn, "SELECT %s FROM (%s) LIMIT 0".formatted(tokenList, wrapped)),
                     "Every PARTITION_BY token must resolve as a column in the projected relation");
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // bucket(N) hash-partition transform
+    //
+    // COPY's PARTITION_BY needs a real column, and DuckLake's bucket() is murmur3 with no DuckDB
+    // builtin, so the handler projects _dd_iceberg_bucket(col, N). The hive key follows DuckLake's
+    // own directory naming ("bucket", then "bucket_<col>" on collision) so ducklake_add_data_files
+    // — which matches files to partitioning by hive key name — accepts the written files.
+    // -----------------------------------------------------------------------
+
+    @Test
+    void shouldResolveBucketTransformsWithDuckLakeHiveKeys() throws Exception {
+        String table = "bucketed_events";
+        var factory = handlerForPartitionedTable(table,
+                "bucket(4, group_id), event_date, bucket(4, user_id)",
+                "group_id BIGINT, user_id BIGINT, event_date DATE");
+
+        // First bucket dir is "bucket"; the second collides and is disambiguated as "bucket_user_id"
+        // (DuckLake's own writer convention). The identity column keeps its name.
+        assertArrayEquals(new String[]{"bucket", "event_date", "bucket_user_id"},
+                factory.getPartitionBy(table));
+        // Identity contributes no projection; each bucket column projects the murmur3 bucket macro.
+        assertArrayEquals(new String[]{
+                        "_dd_iceberg_bucket(\"group_id\", 4) AS \"bucket\"",
+                        "_dd_iceberg_bucket(\"user_id\", 4) AS \"bucket_user_id\""},
+                factory.getPartitionProjections(table));
+    }
+
+    @Test
+    void bucketProjectionsMakePartitionTokensResolvable() throws Exception {
+        String table = "bucket_resolvable_events";
+        var factory = handlerForPartitionedTable(table,
+                "bucket(8, group_id), event_date, bucket(8, user_id)",
+                "group_id BIGINT, user_id BIGINT, event_date DATE");
+
+        String[] tokens = factory.getPartitionBy(table);
+        String[] projections = factory.getPartitionProjections(table);
+        String wrapped = "SELECT *, %s FROM (SELECT * FROM %s.%s.%s)".formatted(
+                String.join(", ", projections), CATALOG, SCHEMA, table);
+        String tokenList = String.join(", ",
+                java.util.Arrays.stream(tokens).map(t -> "\"" + t + "\"").toArray(String[]::new));
+        try (Connection conn = ConnectionPool.getConnection()) {
+            assertDoesNotThrow(() ->
+                    ConnectionPool.execute(conn, "SELECT %s FROM (%s) LIMIT 0".formatted(tokenList, wrapped)),
+                    "Every bucket PARTITION_BY token must resolve as a column in the projected relation");
+        }
+    }
+
+    /**
+     * The projected {@code _dd_iceberg_bucket(col, N)} must equal DuckLake's native {@code bucket()}
+     * — otherwise files register under the wrong partition and pruning silently drops rows. Ground
+     * truth was captured from DuckLake 1.5.5's on-disk {@code bucket=<v>} directories (N=16) across
+     * the long domain: 0, positives, snowflake ids, {@code Long.MIN/MAX_VALUE}, negatives, and the
+     * int32 boundaries (int columns hash as promoted longs).
+     */
+    @Test
+    void icebergBucketMacroMatchesDuckLakeNativeBucket() throws Exception {
+        // Resolving a bucket-partitioned table registers the macros (lazily, on first bucket use).
+        handlerForPartitionedTable("macro_bootstrap", "bucket(4, id)", "id BIGINT")
+                .getPartitionProjections("macro_bootstrap");
+
+        String probe = """
+                SELECT count(*) FILTER (WHERE truth <> _dd_iceberg_bucket(g, 16)) AS mismatches
+                FROM (VALUES (0,12),(1,4),(2,4),(3,3),(7,3),(11,7),(42,14),(255,7),(1000000,6),
+                             (123456789,1),(1000000000000,12),(361193724270612480,9),
+                             (361193725126246400,5),(9223372036854775807,15),
+                             (-1,8),(-2,5),(-100,14),(2147483647,14),(-2147483648,8),
+                             (-9223372036854775808,5)) v(g, truth)
+                """;
+        try (Connection conn = ConnectionPool.getConnection()) {
+            long mismatches = ConnectionPool.collectFirst(conn, probe, Long.class);
+            assertEquals(0L, mismatches,
+                    "_dd_iceberg_bucket must match DuckLake's native bucket(16, ...) for every probe value");
+        }
+    }
+
+    /**
+     * Stronger than the static probe above: compares the macro to DuckLake's <em>own</em> bucketing
+     * computed at test time. Inlining is disabled so each row lands in a file whose hive dir carries
+     * the native bucket value; the macro must reproduce it for every value and sign.
+     */
+    @Test
+    void icebergBucketMatchesDuckLakeNativeComputedAtTestTime() throws Exception {
+        String table = "native_bucket_probe";
+        handlerForPartitionedTable("macro_bootstrap2", "bucket(4, id)", "id BIGINT")
+                .getPartitionProjections("macro_bootstrap2");   // register the macros
+
+        try (Connection conn = ConnectionPool.getConnection()) {
+            ConnectionPool.execute(conn,
+                    "CALL %s.set_option('data_inlining_row_limit', 0)".formatted(CATALOG));
+            ConnectionPool.executeBatchInTxn(conn, new String[]{
+                    "CREATE TABLE %s.%s.%s (g BIGINT)".formatted(CATALOG, SCHEMA, table),
+                    "ALTER TABLE %s.%s.%s SET PARTITIONED BY (bucket(16, g))".formatted(CATALOG, SCHEMA, table),
+                    ("INSERT INTO %s.%s.%s VALUES (0),(1),(42),(255),(-1),(-2),(-100),"
+                            + "(2147483647),(-2147483648),(9223372036854775807),(-9223372036854775808),"
+                            + "(361193724270612480)").formatted(CATALOG, SCHEMA, table)
+            });
+            String dataGlob = tempDir.resolve("data").resolve(SCHEMA).resolve(table)
+                    .resolve("**").resolve("*.parquet").toString();
+            String cmp = ("SELECT count(*) FROM ("
+                    + "SELECT g, _dd_iceberg_bucket(g, 16) AS macro, "
+                    + "regexp_extract(filename, 'bucket=([0-9]+)', 1)::BIGINT AS native "
+                    + "FROM read_parquet('%s', filename=true)) WHERE macro <> native").formatted(dataGlob);
+            long mismatches = ConnectionPool.collectFirst(conn, cmp, Long.class);
+            assertEquals(0L, mismatches,
+                    "_dd_iceberg_bucket must equal DuckLake's on-disk native bucket for every value/sign");
+        }
+    }
+
+    @Test
+    void shouldAcceptBucketOnInt32Column() throws Exception {
+        // Iceberg promotes int32 to a long for hashing, so the long-based macro is correct.
+        var factory = handlerForPartitionedTable("int32_bucket_events", "bucket(4, uid)", "uid INTEGER");
+        assertArrayEquals(new String[]{"bucket"}, factory.getPartitionBy("int32_bucket_events"));
+        assertArrayEquals(new String[]{"_dd_iceberg_bucket(\"uid\", 4) AS \"bucket\""},
+                factory.getPartitionProjections("int32_bucket_events"));
+    }
+
+    private void createPartitionedTable(String table, String columnsDdl, String partitionBySpec) throws SQLException {
+        try (Connection conn = ConnectionPool.getConnection()) {
+            ConnectionPool.executeBatchInTxn(conn, new String[]{
+                    "CREATE TABLE %s.%s.%s (%s)".formatted(CATALOG, SCHEMA, table, columnsDdl),
+                    "ALTER TABLE %s.%s.%s SET PARTITIONED BY (%s)".formatted(CATALOG, SCHEMA, table, partitionBySpec)
+            });
+        }
+    }
+
+    private QueueIdToTableMapping tableMapping(String table) {
+        return new QueueIdToTableMapping(table, CATALOG, SCHEMA, table, Map.of(), null);
+    }
+
+    /**
+     * An unsupported bucket column (a float: DuckLake hashes its IEEE-754 bits, which SQL cannot
+     * reinterpret exactly) must fail only its own queue. The handler still constructs and every other
+     * queue keeps resolving its partitioning.
+     */
+    @Test
+    void unsupportedBucketColumnFailsOnlyItsOwnQueue() throws Exception {
+        createPartitionedTable("float_bucket_events", "id BIGINT, score DOUBLE", "bucket(4, score)");
+        createPartitionedTable("healthy_bucket_events", "id BIGINT", "bucket(4, id)");
+
+        var handler = assertDoesNotThrow(() -> new DuckLakeIngestionHandler(Map.of(
+                        "float_bucket_events", tableMapping("float_bucket_events"),
+                        "healthy_bucket_events", tableMapping("healthy_bucket_events"))),
+                "one bad table must not prevent the handler from starting");
+
+        // The healthy queue is unaffected.
+        assertArrayEquals(new String[]{"bucket"}, handler.getPartitionBy("healthy_bucket_events"));
+        assertArrayEquals(new String[]{"_dd_iceberg_bucket(\"id\", 4) AS \"bucket\""},
+                handler.getPartitionProjections("healthy_bucket_events"));
+        assertNotNull(handler.getTargetPath("float_bucket_events"), "the bad queue is still known");
+
+        // The bad queue's writes are rejected with a message naming the column and type.
+        var ex = assertThrows(UnsupportedPartitionTransformException.class,
+                () -> handler.getPartitionBy("float_bucket_events"));
+        assertTrue(ex.getMessage().contains("score") && ex.getMessage().contains("float64"),
+                "message must name the column and type, was: " + ex.getMessage());
+        assertThrows(UnsupportedPartitionTransformException.class,
+                () -> handler.getPartitionProjections("float_bucket_events"));
+    }
+
+    /**
+     * The same isolation when the partitioning is changed at runtime: the refresh after the ALTER
+     * fails only that queue, and changing the partitioning back recovers it.
+     */
+    @Test
+    void unsupportedPartitioningAddedAtRuntimeFailsOnlyThatQueueAndRecovers() throws Exception {
+        createPartitionedTable("runtime_events", "id BIGINT, score DOUBLE", "bucket(4, id)");
+        createPartitionedTable("bystander_events", "id BIGINT", "bucket(4, id)");
+        var handler = new DuckLakeIngestionHandler(Map.of(
+                "runtime_events", tableMapping("runtime_events"),
+                "bystander_events", tableMapping("bystander_events")), Duration.ZERO); // refresh on every read
+        assertArrayEquals(new String[]{"bucket"}, handler.getPartitionBy("runtime_events"));
+
+        String alter = "ALTER TABLE %s.%s.runtime_events SET PARTITIONED BY (%s)";
+        try (Connection conn = ConnectionPool.getConnection()) {
+            ConnectionPool.execute(conn, alter.formatted(CATALOG, SCHEMA, "bucket(4, score)"));
+        }
+        assertThrows(UnsupportedPartitionTransformException.class, () -> handler.getPartitionBy("runtime_events"));
+        assertArrayEquals(new String[]{"bucket"}, handler.getPartitionBy("bystander_events"),
+                "other queues keep working after one table's partitioning becomes unsupported");
+
+        try (Connection conn = ConnectionPool.getConnection()) {
+            ConnectionPool.execute(conn, alter.formatted(CATALOG, SCHEMA, "bucket(4, id)"));
+        }
+        assertArrayEquals(new String[]{"bucket"}, handler.getPartitionBy("runtime_events"),
+                "fixing the partitioning recovers the queue on the next refresh");
+    }
+
+    @Test
+    void shouldProjectStringBucketOverUtf8Bytes() throws Exception {
+        var factory = handlerForPartitionedTable("string_bucket_events", "bucket(8, name)", "name VARCHAR");
+        assertArrayEquals(new String[]{"bucket"}, factory.getPartitionBy("string_bucket_events"));
+        assertArrayEquals(new String[]{"_dd_iceberg_bucket_hex(hex(encode(\"name\"::VARCHAR)), 8) AS \"bucket\""},
+                factory.getPartitionProjections("string_bucket_events"));
+    }
+
+    /**
+     * For every column type the handler supports, the generated bucket projection must equal the bucket
+     * DuckLake itself writes. Uses bucket(2^31-1), so the directory value is the full masked murmur3
+     * hash and any encoding difference shows up. Covers negatives, pre-epoch times, fractional
+     * seconds, exact-4-byte and multibyte UTF-8 strings, the empty string, and wide/unsigned integers.
+     */
+    @Test
+    void bucketProjectionMatchesDuckLakeNativeForEveryType() throws Exception {
+        String[][] cases = {
+                {"TINYINT", "-3"}, {"SMALLINT", "-7"}, {"INTEGER", "34"}, {"BIGINT", "-9223372036854775808"},
+                {"BOOLEAN", "true"}, {"BOOLEAN", "false"},
+                {"DATE", "'2017-11-16'"}, {"DATE", "'1901-01-01'"},
+                {"TIME", "'22:31:08.5'"}, {"TIMETZ", "'22:31:08+02'"},
+                {"TIMESTAMP", "'2017-11-16 22:31:08.123456'"}, {"TIMESTAMP", "'1960-01-01 00:00:00.5'"},
+                {"TIMESTAMPTZ", "'2017-11-16 14:31:08-08:00'"}, {"TIMESTAMP_S", "'2017-11-16 22:31:08'"},
+                {"TIMESTAMP_MS", "'2017-11-16 22:31:08.123'"}, {"TIMESTAMP_NS", "'2017-11-16 22:31:08.123456789'"},
+                {"DECIMAL(4,2)", "-12.34"}, {"DECIMAL(9,0)", "42"}, {"DECIMAL(18,3)", "123456789.123"},
+                {"DECIMAL(38,2)", "12345678901234567890.12"},
+                {"VARCHAR", "'iceberg'"}, {"VARCHAR", "''"}, {"VARCHAR", "'abcdefgh'"}, {"VARCHAR", "'héllo wörld ✓'"},
+                {"UUID", "'f79c3e09-677c-4bbd-a479-3f349cb785e7'"}, {"INTERVAL", "INTERVAL 3 DAY"},
+                {"UTINYINT", "200"}, {"USMALLINT", "60000"}, {"UINTEGER", "4000000000"},
+                {"UBIGINT", "18446744073709551615"}, {"HUGEINT", "-170141183460469231731687303715884105727"},
+                {"UHUGEINT", "340282366920938463463374607431768211455"}, {"BLOB", "'\\x00\\x01\\x02\\x03\\xAB'"},
+        };
+        List<String> mismatches = new java.util.ArrayList<>();
+        try (Connection conn = ConnectionPool.getConnection()) {
+            ConnectionPool.execute(conn, "CALL %s.set_option('data_inlining_row_limit', 0)".formatted(CATALOG));
+            for (int i = 0; i < cases.length; i++) {
+                String type = cases[i][0], literal = "CAST(%s AS %s)".formatted(cases[i][1], type);
+                String table = "bucket_type_" + i;
+                ConnectionPool.executeBatchInTxn(conn, new String[]{
+                        "CREATE TABLE %s.%s.%s (c %s)".formatted(CATALOG, SCHEMA, table, type),
+                        "ALTER TABLE %s.%s.%s SET PARTITIONED BY (bucket(2147483647, c))".formatted(CATALOG, SCHEMA, table),
+                        "INSERT INTO %s.%s.%s VALUES (%s)".formatted(CATALOG, SCHEMA, table, literal)
+                });
+                String nativeBucket = ConnectionPool.collectFirst(conn,
+                        "SELECT regexp_extract(filename, 'bucket=([^/]+)', 1) FROM %s.%s.%s"
+                                .formatted(CATALOG, SCHEMA, table), String.class);
+
+                var mapping = new QueueIdToTableMapping(table, CATALOG, SCHEMA, table, Map.of(), null);
+                String projection = new DuckLakeIngestionHandler(Map.of(table, mapping)).getPartitionProjections(table)[0];
+                String computed = ConnectionPool.collectFirst(conn,
+                        "SELECT \"bucket\"::VARCHAR FROM (SELECT %s FROM (SELECT %s AS c))".formatted(projection, literal),
+                        String.class);
+                if (!nativeBucket.equals(computed)) {
+                    mismatches.add("%s %s: native=%s handler=%s".formatted(type, cases[i][1], nativeBucket, computed));
+                }
+            }
+        }
+        assertEquals(List.of(), mismatches, "bucket projection must equal DuckLake's native bucket for every type");
+    }
+
+    /**
+     * The collector's actual write path, on a table whose hive keys collide: two bucket columns
+     * ({@code bucket}, {@code bucket_uid}) and two day() columns ({@code day}, {@code day_b}). COPY
+     * with the handler's projections and PARTITION_BY tokens, then ducklake_add_data_files matches
+     * files to the partitioning by hive key name — so this also proves the disambiguated names are the
+     * ones DuckLake expects. Includes a string bucket with multibyte and NULL keys. Pruned lookups on
+     * every partition column must return the right rows.
+     */
+    @Test
+    void copyWrittenFilesWithCollidingPartitionKeysRegisterAndPrune() throws Exception {
+        String table = "copy_colliding_keys";
+        var factory = handlerForPartitionedTable(table, "bucket(8, name), bucket(4, uid), day(a), day(b)",
+                "name VARCHAR, uid BIGINT, a TIMESTAMP, b TIMESTAMP, n BIGINT");
+        assertArrayEquals(new String[]{"bucket", "bucket_uid", "day", "day_b"}, factory.getPartitionBy(table));
+
+        Path stage = tempDir.resolve("stage");
+        try (Connection conn = ConnectionPool.getConnection()) {
+            ConnectionPool.execute(conn, ("COPY (SELECT *, %s FROM (VALUES "
+                    + "('alice', 361193724270612480, TIMESTAMP '2026-01-05 10:00', TIMESTAMP '2026-02-20 11:00', 1), "
+                    + "('bob',   42,                 TIMESTAMP '2026-01-15 10:00', TIMESTAMP '2026-03-01 00:00', 2), "
+                    + "(NULL,    -7,                 TIMESTAMP '2026-01-05 23:59', TIMESTAMP '2026-02-20 11:00', 3), "
+                    + "('héllo', 9223372036854775807, TIMESTAMP '2026-01-31 00:00', TIMESTAMP '2026-02-28 12:00', 4)"
+                    + ") v(name, uid, a, b, n)) TO '%s' (FORMAT parquet, PARTITION_BY(%s))")
+                    .formatted(String.join(", ", factory.getPartitionProjections(table)), stage,
+                            String.join(", ", factory.getPartitionBy(table))));
+            ConnectionPool.execute(conn, ("CALL ducklake_add_data_files('%s', '%s', '%s', hive_partitioning => true, "
+                    + "ignore_extra_columns => true, allow_missing => true)")
+                    .formatted(CATALOG, table, stage.resolve("**").resolve("*.parquet")));
+
+            String fq = "%s.%s.%s".formatted(CATALOG, SCHEMA, table);
+            assertEquals(4L, ConnectionPool.collectFirst(conn, "SELECT count(*) FROM " + fq, Long.class));
+            assertEquals(2L, ConnectionPool.collectFirst(conn, "SELECT n FROM " + fq + " WHERE name = 'bob'", Long.class));
+            assertEquals(4L, ConnectionPool.collectFirst(conn, "SELECT n FROM " + fq + " WHERE name = 'héllo'", Long.class));
+            assertEquals(3L, ConnectionPool.collectFirst(conn, "SELECT n FROM " + fq + " WHERE name IS NULL", Long.class));
+            assertEquals(1L, ConnectionPool.collectFirst(conn,
+                    "SELECT n FROM " + fq + " WHERE uid = 361193724270612480", Long.class));
+            assertEquals(3L, ConnectionPool.collectFirst(conn, "SELECT n FROM " + fq + " WHERE uid = -7", Long.class));
+            assertEquals(2L, ConnectionPool.collectFirst(conn,
+                    "SELECT count(*) FROM " + fq + " WHERE b = TIMESTAMP '2026-02-20 11:00'", Long.class));
+            assertEquals(4L, ConnectionPool.collectFirst(conn,
+                    "SELECT n FROM " + fq + " WHERE a = TIMESTAMP '2026-01-31 00:00' AND b = TIMESTAMP '2026-02-28 12:00'",
+                    Long.class));
+        }
+    }
+
+    @Test
+    void shouldDisambiguateCollidingTimeTransforms() throws Exception {
+        // Two day() transforms collide on the "day" key; DuckLake names them day / day_b, and the
+        // handler must match so ducklake_add_data_files accepts the files.
+        var factory = handlerForPartitionedTable("dual_day_events", "day(a), day(b)",
+                "a TIMESTAMP, b TIMESTAMP");
+        assertArrayEquals(new String[]{"day", "day_b"}, factory.getPartitionBy("dual_day_events"));
+        assertArrayEquals(new String[]{"day(\"a\") AS \"day\"", "day(\"b\") AS \"day_b\""},
+                factory.getPartitionProjections("dual_day_events"));
     }
 }
