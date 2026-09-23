@@ -374,4 +374,76 @@ class DuckLakeIngestionHandlerTest {
                     "Every PARTITION_BY token must resolve as a column in the projected relation");
         }
     }
+
+    // -----------------------------------------------------------------------
+    // bucket(N) hash-partition transform
+    //
+    // COPY's PARTITION_BY needs a real column, and DuckLake's bucket() is murmur3 with no DuckDB
+    // builtin, so the handler projects _dd_iceberg_bucket(col, N). The hive key follows DuckLake's
+    // own directory naming ("bucket", then "bucket_<col>" on collision) so ducklake_add_data_files
+    // — which matches files to partitioning by hive key name — accepts the written files.
+    // -----------------------------------------------------------------------
+
+    @Test
+    void shouldResolveBucketTransformsWithDuckLakeHiveKeys() throws Exception {
+        String table = "bucketed_events";
+        var factory = handlerForPartitionedTable(table,
+                "bucket(4, group_id), event_date, bucket(4, user_id)",
+                "group_id BIGINT, user_id BIGINT, event_date DATE");
+
+        // First bucket dir is "bucket"; the second collides and is disambiguated as "bucket_user_id"
+        // (DuckLake's own writer convention). The identity column keeps its name.
+        assertArrayEquals(new String[]{"bucket", "event_date", "bucket_user_id"},
+                factory.getPartitionBy(table));
+        // Identity contributes no projection; each bucket column projects the murmur3 bucket macro.
+        assertArrayEquals(new String[]{
+                        "_dd_iceberg_bucket(\"group_id\", 4) AS \"bucket\"",
+                        "_dd_iceberg_bucket(\"user_id\", 4) AS \"bucket_user_id\""},
+                factory.getPartitionProjections(table));
+    }
+
+    @Test
+    void bucketProjectionsMakePartitionTokensResolvable() throws Exception {
+        String table = "bucket_resolvable_events";
+        var factory = handlerForPartitionedTable(table,
+                "bucket(8, group_id), event_date, bucket(8, user_id)",
+                "group_id BIGINT, user_id BIGINT, event_date DATE");
+
+        String[] tokens = factory.getPartitionBy(table);
+        String[] projections = factory.getPartitionProjections(table);
+        String wrapped = "SELECT *, %s FROM (SELECT * FROM %s.%s.%s)".formatted(
+                String.join(", ", projections), CATALOG, SCHEMA, table);
+        String tokenList = String.join(", ",
+                java.util.Arrays.stream(tokens).map(t -> "\"" + t + "\"").toArray(String[]::new));
+        try (Connection conn = ConnectionPool.getConnection()) {
+            assertDoesNotThrow(() ->
+                    ConnectionPool.execute(conn, "SELECT %s FROM (%s) LIMIT 0".formatted(tokenList, wrapped)),
+                    "Every bucket PARTITION_BY token must resolve as a column in the projected relation");
+        }
+    }
+
+    /**
+     * The projected {@code _dd_iceberg_bucket(col, N)} must equal DuckLake's native {@code bucket()}
+     * — otherwise files register under the wrong partition and pruning silently drops rows. Ground
+     * truth was captured from DuckLake 1.5.5's on-disk {@code bucket=<v>} directories (N=16) across
+     * the long domain, including 0, snowflake ids, and {@code Long.MAX_VALUE}.
+     */
+    @Test
+    void icebergBucketMacroMatchesDuckLakeNativeBucket() throws Exception {
+        // Resolving a bucket-partitioned table registers the macros (lazily, on first bucket use).
+        handlerForPartitionedTable("macro_bootstrap", "bucket(4, id)", "id BIGINT")
+                .getPartitionProjections("macro_bootstrap");
+
+        String probe = """
+                SELECT count(*) FILTER (WHERE truth <> _dd_iceberg_bucket(g, 16)) AS mismatches
+                FROM (VALUES (0,12),(1,4),(2,4),(3,3),(7,3),(11,7),(42,14),(255,7),(1000000,6),
+                             (123456789,1),(1000000000000,12),(361193724270612480,9),
+                             (361193725126246400,5),(9223372036854775807,15)) v(g, truth)
+                """;
+        try (Connection conn = ConnectionPool.getConnection()) {
+            long mismatches = ConnectionPool.collectFirst(conn, probe, Long.class);
+            assertEquals(0L, mismatches,
+                    "_dd_iceberg_bucket must match DuckLake's native bucket(16, ...) for every probe value");
+        }
+    }
 }
