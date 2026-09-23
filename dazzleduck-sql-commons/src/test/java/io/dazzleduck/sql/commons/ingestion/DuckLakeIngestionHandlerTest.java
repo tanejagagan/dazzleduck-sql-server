@@ -493,22 +493,110 @@ class DuckLakeIngestionHandlerTest {
     }
 
     @Test
-    void shouldRejectBucketOnNonIntegerColumn() throws Exception {
-        // DuckLake accepts bucket() on a varchar column, but Iceberg hashes its bytes differently;
-        // the collector must fail fast with a clear message rather than emit a wrong/failing COPY.
-        String table = "bad_bucket_events";
+    void shouldRejectBucketOnFloatingPointColumn() throws Exception {
+        // DuckLake hashes a float's IEEE-754 bits, which DuckDB SQL cannot reinterpret exactly; the
+        // collector must fail fast rather than register files under the wrong partition.
+        String table = "float_bucket_events";
         try (Connection conn = ConnectionPool.getConnection()) {
             ConnectionPool.executeBatchInTxn(conn, new String[]{
-                    "CREATE TABLE %s.%s.%s (id BIGINT, name VARCHAR)".formatted(CATALOG, SCHEMA, table),
-                    "ALTER TABLE %s.%s.%s SET PARTITIONED BY (bucket(4, name))".formatted(CATALOG, SCHEMA, table)
+                    "CREATE TABLE %s.%s.%s (id BIGINT, score DOUBLE)".formatted(CATALOG, SCHEMA, table),
+                    "ALTER TABLE %s.%s.%s SET PARTITIONED BY (bucket(4, score))".formatted(CATALOG, SCHEMA, table)
             });
         }
         var mapping = new QueueIdToTableMapping(table, CATALOG, SCHEMA, table, Map.of(), null);
         // Partitions resolve eagerly on construction, so the unsupported type surfaces there.
         IllegalStateException ex = assertThrows(IllegalStateException.class,
                 () -> new DuckLakeIngestionHandler(Map.of(table, mapping)));
-        assertTrue(ex.getMessage().toLowerCase().contains("integer"),
-                "message must explain the integer-only limitation, was: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("score") && ex.getMessage().contains("float64"),
+                "message must name the column and type, was: " + ex.getMessage());
+    }
+
+    @Test
+    void shouldProjectStringBucketOverUtf8Bytes() throws Exception {
+        var factory = handlerForPartitionedTable("string_bucket_events", "bucket(8, name)", "name VARCHAR");
+        assertArrayEquals(new String[]{"bucket"}, factory.getPartitionBy("string_bucket_events"));
+        assertArrayEquals(new String[]{"_dd_iceberg_bucket_hex(hex(encode(\"name\"::VARCHAR)), 8) AS \"bucket\""},
+                factory.getPartitionProjections("string_bucket_events"));
+    }
+
+    /**
+     * For every column type the handler supports, the generated bucket projection must equal the bucket
+     * DuckLake itself writes. Uses bucket(2^31-1), so the directory value is the full masked murmur3
+     * hash and any encoding difference shows up. Covers negatives, pre-epoch times, fractional
+     * seconds, exact-4-byte and multibyte UTF-8 strings, the empty string, and wide/unsigned integers.
+     */
+    @Test
+    void bucketProjectionMatchesDuckLakeNativeForEveryType() throws Exception {
+        String[][] cases = {
+                {"TINYINT", "-3"}, {"SMALLINT", "-7"}, {"INTEGER", "34"}, {"BIGINT", "-9223372036854775808"},
+                {"BOOLEAN", "true"}, {"BOOLEAN", "false"},
+                {"DATE", "'2017-11-16'"}, {"DATE", "'1901-01-01'"},
+                {"TIME", "'22:31:08.5'"}, {"TIMETZ", "'22:31:08+02'"},
+                {"TIMESTAMP", "'2017-11-16 22:31:08.123456'"}, {"TIMESTAMP", "'1960-01-01 00:00:00.5'"},
+                {"TIMESTAMPTZ", "'2017-11-16 14:31:08-08:00'"}, {"TIMESTAMP_S", "'2017-11-16 22:31:08'"},
+                {"TIMESTAMP_MS", "'2017-11-16 22:31:08.123'"}, {"TIMESTAMP_NS", "'2017-11-16 22:31:08.123456789'"},
+                {"DECIMAL(4,2)", "-12.34"}, {"DECIMAL(9,0)", "42"}, {"DECIMAL(18,3)", "123456789.123"},
+                {"DECIMAL(38,2)", "12345678901234567890.12"},
+                {"VARCHAR", "'iceberg'"}, {"VARCHAR", "''"}, {"VARCHAR", "'abcdefgh'"}, {"VARCHAR", "'héllo wörld ✓'"},
+                {"UUID", "'f79c3e09-677c-4bbd-a479-3f349cb785e7'"}, {"INTERVAL", "INTERVAL 3 DAY"},
+                {"UTINYINT", "200"}, {"USMALLINT", "60000"}, {"UINTEGER", "4000000000"},
+                {"UBIGINT", "18446744073709551615"}, {"HUGEINT", "-170141183460469231731687303715884105727"},
+                {"UHUGEINT", "340282366920938463463374607431768211455"}, {"BLOB", "'\\x00\\x01\\x02\\x03\\xAB'"},
+        };
+        List<String> mismatches = new java.util.ArrayList<>();
+        try (Connection conn = ConnectionPool.getConnection()) {
+            ConnectionPool.execute(conn, "CALL %s.set_option('data_inlining_row_limit', 0)".formatted(CATALOG));
+            for (int i = 0; i < cases.length; i++) {
+                String type = cases[i][0], literal = "CAST(%s AS %s)".formatted(cases[i][1], type);
+                String table = "bucket_type_" + i;
+                ConnectionPool.executeBatchInTxn(conn, new String[]{
+                        "CREATE TABLE %s.%s.%s (c %s)".formatted(CATALOG, SCHEMA, table, type),
+                        "ALTER TABLE %s.%s.%s SET PARTITIONED BY (bucket(2147483647, c))".formatted(CATALOG, SCHEMA, table),
+                        "INSERT INTO %s.%s.%s VALUES (%s)".formatted(CATALOG, SCHEMA, table, literal)
+                });
+                String nativeBucket = ConnectionPool.collectFirst(conn,
+                        "SELECT regexp_extract(filename, 'bucket=([^/]+)', 1) FROM %s.%s.%s"
+                                .formatted(CATALOG, SCHEMA, table), String.class);
+
+                var mapping = new QueueIdToTableMapping(table, CATALOG, SCHEMA, table, Map.of(), null);
+                String projection = new DuckLakeIngestionHandler(Map.of(table, mapping)).getPartitionProjections(table)[0];
+                String computed = ConnectionPool.collectFirst(conn,
+                        "SELECT \"bucket\"::VARCHAR FROM (SELECT %s FROM (SELECT %s AS c))".formatted(projection, literal),
+                        String.class);
+                if (!nativeBucket.equals(computed)) {
+                    mismatches.add("%s %s: native=%s handler=%s".formatted(type, cases[i][1], nativeBucket, computed));
+                }
+            }
+        }
+        assertEquals(List.of(), mismatches, "bucket projection must equal DuckLake's native bucket for every type");
+    }
+
+    /**
+     * The collector's actual write path for a string bucket column: COPY with the handler's
+     * projections and PARTITION_BY tokens, then ducklake_add_data_files by hive key. Includes a NULL
+     * key, which both sides place in DuckDB's default hive partition. Pruned lookups must return the
+     * right rows.
+     */
+    @Test
+    void copyWrittenStringBucketFilesRegisterAndPrune() throws Exception {
+        String table = "copy_string_bucket";
+        var factory = handlerForPartitionedTable(table, "bucket(8, name)", "name VARCHAR, n BIGINT");
+        Path stage = tempDir.resolve("stage");
+        try (Connection conn = ConnectionPool.getConnection()) {
+            ConnectionPool.execute(conn, ("COPY (SELECT *, %s FROM (VALUES ('alice', 1), ('bob', 2), (NULL, 3), "
+                    + "('iceberg', 4), ('héllo', 5)) v(name, n)) TO '%s' (FORMAT parquet, PARTITION_BY(%s))")
+                    .formatted(String.join(", ", factory.getPartitionProjections(table)), stage,
+                            String.join(", ", factory.getPartitionBy(table))));
+            ConnectionPool.execute(conn, ("CALL ducklake_add_data_files('%s', '%s', '%s', hive_partitioning => true, "
+                    + "ignore_extra_columns => true, allow_missing => true)")
+                    .formatted(CATALOG, table, stage.resolve("**").resolve("*.parquet")));
+
+            String fq = "%s.%s.%s".formatted(CATALOG, SCHEMA, table);
+            assertEquals(5L, ConnectionPool.collectFirst(conn, "SELECT count(*) FROM " + fq, Long.class));
+            assertEquals(2L, ConnectionPool.collectFirst(conn, "SELECT n FROM " + fq + " WHERE name = 'bob'", Long.class));
+            assertEquals(5L, ConnectionPool.collectFirst(conn, "SELECT n FROM " + fq + " WHERE name = 'héllo'", Long.class));
+            assertEquals(3L, ConnectionPool.collectFirst(conn, "SELECT n FROM " + fq + " WHERE name IS NULL", Long.class));
+        }
     }
 
     @Test
