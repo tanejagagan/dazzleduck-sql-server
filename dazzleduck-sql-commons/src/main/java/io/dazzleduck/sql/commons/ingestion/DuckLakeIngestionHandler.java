@@ -600,7 +600,7 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
             case "boolean" -> col + "::BIGINT";
             case "date" -> "(%s - DATE '1970-01-01')".formatted(col);
             case "time" -> "epoch_us(DATE '1970-01-01' + %s)".formatted(col);
-            case "timetz" -> ("((epoch_us(DATE '1970-01-01' + %1$s::TIME)::HUGEINT << 24)"
+            case "timetz" -> ("((epoch_us(DATE '1970-01-01' + %1$s::TIME) << 24)"
                     + " | (57599 - date_part('timezone', %1$s)))").formatted(col);
             case "timestamp", "timestamptz" -> "epoch_us(%s)".formatted(col);
             case "timestamp_s" -> "(epoch_ms(%s) // 1000)".formatted(col);
@@ -655,31 +655,33 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
      * DuckDB has no murmur3 builtin and COPY's {@code PARTITION_BY} needs the value as a real column,
      * so murmur3 is expressed as SQL macros: {@link #ICEBERG_BUCKET_FN} over a long's 8 little-endian
      * bytes, and {@link #ICEBERG_BUCKET_HEX_FN} over arbitrary bytes (a hex string, folded 4 bytes at a
-     * time with {@code list_reduce}, plus the tail). All arithmetic is in {@code HUGEINT} (no 64-bit
-     * overflow) and masked back to 32 bits; NULL in gives NULL out (DuckLake's NULL partition).
+     * time with {@code list_reduce}, plus the tail). All arithmetic is in {@code UBIGINT}: every
+     * intermediate is a 32-bit value times a 32-bit constant, which fits unsigned 64-bit, and unsigned
+     * 64-bit math is several times faster in DuckDB than {@code HUGEINT}. Results are masked to 32
+     * bits; NULL in gives NULL out (DuckLake's NULL partition).
      * Constants: c1=0xcc9e2d51, c2=0x1b873593, 0xe6546b64, fmix 0x85ebca6b / 0xc2b2ae35.
      */
     private static final String[] ICEBERG_BUCKET_MACRO_DDL = {
-            "CREATE OR REPLACE MACRO _dd_m32(x) AS (x::HUGEINT % 4294967296)",
-            "CREATE OR REPLACE MACRO _dd_rotl32(x, r) AS _dd_m32((x::HUGEINT << r) | (x::HUGEINT >> (32 - r)))",
-            "CREATE OR REPLACE MACRO _dd_kmix(k) AS _dd_m32(_dd_m32(_dd_rotl32(_dd_m32(k::HUGEINT * 3432918353), 15)) * 461845907)",
-            "CREATE OR REPLACE MACRO _dd_hstep(h, k) AS _dd_m32(_dd_rotl32(xor(h::HUGEINT, _dd_kmix(k)), 13) * 5 + 3864292196)",
-            "CREATE OR REPLACE MACRO _dd_fm1(h) AS _dd_m32(xor(h::HUGEINT, h::HUGEINT >> 16) * 2246822507)",
-            "CREATE OR REPLACE MACRO _dd_fm2(h) AS _dd_m32(xor(h::HUGEINT, h::HUGEINT >> 13) * 3266489909)",
-            "CREATE OR REPLACE MACRO _dd_fm3(h) AS xor(h::HUGEINT, h::HUGEINT >> 16)",
+            "CREATE OR REPLACE MACRO _dd_m32(x) AS (x & 4294967295::UBIGINT)",
+            "CREATE OR REPLACE MACRO _dd_rotl32(x, r) AS _dd_m32((x << r) | (x >> (32 - r)))",
+            "CREATE OR REPLACE MACRO _dd_kmix(k) AS _dd_m32(_dd_rotl32(_dd_m32(k::UBIGINT * 3432918353::UBIGINT), 15) * 461845907::UBIGINT)",
+            "CREATE OR REPLACE MACRO _dd_hstep(h, k) AS _dd_m32(_dd_rotl32(xor(h::UBIGINT, _dd_kmix(k)), 13) * 5::UBIGINT + 3864292196::UBIGINT)",
+            "CREATE OR REPLACE MACRO _dd_fm1(h) AS _dd_m32(xor(h, h >> 16) * 2246822507::UBIGINT)",
+            "CREATE OR REPLACE MACRO _dd_fm2(h) AS _dd_m32(xor(h, h >> 13) * 3266489909::UBIGINT)",
+            "CREATE OR REPLACE MACRO _dd_fm3(h) AS xor(h, h >> 16)",
             "CREATE OR REPLACE MACRO " + ICEBERG_BUCKET_FN + "(val, n) AS "
                     + "(_dd_fm3(_dd_fm2(_dd_fm1(xor("
-                    + "_dd_hstep(_dd_hstep(0, (val::BIGINT & 4294967295)), ((val::BIGINT >> 32) & 4294967295)), "
-                    + "8::HUGEINT)))) & 2147483647) % n",
+                    + "_dd_hstep(_dd_hstep(0, (val::BIGINT & 4294967295)::UBIGINT), ((val::BIGINT >> 32) & 4294967295)::UBIGINT), "
+                    + "8::UBIGINT)))) & 2147483647) % n",
             // byte i (0-based) of a hex string
-            "CREATE OR REPLACE MACRO _dd_byte(hx, i) AS ('0x' || substr(hx, 2 * i + 1, 2))::INTEGER",
+            "CREATE OR REPLACE MACRO _dd_byte(hx, i) AS ('0x' || substr(hx, 2 * i + 1, 2))::UBIGINT",
             "CREATE OR REPLACE MACRO _dd_murmur3_hex(hx) AS _dd_fm3(_dd_fm2(_dd_fm1(xor(xor("
                     + "list_reduce(list_transform(range(length(hx) // 8), lambda j: "
-                    + "_dd_byte(hx, 4 * j) + _dd_byte(hx, 4 * j + 1) * 256 + _dd_byte(hx, 4 * j + 2) * 65536 "
-                    + "+ _dd_byte(hx, 4 * j + 3)::HUGEINT * 16777216), lambda h, k: _dd_hstep(h, k), 0::HUGEINT), "
-                    + "_dd_kmix(COALESCE(list_sum(list_transform(range((length(hx) // 2) % 4), lambda t: "
-                    + "_dd_byte(hx, (length(hx) // 8) * 4 + t)::HUGEINT * (1 << (8 * t)))), 0))), "
-                    + "(length(hx) // 2)::HUGEINT)))) & 2147483647",
+                    + "_dd_byte(hx, 4 * j) | (_dd_byte(hx, 4 * j + 1) << 8) | (_dd_byte(hx, 4 * j + 2) << 16) "
+                    + "| (_dd_byte(hx, 4 * j + 3) << 24)), lambda h, k: _dd_hstep(h, k), 0::UBIGINT), "
+                    + "_dd_kmix(COALESCE(list_reduce(list_transform(range((length(hx) // 2) % 4), lambda t: "
+                    + "_dd_byte(hx, (length(hx) // 8) * 4 + t) << (8 * t)), lambda a, b: a | b, 0::UBIGINT), 0::UBIGINT))), "
+                    + "(length(hx) // 2)::UBIGINT)))) & 2147483647",
             "CREATE OR REPLACE MACRO " + ICEBERG_BUCKET_HEX_FN + "(hx, n) AS _dd_murmur3_hex(hx) % n"
     };
 
