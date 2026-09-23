@@ -6,6 +6,7 @@ import io.dazzleduck.sql.commons.util.HeaderUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.math.BigInteger;
 import java.sql.SQLException;
 import java.time.Clock;
 import java.time.Duration;
@@ -15,7 +16,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -493,7 +493,7 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
         try (var connection = ConnectionPool.getConnection()) {
             // Collect the raw (column, transform, type) rows first — resolving a bucket() column's hive
             // key needs to know how many earlier columns already used the "bucket" key (disambiguation),
-            // and the column type decides whether the bucket transform is expressible (integers only).
+            // and the column type decides how a bucket() value is encoded for hashing.
             List<String[]> raw = new ArrayList<>();
             ConnectionPool.collectAll(connection, query,
                     rs -> new String[]{rs.getString("column_name"), rs.getString("transform"),
@@ -535,12 +535,9 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
      *   <li><b>identity</b> — the column itself (no projection).</li>
      *   <li><b>year/month/day/hour</b> — DuckDB's scalar of the same name (calendar-component
      *       extraction, matching DuckLake): {@code day("ts") AS "day"}.</li>
-     *   <li><b>bucket(N)</b> on an <b>integer</b> column (int8/16/32/64) — {@link #ICEBERG_BUCKET_FN},
-     *       the murmur3 bucket DuckLake computes natively: {@code _dd_iceberg_bucket("group_id", 4) AS
-     *       "bucket"}. Iceberg promotes every integer width to a long for hashing, so one macro covers
-     *       them all. Bucketing a non-integer column (varchar/decimal/date/…) is rejected here: those
-     *       types hash a different byte encoding that this macro does not yet reproduce (see
-     *       {@link #INTEGER_BUCKET_TYPES}).</li>
+     *   <li><b>bucket(N)</b> — the murmur3 bucket DuckLake computes natively, with the column encoded
+     *       the way DuckLake encodes it for hashing (see {@link #bucketExpression}):
+     *       {@code _dd_iceberg_bucket("group_id", 4) AS "bucket"}.</li>
      * </ul>
      * The hive key follows DuckLake's own directory-naming: the transform's base name on first use
      * ({@code bucket}), suffixed with the column on any later collision ({@code bucket_user_id}), so
@@ -556,16 +553,9 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
         Matcher bucket = BUCKET_TRANSFORM.matcher(fn);
         if (bucket.matches()) {
             int numBuckets = Integer.parseInt(bucket.group(1));
-            if (columnType == null || !INTEGER_BUCKET_TYPES.contains(columnType.toLowerCase(Locale.ROOT))) {
-                throw new IllegalStateException(("bucket() partitioning is only supported on integer "
-                        + "columns (int8/int16/int32/int64), but column '%s' is of type '%s'. Iceberg "
-                        + "hashes other types over a different byte encoding, which this collector does "
-                        + "not yet reproduce.").formatted(columnName, columnType));
-            }
+            String expression = bucketExpression(columnName, columnType, numBuckets);
             String key = hiveKey("bucket", columnName, keyUses);
-            String projection = "%s(%s, %d) AS %s".formatted(ICEBERG_BUCKET_FN,
-                    HeaderUtils.quoteIdentifier(columnName), numBuckets, HeaderUtils.quoteIdentifier(key));
-            return new ResolvedPartition(key, projection);
+            return new ResolvedPartition(key, expression + " AS " + HeaderUtils.quoteIdentifier(key));
         }
 
         // Time transforms: the transform string is the bare function name (year/month/day/hour).
@@ -581,33 +571,93 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
         return use == 1 ? baseKey : baseKey + "_" + columnName;
     }
 
+    /**
+     * SQL computing DuckLake's {@code bucket(N)} value for a column of the given DuckLake
+     * {@code column_type}. DuckLake hashes murmur3_x86_32 over one of three encodings, and the value
+     * written to the hive path must equal it exactly, so each type is mapped to the encoding DuckLake
+     * uses (derived from, and verified against, DuckLake's own bucketing — see the handler tests):
+     * <ul>
+     *   <li><b>64-bit integer</b> ({@link #ICEBERG_BUCKET_FN}) — int8..int64; boolean (1/0); date (days
+     *       since epoch); time (µs since midnight); timetz (DuckDB's packed µs/offset bits); timestamp
+     *       and timestamptz (epoch µs); timestamp_s/_ms/_ns (epoch in their own unit); decimal with
+     *       precision ≤ 18 (the unscaled value).</li>
+     *   <li><b>UTF-8 of the string form</b> ({@link #ICEBERG_BUCKET_HEX_FN}) — varchar, uuid, interval,
+     *       uint8..uint64, int128/uint128, decimal with precision &gt; 18.</li>
+     *   <li><b>raw bytes</b> — blob.</li>
+     * </ul>
+     * float32/float64 are rejected: DuckLake hashes their IEEE-754 bits, which DuckDB SQL cannot
+     * reinterpret exactly (Iceberg disallows bucketing floats for the same reason). Nested and other
+     * types are rejected as well — fail fast rather than register files under the wrong partition.
+     */
+    static String bucketExpression(String columnName, String columnType, int numBuckets) {
+        String col = HeaderUtils.quoteIdentifier(columnName);
+        String type = columnType == null ? "" : columnType.toLowerCase(Locale.ROOT).trim();
+        Matcher decimal = DECIMAL_TYPE.matcher(type);
+        boolean isDecimal = decimal.matches();
+
+        String asLong = switch (type) {
+            case "int8", "int16", "int32", "int64" -> col;
+            case "boolean" -> col + "::BIGINT";
+            case "date" -> "(%s - DATE '1970-01-01')".formatted(col);
+            case "time" -> "epoch_us(DATE '1970-01-01' + %s)".formatted(col);
+            case "timetz" -> ("((epoch_us(DATE '1970-01-01' + %1$s::TIME)::HUGEINT << 24)"
+                    + " | (57599 - date_part('timezone', %1$s)))").formatted(col);
+            case "timestamp", "timestamptz" -> "epoch_us(%s)".formatted(col);
+            case "timestamp_s" -> "(epoch_ms(%s) // 1000)".formatted(col);
+            case "timestamp_ms" -> "epoch_ms(%s)".formatted(col);
+            case "timestamp_ns" -> "epoch_ns(%s)".formatted(col);
+            default -> null;
+        };
+        if (asLong == null && isDecimal && Integer.parseInt(decimal.group(1)) <= 18) {
+            int scale = Integer.parseInt(decimal.group(2));
+            asLong = scale == 0 ? col + "::BIGINT"
+                    : "(%s * %s)::BIGINT".formatted(col, BigInteger.TEN.pow(scale));
+        }
+        if (asLong != null) {
+            return "%s(%s, %d)".formatted(ICEBERG_BUCKET_FN, asLong, numBuckets);
+        }
+
+        String hex = switch (type) {
+            case "blob" -> "hex(%s)".formatted(col);
+            case "varchar", "uuid", "interval", "uint8", "uint16", "uint32", "uint64", "int128", "uint128" ->
+                    "hex(encode(%s::VARCHAR))".formatted(col);
+            default -> isDecimal ? "hex(encode(%s::VARCHAR))".formatted(col) : null;
+        };
+        if (hex != null) {
+            return "%s(%s, %d)".formatted(ICEBERG_BUCKET_HEX_FN, hex, numBuckets);
+        }
+        throw new IllegalStateException(("bucket() partitioning is not supported on column '%s' of type "
+                + "'%s'. Supported: integers, boolean, decimal, date/time/timestamp types, varchar, uuid, "
+                + "interval, blob. Floating-point types are hashed over IEEE-754 bits, which cannot be "
+                + "reproduced exactly in SQL.").formatted(columnName, columnType));
+    }
+
     // -----------------------------------------------------------------------
     // bucket(N) partition transform — murmur3, reproduced as DuckDB SQL macros
     // -----------------------------------------------------------------------
 
-    /** DuckDB scalar macro name for the iceberg/DuckLake {@code bucket(N, col)} transform. */
+    /** Bucket of a value DuckLake hashes as a 64-bit integer: {@code _dd_iceberg_bucket(long, N)}. */
     static final String ICEBERG_BUCKET_FN = "_dd_iceberg_bucket";
+
+    /** Bucket of a value DuckLake hashes as bytes, given as a hex string: {@code _dd_iceberg_bucket_hex(hex, N)}. */
+    static final String ICEBERG_BUCKET_HEX_FN = "_dd_iceberg_bucket_hex";
 
     /** Matches DuckLake's stored {@code bucket(N)} transform, capturing the bucket count. */
     private static final Pattern BUCKET_TRANSFORM = Pattern.compile("bucket\\((\\d+)\\)");
 
-    /**
-     * DuckLake {@code column_type} values for which {@link #ICEBERG_BUCKET_FN} is correct. Iceberg
-     * promotes every integer width to a long before hashing, so the single long-based macro covers
-     * all of them; other types (varchar/decimal/date/…) hash a different byte encoding.
-     */
-    private static final Set<String> INTEGER_BUCKET_TYPES = Set.of("int8", "int16", "int32", "int64");
+    /** Matches a DuckLake {@code decimal(p,s)} column type, capturing precision and scale. */
+    private static final Pattern DECIMAL_TYPE = Pattern.compile("decimal\\((\\d+),\\s*(\\d+)\\)");
 
     private static final AtomicBoolean ICEBERG_BUCKET_MACROS_READY = new AtomicBoolean(false);
 
     /**
-     * Iceberg/DuckLake {@code bucket(N, v)} = {@code (murmur3_x86_32(8-byte little-endian v) &
-     * 0x7fffffff) % N}. DuckDB has no murmur3 builtin and COPY's {@code PARTITION_BY} needs the value
-     * as a real column, so the transform is expressed as SQL macros. All arithmetic is done in
-     * {@code HUGEINT} (to avoid 64-bit overflow) and masked back to 32 bits. Verified equal to
-     * DuckLake's native {@code bucket()} across the long domain (0, snowflake ids, {@code
-     * Long.MAX_VALUE}). Constants: c1=0xcc9e2d51, c2=0x1b873593, 0xe6546b64, fmix 0x85ebca6b /
-     * 0xc2b2ae35.
+     * Iceberg/DuckLake {@code bucket(N, v)} = {@code (murmur3_x86_32(bytes(v)) & 0x7fffffff) % N}.
+     * DuckDB has no murmur3 builtin and COPY's {@code PARTITION_BY} needs the value as a real column,
+     * so murmur3 is expressed as SQL macros: {@link #ICEBERG_BUCKET_FN} over a long's 8 little-endian
+     * bytes, and {@link #ICEBERG_BUCKET_HEX_FN} over arbitrary bytes (a hex string, folded 4 bytes at a
+     * time with {@code list_reduce}, plus the tail). All arithmetic is in {@code HUGEINT} (no 64-bit
+     * overflow) and masked back to 32 bits; NULL in gives NULL out (DuckLake's NULL partition).
+     * Constants: c1=0xcc9e2d51, c2=0x1b873593, 0xe6546b64, fmix 0x85ebca6b / 0xc2b2ae35.
      */
     private static final String[] ICEBERG_BUCKET_MACRO_DDL = {
             "CREATE OR REPLACE MACRO _dd_m32(x) AS (x::HUGEINT % 4294967296)",
@@ -620,7 +670,17 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
             "CREATE OR REPLACE MACRO " + ICEBERG_BUCKET_FN + "(val, n) AS "
                     + "(_dd_fm3(_dd_fm2(_dd_fm1(xor("
                     + "_dd_hstep(_dd_hstep(0, (val::BIGINT & 4294967295)), ((val::BIGINT >> 32) & 4294967295)), "
-                    + "8::HUGEINT)))) & 2147483647) % n"
+                    + "8::HUGEINT)))) & 2147483647) % n",
+            // byte i (0-based) of a hex string
+            "CREATE OR REPLACE MACRO _dd_byte(hx, i) AS ('0x' || substr(hx, 2 * i + 1, 2))::INTEGER",
+            "CREATE OR REPLACE MACRO _dd_murmur3_hex(hx) AS _dd_fm3(_dd_fm2(_dd_fm1(xor(xor("
+                    + "list_reduce(list_transform(range(length(hx) // 8), lambda j: "
+                    + "_dd_byte(hx, 4 * j) + _dd_byte(hx, 4 * j + 1) * 256 + _dd_byte(hx, 4 * j + 2) * 65536 "
+                    + "+ _dd_byte(hx, 4 * j + 3)::HUGEINT * 16777216), lambda h, k: _dd_hstep(h, k), 0::HUGEINT), "
+                    + "_dd_kmix(COALESCE(list_sum(list_transform(range((length(hx) // 2) % 4), lambda t: "
+                    + "_dd_byte(hx, (length(hx) // 8) * 4 + t)::HUGEINT * (1 << (8 * t)))), 0))), "
+                    + "(length(hx) // 2)::HUGEINT)))) & 2147483647",
+            "CREATE OR REPLACE MACRO " + ICEBERG_BUCKET_HEX_FN + "(hx, n) AS _dd_murmur3_hex(hx) % n"
     };
 
     /**
