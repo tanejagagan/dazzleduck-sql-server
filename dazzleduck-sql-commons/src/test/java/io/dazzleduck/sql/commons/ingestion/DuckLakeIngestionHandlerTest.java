@@ -426,7 +426,8 @@ class DuckLakeIngestionHandlerTest {
      * The projected {@code _dd_iceberg_bucket(col, N)} must equal DuckLake's native {@code bucket()}
      * — otherwise files register under the wrong partition and pruning silently drops rows. Ground
      * truth was captured from DuckLake 1.5.5's on-disk {@code bucket=<v>} directories (N=16) across
-     * the long domain, including 0, snowflake ids, and {@code Long.MAX_VALUE}.
+     * the long domain: 0, positives, snowflake ids, {@code Long.MIN/MAX_VALUE}, negatives, and the
+     * int32 boundaries (int columns hash as promoted longs).
      */
     @Test
     void icebergBucketMacroMatchesDuckLakeNativeBucket() throws Exception {
@@ -438,12 +439,86 @@ class DuckLakeIngestionHandlerTest {
                 SELECT count(*) FILTER (WHERE truth <> _dd_iceberg_bucket(g, 16)) AS mismatches
                 FROM (VALUES (0,12),(1,4),(2,4),(3,3),(7,3),(11,7),(42,14),(255,7),(1000000,6),
                              (123456789,1),(1000000000000,12),(361193724270612480,9),
-                             (361193725126246400,5),(9223372036854775807,15)) v(g, truth)
+                             (361193725126246400,5),(9223372036854775807,15),
+                             (-1,8),(-2,5),(-100,14),(2147483647,14),(-2147483648,8),
+                             (-9223372036854775808,5)) v(g, truth)
                 """;
         try (Connection conn = ConnectionPool.getConnection()) {
             long mismatches = ConnectionPool.collectFirst(conn, probe, Long.class);
             assertEquals(0L, mismatches,
                     "_dd_iceberg_bucket must match DuckLake's native bucket(16, ...) for every probe value");
         }
+    }
+
+    /**
+     * Stronger than the static probe above: compares the macro to DuckLake's <em>own</em> bucketing
+     * computed at test time. Inlining is disabled so each row lands in a file whose hive dir carries
+     * the native bucket value; the macro must reproduce it for every value and sign.
+     */
+    @Test
+    void icebergBucketMatchesDuckLakeNativeComputedAtTestTime() throws Exception {
+        String table = "native_bucket_probe";
+        handlerForPartitionedTable("macro_bootstrap2", "bucket(4, id)", "id BIGINT")
+                .getPartitionProjections("macro_bootstrap2");   // register the macros
+
+        try (Connection conn = ConnectionPool.getConnection()) {
+            ConnectionPool.execute(conn,
+                    "CALL %s.set_option('data_inlining_row_limit', 0)".formatted(CATALOG));
+            ConnectionPool.executeBatchInTxn(conn, new String[]{
+                    "CREATE TABLE %s.%s.%s (g BIGINT)".formatted(CATALOG, SCHEMA, table),
+                    "ALTER TABLE %s.%s.%s SET PARTITIONED BY (bucket(16, g))".formatted(CATALOG, SCHEMA, table),
+                    ("INSERT INTO %s.%s.%s VALUES (0),(1),(42),(255),(-1),(-2),(-100),"
+                            + "(2147483647),(-2147483648),(9223372036854775807),(-9223372036854775808),"
+                            + "(361193724270612480)").formatted(CATALOG, SCHEMA, table)
+            });
+            String dataGlob = tempDir.resolve("data").resolve(SCHEMA).resolve(table)
+                    .resolve("**").resolve("*.parquet").toString();
+            String cmp = ("SELECT count(*) FROM ("
+                    + "SELECT g, _dd_iceberg_bucket(g, 16) AS macro, "
+                    + "regexp_extract(filename, 'bucket=([0-9]+)', 1)::BIGINT AS native "
+                    + "FROM read_parquet('%s', filename=true)) WHERE macro <> native").formatted(dataGlob);
+            long mismatches = ConnectionPool.collectFirst(conn, cmp, Long.class);
+            assertEquals(0L, mismatches,
+                    "_dd_iceberg_bucket must equal DuckLake's on-disk native bucket for every value/sign");
+        }
+    }
+
+    @Test
+    void shouldAcceptBucketOnInt32Column() throws Exception {
+        // Iceberg promotes int32 to a long for hashing, so the long-based macro is correct.
+        var factory = handlerForPartitionedTable("int32_bucket_events", "bucket(4, uid)", "uid INTEGER");
+        assertArrayEquals(new String[]{"bucket"}, factory.getPartitionBy("int32_bucket_events"));
+        assertArrayEquals(new String[]{"_dd_iceberg_bucket(\"uid\", 4) AS \"bucket\""},
+                factory.getPartitionProjections("int32_bucket_events"));
+    }
+
+    @Test
+    void shouldRejectBucketOnNonIntegerColumn() throws Exception {
+        // DuckLake accepts bucket() on a varchar column, but Iceberg hashes its bytes differently;
+        // the collector must fail fast with a clear message rather than emit a wrong/failing COPY.
+        String table = "bad_bucket_events";
+        try (Connection conn = ConnectionPool.getConnection()) {
+            ConnectionPool.executeBatchInTxn(conn, new String[]{
+                    "CREATE TABLE %s.%s.%s (id BIGINT, name VARCHAR)".formatted(CATALOG, SCHEMA, table),
+                    "ALTER TABLE %s.%s.%s SET PARTITIONED BY (bucket(4, name))".formatted(CATALOG, SCHEMA, table)
+            });
+        }
+        var mapping = new QueueIdToTableMapping(table, CATALOG, SCHEMA, table, Map.of(), null);
+        // Partitions resolve eagerly on construction, so the unsupported type surfaces there.
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> new DuckLakeIngestionHandler(Map.of(table, mapping)));
+        assertTrue(ex.getMessage().toLowerCase().contains("integer"),
+                "message must explain the integer-only limitation, was: " + ex.getMessage());
+    }
+
+    @Test
+    void shouldDisambiguateCollidingTimeTransforms() throws Exception {
+        // Two day() transforms collide on the "day" key; DuckLake names them day / day_b, and the
+        // handler must match so ducklake_add_data_files accepts the files.
+        var factory = handlerForPartitionedTable("dual_day_events", "day(a), day(b)",
+                "a TIMESTAMP, b TIMESTAMP");
+        assertArrayEquals(new String[]{"day", "day_b"}, factory.getPartitionBy("dual_day_events"));
+        assertArrayEquals(new String[]{"day(\"a\") AS \"day\"", "day(\"b\") AS \"day_b\""},
+                factory.getPartitionProjections("dual_day_events"));
     }
 }

@@ -15,6 +15,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -473,6 +474,7 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
                 SELECT
                     c.column_name,
                     pc.transform,
+                    c.column_type,
                     pc.partition_key_index
                 FROM %1$s.ducklake_table t
                 JOIN %1$s.ducklake_partition_info pi
@@ -489,11 +491,13 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
                 ORDER BY pc.partition_key_index ASC
                 """.formatted(metadataDatabase, table);
         try (var connection = ConnectionPool.getConnection()) {
-            // Collect the raw (column, transform) rows first — resolving a bucket() column's hive key
-            // needs to know how many earlier columns already used the "bucket" key (§ disambiguation).
+            // Collect the raw (column, transform, type) rows first — resolving a bucket() column's hive
+            // key needs to know how many earlier columns already used the "bucket" key (disambiguation),
+            // and the column type decides whether the bucket transform is expressible (integers only).
             List<String[]> raw = new ArrayList<>();
             ConnectionPool.collectAll(connection, query,
-                    rs -> new String[]{rs.getString("column_name"), rs.getString("transform")})
+                    rs -> new String[]{rs.getString("column_name"), rs.getString("transform"),
+                            rs.getString("column_type")})
                     .forEach(raw::add);
             return resolvePartitions(raw);
         } catch (SQLException e) {
@@ -518,7 +522,7 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
         Map<String, Integer> keyUses = new HashMap<>();
         List<ResolvedPartition> partitions = new ArrayList<>(raw.size());
         for (String[] r : raw) {
-            partitions.add(resolvePartition(r[0], r[1], keyUses));
+            partitions.add(resolvePartition(r[0], r[1], r[2], keyUses));
         }
         return partitions;
     }
@@ -531,15 +535,19 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
      *   <li><b>identity</b> — the column itself (no projection).</li>
      *   <li><b>year/month/day/hour</b> — DuckDB's scalar of the same name (calendar-component
      *       extraction, matching DuckLake): {@code day("ts") AS "day"}.</li>
-     *   <li><b>bucket(N)</b> — {@link #ICEBERG_BUCKET_FN}, the murmur3 bucket DuckLake computes
-     *       natively: {@code _dd_iceberg_bucket("group_id", 4) AS "bucket"}.</li>
+     *   <li><b>bucket(N)</b> on an <b>integer</b> column (int8/16/32/64) — {@link #ICEBERG_BUCKET_FN},
+     *       the murmur3 bucket DuckLake computes natively: {@code _dd_iceberg_bucket("group_id", 4) AS
+     *       "bucket"}. Iceberg promotes every integer width to a long for hashing, so one macro covers
+     *       them all. Bucketing a non-integer column (varchar/decimal/date/…) is rejected here: those
+     *       types hash a different byte encoding that this macro does not yet reproduce (see
+     *       {@link #INTEGER_BUCKET_TYPES}).</li>
      * </ul>
      * The hive key follows DuckLake's own directory-naming: the transform's base name on first use
      * ({@code bucket}), suffixed with the column on any later collision ({@code bucket_user_id}), so
      * {@code ducklake_add_data_files} (which matches by hive key name) accepts the written files.
      */
     private static ResolvedPartition resolvePartition(String columnName, String transform,
-                                                      Map<String, Integer> keyUses) {
+                                                      String columnType, Map<String, Integer> keyUses) {
         if (transform == null || transform.isBlank() || transform.equalsIgnoreCase("identity")) {
             return new ResolvedPartition(columnName, null);
         }
@@ -548,6 +556,12 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
         Matcher bucket = BUCKET_TRANSFORM.matcher(fn);
         if (bucket.matches()) {
             int numBuckets = Integer.parseInt(bucket.group(1));
+            if (columnType == null || !INTEGER_BUCKET_TYPES.contains(columnType.toLowerCase(Locale.ROOT))) {
+                throw new IllegalStateException(("bucket() partitioning is only supported on integer "
+                        + "columns (int8/int16/int32/int64), but column '%s' is of type '%s'. Iceberg "
+                        + "hashes other types over a different byte encoding, which this collector does "
+                        + "not yet reproduce.").formatted(columnName, columnType));
+            }
             String key = hiveKey("bucket", columnName, keyUses);
             String projection = "%s(%s, %d) AS %s".formatted(ICEBERG_BUCKET_FN,
                     HeaderUtils.quoteIdentifier(columnName), numBuckets, HeaderUtils.quoteIdentifier(key));
@@ -576,6 +590,13 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
 
     /** Matches DuckLake's stored {@code bucket(N)} transform, capturing the bucket count. */
     private static final Pattern BUCKET_TRANSFORM = Pattern.compile("bucket\\((\\d+)\\)");
+
+    /**
+     * DuckLake {@code column_type} values for which {@link #ICEBERG_BUCKET_FN} is correct. Iceberg
+     * promotes every integer width to a long before hashing, so the single long-based macro covers
+     * all of them; other types (varchar/decimal/date/…) hash a different byte encoding.
+     */
+    private static final Set<String> INTEGER_BUCKET_TYPES = Set.of("int8", "int16", "int32", "int64");
 
     private static final AtomicBoolean ICEBERG_BUCKET_MACROS_READY = new AtomicBoolean(false);
 
