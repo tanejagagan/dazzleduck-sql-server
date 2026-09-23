@@ -10,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
@@ -492,23 +493,75 @@ class DuckLakeIngestionHandlerTest {
                 factory.getPartitionProjections("int32_bucket_events"));
     }
 
-    @Test
-    void shouldRejectBucketOnFloatingPointColumn() throws Exception {
-        // DuckLake hashes a float's IEEE-754 bits, which DuckDB SQL cannot reinterpret exactly; the
-        // collector must fail fast rather than register files under the wrong partition.
-        String table = "float_bucket_events";
+    private void createPartitionedTable(String table, String columnsDdl, String partitionBySpec) throws SQLException {
         try (Connection conn = ConnectionPool.getConnection()) {
             ConnectionPool.executeBatchInTxn(conn, new String[]{
-                    "CREATE TABLE %s.%s.%s (id BIGINT, score DOUBLE)".formatted(CATALOG, SCHEMA, table),
-                    "ALTER TABLE %s.%s.%s SET PARTITIONED BY (bucket(4, score))".formatted(CATALOG, SCHEMA, table)
+                    "CREATE TABLE %s.%s.%s (%s)".formatted(CATALOG, SCHEMA, table, columnsDdl),
+                    "ALTER TABLE %s.%s.%s SET PARTITIONED BY (%s)".formatted(CATALOG, SCHEMA, table, partitionBySpec)
             });
         }
-        var mapping = new QueueIdToTableMapping(table, CATALOG, SCHEMA, table, Map.of(), null);
-        // Partitions resolve eagerly on construction, so the unsupported type surfaces there.
-        IllegalStateException ex = assertThrows(IllegalStateException.class,
-                () -> new DuckLakeIngestionHandler(Map.of(table, mapping)));
+    }
+
+    private QueueIdToTableMapping tableMapping(String table) {
+        return new QueueIdToTableMapping(table, CATALOG, SCHEMA, table, Map.of(), null);
+    }
+
+    /**
+     * An unsupported bucket column (a float: DuckLake hashes its IEEE-754 bits, which SQL cannot
+     * reinterpret exactly) must fail only its own queue. The handler still constructs and every other
+     * queue keeps resolving its partitioning.
+     */
+    @Test
+    void unsupportedBucketColumnFailsOnlyItsOwnQueue() throws Exception {
+        createPartitionedTable("float_bucket_events", "id BIGINT, score DOUBLE", "bucket(4, score)");
+        createPartitionedTable("healthy_bucket_events", "id BIGINT", "bucket(4, id)");
+
+        var handler = assertDoesNotThrow(() -> new DuckLakeIngestionHandler(Map.of(
+                        "float_bucket_events", tableMapping("float_bucket_events"),
+                        "healthy_bucket_events", tableMapping("healthy_bucket_events"))),
+                "one bad table must not prevent the handler from starting");
+
+        // The healthy queue is unaffected.
+        assertArrayEquals(new String[]{"bucket"}, handler.getPartitionBy("healthy_bucket_events"));
+        assertArrayEquals(new String[]{"_dd_iceberg_bucket(\"id\", 4) AS \"bucket\""},
+                handler.getPartitionProjections("healthy_bucket_events"));
+        assertNotNull(handler.getTargetPath("float_bucket_events"), "the bad queue is still known");
+
+        // The bad queue's writes are rejected with a message naming the column and type.
+        var ex = assertThrows(UnsupportedPartitionTransformException.class,
+                () -> handler.getPartitionBy("float_bucket_events"));
         assertTrue(ex.getMessage().contains("score") && ex.getMessage().contains("float64"),
                 "message must name the column and type, was: " + ex.getMessage());
+        assertThrows(UnsupportedPartitionTransformException.class,
+                () -> handler.getPartitionProjections("float_bucket_events"));
+    }
+
+    /**
+     * The same isolation when the partitioning is changed at runtime: the refresh after the ALTER
+     * fails only that queue, and changing the partitioning back recovers it.
+     */
+    @Test
+    void unsupportedPartitioningAddedAtRuntimeFailsOnlyThatQueueAndRecovers() throws Exception {
+        createPartitionedTable("runtime_events", "id BIGINT, score DOUBLE", "bucket(4, id)");
+        createPartitionedTable("bystander_events", "id BIGINT", "bucket(4, id)");
+        var handler = new DuckLakeIngestionHandler(Map.of(
+                "runtime_events", tableMapping("runtime_events"),
+                "bystander_events", tableMapping("bystander_events")), Duration.ZERO); // refresh on every read
+        assertArrayEquals(new String[]{"bucket"}, handler.getPartitionBy("runtime_events"));
+
+        String alter = "ALTER TABLE %s.%s.runtime_events SET PARTITIONED BY (%s)";
+        try (Connection conn = ConnectionPool.getConnection()) {
+            ConnectionPool.execute(conn, alter.formatted(CATALOG, SCHEMA, "bucket(4, score)"));
+        }
+        assertThrows(UnsupportedPartitionTransformException.class, () -> handler.getPartitionBy("runtime_events"));
+        assertArrayEquals(new String[]{"bucket"}, handler.getPartitionBy("bystander_events"),
+                "other queues keep working after one table's partitioning becomes unsupported");
+
+        try (Connection conn = ConnectionPool.getConnection()) {
+            ConnectionPool.execute(conn, alter.formatted(CATALOG, SCHEMA, "bucket(4, id)"));
+        }
+        assertArrayEquals(new String[]{"bucket"}, handler.getPartitionBy("runtime_events"),
+                "fixing the partitioning recovers the queue on the next refresh");
     }
 
     @Test
@@ -572,19 +625,28 @@ class DuckLakeIngestionHandlerTest {
     }
 
     /**
-     * The collector's actual write path for a string bucket column: COPY with the handler's
-     * projections and PARTITION_BY tokens, then ducklake_add_data_files by hive key. Includes a NULL
-     * key, which both sides place in DuckDB's default hive partition. Pruned lookups must return the
-     * right rows.
+     * The collector's actual write path, on a table whose hive keys collide: two bucket columns
+     * ({@code bucket}, {@code bucket_uid}) and two day() columns ({@code day}, {@code day_b}). COPY
+     * with the handler's projections and PARTITION_BY tokens, then ducklake_add_data_files matches
+     * files to the partitioning by hive key name — so this also proves the disambiguated names are the
+     * ones DuckLake expects. Includes a string bucket with multibyte and NULL keys. Pruned lookups on
+     * every partition column must return the right rows.
      */
     @Test
-    void copyWrittenStringBucketFilesRegisterAndPrune() throws Exception {
-        String table = "copy_string_bucket";
-        var factory = handlerForPartitionedTable(table, "bucket(8, name)", "name VARCHAR, n BIGINT");
+    void copyWrittenFilesWithCollidingPartitionKeysRegisterAndPrune() throws Exception {
+        String table = "copy_colliding_keys";
+        var factory = handlerForPartitionedTable(table, "bucket(8, name), bucket(4, uid), day(a), day(b)",
+                "name VARCHAR, uid BIGINT, a TIMESTAMP, b TIMESTAMP, n BIGINT");
+        assertArrayEquals(new String[]{"bucket", "bucket_uid", "day", "day_b"}, factory.getPartitionBy(table));
+
         Path stage = tempDir.resolve("stage");
         try (Connection conn = ConnectionPool.getConnection()) {
-            ConnectionPool.execute(conn, ("COPY (SELECT *, %s FROM (VALUES ('alice', 1), ('bob', 2), (NULL, 3), "
-                    + "('iceberg', 4), ('héllo', 5)) v(name, n)) TO '%s' (FORMAT parquet, PARTITION_BY(%s))")
+            ConnectionPool.execute(conn, ("COPY (SELECT *, %s FROM (VALUES "
+                    + "('alice', 361193724270612480, TIMESTAMP '2026-01-05 10:00', TIMESTAMP '2026-02-20 11:00', 1), "
+                    + "('bob',   42,                 TIMESTAMP '2026-01-15 10:00', TIMESTAMP '2026-03-01 00:00', 2), "
+                    + "(NULL,    -7,                 TIMESTAMP '2026-01-05 23:59', TIMESTAMP '2026-02-20 11:00', 3), "
+                    + "('héllo', 9223372036854775807, TIMESTAMP '2026-01-31 00:00', TIMESTAMP '2026-02-28 12:00', 4)"
+                    + ") v(name, uid, a, b, n)) TO '%s' (FORMAT parquet, PARTITION_BY(%s))")
                     .formatted(String.join(", ", factory.getPartitionProjections(table)), stage,
                             String.join(", ", factory.getPartitionBy(table))));
             ConnectionPool.execute(conn, ("CALL ducklake_add_data_files('%s', '%s', '%s', hive_partitioning => true, "
@@ -592,10 +654,18 @@ class DuckLakeIngestionHandlerTest {
                     .formatted(CATALOG, table, stage.resolve("**").resolve("*.parquet")));
 
             String fq = "%s.%s.%s".formatted(CATALOG, SCHEMA, table);
-            assertEquals(5L, ConnectionPool.collectFirst(conn, "SELECT count(*) FROM " + fq, Long.class));
+            assertEquals(4L, ConnectionPool.collectFirst(conn, "SELECT count(*) FROM " + fq, Long.class));
             assertEquals(2L, ConnectionPool.collectFirst(conn, "SELECT n FROM " + fq + " WHERE name = 'bob'", Long.class));
-            assertEquals(5L, ConnectionPool.collectFirst(conn, "SELECT n FROM " + fq + " WHERE name = 'héllo'", Long.class));
+            assertEquals(4L, ConnectionPool.collectFirst(conn, "SELECT n FROM " + fq + " WHERE name = 'héllo'", Long.class));
             assertEquals(3L, ConnectionPool.collectFirst(conn, "SELECT n FROM " + fq + " WHERE name IS NULL", Long.class));
+            assertEquals(1L, ConnectionPool.collectFirst(conn,
+                    "SELECT n FROM " + fq + " WHERE uid = 361193724270612480", Long.class));
+            assertEquals(3L, ConnectionPool.collectFirst(conn, "SELECT n FROM " + fq + " WHERE uid = -7", Long.class));
+            assertEquals(2L, ConnectionPool.collectFirst(conn,
+                    "SELECT count(*) FROM " + fq + " WHERE b = TIMESTAMP '2026-02-20 11:00'", Long.class));
+            assertEquals(4L, ConnectionPool.collectFirst(conn,
+                    "SELECT n FROM " + fq + " WHERE a = TIMESTAMP '2026-01-31 00:00' AND b = TIMESTAMP '2026-02-28 12:00'",
+                    Long.class));
         }
     }
 

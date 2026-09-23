@@ -72,9 +72,12 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
      * {@code schemaChangeId} is MAX(schema_version) from ducklake_snapshot.
      * It increments only on DDL (CREATE/ALTER TABLE, view changes), not on data ingestion.
      * {@code refreshedAt} is the clock instant when this state was last confirmed/rebuilt.
+     * {@code partitionError} is non-null when the table's partitioning cannot be reproduced by the
+     * COPY path (see {@link UnsupportedPartitionTransformException}); only this queue is affected.
      */
     private record QueueState(String targetPath, String transformation, String[] partitionColumns,
-                               String[] partitionProjections, long schemaChangeId, Instant refreshedAt) {}
+                               String[] partitionProjections, long schemaChangeId, Instant refreshedAt,
+                               String partitionError) {}
 
     /**
      * A resolved partition column: {@code token} is the identifier placed in COPY's
@@ -167,14 +170,26 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
 
     @Override
     public String[] getPartitionBy(String queueId) {
-        QueueState s = getOrRefreshState(queueId);
+        QueueState s = requirePartitionable(getOrRefreshState(queueId));
         return s != null ? s.partitionColumns() : new String[0];
     }
 
     @Override
     public String[] getPartitionProjections(String queueId) {
-        QueueState s = getOrRefreshState(queueId);
+        QueueState s = requirePartitionable(getOrRefreshState(queueId));
         return s != null ? s.partitionProjections() : new String[0];
+    }
+
+    /**
+     * Fails a queue whose table partitioning is unsupported, so its writes are rejected with a clear
+     * message instead of registering unpartitioned (or wrongly partitioned) files. The state is
+     * rebuilt on the next schema change, so fixing the table's partitioning recovers the queue.
+     */
+    private static QueueState requirePartitionable(QueueState s) {
+        if (s != null && s.partitionError() != null) {
+            throw new UnsupportedPartitionTransformException(s.partitionError());
+        }
+        return s;
     }
 
     @Override
@@ -371,7 +386,7 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
                     currentSchemaChangeId, mapping.catalog(), mapping.schema(), mapping.table());
             return new QueueState(existing.targetPath(), existing.transformation(),
                     existing.partitionColumns(), existing.partitionProjections(),
-                    existing.schemaChangeId(), clock.instant());
+                    existing.schemaChangeId(), clock.instant(), existing.partitionError());
         }
         return buildState(mapping, currentSchemaChangeId, clock.instant(), existing == null);
     }
@@ -388,11 +403,20 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
         if (firstBuild) {
             warnIfClaimsColumnMissing(mapping, transformation);
         }
-        List<ResolvedPartition> partitions = fetchPartitions(mapping.catalog(), mapping.schema(), mapping.table());
+        List<ResolvedPartition> partitions;
+        try {
+            partitions = fetchPartitions(mapping.catalog(), mapping.schema(), mapping.table());
+        } catch (UnsupportedPartitionTransformException e) {
+            // Isolate to this queue: the handler (and every other queue) must keep working.
+            logger.error("Queue '{}' ({}.{}.{}) cannot be ingested until its partitioning is changed: {}",
+                    mapping.ingestionQueue(), mapping.catalog(), mapping.schema(), mapping.table(), e.getMessage());
+            return new QueueState(path, transformation, new String[0], new String[0], schemaChangeId, refreshedAt,
+                    e.getMessage());
+        }
         String[] tokens      = partitions.stream().map(ResolvedPartition::token).toArray(String[]::new);
         String[] projections = partitions.stream().map(ResolvedPartition::projection)
                 .filter(java.util.Objects::nonNull).toArray(String[]::new);
-        return new QueueState(path, transformation, tokens, projections, schemaChangeId, refreshedAt);
+        return new QueueState(path, transformation, tokens, projections, schemaChangeId, refreshedAt, null);
     }
 
     /** Convenience overload that fetches schema change ID itself (used at construction time). */
@@ -626,7 +650,7 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
         if (hex != null) {
             return "%s(%s, %d)".formatted(ICEBERG_BUCKET_HEX_FN, hex, numBuckets);
         }
-        throw new IllegalStateException(("bucket() partitioning is not supported on column '%s' of type "
+        throw new UnsupportedPartitionTransformException(("bucket() partitioning is not supported on column '%s' of type "
                 + "'%s'. Supported: integers, boolean, decimal, date/time/timestamp types, varchar, uuid, "
                 + "interval, blob. Floating-point types are hashed over IEEE-754 bits, which cannot be "
                 + "reproduced exactly in SQL.").formatted(columnName, columnType));
