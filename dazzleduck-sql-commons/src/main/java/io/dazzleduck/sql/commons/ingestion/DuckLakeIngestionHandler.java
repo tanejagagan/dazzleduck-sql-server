@@ -11,11 +11,15 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * {@link IngestionHandler} backed by DuckLake metadata.
@@ -485,11 +489,13 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
                 ORDER BY pc.partition_key_index ASC
                 """.formatted(metadataDatabase, table);
         try (var connection = ConnectionPool.getConnection()) {
-            Iterable<ResolvedPartition> rows = ConnectionPool.collectAll(connection, query,
-                    rs -> resolvePartition(rs.getString("column_name"), rs.getString("transform")));
-            List<ResolvedPartition> partitions = new ArrayList<>();
-            rows.forEach(partitions::add);
-            return partitions;
+            // Collect the raw (column, transform) rows first — resolving a bucket() column's hive key
+            // needs to know how many earlier columns already used the "bucket" key (§ disambiguation).
+            List<String[]> raw = new ArrayList<>();
+            ConnectionPool.collectAll(connection, query,
+                    rs -> new String[]{rs.getString("column_name"), rs.getString("transform")})
+                    .forEach(raw::add);
+            return resolvePartitions(raw);
         } catch (SQLException e) {
             logger.atDebug().setCause(e).log("Failed to get partition columns for table {}.{}.{}", catalogName, schema, table);
             return List.of();
@@ -497,20 +503,128 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
     }
 
     /**
-     * Resolves a {@code ducklake_partition_column} row into a {@link ResolvedPartition}. Identity
-     * columns partition by the column directly. Time transforms ({@code year}/{@code month}/{@code
-     * day}/{@code hour}) map to the DuckDB scalar function of the same name; since COPY's
-     * {@code PARTITION_BY} accepts only column names, the transform is projected as a derived column
-     * aliased to the transform name and partitioned by that alias.
+     * Resolves the ordered {@code (column, transform)} rows into partition tokens/projections. When
+     * any column uses a {@code bucket(N)} transform, the murmur3 bucket macros are registered once
+     * (they are needed by the projection). Hive keys are disambiguated the way DuckLake's own writer
+     * names partition directories, because {@code ducklake_add_data_files} matches files to the table's
+     * partitioning by hive key <em>name</em>.
      */
-    private static ResolvedPartition resolvePartition(String columnName, String transform) {
+    private static List<ResolvedPartition> resolvePartitions(List<String[]> raw) {
+        boolean hasBucket = raw.stream().anyMatch(r ->
+                r[1] != null && BUCKET_TRANSFORM.matcher(r[1].toLowerCase(Locale.ROOT)).matches());
+        if (hasBucket) {
+            ensureIcebergBucketMacros();
+        }
+        Map<String, Integer> keyUses = new HashMap<>();
+        List<ResolvedPartition> partitions = new ArrayList<>(raw.size());
+        for (String[] r : raw) {
+            partitions.add(resolvePartition(r[0], r[1], keyUses));
+        }
+        return partitions;
+    }
+
+    /**
+     * Resolves a {@code ducklake_partition_column} row into a {@link ResolvedPartition}. COPY's
+     * {@code PARTITION_BY} accepts only column names, so every non-identity transform is projected as
+     * a derived column aliased to a hive key, and partitioned by that key:
+     * <ul>
+     *   <li><b>identity</b> — the column itself (no projection).</li>
+     *   <li><b>year/month/day/hour</b> — DuckDB's scalar of the same name (calendar-component
+     *       extraction, matching DuckLake): {@code day("ts") AS "day"}.</li>
+     *   <li><b>bucket(N)</b> — {@link #ICEBERG_BUCKET_FN}, the murmur3 bucket DuckLake computes
+     *       natively: {@code _dd_iceberg_bucket("group_id", 4) AS "bucket"}.</li>
+     * </ul>
+     * The hive key follows DuckLake's own directory-naming: the transform's base name on first use
+     * ({@code bucket}), suffixed with the column on any later collision ({@code bucket_user_id}), so
+     * {@code ducklake_add_data_files} (which matches by hive key name) accepts the written files.
+     */
+    private static ResolvedPartition resolvePartition(String columnName, String transform,
+                                                      Map<String, Integer> keyUses) {
         if (transform == null || transform.isBlank() || transform.equalsIgnoreCase("identity")) {
             return new ResolvedPartition(columnName, null);
         }
         String fn = transform.toLowerCase(Locale.ROOT);
+
+        Matcher bucket = BUCKET_TRANSFORM.matcher(fn);
+        if (bucket.matches()) {
+            int numBuckets = Integer.parseInt(bucket.group(1));
+            String key = hiveKey("bucket", columnName, keyUses);
+            String projection = "%s(%s, %d) AS %s".formatted(ICEBERG_BUCKET_FN,
+                    HeaderUtils.quoteIdentifier(columnName), numBuckets, HeaderUtils.quoteIdentifier(key));
+            return new ResolvedPartition(key, projection);
+        }
+
+        // Time transforms: the transform string is the bare function name (year/month/day/hour).
+        String key = hiveKey(fn, columnName, keyUses);
         String projection = "%s(%s) AS %s".formatted(fn,
-                HeaderUtils.quoteIdentifier(columnName), HeaderUtils.quoteIdentifier(fn));
-        return new ResolvedPartition(fn, projection);
+                HeaderUtils.quoteIdentifier(columnName), HeaderUtils.quoteIdentifier(key));
+        return new ResolvedPartition(key, projection);
+    }
+
+    /** DuckLake names the first dir for a transform by its base key, later collisions {@code base_column}. */
+    private static String hiveKey(String baseKey, String columnName, Map<String, Integer> keyUses) {
+        int use = keyUses.merge(baseKey, 1, Integer::sum);
+        return use == 1 ? baseKey : baseKey + "_" + columnName;
+    }
+
+    // -----------------------------------------------------------------------
+    // bucket(N) partition transform — murmur3, reproduced as DuckDB SQL macros
+    // -----------------------------------------------------------------------
+
+    /** DuckDB scalar macro name for the iceberg/DuckLake {@code bucket(N, col)} transform. */
+    static final String ICEBERG_BUCKET_FN = "_dd_iceberg_bucket";
+
+    /** Matches DuckLake's stored {@code bucket(N)} transform, capturing the bucket count. */
+    private static final Pattern BUCKET_TRANSFORM = Pattern.compile("bucket\\((\\d+)\\)");
+
+    private static final AtomicBoolean ICEBERG_BUCKET_MACROS_READY = new AtomicBoolean(false);
+
+    /**
+     * Iceberg/DuckLake {@code bucket(N, v)} = {@code (murmur3_x86_32(8-byte little-endian v) &
+     * 0x7fffffff) % N}. DuckDB has no murmur3 builtin and COPY's {@code PARTITION_BY} needs the value
+     * as a real column, so the transform is expressed as SQL macros. All arithmetic is done in
+     * {@code HUGEINT} (to avoid 64-bit overflow) and masked back to 32 bits. Verified equal to
+     * DuckLake's native {@code bucket()} across the long domain (0, snowflake ids, {@code
+     * Long.MAX_VALUE}). Constants: c1=0xcc9e2d51, c2=0x1b873593, 0xe6546b64, fmix 0x85ebca6b /
+     * 0xc2b2ae35.
+     */
+    private static final String[] ICEBERG_BUCKET_MACRO_DDL = {
+            "CREATE OR REPLACE MACRO _dd_m32(x) AS (x::HUGEINT % 4294967296)",
+            "CREATE OR REPLACE MACRO _dd_rotl32(x, r) AS _dd_m32((x::HUGEINT << r) | (x::HUGEINT >> (32 - r)))",
+            "CREATE OR REPLACE MACRO _dd_kmix(k) AS _dd_m32(_dd_m32(_dd_rotl32(_dd_m32(k::HUGEINT * 3432918353), 15)) * 461845907)",
+            "CREATE OR REPLACE MACRO _dd_hstep(h, k) AS _dd_m32(_dd_rotl32(xor(h::HUGEINT, _dd_kmix(k)), 13) * 5 + 3864292196)",
+            "CREATE OR REPLACE MACRO _dd_fm1(h) AS _dd_m32(xor(h::HUGEINT, h::HUGEINT >> 16) * 2246822507)",
+            "CREATE OR REPLACE MACRO _dd_fm2(h) AS _dd_m32(xor(h::HUGEINT, h::HUGEINT >> 13) * 3266489909)",
+            "CREATE OR REPLACE MACRO _dd_fm3(h) AS xor(h::HUGEINT, h::HUGEINT >> 16)",
+            "CREATE OR REPLACE MACRO " + ICEBERG_BUCKET_FN + "(val, n) AS "
+                    + "(_dd_fm3(_dd_fm2(_dd_fm1(xor("
+                    + "_dd_hstep(_dd_hstep(0, (val::BIGINT & 4294967295)), ((val::BIGINT >> 32) & 4294967295)), "
+                    + "8::HUGEINT)))) & 2147483647) % n"
+    };
+
+    /**
+     * Registers the {@code bucket()} macros once. They are persistent (non-{@code TEMP}) macros, and
+     * {@link ConnectionPool} hands out {@code duplicate()}s of one in-process DuckDB instance, so a
+     * single registration is visible to every ingestion connection — including the one that runs the
+     * COPY later. {@code CREATE OR REPLACE} keeps it idempotent under races.
+     */
+    private static void ensureIcebergBucketMacros() {
+        if (ICEBERG_BUCKET_MACROS_READY.get()) {
+            return;
+        }
+        synchronized (ICEBERG_BUCKET_MACROS_READY) {
+            if (ICEBERG_BUCKET_MACROS_READY.get()) {
+                return;
+            }
+            try (var connection = ConnectionPool.getConnection()) {
+                for (String ddl : ICEBERG_BUCKET_MACRO_DDL) {
+                    ConnectionPool.execute(connection, ddl);
+                }
+                ICEBERG_BUCKET_MACROS_READY.set(true);
+            } catch (SQLException e) {
+                throw new RuntimeException("Failed to register iceberg bucket() partition macros", e);
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
