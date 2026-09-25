@@ -13,8 +13,13 @@ makes it impossible to run this module's tiered compaction (`minor`/`major`/etc.
 against one table — exactly what the N-tier design (see the module README) depends on.
 
 The fix is [`duckdb/ducklake#1453`](https://github.com/duckdb/ducklake/pull/1453) (not merged
-upstream at time of writing), which escalates the conflict check to file granularity. It's
-backported onto `d8a1881e` — the exact DuckLake commit DuckDB `v1.5.5` pins via its own
+upstream at time of writing), which escalates the conflict check to file granularity. Two
+follow-ups are carried alongside it (also unmerged upstream):
+[`duckdb/ducklake#1482`](https://github.com/duckdb/ducklake/pull/1482) detects two concurrent
+deletes that each replace a file's existing delete file (previously both committed and corrupted
+the table), and [`duckdb/ducklake#1484`](https://github.com/duckdb/ducklake/pull/1484) narrows
+compaction-vs-delete conflicts to file granularity too, so a compaction no longer fails whenever
+the table is updated during it. All three are backported onto `d8a1881e` — the exact DuckLake commit DuckDB `v1.5.5` pins via its own
 `.github/config/extensions/ducklake.cmake` — so it's ABI-compatible with the DuckDB build this
 repo's `duckdb.version` (`1.5.5.1`) actually ships. That match was verified directly, not just
 inferred from the pin file:
@@ -35,7 +40,7 @@ select extension_version from duckdb_extensions() where extension_name = 'duckla
 |---|---|
 | Patched source | [`dazzleduck-web/ducklake`](https://github.com/dazzleduck-web/ducklake), branch `backport/1453-file-level-compaction-conflict` |
 | Build + publish workflow | same repo, `.github/workflows/build-and-publish-extension.yml` (manually triggered) |
-| Published binaries | GitHub Releases on that repo, e.g. [`v1.5.5-dazzleduck.1`](https://github.com/dazzleduck-web/ducklake/releases/tag/v1.5.5-dazzleduck.1), assets `ducklake-linux_amd64.duckdb_extension` / `ducklake-linux_arm64.duckdb_extension` |
+| Published binaries | GitHub Releases on that repo, e.g. [`v1.5.5-dazzleduck.2`](https://github.com/dazzleduck-web/ducklake/releases/tag/v1.5.5-dazzleduck.2), assets `ducklake-linux_amd64.duckdb_extension` / `ducklake-linux_arm64.duckdb_extension` |
 | Version pins in this repo | `dazzleduck-sql-ducklake-compactor/pom.xml`: `ducklake.patch.release`, `ducklake.patch.built.for.duckdb.version`, `ducklake.extension.cache.version` |
 | Drift guard | `DuckLakePatchVersionTest` (fails the build if `duckdb.version` diverges from `ducklake.patch.built.for.duckdb.version`, or if `ducklake.extension.cache.version` no longer matches `duckdb.version`'s first three components) |
 | Runtime enablement | Two separate connections need it, both set as a JDBC connection **property** (not a `SET` statement — DuckDB rejects changing it once the instance is running): `RawConnections.java` for the compaction/housekeeping connections, and `src/main/resources/duckdb.properties` for the shared commons singleton `Main.java` runs the startup script against first (`ConnectionPool.executeOnSingleton` has no other hook for connection properties) |
