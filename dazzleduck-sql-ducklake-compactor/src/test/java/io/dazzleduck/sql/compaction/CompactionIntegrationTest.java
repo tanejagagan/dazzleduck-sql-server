@@ -220,4 +220,42 @@ class CompactionIntegrationTest {
 
         assertDoesNotThrow(() -> withSettings.compact(CATALOG, majorWithSettings));
     }
+
+    @Test
+    @Order(8)
+    void housekeepingRewriteDropsDeleteFilesAndKeepsTheRemainingRows() throws Exception {
+        try (Connection conn = ConnectionPool.getConnection()) {
+            ConnectionPool.execute(conn, "CREATE TABLE %s.main.rewrites (id BIGINT)".formatted(CATALOG));
+            ConnectionPool.execute(conn, "INSERT INTO %s.main.rewrites SELECT range FROM range(100)".formatted(CATALOG));
+            // 80% of the file's rows, above the 0.5 threshold below
+            ConnectionPool.execute(conn, "DELETE FROM %s.main.rewrites WHERE id < 80".formatted(CATALOG));
+        }
+        assertTrue(activeDeleteFiles("rewrites") > 0, "the DELETE should have written a delete file");
+
+        CompactionState state = new CompactionState(registry, config.databases(), List.of("minor", "major"));
+        try (Housekeeper housekeeper = new DuckLakeHousekeeper(
+                startupScript, config.snapshotRetention(), List.of(), true, 0.5, state)) {
+            housekeeper.housekeep(CATALOG);
+        }
+
+        assertEquals(0, activeDeleteFiles("rewrites"), "the rewrite should have dropped the delete file");
+        assertEquals(20L, ConnectionPool.collectFirst(
+                "SELECT COUNT(*) FROM %s.main.rewrites".formatted(CATALOG), Long.class));
+        assertEquals(80L, ConnectionPool.collectFirst(
+                "SELECT MIN(id) FROM %s.main.rewrites".formatted(CATALOG), Long.class));
+        Timer timer = registry.find("ducklake.compaction.duration")
+                .tag("type", "housekeeping")
+                .tag("step", "rewrite_deletes")
+                .tag("database", CATALOG)
+                .timer();
+        assertNotNull(timer, "Expected housekeeping timer for step: rewrite_deletes");
+    }
+
+    private static long activeDeleteFiles(String table) throws Exception {
+        return ConnectionPool.collectFirst((
+                "SELECT COUNT(*) FROM %1$s.ducklake_delete_file d JOIN %1$s.ducklake_table t USING (table_id) "
+                        + "WHERE d.end_snapshot IS NULL AND t.end_snapshot IS NULL AND t.table_name = '%2$s'")
+                        .formatted(MD_DATABASE, table),
+                Long.class);
+    }
 }

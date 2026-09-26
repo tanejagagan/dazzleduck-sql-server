@@ -35,6 +35,8 @@ All settings live under the `dazzleduck_sql_compaction` HOCON root in `applicati
 | `housekeeping_frequency` | `5 minutes` | How often to expire snapshots and delete orphaned files |
 | `housekeeping_connection_settings` | `[]` | Raw SQL run on housekeeping's connection right after opening it — independent of any tier |
 | `snapshot_retention` | `15 minutes` | Expire snapshots older than this during housekeeping |
+| `rewrite_deletes_enabled` | `true` | Each housekeeping cycle first runs `ducklake_rewrite_data_files`, rewriting data files with enough deleted rows so their delete files are dropped |
+| `rewrite_delete_threshold` | unset | Fraction (0–1) of a file's rows that must be deleted before it is rewritten; unset uses the catalog's `rewrite_delete_threshold` option (DuckLake default 0.95) |
 | `health_port` | `8080` | Port for the `GET /health` endpoint |
 | `startup_script_provider` | — | How to load the startup SQL (attach catalogs, load extensions) |
 | `config_provider` | — | Optional: overlay config values read from a table (see below) |
@@ -223,7 +225,7 @@ Micrometer metrics are emitted via the logging registry by default:
 
 | Metric | Tags | Description |
 |--------|------|-------------|
-| `ducklake.compaction.duration` | `type` (tier name, or `housekeeping`), `step` (merge/expire/cleanup), `database` | Time per compaction step |
+| `ducklake.compaction.duration` | `type` (tier name, or `housekeeping`), `step` (merge/rewrite_deletes/expire/cleanup), `database` | Time per compaction step |
 | `ducklake.compaction.cycles` | `tier`, `database` | Successful compaction cycles for this tier |
 | `ducklake.compaction.failures` | `type` (tier name, or `housekeeping`), `database` | Cycles that ended in an exception |
 | `ducklake.files.compacted` | `database` | Total files compacted, across all tiers |

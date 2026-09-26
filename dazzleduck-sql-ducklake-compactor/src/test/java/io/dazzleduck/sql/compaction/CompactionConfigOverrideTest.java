@@ -441,4 +441,37 @@ class CompactionConfigOverrideTest {
         assertTrue(e.getMessage().contains("minor"), e.getMessage());
         assertTrue(e.getMessage().contains("key the tiers by name first"), e.getMessage());
     }
+
+    @Test
+    void deleteFileRewriteIsOnByDefaultAndDefersTheThresholdToTheCatalog() throws Exception {
+        CompactionConfig config = resolve(ConfigFactory.parseString(FILE_CONFIG));
+        assertTrue(config.rewriteDeletesEnabled());
+        assertNull(config.rewriteDeleteThreshold(),
+                "unset must mean DuckLake's own rewrite_delete_threshold, not a value baked in here");
+    }
+
+    @Test
+    void deleteFileRewriteSettingsCanComeFromTheTable() throws Exception {
+        insert("compaction.rewrite_deletes_enabled", "false");
+        insert("compaction.rewrite_delete_threshold", "0.5");
+
+        CompactionConfig config = resolve(withProvider("compaction."));
+        assertFalse(config.rewriteDeletesEnabled());
+        assertEquals(0.5, config.rewriteDeleteThreshold());
+    }
+
+    @Test
+    void aRewriteDeleteThresholdOutsideZeroToOneIsRejected() {
+        var e = assertThrows(IllegalArgumentException.class,
+                () -> resolve(ConfigFactory.parseString(FILE_CONFIG + "rewrite_delete_threshold = 1.5\n")));
+        assertTrue(e.getMessage().contains("rewrite_delete_threshold"), e.getMessage());
+    }
+
+    @Test
+    void rewriteSqlPassesTheThresholdOnlyWhenSet() {
+        assertEquals("CALL ducklake_rewrite_data_files('mylake')",
+                DuckLakeHousekeeper.rewriteDataFilesSql("mylake", null));
+        assertEquals("CALL ducklake_rewrite_data_files('mylake', delete_threshold => 0.5)",
+                DuckLakeHousekeeper.rewriteDataFilesSql("mylake", 0.5));
+    }
 }

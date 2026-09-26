@@ -23,9 +23,21 @@ public record CompactionConfig(
         Duration snapshotRetention,
         List<String> housekeepingConnectionSettings,
         int healthPort,
-        int runHistorySize
+        int runHistorySize,
+        boolean rewriteDeletesEnabled,
+        Double rewriteDeleteThreshold
 ) {
     private static final String CONFIG_PATH = "dazzleduck_sql_compaction";
+
+    /**
+     * Delete-file cleanup off, for callers (mostly tests) that only care about compaction tiers.
+     */
+    public CompactionConfig(List<String> databases, List<CompactionTier> tiers, Duration housekeepingFrequency,
+                            Duration snapshotRetention, List<String> housekeepingConnectionSettings,
+                            int healthPort, int runHistorySize) {
+        this(databases, tiers, housekeepingFrequency, snapshotRetention, housekeepingConnectionSettings,
+                healthPort, runHistorySize, false, null);
+    }
     private static final String TIERS_KEY = "compaction_tiers";
 
     public static Config rawConfig(String[] args) throws Exception {
@@ -53,8 +65,26 @@ public record CompactionConfig(
                 c.getStringList("housekeeping_connection_settings"),
                 c.getInt("health_port"),
                 c.hasPath("run_history_size")
-                        ? c.getInt("run_history_size") : CompactionRunLog.DEFAULT_CAPACITY
+                        ? c.getInt("run_history_size") : CompactionRunLog.DEFAULT_CAPACITY,
+                !c.hasPath("rewrite_deletes_enabled") || c.getBoolean("rewrite_deletes_enabled"),
+                rewriteDeleteThreshold(c)
         );
+    }
+
+    /**
+     * {@code null} when unset, so DuckLake falls back to the catalog's own
+     * {@code rewrite_delete_threshold} option (0.95 unless set with {@code ducklake_set_option}).
+     */
+    private static Double rewriteDeleteThreshold(Config c) {
+        if (!c.hasPath("rewrite_delete_threshold")) {
+            return null;
+        }
+        double threshold = c.getDouble("rewrite_delete_threshold");
+        if (threshold < 0 || threshold > 1) {
+            throw new IllegalArgumentException(
+                    "rewrite_delete_threshold must be between 0 and 1, got " + threshold);
+        }
+        return threshold;
     }
 
     /**
