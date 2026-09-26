@@ -10,6 +10,7 @@ import java.sql.Statement;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class DuckLakeHousekeeper implements Housekeeper {
 
@@ -21,6 +22,7 @@ public class DuckLakeHousekeeper implements Housekeeper {
     private final boolean rewriteDeletesEnabled;
     private final Double rewriteDeleteThreshold;
     private final CompactionState metrics;
+    private final AtomicLong filesRewritten = new AtomicLong();
 
     // One real DuckDB instance per database — see RawConnections. Keyed by database, not shared:
     // CompactionService sizes its housekeeping thread pool so different databases' housekeeping runs
@@ -58,8 +60,11 @@ public class DuckLakeHousekeeper implements Housekeeper {
         // they fall out of snapshot retention, like any other retired file.
         if (rewriteDeletesEnabled) {
             try {
-                time("housekeeping", "rewrite_deletes", database,
-                        () -> execute(connection, rewriteDataFilesSql(database, rewriteDeleteThreshold)));
+                time("housekeeping", "rewrite_deletes", database, () -> {
+                    long rewritten = sumFilesProcessed(connection, rewriteDataFilesSql(database, rewriteDeleteThreshold));
+                    filesRewritten.addAndGet(rewritten);
+                    logger.debug("Delete-file rewrite for {} rewrote {} data file(s)", database, rewritten);
+                });
             } catch (Exception e) {
                 logger.error("Delete-file rewrite failed for {}, expiry and cleanup will still run", database, e);
             }
@@ -96,6 +101,28 @@ public class DuckLakeHousekeeper implements Housekeeper {
             Connection opened = RawConnections.open(startupScript, connectionSettings);
             connections.put(database, opened);
             return opened;
+        }
+    }
+
+    /** Data files rewritten by the delete-file rewrite step since this housekeeper was created. */
+    long filesRewritten() {
+        return filesRewritten.get();
+    }
+
+    /** Sums {@code files_processed} over the one-row-per-table result of a DuckLake compaction call. */
+    private static long sumFilesProcessed(Connection connection, String sql) {
+        try (Statement statement = connection.createStatement()) {
+            long processed = 0;
+            if (statement.execute(sql)) {
+                try (var rs = statement.getResultSet()) {
+                    while (rs.next()) {
+                        processed += rs.getLong("files_processed");
+                    }
+                }
+            }
+            return processed;
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
         }
     }
 

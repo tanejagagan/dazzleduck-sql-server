@@ -98,8 +98,14 @@ class CompactionStressTest {
     static final CompactionTier MAJOR = new CompactionTier(
             "major", true, Duration.ofSeconds(1), 32 * 1024L, 4 * 1024 * 1024L, 0, List.of());
 
+    /** Housekeeping's delete-file rewrite threshold; the post-run check uses the same rule. */
+    static final double REWRITE_DELETE_THRESHOLD = 0.3;
+
     @TempDir
     static Path tempDir;
+
+    static Path dataPath;
+    static DuckLakeHousekeeper housekeeper;
 
     static PostgreSQLContainer<?> postgres;
     static String startupScript;
@@ -119,7 +125,7 @@ class CompactionStressTest {
                 .withPassword("duck");
         postgres.start();
 
-        Path dataPath = tempDir.resolve("data");
+        dataPath = tempDir.resolve("data");
         Files.createDirectories(dataPath);
         String connectionString = "host=%s port=%d dbname=ducklake user=duck password=duck".formatted(
                 postgres.getHost(), postgres.getFirstMappedPort());
@@ -145,15 +151,14 @@ class CompactionStressTest {
 
         CompactionConfig config = new CompactionConfig(
                 List.of(CATALOG), List.of(MINOR, MAJOR), Duration.ofSeconds(1), SNAPSHOT_RETENTION,
-                List.of(), 0, 100_000, true, 0.3);
+                List.of(), 0, 100_000, true, REWRITE_DELETE_THRESHOLD);
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         CompactionState state = new CompactionState(registry, config.databases(), List.of("minor", "major"));
         runLog = new CompactionRunLog(config.runHistorySize());
+        housekeeper = new DuckLakeHousekeeper(startupScript, config.snapshotRetention(), List.of(),
+                config.rewriteDeletesEnabled(), config.rewriteDeleteThreshold(), state);
         service = new CompactionService(config, startupScript,
-                new DuckDbTierCompactor(startupScript, state),
-                new DuckLakeHousekeeper(startupScript, config.snapshotRetention(), List.of(),
-                        config.rewriteDeletesEnabled(), config.rewriteDeleteThreshold(), state),
-                state, runLog);
+                new DuckDbTierCompactor(startupScript, state), housekeeper, state, runLog);
 
         // The service and housekeeper log failures instead of throwing, so capture them here.
         errorLog = new ListAppender<>();
@@ -219,11 +224,55 @@ class CompactionStressTest {
             service.runHousekeeping(CATALOG);
         }
 
+        // Every check runs and is reported together, so one failure does not hide the others.
+        List<String> failures = new ArrayList<>();
+        try (Connection connection = RawConnections.open(startupScript, List.of())) {
+            // With writers stopped, the rewrite has had its chance at every file: none should still
+            // carry enough deleted rows to qualify. Same rule as DuckLake's REWRITE_DELETES filter.
+            long unrewritten = scalar(connection, ("SELECT COUNT(*) FROM %1$s.ducklake_delete_file d "
+                    + "JOIN %1$s.ducklake_data_file f USING (data_file_id) "
+                    + "WHERE d.end_snapshot IS NULL AND f.end_snapshot IS NULL AND f.record_count > 0 "
+                    + "AND d.delete_count::DOUBLE / f.record_count >= %2$s").formatted(MD_DATABASE, REWRITE_DELETE_THRESHOLD));
+            if (unrewritten != 0) {
+                failures.add(unrewritten + " data files still have at least " + REWRITE_DELETE_THRESHOLD
+                        + " of their rows deleted after quiescing");
+            }
+
+            // Retired delete files: still referenced by an older snapshot, or already scheduled for
+            // deletion. Once they are older than snapshot_retention, expiry and cleanup must remove
+            // them from storage.
+            List<String> retiredDeleteFiles = strings(connection, ("SELECT path FROM %1$s.ducklake_delete_file "
+                    + "WHERE end_snapshot IS NOT NULL UNION ALL SELECT path FROM %1$s.ducklake_files_scheduled_for_deletion "
+                    + "WHERE path LIKE '%%-delete.parquet'").formatted(MD_DATABASE)).stream()
+                    .map(path -> Path.of(path).getFileName().toString())
+                    .toList();
+            // First pass expires the snapshots that still reference them, second pass deletes them.
+            for (int i = 0; i < 2; i++) {
+                pause(SNAPSHOT_RETENTION.plusSeconds(1).toMillis());
+                service.runHousekeeping(CATALOG);
+            }
+            if (retiredDeleteFiles.isEmpty()) {
+                failures.add("no retired delete files to check, so storage cleanup went untested");
+            }
+            List<String> stillOnDisk = filesOnDisk().stream().filter(retiredDeleteFiles::contains).toList();
+            if (!stillOnDisk.isEmpty()) {
+                failures.add("%d of %d retired delete files are still in storage, e.g. %s".formatted(
+                        stillOnDisk.size(), retiredDeleteFiles.size(), stillOnDisk.subList(0, Math.min(3, stillOnDisk.size()))));
+            }
+            long overdue = scalar(connection, ("SELECT COUNT(*) FROM %s.ducklake_files_scheduled_for_deletion "
+                    + "WHERE schedule_start < now() - INTERVAL '%d seconds'").formatted(MD_DATABASE, SNAPSHOT_RETENTION.toSeconds()));
+            if (overdue != 0) {
+                failures.add(overdue + " files scheduled for deletion are older than snapshot_retention but were not deleted");
+            }
+            count("retired_delete_files.checked", retiredDeleteFiles.size());
+        }
+        if (housekeeper.filesRewritten() == 0) {
+            failures.add("the housekeeping rewrite never rewrote a file");
+        }
+
         classifyLoggedErrors();
         report();
-
-        // Every check runs and is reported together, so one failure does not hide the others.
-        List<String> failures = new ArrayList<>(unexpectedErrors);
+        failures.addAll(0, unexpectedErrors);
         try (Connection connection = RawConnections.open(startupScript, List.of())) {
             // Reads every column of every live file, so a data file deleted while still referenced fails here.
             query(connection, "SELECT SUM(hash(id, writer, version, payload)) FROM " + TABLE);
@@ -555,7 +604,8 @@ class CompactionStressTest {
         new TreeMap<>(counters).forEach((k, v) -> report.append("  ").append(k).append(" = ").append(v).append('\n'));
         outcomes.forEach((k, v) -> report.append("  runs.").append(k).append(" = ").append(v).append('\n'));
         report.append("  files merged: minor = ").append(filesMerged(MINOR))
-                .append(", major = ").append(filesMerged(MAJOR));
+                .append(", major = ").append(filesMerged(MAJOR))
+                .append(", files rewritten by housekeeping = ").append(housekeeper.filesRewritten());
         System.out.println(report);
     }
 
@@ -590,7 +640,30 @@ class CompactionStressTest {
     }
 
     private static void count(String key) {
-        counters.computeIfAbsent(key, k -> new AtomicLong()).incrementAndGet();
+        count(key, 1);
+    }
+
+    private static void count(String key, long delta) {
+        counters.computeIfAbsent(key, k -> new AtomicLong()).addAndGet(delta);
+    }
+
+    private static List<String> strings(Connection connection, String sql) throws SQLException {
+        List<String> values = new ArrayList<>();
+        try (Statement statement = connection.createStatement(); ResultSet rs = statement.executeQuery(sql)) {
+            while (rs.next()) {
+                values.add(rs.getString(1));
+            }
+        }
+        return values;
+    }
+
+    /** File names (not paths) of every file under the catalog's DATA_PATH; DuckLake names are UUIDs. */
+    private static java.util.Set<String> filesOnDisk() throws java.io.IOException {
+        try (var paths = Files.walk(dataPath)) {
+            return paths.filter(Files::isRegularFile)
+                    .map(path -> path.getFileName().toString())
+                    .collect(Collectors.toSet());
+        }
     }
 
     private static void pause(long millis) {
