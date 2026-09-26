@@ -28,6 +28,7 @@
         <!-- Override with -Djib.architecture=arm64 on Apple Silicon -->
         <jib.architecture>amd64</jib.architecture>
         <testcontainer.version>1.21.2</testcontainer.version>
+        <excluded.test.groups>stress</excluded.test.groups>
 
         <!-- Patched DuckLake extension (backports duckdb/ducklake#1453: concurrent compactions on
              disjoint files in the same table falsely conflict) onto d8a1881e, the commit the
@@ -146,6 +147,8 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
+                    <!-- CompactionStressTest runs for a minute; run it with -Pstress -->
+                    <excludedGroups>${excluded.test.groups}</excludedGroups>
                     <argLine>
                         --add-opens=java.base/java.nio=ALL-UNNAMED
                         --add-opens=java.base/sun.nio.ch=ALL-UNNAMED
@@ -279,6 +282,27 @@
           automatically. The metadata is captured on linux/arm64; an amd64 build needs its own
           capture of the amd64 DuckDB .so.
         -->
+        <!-- Runs only CompactionStressTest:
+            ./mvnw test -Pstress -pl dazzleduck-sql-ducklake-compactor
+          Tune it with -Dcompaction.stress.duration=PT5M, -Dcompaction.stress.writers, -Dcompaction.stress.seed,
+          and -Dducklake.extension.path to test a patched DuckLake build. -->
+        <profile>
+            <id>stress</id>
+            <properties>
+                <excluded.test.groups/>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <groups>stress</groups>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
         <profile>
             <id>native</id>
             <build>
