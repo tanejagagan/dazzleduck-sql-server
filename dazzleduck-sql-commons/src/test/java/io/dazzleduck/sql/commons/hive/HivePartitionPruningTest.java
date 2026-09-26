@@ -3,23 +3,17 @@ package io.dazzleduck.sql.commons.hive;
 
 import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.FileStatus;
-import io.dazzleduck.sql.commons.MinioContainerTestUtil;
-import io.minio.MakeBucketArgs;
-import io.minio.MinioClient;
-import io.minio.errors.*;
+import io.dazzleduck.sql.commons.S3MockContainerTestUtil;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.duckdb.DuckDBConnection;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
-import org.testcontainers.containers.MinIOContainer;
+import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
 
 import java.io.IOException;
-import java.net.URI;
-import java.security.InvalidKeyException;
-import java.security.NoSuchAlgorithmException;
 import java.sql.SQLException;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -38,16 +32,13 @@ public class HivePartitionPruningTest {
 
 
     public static Network network = Network.newNetwork();
-    public static MinIOContainer minio =
-            MinioContainerTestUtil.createContainer("minio", network);
-    public static MinioClient minioClient;
+    public static GenericContainer<?> s3mock =
+            S3MockContainerTestUtil.createContainer("s3mock", network);
 
 
     @BeforeAll
-    public static void setup() throws IOException, ServerException, InsufficientDataException, ErrorResponseException, NoSuchAlgorithmException, InvalidKeyException, InvalidResponseException, XmlParserException, InternalException, SQLException {
-        minio.start();
-        minioClient = MinioContainerTestUtil.createClient(minio);
-        minioClient.makeBucket(MakeBucketArgs.builder().bucket(MinioContainerTestUtil.TEST_BUCKET_NAME).build());
+    public static void setup() throws IOException, SQLException {
+        s3mock.start();
         createDuckDBSecret();
         insertDataUsingDuckDB();
     }
@@ -56,18 +47,18 @@ public class HivePartitionPruningTest {
         return String.format("'%s'", input);
     }
     private static void createDuckDBSecret() {
-        var uri = URI.create(minio.getS3URL());
+        var secret = S3MockContainerTestUtil.duckDBSecretForS3Access(s3mock);
         String param = "TYPE s3" +
-        ",KEY_ID " +  quote( minio.getUserName()) +
-                ",SECRET " +  quote(minio.getPassword()) +
-                ",ENDPOINT " +  quote (uri.getHost() + ":" + uri.getPort()) +
+        ",KEY_ID " +  quote(secret.get("KEY_ID")) +
+                ",SECRET " +  quote(secret.get("SECRET")) +
+                ",ENDPOINT " +  quote(secret.get("ENDPOINT")) +
                 ",USE_SSL " +  "false" +
                 ",URL_STYLE " +  "path";
        ConnectionPool.execute(String.format(CREATE_SECRET_SQL, "d", param));
     }
 
     private static void  insertDataUsingDuckDB() throws SQLException, IOException {
-        String path = "s3://" + MinioContainerTestUtil.TEST_BUCKET_NAME + "/hive_table/dt=2024-01-01/p=x/result.parquet";
+        String path = "s3://" + S3MockContainerTestUtil.TEST_BUCKET_NAME + "/hive_table/dt=2024-01-01/p=x/result.parquet";
         ConnectionPool.execute(String.format(INSERT_STATEMENT, path));
     }
 
@@ -104,13 +95,13 @@ public class HivePartitionPruningTest {
 
     @Test
     public void testPruneFileS3() throws SQLException, IOException {
-        String path = "s3://" + MinioContainerTestUtil.TEST_BUCKET_NAME + "/hive_table";
+        String path = "s3://" + S3MockContainerTestUtil.TEST_BUCKET_NAME + "/hive_table";
         assertSize(1, path, "true", partition);
     }
 
     @Test
     public void testPruneFileS3NoPartition() throws SQLException, IOException {
-        String path = "s3://" + MinioContainerTestUtil.TEST_BUCKET_NAME + "/hive_table/dt=2024-01-01/p=x";
+        String path = "s3://" + S3MockContainerTestUtil.TEST_BUCKET_NAME + "/hive_table/dt=2024-01-01/p=x";
         assertSize(1, path, "true", new String[0][0]);
     }
 
