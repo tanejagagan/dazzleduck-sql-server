@@ -1,7 +1,9 @@
 package io.dazzleduck.sql.otel.collector;
 
+import com.typesafe.config.Config;
 import com.typesafe.config.ConfigException;
 import com.typesafe.config.ConfigFactory;
+import io.dazzleduck.sql.common.StartupScriptProvider;
 import io.dazzleduck.sql.otel.collector.config.CollectorConfig;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -20,6 +22,21 @@ class CollectorConfigFailFastTest {
 
     private static CollectorConfig config(String hocon) {
         return new CollectorConfig(ConfigFactory.parseString(hocon));
+    }
+
+    /** The bundled reference.conf underneath, as a real deployment starts with. */
+    private static CollectorConfig withReferenceConf(String hocon) {
+        return new CollectorConfig(ConfigFactory.parseString(hocon).withFallback(ConfigFactory.load()).resolve());
+    }
+
+    @Test
+    void theBundledDefaultConfigStillStarts() {
+        // reference.conf declares an ingestion_task_factory_provider block with no class and no
+        // ingestion_path; that must mean plain Parquet, not a startup failure.
+        var props = withReferenceConf("").toProperties();
+        assertNotNull(props.getIngestionHandler());
+        assertNull(props.getLoginUrl());
+        assertTrue(props.getStartupScript().contains("LOAD arrow"), props.getStartupScript());
     }
 
     // --- ingestion_task_factory_provider ---------------------------------------------------
@@ -72,6 +89,29 @@ class CollectorConfigFailFastTest {
         String location = script.toString().replace("\\", "\\\\");
         assertThrows(IllegalArgumentException.class, () -> config(
                 "otel_collector.startup_script_provider.script_location = \"" + location + "\"").getStartupScript());
+    }
+
+    /** Stands in for a provider that resolves script_location itself, e.g. from S3. */
+    public static class RemoteScriptProvider implements StartupScriptProvider {
+        private Config config;
+
+        @Override
+        public void setConfig(Config config) {
+            this.config = config;
+        }
+
+        @Override
+        public String getStartupScript() {
+            return "-- from " + config.getString("script_location");
+        }
+    }
+
+    @Test
+    void aCustomProviderClassMayUseANonLocalScriptLocation() {
+        String script = withReferenceConf(
+                "otel_collector.startup_script_provider { class = \"" + RemoteScriptProvider.class.getName()
+                        + "\", script_location = \"s3://bucket/startup.sql\" }").getStartupScript();
+        assertEquals("-- from s3://bucket/startup.sql", script);
     }
 
     @Test

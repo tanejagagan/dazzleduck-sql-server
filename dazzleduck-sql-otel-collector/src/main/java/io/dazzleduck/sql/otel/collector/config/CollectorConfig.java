@@ -142,9 +142,11 @@ public class CollectorConfig {
             return config.hasPath(deprecatedPath)
                     ? config.getString(deprecatedPath) : "INSTALL arrow FROM community; LOAD arrow;";
         }
-        // The shared provider skips a script_location that is not a file; here that is an error.
+        // The built-in provider skips a script_location that is not a file; here that is an error.
+        // A custom provider class may resolve script_location differently (S3, classpath), so the
+        // check applies only when no class is configured.
         String locationPath = providerPath + ".script_location";
-        if (config.hasPath(locationPath)) {
+        if (!config.hasPath(providerPath + ".class") && config.hasPath(locationPath)) {
             String location = config.getString(locationPath);
             if (!location.isBlank() && !Files.isRegularFile(Path.of(location))) {
                 throw new IllegalArgumentException(
@@ -194,12 +196,16 @@ public class CollectorConfig {
     }
 
     /**
-     * NOOP (plain Parquet under {@code defaultPath}) only when the block is absent. A block that is
-     * present but fails to load or validate fails startup: falling back to NOOP would write data to
-     * local disk and never register it in the catalog, while the collector looks healthy.
+     * NOOP (plain Parquet under {@code defaultPath}) when no provider is configured: the block is
+     * absent, or — as in the bundled reference.conf — present without {@code class} or
+     * {@code ingestion_path}. A block that configures a provider but fails to load or validate fails
+     * startup: falling back to NOOP would write data to local disk and never register it in the
+     * catalog, while the collector looks healthy.
      */
     private IngestionHandler loadIngestionTaskFactory(String providerKey, String defaultPath) {
-        if (!config.hasPath(CONFIG_PREFIX + "." + providerKey)) {
+        String blockPath = CONFIG_PREFIX + "." + providerKey;
+        if (!config.hasPath(blockPath)
+                || (!config.hasPath(blockPath + ".class") && !config.hasPath(blockPath + ".ingestion_path"))) {
             return new NOOPIngestionTaskFactoryProvider(defaultPath).getIngestionHandler();
         }
         try {
