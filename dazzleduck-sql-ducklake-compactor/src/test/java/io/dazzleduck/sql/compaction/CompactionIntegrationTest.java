@@ -232,7 +232,10 @@ class CompactionIntegrationTest {
         }
         assertTrue(activeDeleteFiles("rewrites") > 0, "the DELETE should have written a delete file");
 
-        CompactionState state = new CompactionState(registry, config.databases(), List.of("minor", "major"));
+        // Own registry: the service's state already registered this database's counters on `registry`,
+        // and Micrometer would hand back those instead of this state's.
+        SimpleMeterRegistry rewriteRegistry = new SimpleMeterRegistry();
+        CompactionState state = new CompactionState(rewriteRegistry, config.databases(), List.of("minor", "major"));
         try (Housekeeper housekeeper = new DuckLakeHousekeeper(
                 startupScript, config.snapshotRetention(), List.of(), true, 0.5, state)) {
             housekeeper.housekeep(CATALOG);
@@ -243,12 +246,15 @@ class CompactionIntegrationTest {
                 "SELECT COUNT(*) FROM %s.main.rewrites".formatted(CATALOG), Long.class));
         assertEquals(80L, ConnectionPool.collectFirst(
                 "SELECT MIN(id) FROM %s.main.rewrites".formatted(CATALOG), Long.class));
-        Timer timer = registry.find("ducklake.compaction.duration")
+        Timer timer = rewriteRegistry.find("ducklake.compaction.duration")
                 .tag("type", "housekeeping")
                 .tag("step", "rewrite_deletes")
                 .tag("database", CATALOG)
                 .timer();
         assertNotNull(timer, "Expected housekeeping timer for step: rewrite_deletes");
+        assertEquals(1.0, rewriteRegistry.get("ducklake.files.rewritten").tag("database", CATALOG).functionCounter().count(),
+                "the one data file with deletes should be counted as rewritten");
+        assertEquals(1L, state.getSnapshot(config.databases()).databases().get(CATALOG).totalFilesRewritten());
     }
 
     private static long activeDeleteFiles(String table) throws Exception {

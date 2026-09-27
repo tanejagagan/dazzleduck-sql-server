@@ -179,7 +179,7 @@ back to file defaults would hide a broken override source.
 
 `GET /health` on `health_port` (default 8080) returns uptime plus per-database stats, with one
 nested object per configured tier (`totalCompactions`, `currentFiles`, `nextExecutionTime`) plus
-whole-catalog totals (`totalFailedCycles`, `totalFilesCompacted`, `lastSuccessTime`,
+whole-catalog totals (`totalFailedCycles`, `totalFilesCompacted`, `totalFilesRewritten`, `lastSuccessTime`,
 `currentTotalFiles`). Note: the status is always `UP` while the process is running — it does not
 reflect failing compaction cycles.
 
@@ -229,5 +229,6 @@ Micrometer metrics are emitted via the logging registry by default:
 | `ducklake.compaction.cycles` | `tier`, `database` | Successful compaction cycles for this tier |
 | `ducklake.compaction.failures` | `type` (tier name, or `housekeeping`), `database` | Cycles that ended in an exception |
 | `ducklake.files.compacted` | `database` | Total files compacted, across all tiers |
+| `ducklake.files.rewritten` | `database` | Total data files rewritten by housekeeping to drop their delete files (`rewrite_deletes` step) |
 | `ducklake.files.total` | `database` | Total active Parquet files |
 | `ducklake.files.by_tier` | `tier`, `database` | Active files in this tier's file-size range |
