@@ -18,6 +18,8 @@ public class DuckLakeHousekeeper implements Housekeeper {
     private final String startupScript;
     private final Duration snapshotRetention;
     private final List<String> connectionSettings;
+    private final boolean rewriteDeletesEnabled;
+    private final Double rewriteDeleteThreshold;
     private final CompactionState metrics;
 
     // One real DuckDB instance per database — see RawConnections. Keyed by database, not shared:
@@ -27,9 +29,22 @@ public class DuckLakeHousekeeper implements Housekeeper {
     private final ConcurrentHashMap<String, Connection> connections = new ConcurrentHashMap<>();
 
     public DuckLakeHousekeeper(String startupScript, Duration snapshotRetention, List<String> connectionSettings, CompactionState metrics) {
+        this(startupScript, snapshotRetention, connectionSettings, false, null, metrics);
+    }
+
+    /**
+     * @param rewriteDeletesEnabled  run {@code ducklake_rewrite_data_files} before expiry, rewriting
+     *                               data files whose rows are mostly deleted so their delete files go away
+     * @param rewriteDeleteThreshold fraction of a file's rows that must be deleted before it is rewritten,
+     *                               or {@code null} to use the catalog's {@code rewrite_delete_threshold}
+     */
+    public DuckLakeHousekeeper(String startupScript, Duration snapshotRetention, List<String> connectionSettings,
+                               boolean rewriteDeletesEnabled, Double rewriteDeleteThreshold, CompactionState metrics) {
         this.startupScript = startupScript;
         this.snapshotRetention = snapshotRetention;
         this.connectionSettings = connectionSettings;
+        this.rewriteDeletesEnabled = rewriteDeletesEnabled;
+        this.rewriteDeleteThreshold = rewriteDeleteThreshold;
         this.metrics = metrics;
     }
 
@@ -38,7 +53,17 @@ public class DuckLakeHousekeeper implements Housekeeper {
         long retentionSeconds = snapshotRetention.toSeconds();
         Connection connection = connectionFor(database);
 
-        // Run steps independently so a failure in expire does not silently skip cleanup
+        // Run steps independently so a failure in one does not silently skip the rest. Rewriting
+        // first means the files it replaces are retired in this cycle and deleted by cleanup once
+        // they fall out of snapshot retention, like any other retired file.
+        if (rewriteDeletesEnabled) {
+            try {
+                time("housekeeping", "rewrite_deletes", database,
+                        () -> execute(connection, rewriteDataFilesSql(database, rewriteDeleteThreshold)));
+            } catch (Exception e) {
+                logger.error("Delete-file rewrite failed for {}, expiry and cleanup will still run", database, e);
+            }
+        }
         try {
             time("housekeeping", "expire", database, () -> execute(connection,
                     "CALL ducklake_expire_snapshots('%s', older_than => now() - INTERVAL '%d seconds')"
@@ -49,6 +74,13 @@ public class DuckLakeHousekeeper implements Housekeeper {
         time("housekeeping", "cleanup", database, () -> execute(connection,
                 "CALL ducklake_cleanup_old_files('%s', older_than => now() - INTERVAL '%d seconds')"
                         .formatted(database, retentionSeconds)));
+    }
+
+    static String rewriteDataFilesSql(String database, Double deleteThreshold) {
+        if (deleteThreshold == null) {
+            return "CALL ducklake_rewrite_data_files('%s')".formatted(database);
+        }
+        return "CALL ducklake_rewrite_data_files('%s', delete_threshold => %s)".formatted(database, deleteThreshold);
     }
 
     private Connection connectionFor(String database) throws SQLException {

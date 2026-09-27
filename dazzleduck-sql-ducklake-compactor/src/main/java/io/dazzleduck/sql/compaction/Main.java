@@ -34,7 +34,8 @@ public class Main {
         CompactionState state = new CompactionState(metrics.registry(), config.databases(), tierNames);
         TierCompactor tierCompactor = new DuckDbTierCompactor(startupScript, state);
         Housekeeper housekeeper = new DuckLakeHousekeeper(
-                startupScript, config.snapshotRetention(), config.housekeepingConnectionSettings(), state);
+                startupScript, config.snapshotRetention(), config.housekeepingConnectionSettings(),
+                config.rewriteDeletesEnabled(), config.rewriteDeleteThreshold(), state);
         CompactionRunLog runLog = new CompactionRunLog(config.runHistorySize());
         CompactionService service = new CompactionService(config, startupScript, tierCompactor, housekeeper, state, runLog);
         HealthServer healthServer = new HealthServer(config.healthPort(), service::getStats, runLog);

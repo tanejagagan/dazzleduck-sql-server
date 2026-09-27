@@ -4,7 +4,7 @@ import java.io.Closeable;
 import java.io.IOException;
 
 public interface Housekeeper extends Closeable {
-    /** Expire old snapshots and delete orphaned S3 files. */
+    /** Rewrite files with many deleted rows, expire old snapshots and delete retired files. */
     void housekeep(String database) throws Exception;
 
     @Override
