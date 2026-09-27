@@ -28,7 +28,11 @@ import java.util.List;
  */
 public class MetricBatchWriter {
 
-    public static void write(List<MetricEntry> entries, VectorSchemaRoot root) {
+    /**
+     * @param writeDescription write each metric's OTLP description; when false the column is NULL on
+     *                         every row, since the description would otherwise repeat per data point
+     */
+    public static void write(List<MetricEntry> entries, VectorSchemaRoot root, boolean writeDescription) {
         root.allocateNew();
 
         VarCharVector nameVec           = (VarCharVector)        root.getVector(OtelMetricSchema.COL_NAME);
@@ -63,7 +67,7 @@ public class MetricBatchWriter {
             switch (metric.getDataCase()) {
                 case GAUGE -> {
                     for (var dp : metric.getGauge().getDataPointsList()) {
-                        writeBase(row, metric, resource, scope, "GAUGE",
+                        writeBase(row, writeDescription, metric, resource, scope, "GAUGE",
                                 dp.getStartTimeUnixNano(), dp.getTimeUnixNano(),
                                 dp.getAttributesList(),
                                 nameVec, descVec, unitVec, typeVec, startVec, timeVec,
@@ -79,7 +83,7 @@ public class MetricBatchWriter {
                     var sum = metric.getSum();
                     String temporality = stripAggPrefix(sum.getAggregationTemporality().name());
                     for (var dp : sum.getDataPointsList()) {
-                        writeBase(row, metric, resource, scope, "SUM",
+                        writeBase(row, writeDescription, metric, resource, scope, "SUM",
                                 dp.getStartTimeUnixNano(), dp.getTimeUnixNano(),
                                 dp.getAttributesList(),
                                 nameVec, descVec, unitVec, typeVec, startVec, timeVec,
@@ -95,7 +99,7 @@ public class MetricBatchWriter {
                     var hist = metric.getHistogram();
                     String temporality = stripAggPrefix(hist.getAggregationTemporality().name());
                     for (var dp : hist.getDataPointsList()) {
-                        writeBase(row, metric, resource, scope, "HISTOGRAM",
+                        writeBase(row, writeDescription, metric, resource, scope, "HISTOGRAM",
                                 dp.getStartTimeUnixNano(), dp.getTimeUnixNano(),
                                 dp.getAttributesList(),
                                 nameVec, descVec, unitVec, typeVec, startVec, timeVec,
@@ -113,7 +117,7 @@ public class MetricBatchWriter {
                     var expHist = metric.getExponentialHistogram();
                     String temporality = stripAggPrefix(expHist.getAggregationTemporality().name());
                     for (var dp : expHist.getDataPointsList()) {
-                        writeBase(row, metric, resource, scope, "EXPONENTIAL_HISTOGRAM",
+                        writeBase(row, writeDescription, metric, resource, scope, "EXPONENTIAL_HISTOGRAM",
                                 dp.getStartTimeUnixNano(), dp.getTimeUnixNano(),
                                 dp.getAttributesList(),
                                 nameVec, descVec, unitVec, typeVec, startVec, timeVec,
@@ -132,7 +136,7 @@ public class MetricBatchWriter {
                 }
                 case SUMMARY -> {
                     for (var dp : metric.getSummary().getDataPointsList()) {
-                        writeBase(row, metric, resource, scope, "SUMMARY",
+                        writeBase(row, writeDescription, metric, resource, scope, "SUMMARY",
                                 dp.getStartTimeUnixNano(), dp.getTimeUnixNano(),
                                 dp.getAttributesList(),
                                 nameVec, descVec, unitVec, typeVec, startVec, timeVec,
@@ -156,7 +160,7 @@ public class MetricBatchWriter {
         root.setRowCount(row);
     }
 
-    private static void writeBase(int row, Metric metric, Resource resource, InstrumentationScope scope,
+    private static void writeBase(int row, boolean writeDescription, Metric metric, Resource resource, InstrumentationScope scope,
                                   String metricType, long startNanos, long timeNanos,
                                   List<KeyValue> attributes,
                                   VarCharVector nameVec, VarCharVector descVec, VarCharVector unitVec,
@@ -164,7 +168,11 @@ public class MetricBatchWriter {
                                   MapColumnWriter attrWriter, MapColumnWriter resAttrWriter,
                                   VarCharVector scopeNameVec, VarCharVector scopeVersionVec) {
         writeVarChar(nameVec, row, metric.getName());
-        writeVarChar(descVec, row, LogRecordConverter.emptyToNull(metric.getDescription()));
+        if (writeDescription) {
+            writeVarChar(descVec, row, LogRecordConverter.emptyToNull(metric.getDescription()));
+        } else {
+            descVec.setNull(row);
+        }
         writeVarChar(unitVec, row, LogRecordConverter.emptyToNull(metric.getUnit()));
         writeVarChar(typeVec, row, metricType);
         if (startNanos > 0) startVec.setSafe(row, startNanos / 1_000_000L); else startVec.setNull(row);

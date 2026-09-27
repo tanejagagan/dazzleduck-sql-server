@@ -253,6 +253,19 @@ public class CollectorConfig {
         return true;
     }
 
+    /** See {@code metrics.write_description} in reference.conf; off unless set. */
+    public boolean getMetricsWriteDescription() {
+        String fullPath = CONFIG_PREFIX + ".metrics.write_description";
+        try {
+            if (config.hasPath(fullPath)) {
+                return config.getBoolean(fullPath);
+            }
+        } catch (Exception e) {
+            log.debug("Error reading {}: {}", fullPath, e.getMessage());
+        }
+        return false;
+    }
+
     public CollectorProperties toProperties() {
         CollectorProperties props = new CollectorProperties();
         props.setGrpcPort(getGrpcPort());
@@ -269,6 +282,7 @@ public class CollectorConfig {
         props.setIngestionConfig(getIngestionConfig());
         props.setVerifySignature(getVerifySignature());
         props.setTempWriteLocation(getTempWriteLocation());
+        props.setMetricsWriteDescription(getMetricsWriteDescription());
         return props;
     }
 

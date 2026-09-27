@@ -33,10 +33,19 @@ public class OtelMetricsService extends MetricsServiceGrpc.MetricsServiceImplBas
 
     private final OtelCollectorMetrics metrics;
     private final OtelServiceBase base;
+    private final boolean writeDescription;
 
     public OtelMetricsService(Path scratchDir, IngestionHandler handler, IngestionConfig ingestionConfig,
                               ScheduledExecutorService flushScheduler, OtelCollectorMetrics metrics) {
+        this(scratchDir, handler, ingestionConfig, flushScheduler, metrics, false);
+    }
+
+    /** @param writeDescription write each metric's OTLP description; otherwise the column is NULL */
+    public OtelMetricsService(Path scratchDir, IngestionHandler handler, IngestionConfig ingestionConfig,
+                              ScheduledExecutorService flushScheduler, OtelCollectorMetrics metrics,
+                              boolean writeDescription) {
         this.metrics = metrics;
+        this.writeDescription = writeDescription;
         this.base = new OtelServiceBase(scratchDir, handler, ingestionConfig, flushScheduler, metrics);
     }
 
@@ -62,7 +71,8 @@ public class OtelMetricsService extends MetricsServiceGrpc.MetricsServiceImplBas
         var sample = metrics.startSample();
 
         try {
-            Path arrowFile = base.writeArrowFile(queueId, entries, OtelMetricSchema.SCHEMA, MetricBatchWriter::write);
+            Path arrowFile = base.writeArrowFile(queueId, entries, OtelMetricSchema.SCHEMA,
+                    (batch, root) -> MetricBatchWriter.write(batch, root, writeDescription));
             base.addBatch(queue, arrowFile).whenComplete(
                     OtelServiceBase.batchCompleteHandler(arrowFile, metricCount, queueId,
                             sample, metrics,
