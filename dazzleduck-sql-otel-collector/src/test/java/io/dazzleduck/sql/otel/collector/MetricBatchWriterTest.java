@@ -1,5 +1,6 @@
 package io.dazzleduck.sql.otel.collector;
 
+import com.typesafe.config.ConfigException;
 import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.otel.collector.config.CollectorConfig;
 import io.dazzleduck.sql.otel.collector.config.CollectorProperties;
@@ -74,6 +75,14 @@ class MetricBatchWriterTest {
         var config = ConfigFactory.parseString("otel_collector.metrics.write_description = true")
                 .withFallback(ConfigFactory.load()).resolve();
         assertTrue(new CollectorConfig(config).toProperties().isMetricsWriteDescription());
+    }
+
+    @Test
+    void aValueThatIsNotABooleanFailsInsteadOfFallingBackToOff() {
+        var config = ConfigFactory.parseString("otel_collector.metrics.write_description = ture")
+                .withFallback(ConfigFactory.load()).resolve();
+        var e = assertThrows(ConfigException.WrongType.class, () -> new CollectorConfig(config).toProperties());
+        assertTrue(e.getMessage().contains("write_description"), e.getMessage());
     }
 
     private static String text(VectorSchemaRoot root, int column, int row) {
