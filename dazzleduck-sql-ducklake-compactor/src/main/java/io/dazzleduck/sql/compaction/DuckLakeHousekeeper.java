@@ -10,7 +10,6 @@ import java.sql.Statement;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicLong;
 
 public class DuckLakeHousekeeper implements Housekeeper {
 
@@ -22,7 +21,6 @@ public class DuckLakeHousekeeper implements Housekeeper {
     private final boolean rewriteDeletesEnabled;
     private final Double rewriteDeleteThreshold;
     private final CompactionState metrics;
-    private final AtomicLong filesRewritten = new AtomicLong();
 
     // One real DuckDB instance per database — see RawConnections. Keyed by database, not shared:
     // CompactionService sizes its housekeeping thread pool so different databases' housekeeping runs
@@ -62,7 +60,7 @@ public class DuckLakeHousekeeper implements Housekeeper {
             try {
                 time("housekeeping", "rewrite_deletes", database, () -> {
                     long rewritten = sumFilesProcessed(connection, rewriteDataFilesSql(database, rewriteDeleteThreshold));
-                    filesRewritten.addAndGet(rewritten);
+                    metrics.addFilesRewritten(database, rewritten);
                     logger.debug("Delete-file rewrite for {} rewrote {} data file(s)", database, rewritten);
                 });
             } catch (Exception e) {
@@ -102,11 +100,6 @@ public class DuckLakeHousekeeper implements Housekeeper {
             connections.put(database, opened);
             return opened;
         }
-    }
-
-    /** Data files rewritten by the delete-file rewrite step since this housekeeper was created. */
-    long filesRewritten() {
-        return filesRewritten.get();
     }
 
     /** Sums {@code files_processed} over the one-row-per-table result of a DuckLake compaction call. */

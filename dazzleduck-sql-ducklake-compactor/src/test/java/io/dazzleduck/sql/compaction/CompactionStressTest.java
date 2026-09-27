@@ -106,6 +106,7 @@ class CompactionStressTest {
 
     static Path dataPath;
     static DuckLakeHousekeeper housekeeper;
+    static CompactionState state;
 
     static PostgreSQLContainer<?> postgres;
     static String startupScript;
@@ -153,7 +154,7 @@ class CompactionStressTest {
                 List.of(CATALOG), List.of(MINOR, MAJOR), Duration.ofSeconds(1), SNAPSHOT_RETENTION,
                 List.of(), 0, 100_000, true, REWRITE_DELETE_THRESHOLD);
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        CompactionState state = new CompactionState(registry, config.databases(), List.of("minor", "major"));
+        state = new CompactionState(registry, config.databases(), List.of("minor", "major"));
         runLog = new CompactionRunLog(config.runHistorySize());
         housekeeper = new DuckLakeHousekeeper(startupScript, config.snapshotRetention(), List.of(),
                 config.rewriteDeletesEnabled(), config.rewriteDeleteThreshold(), state);
@@ -266,7 +267,7 @@ class CompactionStressTest {
             }
             count("retired_delete_files.checked", retiredDeleteFiles.size());
         }
-        if (housekeeper.filesRewritten() == 0) {
+        if (state.getFilesRewritten(CATALOG) == 0) {
             failures.add("the housekeeping rewrite never rewrote a file");
         }
 
@@ -605,7 +606,7 @@ class CompactionStressTest {
         outcomes.forEach((k, v) -> report.append("  runs.").append(k).append(" = ").append(v).append('\n'));
         report.append("  files merged: minor = ").append(filesMerged(MINOR))
                 .append(", major = ").append(filesMerged(MAJOR))
-                .append(", files rewritten by housekeeping = ").append(housekeeper.filesRewritten());
+                .append(", files rewritten by housekeeping = ").append(state.getFilesRewritten(CATALOG));
         System.out.println(report);
     }
 

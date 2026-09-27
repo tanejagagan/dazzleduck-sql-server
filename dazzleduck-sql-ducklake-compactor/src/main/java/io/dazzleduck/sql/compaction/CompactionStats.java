@@ -13,18 +13,19 @@ public record CompactionStats(
             Map<String, Long> tierCompactionCounts,
             long totalFailedCycles,
             long totalFilesCompacted,
+            long totalFilesRewritten,
             Instant lastSuccessTime,
             Map<String, Instant> nextExecutionTimeByTier,
             Map<String, Long> currentTierFileCounts,
             long currentTotalFiles) {
 
         /**
-         * Fills in the one field {@link CompactionState} cannot know, so the seven-component
+         * Fills in the one field {@link CompactionState} cannot know, so the eight-component
          * constructor is spelled out in exactly one place.
          */
         public DatabaseStats withNextExecutionTimeByTier(Map<String, Instant> next) {
             return new DatabaseStats(tierCompactionCounts, totalFailedCycles,
-                    totalFilesCompacted, lastSuccessTime, next,
+                    totalFilesCompacted, totalFilesRewritten, lastSuccessTime, next,
                     currentTierFileCounts, currentTotalFiles);
         }
     }

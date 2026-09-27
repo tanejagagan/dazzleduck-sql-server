@@ -122,6 +122,7 @@ public class HealthServer implements Closeable {
             sb.append("},\n");
             sb.append("      \"totalFailedCycles\": ").append(ds.totalFailedCycles()).append(",\n");
             sb.append("      \"totalFilesCompacted\": ").append(ds.totalFilesCompacted()).append(",\n");
+            sb.append("      \"totalFilesRewritten\": ").append(ds.totalFilesRewritten()).append(",\n");
             sb.append("      \"lastSuccessTime\": ").append(instant(ds.lastSuccessTime())).append(",\n");
             sb.append("      \"currentTotalFiles\": ").append(ds.currentTotalFiles()).append("\n");
             sb.append("    }").append(i < entries.size() - 1 ? "," : "");

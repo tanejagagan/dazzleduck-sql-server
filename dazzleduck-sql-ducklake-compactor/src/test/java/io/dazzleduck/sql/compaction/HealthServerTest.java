@@ -26,7 +26,7 @@ class HealthServerTest {
     // the recorded run and attaches its telemetry.
     private static CompactionStats statsWithTier() {
         var ds = new CompactionStats.DatabaseStats(
-                Map.of("tier", 1L), 0, 5, Instant.now(), Map.of(), Map.of("tier", 3L), 3);
+                Map.of("tier", 1L), 0, 5, 2, Instant.now(), Map.of(), Map.of("tier", 3L), 3);
         return new CompactionStats(Instant.now(), Map.of("db", ds));
     }
 
@@ -55,6 +55,7 @@ class HealthServerTest {
         assertTrue(health.contains("\"telemetry\""), "per-tier telemetry section present");
         assertTrue(health.contains("\"drainFilesPerSec\""), "derived aggregates present");
         assertTrue(health.contains("\"outcome\": \"SUCCESS\""));
+        assertTrue(health.contains("\"totalFilesRewritten\": 2"), "files rewritten by housekeeping reported");
     }
 
     @Test

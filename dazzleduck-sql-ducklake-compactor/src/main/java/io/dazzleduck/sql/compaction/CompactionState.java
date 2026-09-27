@@ -22,6 +22,7 @@ public class CompactionState {
     private static final String FAILURE_COUNT_METRIC = "ducklake.compaction.failures";
     private static final String LAST_SUCCESS_AGE_METRIC = "ducklake.compaction.last_success_age";
     private static final String FILES_COMPACTED_METRIC = "ducklake.files.compacted";
+    private static final String FILES_REWRITTEN_METRIC = "ducklake.files.rewritten";
     private static final String BYTES_COMPACTED_METRIC = "ducklake.bytes.compacted";
     private static final String TIER_FILES_METRIC = "ducklake.files.by_tier";
     private static final String TOTAL_FILES_METRIC = "ducklake.files.total";
@@ -49,6 +50,8 @@ public class CompactionState {
     // Per-database, per-tier successful-cycle counters (also back Micrometer FunctionCounters)
     private final ConcurrentHashMap<String, Map<String, AtomicLong>> tierCounts = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, AtomicLong> filesCompacted = new ConcurrentHashMap<>();
+    // Data files rewritten by housekeeping's delete-file rewrite (ducklake_rewrite_data_files).
+    private final ConcurrentHashMap<String, AtomicLong> filesRewritten = new ConcurrentHashMap<>();
     // Per-database, per-tier cumulative bytes retired (bytes are the real cost driver, per spec).
     private final ConcurrentHashMap<String, Map<String, AtomicLong>> bytesCompacted = new ConcurrentHashMap<>();
     // Per-database, per-failure-class cumulative counters, tagged so opposite failure modes stay distinct.
@@ -186,6 +189,7 @@ public class CompactionState {
 
         AtomicLong total = totalFiles.computeIfAbsent(db, k -> new AtomicLong(0));
         AtomicLong filesCompactedTotal  = filesCompacted.computeIfAbsent(db, k -> new AtomicLong(0));
+        AtomicLong filesRewrittenTotal  = filesRewritten.computeIfAbsent(db, k -> new AtomicLong(0));
         AtomicReference<Instant> lastSuccess =
                 lastSuccessTimes.computeIfAbsent(db, k -> new AtomicReference<>());
         lastRunTimes.computeIfAbsent(db, k -> new AtomicReference<>());
@@ -212,6 +216,11 @@ public class CompactionState {
 
         FunctionCounter.builder(FILES_COMPACTED_METRIC, filesCompactedTotal, AtomicLong::doubleValue)
                 .description("Total Parquet files merged by compaction")
+                .tag("database", db)
+                .register(registry);
+
+        FunctionCounter.builder(FILES_REWRITTEN_METRIC, filesRewrittenTotal, AtomicLong::doubleValue)
+                .description("Total data files rewritten by housekeeping to drop their delete files")
                 .tag("database", db)
                 .register(registry);
 
@@ -255,6 +264,14 @@ public class CompactionState {
 
     public void addFilesCompacted(String db, long delta) {
         if (delta > 0) filesCompacted.computeIfAbsent(db, k -> new AtomicLong(0)).addAndGet(delta);
+    }
+
+    public void addFilesRewritten(String db, long delta) {
+        if (delta > 0) filesRewritten.computeIfAbsent(db, k -> new AtomicLong(0)).addAndGet(delta);
+    }
+
+    public long getFilesRewritten(String db) {
+        return filesRewritten.getOrDefault(db, new AtomicLong(0)).get();
     }
 
     public void addBytesCompacted(String db, String tierName, long delta) {
@@ -369,6 +386,7 @@ public class CompactionState {
                     tierCompactionCounts,
                     getFailureCount(db),
                     filesCompacted.getOrDefault(db, new AtomicLong(0)).get(),
+                    getFilesRewritten(db),
                     getLastSuccessTime(db),
                     Map.of(), // nextExecutionTimeByTier injected by CompactionService
                     currentTierFileCounts,
