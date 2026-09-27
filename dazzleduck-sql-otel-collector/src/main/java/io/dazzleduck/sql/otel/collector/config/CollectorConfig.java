@@ -13,6 +13,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
+import java.net.URI;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.HashMap;
@@ -123,17 +125,38 @@ public class CollectorConfig {
     }
 
     /**
-     * Returns the startup SQL to execute on the singleton DuckDB connection.
-     * Delegates to {@link StartupScriptProvider#load} which reads from the
-     * {@code startup_script_provider} block ({@code content} + {@code script_location}).
-     * Falls back to the deprecated {@code startup_script} string key.
+     * Returns the startup SQL to execute on the singleton DuckDB connection, from the
+     * {@code startup_script_provider} block ({@code content} + {@code script_location}) via
+     * {@link StartupScriptProvider#load}. The deprecated {@code startup_script} string key is used
+     * only when that block is absent.
+     *
+     * <p>Fails rather than falling back when the block is present but cannot produce a script — an
+     * unknown provider class, an undefined {@code ${ENV}} reference, or a {@code script_location}
+     * that is not a readable file — since running without it (e.g. with catalogs never attached)
+     * only surfaces later, far from the cause.
      */
     public String getStartupScript() {
+        String providerPath = CONFIG_PREFIX + "." + StartupScriptProvider.STARTUP_SCRIPT_CONFIG_PREFIX;
+        if (!config.hasPath(providerPath)) {
+            String deprecatedPath = CONFIG_PREFIX + ".startup_script";
+            return config.hasPath(deprecatedPath)
+                    ? config.getString(deprecatedPath) : "INSTALL arrow FROM community; LOAD arrow;";
+        }
+        // The shared provider skips a script_location that is not a file; here that is an error.
+        String locationPath = providerPath + ".script_location";
+        if (config.hasPath(locationPath)) {
+            String location = config.getString(locationPath);
+            if (!location.isBlank() && !Files.isRegularFile(Path.of(location))) {
+                throw new IllegalArgumentException(
+                        "startup_script_provider.script_location is not a readable file: " + location);
+            }
+        }
         try {
             return StartupScriptProvider.load(config.getConfig(CONFIG_PREFIX)).getStartupScript();
+        } catch (RuntimeException e) {
+            throw e;
         } catch (Exception e) {
-            log.warn("Failed to read startup_script_provider, using fallback: {}", e.getMessage());
-            return getString("startup_script", "INSTALL arrow FROM community; LOAD arrow;");
+            throw new IllegalStateException("Failed to load startup_script_provider: " + e.getMessage(), e);
         }
     }
 
@@ -170,7 +193,15 @@ public class CollectorConfig {
         return loadIngestionTaskFactory("ingestion_task_factory_provider", "./otel-output");
     }
 
+    /**
+     * NOOP (plain Parquet under {@code defaultPath}) only when the block is absent. A block that is
+     * present but fails to load or validate fails startup: falling back to NOOP would write data to
+     * local disk and never register it in the catalog, while the collector looks healthy.
+     */
     private IngestionHandler loadIngestionTaskFactory(String providerKey, String defaultPath) {
+        if (!config.hasPath(CONFIG_PREFIX + "." + providerKey)) {
+            return new NOOPIngestionTaskFactoryProvider(defaultPath).getIngestionHandler();
+        }
         try {
             var defaultProvider = new NOOPIngestionTaskFactoryProvider(defaultPath);
             var provider = ConfigBasedProvider.load(
@@ -179,8 +210,7 @@ public class CollectorConfig {
             provider.validate();
             return provider.getIngestionHandler();
         } catch (Exception e) {
-            log.warn("Failed to load {}, using NOOP: {}", providerKey, e.getMessage());
-            return new NOOPIngestionTaskFactoryProvider(defaultPath).getIngestionHandler();
+            throw new IllegalStateException("Failed to load " + providerKey + ": " + e.getMessage(), e);
         }
     }
 
@@ -211,8 +241,28 @@ public class CollectorConfig {
         return getString("secret_key", null);
     }
 
+    /**
+     * Login delegation target, or null when not configured. When set it must be an absolute
+     * {@code http}/{@code https} URL: a value that is not — or not a string — fails startup, since
+     * treating it as unset would silently switch authentication to local users.
+     */
     public String getLoginUrl() {
-        return getString("login_url", null);
+        String fullPath = CONFIG_PREFIX + ".login_url";
+        if (!config.hasPath(fullPath)) {
+            return null;
+        }
+        String value = config.getString(fullPath);
+        URI uri;
+        try {
+            uri = URI.create(value.trim());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("login_url is not a valid URL: '" + value + "'", e);
+        }
+        if (!uri.isAbsolute() || uri.getHost() == null
+                || !("http".equalsIgnoreCase(uri.getScheme()) || "https".equalsIgnoreCase(uri.getScheme()))) {
+            throw new IllegalArgumentException("login_url must be an absolute http(s) URL, got: '" + value + "'");
+        }
+        return value.trim();
     }
 
     public Map<String, String> getUsers() {
