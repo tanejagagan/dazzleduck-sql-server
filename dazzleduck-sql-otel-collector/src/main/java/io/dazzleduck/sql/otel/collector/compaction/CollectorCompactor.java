@@ -68,6 +68,9 @@ public class CollectorCompactor implements Closeable {
     private volatile Statement running;
     // catalog|job -> last run, in catalog then job order.
     private final Map<String, JobStatus> statuses = new ConcurrentHashMap<>();
+    // catalog -> snapshot count, refreshed on the compaction thread after each job run, so status()
+    // never touches the catalog database.
+    private final Map<String, Long> snapshotCounts = new ConcurrentHashMap<>();
 
     public CollectorCompactor(CompactionSettings settings, MeterRegistry registry) {
         this.settings = settings;
@@ -227,13 +230,15 @@ public class CollectorCompactor implements Closeable {
                     (prev == null ? 0 : prev.runs()) + 1,
                     (prev == null ? 0 : prev.failedRuns()) + (outcome == Outcome.OK ? 0 : 1),
                     Instant.now().plus(every)));
+            snapshotCounts.put(catalog, snapshotCount(catalog));
         }
     }
 
     /**
-     * Current status for the {@code /stats} page. Snapshot counts are queried here, on the caller's
-     * thread and a connection of its own, so a page view never waits on the compaction thread; -1
-     * when a catalog cannot be read.
+     * Current status for the {@code /stats} page. Memory only: the health server answers
+     * {@code /health} probes on the same thread, so a page view must never wait on the catalog
+     * database. Snapshot counts are as of each catalog's last job run (absent before its first run,
+     * -1 when it could not be read).
      */
     public Status status() {
         List<JobStatus> jobs = new ArrayList<>();
@@ -244,10 +249,9 @@ public class CollectorCompactor implements Closeable {
             }
         }
         Map<String, Long> snapshots = new LinkedHashMap<>();
-        if (settings.enabled()) {
-            for (String catalog : settings.catalogs()) {
-                snapshots.put(catalog, snapshotCount(catalog));
-            }
+        for (String catalog : settings.catalogs()) {
+            Long count = snapshotCounts.get(catalog);
+            if (count != null) snapshots.put(catalog, count);
         }
         return new Status(settings.enabled(), jobs, snapshots);
     }
@@ -295,7 +299,10 @@ public class CollectorCompactor implements Closeable {
         return message.length() > 300 ? message.substring(0, 300) + "…" : message;
     }
 
-    /** Stops scheduling; waits briefly for a running step, then cancels it. */
+    /**
+     * Stops scheduling; waits briefly for a running step, then cancels it and waits for the cancelled
+     * step to stop, so no step is still running when the caller goes on to close queues.
+     */
     @Override
     public void close() {
         scheduler.shutdown();
@@ -310,6 +317,9 @@ public class CollectorCompactor implements Closeable {
                     }
                 }
                 scheduler.shutdownNow();
+                if (!scheduler.awaitTermination(CLOSE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
+                    log.warn("A compaction step was still running {} after it was cancelled", CLOSE_TIMEOUT);
+                }
             }
         } catch (InterruptedException e) {
             scheduler.shutdownNow();

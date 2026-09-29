@@ -444,7 +444,7 @@ The health server's `/stats` page has a **Compaction** section below the queue t
 - last and next run, outcome (OK, conflict or failed) and duration;
 - files merged and rewritten, for the last run and in total;
 - runs and failed runs;
-- the catalog's snapshot count, read when the page loads;
+- the catalog's snapshot count, as of its last job run (the page itself never queries the catalog);
 - the last error, naming the step that failed.
 
 When compaction is off, the section says so.

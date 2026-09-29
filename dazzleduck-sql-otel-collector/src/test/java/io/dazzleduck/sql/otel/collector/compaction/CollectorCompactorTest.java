@@ -191,6 +191,17 @@ class CollectorCompactorTest {
     }
 
     @Test
+    void statusNeverQueriesTheCatalog() throws Exception {
+        // /health shares the health server's thread with /stats, so status() must stay memory-only:
+        // before any job has run there is no snapshot count, because nothing has read the catalog.
+        var compactor = new CollectorCompactor(settings(Duration.ofMinutes(15), Duration.ofDays(2)), registry);
+        assertTrue(compactor.status().snapshotCounts().isEmpty());
+        compactor.runMinor();
+        assertEquals(scalar("SELECT count(*) FROM %s.ducklake_snapshot".formatted(metadata)),
+                compactor.status().snapshotCounts().get(catalog), "refreshed by the job run");
+    }
+
+    @Test
     void aFailedRunIsRecordedWithItsError() {
         var settings = new CompactionSettings(true, List.of("no_such_catalog"), Duration.ofMinutes(1), 1024,
                 Duration.ofHours(1), Duration.ofMinutes(15), null, false, Duration.ofDays(1), Duration.ofDays(2));
