@@ -87,4 +87,104 @@ class ResultStreamsTest {
         assertEquals(2, readArrowRows(out.toByteArray(), CompressionUtil.CodecType.ZSTD));
         assertTrue(out.size() > 0);
     }
+
+    /** Runs {@code sql} and returns its JSON Lines output; asserts the returned row count. */
+    private static String jsonl(String sql, long expectedRows) throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        try (DuckDBConnection conn = ConnectionPool.getConnection();
+             BufferAllocator allocator = new RootAllocator();
+             ArrowReader reader = ConnectionPool.getReader(conn, allocator, sql, 1024)) {
+            assertEquals(expectedRows, ResultStreams.writeJsonl(reader, out));
+        }
+        return out.toString(StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void writeJsonlWritesOneTypedObjectPerLine() throws Exception {
+        String out = jsonl(SQL, 2);
+        assertEquals("""
+                {"id":1,"name":"a","d":"2020-01-02"}
+                {"id":2,"name":"b","d":"2020-01-03"}
+                """, out, "numbers stay numbers, DATE is ISO-8601, no array and no separators");
+    }
+
+    @Test
+    void writeJsonlTypesEachValueKind() throws Exception {
+        String out = jsonl("""
+                SELECT 42::TINYINT AS ti, 7::SMALLINT AS si, 1234567890123::BIGINT AS bi,
+                       1.5::FLOAT AS f4, 2.25::DOUBLE AS f8, true AS b, NULL::VARCHAR AS n,
+                       'tab' || chr(9) || 'there "quoted"' AS s, from_hex('0102') AS bin,
+                       TIME '12:34:56' AS t, TIMESTAMPTZ '2026-09-29 10:00:00+00' AS tz,
+                       [1, 2, 3] AS list, {'k': 'v', 'n': 1} AS struct
+                """, 1).strip();
+        assertTrue(out.contains("\"ti\":42") && out.contains("\"si\":7") && out.contains("\"bi\":1234567890123"), out);
+        assertTrue(out.contains("\"f4\":1.5") && out.contains("\"f8\":2.25"), out);
+        assertTrue(out.contains("\"b\":true") && out.contains("\"n\":null"), out);
+        assertTrue(out.contains("\"s\":\"tab\\tthere \\\"quoted\\\"\""), "strings are JSON-escaped: " + out);
+        assertTrue(out.contains("\"bin\":\"AQI=\""), "binary is base64: " + out);
+        assertTrue(out.contains("\"t\":\"12:34:56\""), out);
+        assertTrue(out.contains("\"tz\":\"2026-09-29T10:00:00Z\""), "TZ timestamp as ISO-8601 instant: " + out);
+        assertTrue(out.contains("\"list\":[1,2,3]"), "lists are nested JSON: " + out);
+        assertTrue(out.contains("\"struct\":{\"k\":\"v\",\"n\":1}"), "structs are nested JSON: " + out);
+        assertEquals(1, out.split("\n").length, "one line per row");
+    }
+
+    @Test
+    void writeJsonlWritesNothingForAnEmptyResult() throws Exception {
+        assertEquals("", jsonl("SELECT 1 AS id WHERE false", 0));
+    }
+
+    @Test
+    void writeJsonlCoversTimestampDecimalAndMap() throws Exception {
+        String out = jsonl("""
+                SELECT TIMESTAMP '2026-01-02 03:04:05' AS ts, 12.34::DECIMAL(10, 2) AS dc,
+                       123456789012345678901234567890.123::DECIMAL(38, 3) AS big,
+                       5::UTINYINT AS u1, 65535::USMALLINT AS u2, 18446744073709551615::UBIGINT AS u8,
+                       MAP {'a': 1, 'b': 2} AS m, MAP {1: 'x'} AS int_keys
+                """, 1).strip();
+        assertTrue(out.contains("\"ts\":\"2026-01-02T03:04:05\""), "non-TZ TIMESTAMP as ISO-8601: " + out);
+        assertTrue(out.contains("\"dc\":12.34"), "DECIMAL as a JSON number: " + out);
+        assertTrue(out.contains("\"big\":123456789012345678901234567890.123"), "wide DECIMAL keeps full precision: " + out);
+        assertTrue(out.contains("\"u1\":5") && out.contains("\"u2\":65535") && out.contains("\"u8\":18446744073709551615"),
+                "unsigned integers as numbers, without overflow: " + out);
+        assertTrue(out.contains("\"m\":{\"a\":1,\"b\":2}"), "MAP as a JSON object, not an entry array: " + out);
+        assertTrue(out.contains("\"int_keys\":{\"1\":\"x\"}"), "non-string map keys become their text: " + out);
+    }
+
+    @Test
+    void writeJsonlFormatsNestedValuesLikeTopLevelOnes() throws Exception {
+        String out = jsonl("""
+                SELECT {'d': DATE '2026-01-02', 'tz': TIMESTAMPTZ '2026-01-02 03:04:05+00', 'n': NULL::INT} AS s,
+                       [DATE '2026-01-02', NULL] AS dates,
+                       [{'k': 1, 't': TIME '01:02:03'}] AS list_of_structs,
+                       MAP {'when': TIMESTAMP '2026-01-02 03:04:05'} AS map_of_ts,
+                       [[1, 2], [3]] AS nested_lists
+                """, 1).strip();
+        assertTrue(out.contains("\"s\":{\"d\":\"2026-01-02\",\"tz\":\"2026-01-02T03:04:05Z\",\"n\":null}"),
+                "DATE and TZ timestamp inside a struct as ISO-8601, not epoch numbers: " + out);
+        assertTrue(out.contains("\"dates\":[\"2026-01-02\",null]"), "dates inside a list: " + out);
+        assertTrue(out.contains("\"list_of_structs\":[{\"k\":1,\"t\":\"01:02:03\"}]"), out);
+        assertTrue(out.contains("\"map_of_ts\":{\"when\":\"2026-01-02T03:04:05\"}"), out);
+        assertTrue(out.contains("\"nested_lists\":[[1,2],[3]]"), out);
+    }
+
+    @Test
+    void writeJsonlFlushesPerBatchNotPerNestedValue() throws Exception {
+        java.util.concurrent.atomic.AtomicInteger flushes = new java.util.concurrent.atomic.AtomicInteger();
+        java.io.OutputStream counting = new java.io.FilterOutputStream(new ByteArrayOutputStream()) {
+            @Override
+            public void flush() throws IOException {
+                flushes.incrementAndGet();
+                super.flush();
+            }
+        };
+        // 1,000 rows, each with a struct, a list and a map, in one batch.
+        try (DuckDBConnection conn = ConnectionPool.getConnection();
+             BufferAllocator allocator = new RootAllocator();
+             ArrowReader reader = ConnectionPool.getReader(conn, allocator,
+                     "SELECT {'a': range} AS s, [range] AS l, MAP {'k': range} AS m FROM range(1000)", 2048)) {
+            assertEquals(1000, ResultStreams.writeJsonl(reader, counting));
+        }
+        assertTrue(flushes.get() <= 3, "expected a flush per batch plus one on close, got " + flushes.get());
+    }
 }
