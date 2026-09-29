@@ -108,6 +108,7 @@ public class QueryServer implements Closeable {
         Timer.Sample sample = Timer.start(registry);
         String format = "none";
         String outcome = "error";
+        boolean aborted = false;
         try {
             if (closing) {
                 outcome = "unavailable";
@@ -142,11 +143,20 @@ public class QueryServer implements Closeable {
                 return;
             }
             outcome = run(exchange, sql, chosen, codec);
+        } catch (StreamAborted e) {
+            // Rethrown without closing the exchange: the JDK server then drops the connection instead
+            // of ending the chunked body normally, so the client cannot mistake a partial result for
+            // a complete one.
+            aborted = true;
+            outcome = e.outcome;
+            throw e;
         } catch (Exception e) {
             log.error("Query request failed", e);
             sendText(exchange, 500, "Internal error: " + e.getMessage());
         } finally {
-            exchange.close();
+            if (!aborted) {
+                exchange.close();
+            }
             sample.stop(Timer.builder("dazzleduck.otel.query.duration")
                     .description("Local query endpoint requests")
                     .tag("format", format)
@@ -293,28 +303,43 @@ public class QueryServer implements Closeable {
         };
     }
 
+    /** Thrown once a streamed response has failed after its headers were sent; see {@link #handle}. */
+    private static final class StreamAborted extends RuntimeException {
+        final String outcome;
+
+        StreamAborted(String outcome, Throwable cause) {
+            super("Query result stream failed after the response started", cause);
+            this.outcome = outcome;
+        }
+    }
+
     /**
-     * Runs the query and streams the result; returns the outcome tag. Every failure goes through one
-     * path: before the response headers are sent it becomes a 504 (if the timeout fired) or a 500;
-     * after, the status cannot change, so it is only logged and the client sees a cut-off body.
+     * Runs the query and streams the result; returns the outcome tag. Before the response headers
+     * are sent, a failure becomes a 504 (timeout) or 500. After, the status cannot change, so the
+     * connection is aborted instead ({@link StreamAborted}), and the client sees an incomplete
+     * response rather than a short one that looks complete.
+     *
+     * <p>The statement leaves {@link #running} only after its response is sent and its resources
+     * are closed, so {@link #close()} waiting for an empty set really waits for the answer.
      */
     private String run(HttpExchange exchange, String sql, Format format,
                        CompressionUtil.CodecType codec) throws IOException {
         boolean headersSent = false;
-        try (DuckDBConnection connection = ConnectionPool.getConnection();
-             Statement statement = connection.createStatement();
-             BufferAllocator requestAllocator = allocator.newChildAllocator("query", 0, Long.MAX_VALUE)) {
-            running.add(statement);
-            if (closing) {
-                // close() may have cancelled everything just before this registered; do not start.
-                running.remove(statement);
-                sendText(exchange, 503, "Shutting down");
-                return "unavailable";
-            }
-            // The driver cancels execution after this; it does not bound reading a streamed result,
-            // which ends when the client disconnects (the next write fails).
-            statement.setQueryTimeout(timeoutSeconds());
-            try {
+        Statement registered = null;
+        try {
+            try (DuckDBConnection connection = ConnectionPool.getConnection();
+                 Statement statement = connection.createStatement();
+                 BufferAllocator requestAllocator = allocator.newChildAllocator("query", 0, Long.MAX_VALUE)) {
+                registered = statement;
+                running.add(statement);
+                if (closing) {
+                    // close() may have cancelled everything just before this registered; do not start.
+                    sendText(exchange, 503, "Shutting down");
+                    return "unavailable";
+                }
+                // The driver cancels execution after this; it does not bound reading a streamed
+                // result, which ends when the client disconnects (the next write fails).
+                statement.setQueryTimeout(timeoutSeconds());
                 statement.execute("BEGIN TRANSACTION READ ONLY");
                 if (!statement.execute(sql)) {
                     exchange.sendResponseHeaders(200, -1);
@@ -330,30 +355,48 @@ public class QueryServer implements Closeable {
                     });
                     exchange.sendResponseHeaders(200, 0); // chunked: rows stream as they are produced
                     headersSent = true;
-                    try (OutputStream out = exchange.getResponseBody()) {
-                        switch (format) {
-                            case TSV -> ResultStreams.writeTsv(reader, out);
-                            case JSONL -> ResultStreams.writeJsonl(reader, out);
-                            case ARROW -> ResultStreams.writeArrow(reader, out, codec, CommonsCompressionFactory.INSTANCE);
+                    OutputStream body = exchange.getResponseBody();
+                    // The writers close their stream even when they fail; closing the body writes
+                    // the end-of-body chunk, so they get a stream whose close() only flushes.
+                    OutputStream unclosable = new java.io.FilterOutputStream(body) {
+                        @Override
+                        public void write(byte[] b, int off, int len) throws IOException {
+                            out.write(b, off, len);
                         }
+
+                        @Override
+                        public void close() throws IOException {
+                            flush();
+                        }
+                    };
+                    switch (format) {
+                        case TSV -> ResultStreams.writeTsv(reader, unclosable);
+                        case JSONL -> ResultStreams.writeJsonl(reader, unclosable);
+                        case ARROW -> ResultStreams.writeArrow(reader, unclosable, codec, CommonsCompressionFactory.INSTANCE);
                     }
+                    body.close(); // complete: now end the chunked body
                 }
                 return "ok";
-            } finally {
-                running.remove(statement);
             }
         } catch (SQLException | IOException | RuntimeException e) {
             // DuckDB reports a query timeout and a cancel from close() the same way; while not
             // closing, an interrupt can only be the timeout.
             boolean timedOut = !closing && isInterrupt(e);
+            String outcome = timedOut ? "timeout" : "error";
             if (headersSent) {
-                log.warn("Query result stream ended early", e);
-            } else if (timedOut) {
+                log.warn("Query result stream failed after the response started; aborting the connection", e);
+                throw new StreamAborted(outcome, e);
+            }
+            if (timedOut) {
                 sendText(exchange, 504, "Query timed out after " + settings.timeout());
             } else {
                 sendText(exchange, 500, e.getMessage());
             }
-            return timedOut ? "timeout" : "error";
+            return outcome;
+        } finally {
+            if (registered != null) {
+                running.remove(registered);
+            }
         }
     }
 

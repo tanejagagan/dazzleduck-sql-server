@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -228,6 +229,28 @@ class QueryServerTest {
         assertTrue(closeMs < 8_000, "close() cancelled the running query instead of waiting it out: " + closeMs + "ms");
         var response = slow.get(10, java.util.concurrent.TimeUnit.SECONDS);
         assertEquals(500, response.statusCode(), "the cancelled query is answered, not left hanging: " + response.body());
+    }
+
+    @Test
+    void aFailureAfterRowsHaveStreamedAbortsTheResponseInsteadOfEndingItNormally() throws Exception {
+        // The first rows stream out, then error() fails the query partway through. The response has
+        // already started with 200, so it must end as a broken connection, never as a normal
+        // chunked ending that would make the partial result look complete.
+        String sql = "SELECT CASE WHEN range < 200000 THEN range ELSE error('boom') END AS v FROM range(1000000)";
+        HttpResponse<byte[]> response = null;
+        IOException failure = null;
+        try {
+            response = get(sql, "text/tab-separated-values");
+        } catch (IOException e) {
+            failure = e;
+        }
+        if (failure == null) {
+            // Only acceptable if DuckDB failed before any row was sent: then it is an error status.
+            assertNotEquals(200, response.statusCode(), "a failed query must not look like a complete 200: "
+                    + text(response).lines().count() + " lines");
+        }
+        assertEquals("1\n", text(get("SELECT 1 AS n", "text/tab-separated-values")).lines().skip(1)
+                .map(l -> l + "\n").findFirst().orElse(""), "the server keeps working afterwards");
     }
 
     @Test
