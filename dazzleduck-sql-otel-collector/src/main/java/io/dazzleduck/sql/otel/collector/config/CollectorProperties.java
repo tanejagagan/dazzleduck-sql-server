@@ -3,6 +3,7 @@ package io.dazzleduck.sql.otel.collector.config;
 import io.dazzleduck.sql.commons.ingestion.IngestionConfig;
 import io.dazzleduck.sql.commons.ingestion.IngestionHandler;
 import io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider;
+import io.dazzleduck.sql.otel.collector.compaction.CompactionSettings;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
@@ -48,6 +49,17 @@ public class CollectorProperties {
 
     public void setMetricsWriteDescription(boolean metricsWriteDescription) {
         this.metricsWriteDescription = metricsWriteDescription;
+    }
+
+    private CompactionSettings compactionSettings =
+            CompactionSettings.disabled();
+
+    public CompactionSettings getCompactionSettings() {
+        return compactionSettings;
+    }
+
+    public void setCompactionSettings(CompactionSettings compactionSettings) {
+        this.compactionSettings = compactionSettings;
     }
 
     public String getTempWriteLocation() {

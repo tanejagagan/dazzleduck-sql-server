@@ -9,6 +9,7 @@ import io.dazzleduck.sql.commons.ingestion.IngestionConfig;
 import io.dazzleduck.sql.commons.ingestion.IngestionHandler;
 import io.dazzleduck.sql.commons.ingestion.IngestionTaskFactoryProvider;
 import io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider;
+import io.dazzleduck.sql.otel.collector.compaction.CompactionSettings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -319,6 +320,12 @@ public class CollectorConfig {
         return config.hasPath(fullPath) && config.getBoolean(fullPath);
     }
 
+    /** The {@code compaction} block, parsed strictly; disabled when the block is absent. */
+    public CompactionSettings getCompactionSettings() {
+        String path = CONFIG_PREFIX + ".compaction";
+        return config.hasPath(path) ? CompactionSettings.from(config.getConfig(path)) : CompactionSettings.disabled();
+    }
+
     public CollectorProperties toProperties() {
         CollectorProperties props = new CollectorProperties();
         props.setGrpcPort(getGrpcPort());
@@ -336,6 +343,7 @@ public class CollectorConfig {
         props.setVerifySignature(getVerifySignature());
         props.setTempWriteLocation(getTempWriteLocation());
         props.setMetricsWriteDescription(getMetricsWriteDescription());
+        props.setCompactionSettings(getCompactionSettings());
         return props;
     }
 

@@ -1,5 +1,6 @@
 package io.dazzleduck.sql.otel.collector;
 
+import io.dazzleduck.sql.otel.collector.compaction.CollectorCompactor;
 import io.dazzleduck.sql.commons.auth.Validator;
 import io.dazzleduck.sql.commons.ingestion.IngestionHandler;
 import io.dazzleduck.sql.otel.collector.auth.JwtServerInterceptor;
@@ -54,6 +55,7 @@ public class OtelCollectorServer implements Closeable {
     private OtelCollectorMetrics collectorMetrics;
     private CollectorHealth health;
     private HealthServer healthServer;
+    private CollectorCompactor compactor;
     // Scratch directories created by start(); tracked so close() can remove them even when
     // startup fails after creating some but before the corresponding service exists.
     private final List<Path> scratchDirs = new ArrayList<>();
@@ -141,6 +143,10 @@ public class OtelCollectorServer implements Closeable {
             healthServer = new HealthServer(props.getHealthPort(), health, props.getGrpcPort(),
                     statsHandler::getQueueStats);
             healthServer.start();
+            // Last: runs on the same DuckDB instance as ingestion, whose catalogs Main's startup
+            // script has already attached. A no-op unless compaction.enabled is true.
+            compactor = new CollectorCompactor(props.getCompactionSettings(), props.getMeterRegistry());
+            compactor.start();
             health.transitionTo(CollectorHealthStatus.HEALTHY);
             started = true;
 
@@ -216,6 +222,8 @@ public class OtelCollectorServer implements Closeable {
             health.transitionTo(CollectorHealthStatus.MAINTENANCE);
             sleepForGracePeriod();
         }
+        // First, so no maintenance step is still running while queues flush and close.
+        closeQuietly("compactor", compactor);
         if (grpcServer != null) {
             log.info("Shutting down gRPC server...");
             grpcServer.shutdown();
