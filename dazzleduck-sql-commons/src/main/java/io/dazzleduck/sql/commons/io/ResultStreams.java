@@ -52,8 +52,12 @@ import java.nio.channels.Channels;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.List;
+
+import static java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME;
+import static java.time.format.DateTimeFormatter.ISO_LOCAL_TIME;
 
 /**
  * Serializes Arrow query results to a client {@link OutputStream} as Arrow IPC (optionally
@@ -218,8 +222,7 @@ public final class ResultStreams {
             case BIT -> generator.writeBoolean(((BitVector) vector).get(index) != 0);
             case VARCHAR -> generator.writeString(((VarCharVector) vector).getObject(index).toString());
             case VARBINARY -> generator.writeBinary(((VarBinaryVector) vector).get(index));
-            // Dates, times and timestamps (with or without zone) share formatValue's ISO-8601 text;
-            // non-TZ timestamps come out of getObject as LocalDateTime, whose toString is ISO too.
+            // Dates, times and timestamps (with or without zone) share formatValue's ISO-8601 text.
             case DATEDAY, DATEMILLI, TIMESEC, TIMEMILLI, TIMEMICRO, TIMENANO,
                  TIMESTAMPSEC, TIMESTAMPMILLI, TIMESTAMPMICRO, TIMESTAMPNANO,
                  TIMESTAMPSECTZ, TIMESTAMPMILLITZ, TIMESTAMPMICROTZ, TIMESTAMPNANOTZ ->
@@ -327,9 +330,10 @@ public final class ResultStreams {
     }
 
     /**
-     * Formats a single cell as a string. Date/time vectors backed by raw integers are converted to
-     * ISO-8601; all other types fall back to {@code getObject().toString()} (readable for numerics,
-     * strings, booleans, non-TZ timestamps, lists, structs, maps). Null returns {@code null}.
+     * Formats a single cell as a string. Dates, times and timestamps are ISO-8601, always with
+     * seconds ({@code 12:00:00}, {@code 2024-01-01T00:00:00}, {@code 2024-01-01T00:00:00Z}) and only
+     * as many fraction digits as needed; all other types fall back to {@code getObject().toString()}
+     * (readable for numerics, strings, booleans, lists, structs, maps). Null returns {@code null}.
      */
     public static String formatValue(FieldVector vector, int row) {
         if (vector.isNull(row)) {
@@ -340,14 +344,19 @@ public final class ResultStreams {
                     LocalDate.ofEpochDay(((DateDayVector) vector).get(row)).toString();
             case DATEMILLI ->
                     LocalDate.ofEpochDay(((DateMilliVector) vector).get(row) / 86_400_000L).toString();
+            // ISO_LOCAL_TIME / ISO_LOCAL_DATE_TIME always print seconds; toString() drops them when
+            // zero ("12:00", "2024-01-01T00:00"), which breaks clients parsing with a fixed pattern.
             case TIMESEC ->
-                    LocalTime.ofSecondOfDay(((TimeSecVector) vector).get(row)).toString();
+                    ISO_LOCAL_TIME.format(LocalTime.ofSecondOfDay(((TimeSecVector) vector).get(row)));
             case TIMEMILLI ->
-                    LocalTime.ofNanoOfDay((long) ((TimeMilliVector) vector).get(row) * 1_000_000L).toString();
+                    ISO_LOCAL_TIME.format(LocalTime.ofNanoOfDay((long) ((TimeMilliVector) vector).get(row) * 1_000_000L));
             case TIMEMICRO ->
-                    LocalTime.ofNanoOfDay(((TimeMicroVector) vector).get(row) * 1_000L).toString();
+                    ISO_LOCAL_TIME.format(LocalTime.ofNanoOfDay(((TimeMicroVector) vector).get(row) * 1_000L));
             case TIMENANO ->
-                    LocalTime.ofNanoOfDay(((TimeNanoVector) vector).get(row)).toString();
+                    ISO_LOCAL_TIME.format(LocalTime.ofNanoOfDay(((TimeNanoVector) vector).get(row)));
+            // Arrow materializes non-TZ timestamps as LocalDateTime.
+            case TIMESTAMPSEC, TIMESTAMPMILLI, TIMESTAMPMICRO, TIMESTAMPNANO ->
+                    ISO_LOCAL_DATE_TIME.format((LocalDateTime) vector.getObject(row));
             case TIMESTAMPSECTZ ->
                     Instant.ofEpochSecond(((TimeStampSecTZVector) vector).get(row)).toString();
             case TIMESTAMPMILLITZ ->

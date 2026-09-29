@@ -187,4 +187,33 @@ class ResultStreamsTest {
         }
         assertTrue(flushes.get() <= 3, "expected a flush per batch plus one on close, got " + flushes.get());
     }
+
+    @Test
+    void timesAndTimestampsAlwaysIncludeSeconds() throws Exception {
+        // toString() would drop zero seconds ("12:00", "2024-01-01T00:00"), so the width would vary
+        // by row and clients parsing with a fixed pattern would fail on whole-minute values.
+        String sql = """
+                SELECT TIME '12:00:00' AS t, TIMESTAMP '2024-01-01 00:00:00' AS ts, TIMESTAMP '2024-01-01 10:30:00' AS ts2,
+                       TIMESTAMP '2024-01-01 10:30:05.5' AS frac, TIMESTAMPTZ '2024-01-01 00:00:00+00' AS tz,
+                       {'t': TIME '08:00:00', 'ts': TIMESTAMP '2024-01-01 00:00:00'} AS nested,
+                       [TIMESTAMP '2024-01-01 00:00:00'] AS listed
+                """;
+        String json = jsonl(sql, 1).strip();
+        assertTrue(json.contains("\"t\":\"12:00:00\""), json);
+        assertTrue(json.contains("\"ts\":\"2024-01-01T00:00:00\""), json);
+        assertTrue(json.contains("\"ts2\":\"2024-01-01T10:30:00\""), json);
+        assertTrue(json.contains("\"frac\":\"2024-01-01T10:30:05.5\""), "only the fraction digits needed: " + json);
+        assertTrue(json.contains("\"tz\":\"2024-01-01T00:00:00Z\""), json);
+        assertTrue(json.contains("\"nested\":{\"t\":\"08:00:00\",\"ts\":\"2024-01-01T00:00:00\"}"), json);
+        assertTrue(json.contains("\"listed\":[\"2024-01-01T00:00:00\"]"), json);
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        try (DuckDBConnection conn = ConnectionPool.getConnection();
+             BufferAllocator allocator = new RootAllocator();
+             ArrowReader reader = ConnectionPool.getReader(conn, allocator,
+                     "SELECT TIME '12:00:00' AS t, TIMESTAMP '2024-01-01 00:00:00' AS ts", 1024)) {
+            ResultStreams.writeTsv(reader, out);
+        }
+        assertEquals("t\tts\n12:00:00\t2024-01-01T00:00:00\n", out.toString(StandardCharsets.UTF_8), "TSV too");
+    }
 }
