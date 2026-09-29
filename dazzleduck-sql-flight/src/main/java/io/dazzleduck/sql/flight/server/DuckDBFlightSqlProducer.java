@@ -1438,7 +1438,10 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         var databaseSchema = getDatabaseSchema(context, accessMode);
         String dbSchema = format("%s.%s", databaseSchema.database, databaseSchema.schema);
         List<String> sqls = new ArrayList<>();
-        sqls.add(format("USE %s", dbSchema));
+        // Quoted: database and schema come from client headers in every mode except RESTRICTED, and
+        // the setup batch runs every statement in a string, so an unquoted value such as
+        // "memory.main; DELETE FROM t; USE memory" would run the DELETE before any authorization.
+        sqls.add(format("USE %s.%s", quoteIdentifier(databaseSchema.database), quoteIdentifier(databaseSchema.schema)));
         // Session variables are read only from the verified (signed) claims, never from client
         // headers, so they cannot be overridden per-request. Applied as SET VARIABLE so queries and
         // injected RLS filters can read them via getvariable('name'). A malformed claim throws here
@@ -1466,6 +1469,11 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
     protected static List<String> sessionSetupSqls(CallContext context) {
         return SessionVariables.toSetStatements(
                 getVerifiedClaims(context).get(Headers.CLAIM_SESSION_VARIABLES));
+    }
+
+    /** A SQL identifier in double quotes, with embedded quotes doubled, so it can only name an object. */
+    static String quoteIdentifier(String identifier) {
+        return '"' + identifier.replace("\"", "\"\"") + '"';
     }
 
     protected static DatabaseSchema getDatabaseSchema(CallContext context, AccessMode accessMode){

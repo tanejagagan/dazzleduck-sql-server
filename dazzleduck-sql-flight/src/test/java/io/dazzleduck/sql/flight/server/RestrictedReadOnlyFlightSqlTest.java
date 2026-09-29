@@ -187,4 +187,13 @@ public class RestrictedReadOnlyFlightSqlTest {
         assertThrows(FlightRuntimeException.class,
                 () -> filteredClient.flightSqlClient().getExecuteSchema("SELECT * FROM rro_orders"));
     }
+
+    @Test
+    void executeUpdateIsBlocked() throws Exception {
+        // executeUpdate goes through acceptPutStatement, which bypasses the SELECT-only query path.
+        assertThrows(FlightRuntimeException.class, () ->
+                noFilterClient.flightSqlClient().executeUpdate("DELETE FROM rro_orders"));
+        assertEquals(4L, ConnectionPool.collectFirst("SELECT count(*) FROM rro_orders", Long.class),
+                "no rows were deleted");
+    }
 }
