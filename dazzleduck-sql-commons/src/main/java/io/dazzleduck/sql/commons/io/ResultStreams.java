@@ -1,8 +1,20 @@
 package io.dazzleduck.sql.commons.io;
 
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.JsonGenerator;
+import com.fasterxml.jackson.core.io.SerializedString;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import org.apache.arrow.vector.BigIntVector;
+import org.apache.arrow.vector.BitVector;
 import org.apache.arrow.vector.DateDayVector;
 import org.apache.arrow.vector.DateMilliVector;
 import org.apache.arrow.vector.FieldVector;
+import org.apache.arrow.vector.Float4Vector;
+import org.apache.arrow.vector.Float8Vector;
+import org.apache.arrow.vector.IntVector;
+import org.apache.arrow.vector.SmallIntVector;
 import org.apache.arrow.vector.TimeMicroVector;
 import org.apache.arrow.vector.TimeMilliVector;
 import org.apache.arrow.vector.TimeNanoVector;
@@ -11,6 +23,9 @@ import org.apache.arrow.vector.TimeStampMicroTZVector;
 import org.apache.arrow.vector.TimeStampMilliTZVector;
 import org.apache.arrow.vector.TimeStampNanoTZVector;
 import org.apache.arrow.vector.TimeStampSecTZVector;
+import org.apache.arrow.vector.TinyIntVector;
+import org.apache.arrow.vector.VarBinaryVector;
+import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.compression.CompressionCodec;
 import org.apache.arrow.vector.compression.CompressionUtil;
@@ -39,17 +54,24 @@ import java.util.List;
  *
  * <p>Two layers are exposed:
  * <ul>
- *   <li><b>Pull</b> helpers ({@link #writeArrow}, {@link #writeTsv}) drive an {@link ArrowReader}
- *       to completion — convenient for JDBC/DuckDB callers.</li>
+ *   <li><b>Pull</b> helpers ({@link #writeArrow}, {@link #writeTsv}, {@link #writeJsonl}) drive an
+ *       {@link ArrowReader} to completion — convenient for JDBC/DuckDB callers.</li>
  *   <li><b>Per-batch</b> primitives ({@link #newArrowStreamWriter}, {@link #writeTsvHeader},
- *       {@link #writeTsvRows}, {@link #formatValue}) — for push-based callers (e.g. Flight
- *       listeners) that receive one {@link VectorSchemaRoot} at a time.</li>
+ *       {@link #writeTsvRows}, {@link #formatValue}, {@link #writeJsonRow}) — for push-based callers
+ *       (e.g. Flight listeners) that receive one {@link VectorSchemaRoot} at a time.</li>
  * </ul>
  */
 public final class ResultStreams {
 
     private static final char TAB = '\t';
     private static final char NEWLINE = '\n';
+
+    private static final JsonFactory JSON_FACTORY = new JsonFactory();
+    // JavaTimeModule + ISO output so java.time values (e.g. non-TZ TIMESTAMP -> LocalDateTime),
+    // including those nested inside structs/lists, serialize as strings rather than failing.
+    private static final ObjectMapper MAPPER = new ObjectMapper()
+            .registerModule(new JavaTimeModule())
+            .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
     private ResultStreams() {
     }
@@ -97,6 +119,91 @@ public final class ResultStreams {
             }
         }
         return rows;
+    }
+
+    /**
+     * Streams every batch of {@code reader} to {@code out} as JSON Lines (NDJSON): one JSON object
+     * per row, newline-terminated, no enclosing array, flushing per batch. An empty result writes
+     * nothing. Values are typed as in {@link #writeJsonRow}.
+     *
+     * @return total rows written
+     */
+    public static long writeJsonl(ArrowReader reader, OutputStream out) throws IOException {
+        VectorSchemaRoot root = reader.getVectorSchemaRoot();
+        long rows = 0;
+        try (JsonGenerator generator = newJsonlGenerator(out)) {
+            while (reader.loadNextBatch()) {
+                int rowCount = root.getRowCount();
+                for (int row = 0; row < rowCount; row++) {
+                    writeJsonRow(root, row, generator);
+                    generator.writeRaw(NEWLINE);
+                }
+                rows += rowCount;
+                generator.flush();
+            }
+        }
+        return rows;
+    }
+
+    /** A generator for JSON output to {@code out}; the caller writes values and closes it. */
+    public static JsonGenerator newJsonGenerator(OutputStream out) throws IOException {
+        return JSON_FACTORY.createGenerator(out);
+    }
+
+    /**
+     * A generator for JSON Lines: the default single-space separator between root-level values is
+     * suppressed, since each row object is followed by its own newline instead.
+     */
+    public static JsonGenerator newJsonlGenerator(OutputStream out) throws IOException {
+        JsonGenerator generator = newJsonGenerator(out);
+        generator.setRootValueSeparator(new SerializedString(""));
+        return generator;
+    }
+
+    /**
+     * Writes row {@code row} of {@code root} as one JSON object, keyed by column name. Numbers and
+     * booleans keep their JSON types; dates, times and TZ timestamps are ISO-8601 strings; binary is
+     * base64; lists, structs and maps become nested JSON; nulls are JSON null.
+     */
+    public static void writeJsonRow(VectorSchemaRoot root, int row, JsonGenerator generator) throws IOException {
+        generator.writeStartObject();
+        for (FieldVector vector : root.getFieldVectors()) {
+            writeJsonField(vector, row, generator);
+        }
+        generator.writeEndObject();
+    }
+
+    private static void writeJsonField(FieldVector vector, int row, JsonGenerator generator) throws IOException {
+        String name = vector.getName();
+        if (vector.isNull(row)) {
+            generator.writeNullField(name);
+            return;
+        }
+        switch (vector.getMinorType()) {
+            case TINYINT -> generator.writeNumberField(name, ((TinyIntVector) vector).get(row));
+            case SMALLINT -> generator.writeNumberField(name, ((SmallIntVector) vector).get(row));
+            case INT -> generator.writeNumberField(name, ((IntVector) vector).get(row));
+            case BIGINT -> generator.writeNumberField(name, ((BigIntVector) vector).get(row));
+            case FLOAT4 -> generator.writeNumberField(name, ((Float4Vector) vector).get(row));
+            case FLOAT8 -> generator.writeNumberField(name, ((Float8Vector) vector).get(row));
+            case BIT -> generator.writeBooleanField(name, ((BitVector) vector).get(row) != 0);
+            case VARCHAR -> generator.writeStringField(name, ((VarCharVector) vector).getObject(row).toString());
+            case VARBINARY -> generator.writeBinaryField(name, ((VarBinaryVector) vector).get(row));
+            // Dates, times and TZ timestamps share formatValue's ISO-8601 rendering.
+            case DATEDAY, DATEMILLI, TIMESEC, TIMEMILLI, TIMEMICRO, TIMENANO,
+                 TIMESTAMPSECTZ, TIMESTAMPMILLITZ, TIMESTAMPMICROTZ, TIMESTAMPNANOTZ ->
+                    generator.writeStringField(name, formatValue(vector, row));
+            // Complex types (List, Struct, Map etc) and anything else: nested JSON via Jackson.
+            default -> {
+                Object value = vector.getObject(row);
+                if (value != null) {
+                    generator.writeFieldName(name);
+                    MAPPER.writeValue(generator, value);
+                } else {
+                    generator.writeNullField(name);
+                }
+            }
+        }
     }
 
     /**

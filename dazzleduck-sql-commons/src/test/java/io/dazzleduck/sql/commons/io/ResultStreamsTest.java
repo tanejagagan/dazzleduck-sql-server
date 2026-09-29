@@ -87,4 +87,50 @@ class ResultStreamsTest {
         assertEquals(2, readArrowRows(out.toByteArray(), CompressionUtil.CodecType.ZSTD));
         assertTrue(out.size() > 0);
     }
+
+    /** Runs {@code sql} and returns its JSON Lines output; asserts the returned row count. */
+    private static String jsonl(String sql, long expectedRows) throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        try (DuckDBConnection conn = ConnectionPool.getConnection();
+             BufferAllocator allocator = new RootAllocator();
+             ArrowReader reader = ConnectionPool.getReader(conn, allocator, sql, 1024)) {
+            assertEquals(expectedRows, ResultStreams.writeJsonl(reader, out));
+        }
+        return out.toString(StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void writeJsonlWritesOneTypedObjectPerLine() throws Exception {
+        String out = jsonl(SQL, 2);
+        assertEquals("""
+                {"id":1,"name":"a","d":"2020-01-02"}
+                {"id":2,"name":"b","d":"2020-01-03"}
+                """, out, "numbers stay numbers, DATE is ISO-8601, no array and no separators");
+    }
+
+    @Test
+    void writeJsonlTypesEachValueKind() throws Exception {
+        String out = jsonl("""
+                SELECT 42::TINYINT AS ti, 7::SMALLINT AS si, 1234567890123::BIGINT AS bi,
+                       1.5::FLOAT AS f4, 2.25::DOUBLE AS f8, true AS b, NULL::VARCHAR AS n,
+                       'tab' || chr(9) || 'there "quoted"' AS s, from_hex('0102') AS bin,
+                       TIME '12:34:56' AS t, TIMESTAMPTZ '2026-09-29 10:00:00+00' AS tz,
+                       [1, 2, 3] AS list, {'k': 'v', 'n': 1} AS struct
+                """, 1).strip();
+        assertTrue(out.contains("\"ti\":42") && out.contains("\"si\":7") && out.contains("\"bi\":1234567890123"), out);
+        assertTrue(out.contains("\"f4\":1.5") && out.contains("\"f8\":2.25"), out);
+        assertTrue(out.contains("\"b\":true") && out.contains("\"n\":null"), out);
+        assertTrue(out.contains("\"s\":\"tab\\tthere \\\"quoted\\\"\""), "strings are JSON-escaped: " + out);
+        assertTrue(out.contains("\"bin\":\"AQI=\""), "binary is base64: " + out);
+        assertTrue(out.contains("\"t\":\"12:34:56\""), out);
+        assertTrue(out.contains("\"tz\":\"2026-09-29T10:00:00Z\""), "TZ timestamp as ISO-8601 instant: " + out);
+        assertTrue(out.contains("\"list\":[1,2,3]"), "lists are nested JSON: " + out);
+        assertTrue(out.contains("\"struct\":{\"k\":\"v\",\"n\":1}"), "structs are nested JSON: " + out);
+        assertEquals(1, out.split("\n").length, "one line per row");
+    }
+
+    @Test
+    void writeJsonlWritesNothingForAnEmptyResult() throws Exception {
+        assertEquals("", jsonl("SELECT 1 AS id WHERE false", 0));
+    }
 }
