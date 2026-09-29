@@ -33,9 +33,18 @@ public class HealthServer implements Closeable {
 
     public HealthServer(int port, CollectorHealth health, int grpcPort,
                         Supplier<List<Stats>> statsSupplier) throws IOException {
+        this(port, health, grpcPort, statsSupplier, null);
+    }
+
+    /**
+     * @param extraSection HTML appended to {@code /stats} below the queue table (e.g. compaction
+     *                     status), or null for none
+     */
+    public HealthServer(int port, CollectorHealth health, int grpcPort,
+                        Supplier<List<Stats>> statsSupplier, Supplier<String> extraSection) throws IOException {
         server = HttpServer.create(new InetSocketAddress(port), 0);
         server.createContext("/health", exchange -> handle(exchange, health, grpcPort));
-        server.createContext("/stats", exchange -> handleStats(exchange, statsSupplier));
+        server.createContext("/stats", exchange -> handleStats(exchange, statsSupplier, extraSection));
         server.setExecutor(null);
     }
 
@@ -68,7 +77,8 @@ public class HealthServer implements Closeable {
         }
     }
 
-    private void handleStats(HttpExchange exchange, Supplier<List<Stats>> statsSupplier) throws IOException {
+    private void handleStats(HttpExchange exchange, Supplier<List<Stats>> statsSupplier,
+                             Supplier<String> extraSection) throws IOException {
         if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
             exchange.sendResponseHeaders(405, -1);
             return;
@@ -80,8 +90,19 @@ public class HealthServer implements Closeable {
             logger.warn("Failed to collect queue stats for /stats", e);
             stats = List.of();
         }
-        byte[] body = StatsHtml.renderPage(stats, "DazzleDuck OTLP Collector — Queue Stats", 5)
-                .getBytes(StandardCharsets.UTF_8);
+        String page = StatsHtml.renderPage(stats, "DazzleDuck OTLP Collector — Queue Stats", 5);
+        if (extraSection != null) {
+            String section;
+            try {
+                section = extraSection.get();
+            } catch (RuntimeException e) {
+                logger.warn("Failed to render an extra /stats section", e);
+                section = "";
+            }
+            int end = page.lastIndexOf("</body>");
+            page = page.substring(0, end) + section + page.substring(end);
+        }
+        byte[] body = page.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set("Content-Type", "text/html; charset=UTF-8");
         exchange.sendResponseHeaders(200, body.length);
         try (OutputStream os = exchange.getResponseBody()) {

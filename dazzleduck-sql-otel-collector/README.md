@@ -415,6 +415,42 @@ otel_collector.ingestion_task_factory_provider {
 Watermarks are not available for dynamically registered queues — the SQLite registry does not
 store `additional_parameters`.
 
+### Compaction
+
+The collector can maintain the DuckLake catalogs it writes to, on its own DuckDB instance, so no separate compactor is needed. This is required for DuckDB-file and SQLite catalogs, which can only be attached once per process. It is off unless `compaction.enabled = true`:
+
+```hocon
+otel_collector.compaction {
+    enabled = true
+    catalogs = [lake]                        # attached DuckLake catalogs to maintain
+    minor { frequency = 1 minute, max_file_size = 8MB }
+    major { frequency = 1 hour, snapshot_retention = 15 minutes }   # optional: rewrite_delete_threshold = 0.3
+    orphan_cleanup { enabled = false, frequency = 1 day, older_than = 2 days }
+}
+```
+
+| Job | Steps, per catalog |
+|---|---|
+| minor | `ducklake_merge_adjacent_files` for files smaller than `max_file_size` |
+| major | `ducklake_flush_inlined_data`, `ducklake_expire_snapshots` (older than `snapshot_retention`), `ducklake_merge_adjacent_files`, `ducklake_rewrite_data_files`, `ducklake_cleanup_old_files` (retired longer ago than `snapshot_retention`) |
+| orphan cleanup | `ducklake_delete_orphaned_files` (older than `older_than`) |
+
+- **One thread:** all jobs run on it, so they never overlap. Maintenance shares the instance's `memory_limit` and `threads` with ingestion.
+- **Explicit steps, not `CHECKPOINT`:** `CHECKPOINT` can't be given ages. Its expiry does nothing unless the catalog sets `expire_older_than`, and one catalog option would govern both old-file and orphan deletion.
+- **Orphan cleanup is off by default.** A batch's file is unreferenced until the collector registers it, so `older_than` must exceed the longest write-to-register delay; values under 1 hour are rejected.
+- **Strict config:** an invalid value fails startup, and `enabled = true` requires `catalogs`.
+
+The health server's `/stats` page has a **Compaction** section below the queue table. It has one row per catalog and job, showing:
+- last and next run, outcome (OK, conflict or failed) and duration;
+- files merged and rewritten, for the last run and in total;
+- runs and failed runs;
+- the catalog's snapshot count, as of its last job run (the page itself never queries the catalog);
+- the last error, naming the step that failed.
+
+When compaction is off, the section says so.
+
+Metrics, tagged `catalog`: `dazzleduck.otel.compaction.duration` (timer, also tagged `step`), `dazzleduck.otel.compaction.files_merged`, `dazzleduck.otel.compaction.files_rewritten`, and `dazzleduck.otel.compaction.failures` (also tagged `step`; includes lost transaction conflicts, which are retried on the next run).
+
 ## Building
 
 ```bash

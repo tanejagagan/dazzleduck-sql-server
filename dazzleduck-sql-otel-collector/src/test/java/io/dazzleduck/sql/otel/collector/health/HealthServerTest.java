@@ -72,6 +72,33 @@ class HealthServerTest {
         assertTrue(resp.body().contains("No active ingestion queues"));
     }
 
+    @Test
+    void statsAppendsTheExtraSectionBelowTheQueueTable() throws Exception {
+        try (var withSection = new HealthServer(0, health, GRPC_PORT, java.util.List::of,
+                () -> "<h1>Compaction</h1><p id=\"extra\">section</p>")) {
+            withSection.start();
+            HttpRequest req = HttpRequest.newBuilder(URI.create("http://localhost:" + withSection.getPort() + "/stats"))
+                    .GET().build();
+            String body = client.send(req, HttpResponse.BodyHandlers.ofString()).body();
+            assertTrue(body.contains("<p id=\"extra\">section</p>"), body);
+            assertTrue(body.indexOf("No active ingestion queues") < body.indexOf("id=\"extra\""), "below the queue table");
+            assertTrue(body.indexOf("id=\"extra\"") < body.indexOf("</body>"), "inside the body");
+        }
+    }
+
+    @Test
+    void aFailingExtraSectionDoesNotBreakTheStatsPage() throws Exception {
+        try (var failing = new HealthServer(0, health, GRPC_PORT, java.util.List::of,
+                () -> { throw new IllegalStateException("boom"); })) {
+            failing.start();
+            HttpRequest req = HttpRequest.newBuilder(URI.create("http://localhost:" + failing.getPort() + "/stats"))
+                    .GET().build();
+            HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, resp.statusCode());
+            assertTrue(resp.body().contains("No active ingestion queues"));
+        }
+    }
+
     private HttpResponse<String> get() throws Exception {
         HttpRequest req = HttpRequest.newBuilder(URI.create("http://localhost:" + server.getPort() + "/health"))
                 .GET().build();

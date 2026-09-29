@@ -3,7 +3,9 @@ package io.dazzleduck.sql.otel.collector;
 import io.dazzleduck.sql.commons.auth.Validator;
 import io.dazzleduck.sql.commons.ingestion.IngestionHandler;
 import io.dazzleduck.sql.otel.collector.auth.JwtServerInterceptor;
+import io.dazzleduck.sql.otel.collector.compaction.CollectorCompactor;
 import io.dazzleduck.sql.otel.collector.config.CollectorProperties;
+import io.dazzleduck.sql.otel.collector.health.CompactionStatusHtml;
 import io.dazzleduck.sql.otel.collector.health.CollectorHealth;
 import io.dazzleduck.sql.otel.collector.health.CollectorHealthStatus;
 import io.dazzleduck.sql.otel.collector.health.HealthServer;
@@ -54,6 +56,7 @@ public class OtelCollectorServer implements Closeable {
     private OtelCollectorMetrics collectorMetrics;
     private CollectorHealth health;
     private HealthServer healthServer;
+    private CollectorCompactor compactor;
     // Scratch directories created by start(); tracked so close() can remove them even when
     // startup fails after creating some but before the corresponding service exists.
     private final List<Path> scratchDirs = new ArrayList<>();
@@ -138,9 +141,15 @@ public class OtelCollectorServer implements Closeable {
             grpcServer = builder.build().start();
 
             IngestionHandler statsHandler = handler;
+            // Built before the health server so /stats can show its status; started last, below.
+            compactor = new CollectorCompactor(props.getCompactionSettings(), props.getMeterRegistry());
+            CollectorCompactor statusSource = compactor;
             healthServer = new HealthServer(props.getHealthPort(), health, props.getGrpcPort(),
-                    statsHandler::getQueueStats);
+                    statsHandler::getQueueStats, () -> CompactionStatusHtml.render(statusSource.status()));
             healthServer.start();
+            // Last: runs on the same DuckDB instance as ingestion, whose catalogs Main's startup
+            // script has already attached. A no-op unless compaction.enabled is true.
+            compactor.start();
             health.transitionTo(CollectorHealthStatus.HEALTHY);
             started = true;
 
@@ -216,6 +225,8 @@ public class OtelCollectorServer implements Closeable {
             health.transitionTo(CollectorHealthStatus.MAINTENANCE);
             sleepForGracePeriod();
         }
+        // First, so no maintenance step is still running while queues flush and close.
+        closeQuietly("compactor", compactor);
         if (grpcServer != null) {
             log.info("Shutting down gRPC server...");
             grpcServer.shutdown();
