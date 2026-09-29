@@ -32,9 +32,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * A local SQL endpoint on the collector's own DuckDB instance, for testing: {@code GET
@@ -49,6 +47,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * a guard against mistakes, not a security boundary: {@code COPY ... TO}, {@code SET},
  * {@code ATTACH} and DuckLake maintenance functions are not blocked. There is no authentication,
  * which is why it binds to localhost by default.
+ *
+ * <p>{@code query.timeout} bounds query execution, through the driver's
+ * {@link Statement#setQueryTimeout}; reading a streamed result is not time-limited, and ends when the
+ * client disconnects.
  *
  * <p>Requests a browser makes on a web page's behalf are refused (403): any request with an
  * {@code Origin} header, or with {@code Sec-Fetch-Site} other than {@code none} (a URL typed by the
@@ -68,7 +70,6 @@ public class QueryServer implements Closeable {
     private final MeterRegistry registry;
     private final HttpServer server;
     private final ExecutorService requests;
-    private final ScheduledExecutorService timeouts;
     private final BufferAllocator allocator = new RootAllocator();
     // Statements executing right now, so close() can cancel them.
     private final Set<Statement> running = ConcurrentHashMap.newKeySet();
@@ -79,7 +80,6 @@ public class QueryServer implements Closeable {
         this.registry = registry;
         this.server = HttpServer.create(new InetSocketAddress(settings.host(), settings.port()), 0);
         this.requests = Executors.newFixedThreadPool(settings.threads(), daemon("otel-query"));
-        this.timeouts = Executors.newSingleThreadScheduledExecutor(daemon("otel-query-timeout"));
         server.createContext("/v1/query", this::handle);
         server.setExecutor(requests);
     }
@@ -256,16 +256,14 @@ public class QueryServer implements Closeable {
      */
     private String run(HttpExchange exchange, String sql, Format format,
                        CompressionUtil.CodecType codec) throws IOException {
-        AtomicBoolean timedOut = new AtomicBoolean();
         boolean headersSent = false;
         try (DuckDBConnection connection = ConnectionPool.getConnection();
              Statement statement = connection.createStatement();
              BufferAllocator requestAllocator = allocator.newChildAllocator("query", 0, Long.MAX_VALUE)) {
             running.add(statement);
-            var timeout = timeouts.schedule(() -> {
-                timedOut.set(true);
-                cancel(statement);
-            }, settings.timeout().toMillis(), TimeUnit.MILLISECONDS);
+            // The driver cancels execution after this; it does not bound reading a streamed result,
+            // which ends when the client disconnects (the next write fails).
+            statement.setQueryTimeout(timeoutSeconds());
             try {
                 statement.execute("BEGIN TRANSACTION READ ONLY");
                 if (!statement.execute(sql)) {
@@ -292,19 +290,35 @@ public class QueryServer implements Closeable {
                 }
                 return "ok";
             } finally {
-                timeout.cancel(false);
                 running.remove(statement);
             }
         } catch (SQLException | IOException | RuntimeException e) {
+            // DuckDB reports a query timeout and a cancel from close() the same way; while not
+            // closing, an interrupt can only be the timeout.
+            boolean timedOut = !closing && isInterrupt(e);
             if (headersSent) {
-                log.warn("Query result stream ended early{}", timedOut.get() ? " (timed out)" : "", e);
-            } else if (timedOut.get()) {
+                log.warn("Query result stream ended early", e);
+            } else if (timedOut) {
                 sendText(exchange, 504, "Query timed out after " + settings.timeout());
             } else {
                 sendText(exchange, 500, e.getMessage());
             }
-            return timedOut.get() ? "timeout" : "error";
+            return timedOut ? "timeout" : "error";
         }
+    }
+
+    /** JDBC query timeouts are whole seconds; round up so a timeout never fires early. */
+    private int timeoutSeconds() {
+        return (int) Math.max(1, (settings.timeout().toMillis() + 999) / 1000);
+    }
+
+    private static boolean isInterrupt(Throwable e) {
+        for (Throwable c = e; c != null; c = c.getCause()) {
+            if (c.getMessage() != null && c.getMessage().contains("INTERRUPT Error")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void cancel(Statement statement) {
@@ -363,7 +377,6 @@ public class QueryServer implements Closeable {
             requests.shutdownNow();
             Thread.currentThread().interrupt();
         }
-        timeouts.shutdownNow();
         try {
             allocator.close();
         } catch (RuntimeException e) {

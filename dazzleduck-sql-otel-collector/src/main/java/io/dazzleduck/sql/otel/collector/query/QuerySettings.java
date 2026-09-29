@@ -12,7 +12,8 @@ import java.time.Duration;
  * @param host           address to bind; localhost by default, since the endpoint has no auth
  * @param port           port to listen on; 0 picks a free one
  * @param threads        request threads, which also bounds concurrent queries
- * @param timeout        a query still running after this is cancelled
+ * @param timeout        query execution still running after this is cancelled (whole seconds,
+ *                       rounded up); streaming a result is not time-limited
  * @param arrowBatchSize rows per Arrow batch read from DuckDB
  */
 public record QuerySettings(boolean enabled, String host, int port, int threads, Duration timeout, int arrowBatchSize) {
@@ -40,8 +41,9 @@ public record QuerySettings(boolean enabled, String host, int port, int threads,
         if (settings.threads() <= 0) {
             throw new IllegalArgumentException("query.threads must be positive, got " + settings.threads());
         }
-        if (settings.timeout().isZero() || settings.timeout().isNegative()) {
-            throw new IllegalArgumentException("query.timeout must be positive, got " + settings.timeout());
+        if (settings.timeout().compareTo(Duration.ofSeconds(1)) < 0) {
+            throw new IllegalArgumentException(
+                    "query.timeout must be at least 1 second (JDBC timeouts are whole seconds), got " + settings.timeout());
         }
         if (settings.arrowBatchSize() <= 0) {
             throw new IllegalArgumentException("query.arrow_batch_size must be positive, got " + settings.arrowBatchSize());

@@ -45,6 +45,8 @@ class QuerySettingsTest {
         assertThrows(IllegalArgumentException.class, () -> parse("otel_collector.query.port = 70000"));
         assertThrows(IllegalArgumentException.class, () -> parse("otel_collector.query.threads = 0"));
         assertThrows(IllegalArgumentException.class, () -> parse("otel_collector.query.timeout = 0 seconds"));
+        assertThrows(IllegalArgumentException.class, () -> parse("otel_collector.query.timeout = 500 milliseconds"),
+                "JDBC query timeouts are whole seconds");
         assertThrows(IllegalArgumentException.class, () -> parse("otel_collector.query.host = \"\""));
         assertThrows(ConfigException.WrongType.class, () -> parse("otel_collector.query.enabled = ture"));
     }
