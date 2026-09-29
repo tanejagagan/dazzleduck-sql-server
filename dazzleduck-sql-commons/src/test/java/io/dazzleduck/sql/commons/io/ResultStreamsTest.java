@@ -133,4 +133,58 @@ class ResultStreamsTest {
     void writeJsonlWritesNothingForAnEmptyResult() throws Exception {
         assertEquals("", jsonl("SELECT 1 AS id WHERE false", 0));
     }
+
+    @Test
+    void writeJsonlCoversTimestampDecimalAndMap() throws Exception {
+        String out = jsonl("""
+                SELECT TIMESTAMP '2026-01-02 03:04:05' AS ts, 12.34::DECIMAL(10, 2) AS dc,
+                       123456789012345678901234567890.123::DECIMAL(38, 3) AS big,
+                       5::UTINYINT AS u1, 65535::USMALLINT AS u2, 18446744073709551615::UBIGINT AS u8,
+                       MAP {'a': 1, 'b': 2} AS m, MAP {1: 'x'} AS int_keys
+                """, 1).strip();
+        assertTrue(out.contains("\"ts\":\"2026-01-02T03:04:05\""), "non-TZ TIMESTAMP as ISO-8601: " + out);
+        assertTrue(out.contains("\"dc\":12.34"), "DECIMAL as a JSON number: " + out);
+        assertTrue(out.contains("\"big\":123456789012345678901234567890.123"), "wide DECIMAL keeps full precision: " + out);
+        assertTrue(out.contains("\"u1\":5") && out.contains("\"u2\":65535") && out.contains("\"u8\":18446744073709551615"),
+                "unsigned integers as numbers, without overflow: " + out);
+        assertTrue(out.contains("\"m\":{\"a\":1,\"b\":2}"), "MAP as a JSON object, not an entry array: " + out);
+        assertTrue(out.contains("\"int_keys\":{\"1\":\"x\"}"), "non-string map keys become their text: " + out);
+    }
+
+    @Test
+    void writeJsonlFormatsNestedValuesLikeTopLevelOnes() throws Exception {
+        String out = jsonl("""
+                SELECT {'d': DATE '2026-01-02', 'tz': TIMESTAMPTZ '2026-01-02 03:04:05+00', 'n': NULL::INT} AS s,
+                       [DATE '2026-01-02', NULL] AS dates,
+                       [{'k': 1, 't': TIME '01:02:03'}] AS list_of_structs,
+                       MAP {'when': TIMESTAMP '2026-01-02 03:04:05'} AS map_of_ts,
+                       [[1, 2], [3]] AS nested_lists
+                """, 1).strip();
+        assertTrue(out.contains("\"s\":{\"d\":\"2026-01-02\",\"tz\":\"2026-01-02T03:04:05Z\",\"n\":null}"),
+                "DATE and TZ timestamp inside a struct as ISO-8601, not epoch numbers: " + out);
+        assertTrue(out.contains("\"dates\":[\"2026-01-02\",null]"), "dates inside a list: " + out);
+        assertTrue(out.contains("\"list_of_structs\":[{\"k\":1,\"t\":\"01:02:03\"}]"), out);
+        assertTrue(out.contains("\"map_of_ts\":{\"when\":\"2026-01-02T03:04:05\"}"), out);
+        assertTrue(out.contains("\"nested_lists\":[[1,2],[3]]"), out);
+    }
+
+    @Test
+    void writeJsonlFlushesPerBatchNotPerNestedValue() throws Exception {
+        java.util.concurrent.atomic.AtomicInteger flushes = new java.util.concurrent.atomic.AtomicInteger();
+        java.io.OutputStream counting = new java.io.FilterOutputStream(new ByteArrayOutputStream()) {
+            @Override
+            public void flush() throws IOException {
+                flushes.incrementAndGet();
+                super.flush();
+            }
+        };
+        // 1,000 rows, each with a struct, a list and a map, in one batch.
+        try (DuckDBConnection conn = ConnectionPool.getConnection();
+             BufferAllocator allocator = new RootAllocator();
+             ArrowReader reader = ConnectionPool.getReader(conn, allocator,
+                     "SELECT {'a': range} AS s, [range] AS l, MAP {'k': range} AS m FROM range(1000)", 2048)) {
+            assertEquals(1000, ResultStreams.writeJsonl(reader, counting));
+        }
+        assertTrue(flushes.get() <= 3, "expected a flush per batch plus one on close, got " + flushes.get());
+    }
 }
