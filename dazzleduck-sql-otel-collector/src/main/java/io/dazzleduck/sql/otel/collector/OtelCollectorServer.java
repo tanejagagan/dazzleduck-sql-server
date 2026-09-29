@@ -107,7 +107,8 @@ public class OtelCollectorServer implements Closeable {
                     handler, ingestionConfig, flushScheduler, collectorMetrics);
             metricsService = new OtelMetricsService(
                     createScratchDir(tempWriteDir, OtelMetricsService.SCRATCH_PREFIX),
-                    handler, ingestionConfig, flushScheduler, collectorMetrics);
+                    handler, ingestionConfig, flushScheduler, collectorMetrics,
+                    props.isMetricsWriteDescription());
 
             if (!"jwt".equals(props.getAuthentication())) {
                 throw new IllegalStateException(

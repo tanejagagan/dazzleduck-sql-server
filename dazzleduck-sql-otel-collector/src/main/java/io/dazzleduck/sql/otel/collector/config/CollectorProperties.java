@@ -39,6 +39,17 @@ public class CollectorProperties {
     private String tempWriteLocation =
             java.nio.file.Path.of(System.getProperty("java.io.tmpdir"), "dazzleduck-writes").toString();
 
+    // Whether metric rows carry the OTLP description; see metrics.write_description in reference.conf.
+    private boolean metricsWriteDescription = false;
+
+    public boolean isMetricsWriteDescription() {
+        return metricsWriteDescription;
+    }
+
+    public void setMetricsWriteDescription(boolean metricsWriteDescription) {
+        this.metricsWriteDescription = metricsWriteDescription;
+    }
+
     public String getTempWriteLocation() {
         return tempWriteLocation;
     }

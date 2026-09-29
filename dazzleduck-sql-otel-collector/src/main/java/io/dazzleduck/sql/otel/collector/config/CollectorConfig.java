@@ -309,6 +309,16 @@ public class CollectorConfig {
         return true;
     }
 
+    /**
+     * See {@code metrics.write_description} in reference.conf; off unless set. Strict: a value that
+     * is not a boolean fails startup (ConfigException naming the key and its origin) rather than
+     * silently falling back to off.
+     */
+    public boolean getMetricsWriteDescription() {
+        String fullPath = CONFIG_PREFIX + ".metrics.write_description";
+        return config.hasPath(fullPath) && config.getBoolean(fullPath);
+    }
+
     public CollectorProperties toProperties() {
         CollectorProperties props = new CollectorProperties();
         props.setGrpcPort(getGrpcPort());
@@ -325,6 +335,7 @@ public class CollectorConfig {
         props.setIngestionConfig(getIngestionConfig());
         props.setVerifySignature(getVerifySignature());
         props.setTempWriteLocation(getTempWriteLocation());
+        props.setMetricsWriteDescription(getMetricsWriteDescription());
         return props;
     }
 

@@ -50,6 +50,10 @@ otel_collector {
 
     # health { port, shutdown_grace_period_ms } — see the Health Check section below
 
+    # Write each metric's OTLP description into the `description` column (repeats on every data
+    # point, so off by default; the column is then NULL)
+    metrics { write_description = false }
+
     # Startup SQL run before any queue is created (load extensions, ATTACH DuckLake catalogs)
     startup_script_provider {
         content = "INSTALL arrow FROM community; LOAD arrow;"
@@ -286,7 +290,7 @@ Wide-table design — all metric types (GAUGE, SUM, HISTOGRAM, EXPONENTIAL_HISTO
 | Column | Type | Notes |
 |--------|------|-------|
 | `name` | Utf8 | |
-| `description` | Utf8 | |
+| `description` | Utf8 | NULL unless `metrics.write_description = true` |
 | `unit` | Utf8 | |
 | `metric_type` | Utf8 | GAUGE / SUM / HISTOGRAM / etc. |
 | `start_time_ms` | Timestamp(ms) | |
