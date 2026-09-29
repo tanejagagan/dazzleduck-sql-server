@@ -10,6 +10,7 @@ import io.dazzleduck.sql.commons.ingestion.IngestionHandler;
 import io.dazzleduck.sql.commons.ingestion.IngestionTaskFactoryProvider;
 import io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider;
 import io.dazzleduck.sql.otel.collector.compaction.CompactionSettings;
+import io.dazzleduck.sql.otel.collector.query.QuerySettings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -326,6 +327,12 @@ public class CollectorConfig {
         return config.hasPath(path) ? CompactionSettings.from(config.getConfig(path)) : CompactionSettings.disabled();
     }
 
+    /** The {@code query} block, parsed strictly; disabled when the block is absent. */
+    public QuerySettings getQuerySettings() {
+        String path = CONFIG_PREFIX + ".query";
+        return config.hasPath(path) ? QuerySettings.from(config.getConfig(path)) : QuerySettings.disabled();
+    }
+
     public CollectorProperties toProperties() {
         CollectorProperties props = new CollectorProperties();
         props.setGrpcPort(getGrpcPort());
@@ -344,6 +351,7 @@ public class CollectorConfig {
         props.setTempWriteLocation(getTempWriteLocation());
         props.setMetricsWriteDescription(getMetricsWriteDescription());
         props.setCompactionSettings(getCompactionSettings());
+        props.setQuerySettings(getQuerySettings());
         return props;
     }
 

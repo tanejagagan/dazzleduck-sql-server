@@ -415,6 +415,36 @@ otel_collector.ingestion_task_factory_provider {
 Watermarks are not available for dynamically registered queues — the SQLite registry does not
 store `additional_parameters`.
 
+### Local query endpoint
+
+For local testing, the collector can answer SQL queries against its own DuckDB instance, and so against the DuckLake catalogs it writes to. It's off by default:
+
+```hocon
+otel_collector.query {
+    enabled = true
+    host = "127.0.0.1"          # localhost only by default: there is no authentication
+    port = 8082
+    threads = 4                 # request threads, also the limit on concurrent queries
+    timeout = 30 seconds        # a query still running after this is cancelled (504)
+}
+```
+
+It has the same shape as the main server's `/v1/query`. The response format follows the `Accept` header:
+
+```bash
+# TSV
+curl -H "Accept: text/tab-separated-values" "http://127.0.0.1:8082/v1/query?q=select%201"
+# JSON Lines (also application/x-ndjson)
+curl -H "Accept: application/jsonl" -d '{"query": "select 1 as n"}' http://127.0.0.1:8082/v1/query
+# Arrow IPC stream, ZSTD-compressed (x-dd-arrow-compression: none to disable)
+curl -o result.arrow "http://127.0.0.1:8082/v1/query?q=select%201"
+```
+
+- **Streaming:** results are sent in chunks as DuckDB produces them.
+- **Read-only, but not a security boundary:** each query runs in a read-only transaction, which rejects writes to tables. `COPY ... TO`, `SET`, `ATTACH` and DuckLake maintenance functions are not blocked, so keep it on localhost.
+- **Errors:** `400` for a missing query or an invalid compression value, `405` for other HTTP methods, `504` when the timeout fires, `500` with DuckDB's error text otherwise.
+- **Metrics:** `dazzleduck.otel.query.duration`, tagged `format` and `outcome` (`ok`, `error`, `timeout`, `bad_request`).
+
 ### Compaction
 
 The collector can maintain the DuckLake catalogs it writes to, on its own DuckDB instance, so no separate compactor is needed. This is required for DuckDB-file and SQLite catalogs, which can only be attached once per process. It is off unless `compaction.enabled = true`:

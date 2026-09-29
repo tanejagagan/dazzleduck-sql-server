@@ -4,6 +4,7 @@ import io.dazzleduck.sql.commons.ingestion.IngestionConfig;
 import io.dazzleduck.sql.commons.ingestion.IngestionHandler;
 import io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider;
 import io.dazzleduck.sql.otel.collector.compaction.CompactionSettings;
+import io.dazzleduck.sql.otel.collector.query.QuerySettings;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
@@ -53,6 +54,16 @@ public class CollectorProperties {
 
     private CompactionSettings compactionSettings =
             CompactionSettings.disabled();
+
+    private QuerySettings querySettings = QuerySettings.disabled();
+
+    public QuerySettings getQuerySettings() {
+        return querySettings;
+    }
+
+    public void setQuerySettings(QuerySettings querySettings) {
+        this.querySettings = querySettings;
+    }
 
     public CompactionSettings getCompactionSettings() {
         return compactionSettings;
