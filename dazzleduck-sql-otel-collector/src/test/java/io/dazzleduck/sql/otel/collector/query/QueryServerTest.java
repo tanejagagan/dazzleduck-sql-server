@@ -149,6 +149,56 @@ class QueryServerTest {
     }
 
     @Test
+    void browserInitiatedRequestsAreRefused() throws Exception {
+        // What a web page can make the developer's browser send (<img>, fetch, form post).
+        assertEquals(403, get("SELECT 1", null, "Origin", "https://evil.example").statusCode());
+        assertEquals(403, get("SELECT 1", null, "Sec-Fetch-Site", "cross-site").statusCode());
+        assertEquals(403, get("SELECT 1", null, "Sec-Fetch-Site", "same-site").statusCode());
+        // A URL the developer typed into the address bar, and command-line clients, are fine.
+        assertEquals(200, get("SELECT 1", "text/tab-separated-values", "Sec-Fetch-Site", "none").statusCode());
+        assertNotNull(registry.find("dazzleduck.otel.query.duration").tag("outcome", "forbidden").timer());
+    }
+
+    @Test
+    void aNonLoopbackHostHeaderIsRefusedWhileBoundToLocalhost() throws Exception {
+        // DNS rebinding: evil.example resolves to 127.0.0.1, so the request arrives with its Host.
+        // java.net.http will not set Host, so this one goes over a raw socket.
+        assertTrue(rawStatusLine("evil.example:" + server.getPort()).contains(" 403 "));
+        assertTrue(rawStatusLine("localhost:" + server.getPort()).contains(" 200 "));
+        assertTrue(rawStatusLine("[::1]:" + server.getPort()).contains(" 200 "));
+    }
+
+    private static String rawStatusLine(String hostHeader) throws Exception {
+        try (var socket = new java.net.Socket("127.0.0.1", server.getPort())) {
+            socket.getOutputStream().write(("GET /v1/query?q=SELECT%201 HTTP/1.1\r\nHost: " + hostHeader
+                    + "\r\nAccept: text/tab-separated-values\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+            return new java.io.BufferedReader(new java.io.InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII))
+                    .readLine();
+        }
+    }
+
+    @Test
+    void closeCancelsQueriesThatAreStillRunning() throws Exception {
+        // A long timeout, so only close() can stop the query.
+        var own = new QueryServer(new QuerySettings(true, "127.0.0.1", 0, 2, Duration.ofMinutes(5), 1000), registry);
+        own.start();
+        var slow = client.sendAsync(HttpRequest.newBuilder(URI.create("http://127.0.0.1:%d/v1/query?q=%s".formatted(own.getPort(),
+                        URLEncoder.encode("SELECT sum(a.range * b.range) FROM range(300000) a, range(300000) b", StandardCharsets.UTF_8))))
+                .GET().build(), HttpResponse.BodyHandlers.ofString());
+        long waitUntil = System.currentTimeMillis() + 10_000;
+        while (own.runningQueries() == 0 && System.currentTimeMillis() < waitUntil) {
+            Thread.sleep(20);
+        }
+        assertEquals(1, own.runningQueries(), "the slow query is executing");
+        long start = System.nanoTime();
+        own.close();
+        long closeMs = (System.nanoTime() - start) / 1_000_000;
+        assertTrue(closeMs < 8_000, "close() cancelled the running query instead of waiting it out: " + closeMs + "ms");
+        var response = slow.get(10, java.util.concurrent.TimeUnit.SECONDS);
+        assertEquals(500, response.statusCode(), "the cancelled query is answered, not left hanging: " + response.body());
+    }
+
+    @Test
     void badRequests() throws Exception {
         var missing = client.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:%d/v1/query".formatted(server.getPort()))).GET().build(),
                 HttpResponse.BodyHandlers.ofString());

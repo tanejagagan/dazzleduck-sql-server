@@ -28,6 +28,8 @@ import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -47,6 +49,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * a guard against mistakes, not a security boundary: {@code COPY ... TO}, {@code SET},
  * {@code ATTACH} and DuckLake maintenance functions are not blocked. There is no authentication,
  * which is why it binds to localhost by default.
+ *
+ * <p>Requests a browser makes on a web page's behalf are refused (403): any request with an
+ * {@code Origin} header, or with {@code Sec-Fetch-Site} other than {@code none} (a URL typed by the
+ * user). Otherwise any page open in the developer's browser could run SQL here, e.g. through an
+ * {@code <img>} pointing at {@code /v1/query?q=...}. While bound to a loopback address, the
+ * {@code Host} header must also name a loopback host, which stops DNS rebinding. Command-line
+ * clients such as curl send none of these headers and are unaffected.
  */
 public class QueryServer implements Closeable {
 
@@ -61,6 +70,9 @@ public class QueryServer implements Closeable {
     private final ExecutorService requests;
     private final ScheduledExecutorService timeouts;
     private final BufferAllocator allocator = new RootAllocator();
+    // Statements executing right now, so close() can cancel them.
+    private final Set<Statement> running = ConcurrentHashMap.newKeySet();
+    private volatile boolean closing;
 
     public QueryServer(QuerySettings settings, MeterRegistry registry) throws IOException {
         this.settings = settings;
@@ -95,6 +107,17 @@ public class QueryServer implements Closeable {
         String format = "none";
         String outcome = "error";
         try {
+            if (closing) {
+                outcome = "unavailable";
+                sendText(exchange, 503, "Shutting down");
+                return;
+            }
+            String rejection = browserRequestRejection(exchange);
+            if (rejection != null) {
+                outcome = "forbidden";
+                sendText(exchange, 403, rejection);
+                return;
+            }
             String sql = readQuery(exchange);
             if (sql == null) {
                 outcome = "bad_request";
@@ -122,6 +145,40 @@ public class QueryServer implements Closeable {
                     .tag("outcome", outcome)
                     .register(registry));
         }
+    }
+
+    /** Why a request looks browser-initiated (see the class Javadoc), or null when it is acceptable. */
+    private String browserRequestRejection(HttpExchange exchange) {
+        var headers = exchange.getRequestHeaders();
+        if (headers.containsKey("Origin")) {
+            return "Cross-origin browser requests are not accepted";
+        }
+        String site = headers.getFirst("Sec-Fetch-Site");
+        if (site != null && !site.equalsIgnoreCase("none")) {
+            return "Browser requests from a web page are not accepted";
+        }
+        if (isLoopback(settings.host())) {
+            String host = headers.getFirst("Host");
+            if (host == null || !isLoopback(hostName(host))) {
+                return "Host header must name a loopback host";
+            }
+        }
+        return null;
+    }
+
+    /** The host part of a {@code Host} header value: without the port, and without IPv6 brackets. */
+    private static String hostName(String hostHeader) {
+        String value = hostHeader.trim();
+        if (value.startsWith("[")) {
+            int end = value.indexOf(']');
+            return end > 0 ? value.substring(1, end) : value;
+        }
+        int colon = value.lastIndexOf(':');
+        return colon >= 0 ? value.substring(0, colon) : value;
+    }
+
+    private static boolean isLoopback(String host) {
+        return host.equalsIgnoreCase("localhost") || host.startsWith("127.") || host.equals("::1");
     }
 
     /** The SQL from {@code ?q=} (GET) or {@code {"query": ...}} (POST); null after sending an error. */
@@ -192,36 +249,28 @@ public class QueryServer implements Closeable {
         };
     }
 
-    /** Runs the query and streams the result; returns the outcome tag. */
+    /**
+     * Runs the query and streams the result; returns the outcome tag. Every failure goes through one
+     * path: before the response headers are sent it becomes a 504 (if the timeout fired) or a 500;
+     * after, the status cannot change, so it is only logged and the client sees a cut-off body.
+     */
     private String run(HttpExchange exchange, String sql, Format format,
                        CompressionUtil.CodecType codec) throws IOException {
         AtomicBoolean timedOut = new AtomicBoolean();
+        boolean headersSent = false;
         try (DuckDBConnection connection = ConnectionPool.getConnection();
              Statement statement = connection.createStatement();
              BufferAllocator requestAllocator = allocator.newChildAllocator("query", 0, Long.MAX_VALUE)) {
-            statement.execute("BEGIN TRANSACTION READ ONLY");
+            running.add(statement);
             var timeout = timeouts.schedule(() -> {
                 timedOut.set(true);
-                try {
-                    statement.cancel();
-                } catch (SQLException e) {
-                    log.warn("Could not cancel a timed-out query", e);
-                }
+                cancel(statement);
             }, settings.timeout().toMillis(), TimeUnit.MILLISECONDS);
             try {
-                boolean hasResult;
-                try {
-                    hasResult = statement.execute(sql);
-                } catch (SQLException e) {
-                    if (timedOut.get()) {
-                        sendText(exchange, 504, "Query timed out after " + settings.timeout());
-                        return "timeout";
-                    }
-                    sendText(exchange, 500, e.getMessage());
-                    return "error";
-                }
-                if (!hasResult) {
+                statement.execute("BEGIN TRANSACTION READ ONLY");
+                if (!statement.execute(sql)) {
                     exchange.sendResponseHeaders(200, -1);
+                    headersSent = true;
                     return "ok";
                 }
                 try (var resultSet = (DuckDBResultSet) statement.getResultSet();
@@ -232,25 +281,37 @@ public class QueryServer implements Closeable {
                         case ARROW -> ContentTypes.APPLICATION_ARROW;
                     });
                     exchange.sendResponseHeaders(200, 0); // chunked: rows stream as they are produced
+                    headersSent = true;
                     try (OutputStream out = exchange.getResponseBody()) {
                         switch (format) {
                             case TSV -> ResultStreams.writeTsv(reader, out);
                             case JSONL -> ResultStreams.writeJsonl(reader, out);
                             case ARROW -> ResultStreams.writeArrow(reader, out, codec, CommonsCompressionFactory.INSTANCE);
                         }
-                    } catch (IOException | RuntimeException e) {
-                        // Headers are already sent, so the status cannot change; the client sees a cut-off body.
-                        log.warn("Query result stream ended early{}", timedOut.get() ? " (timed out)" : "", e);
-                        return timedOut.get() ? "timeout" : "error";
                     }
                 }
                 return "ok";
             } finally {
                 timeout.cancel(false);
+                running.remove(statement);
             }
+        } catch (SQLException | IOException | RuntimeException e) {
+            if (headersSent) {
+                log.warn("Query result stream ended early{}", timedOut.get() ? " (timed out)" : "", e);
+            } else if (timedOut.get()) {
+                sendText(exchange, 504, "Query timed out after " + settings.timeout());
+            } else {
+                sendText(exchange, 500, e.getMessage());
+            }
+            return timedOut.get() ? "timeout" : "error";
+        }
+    }
+
+    private static void cancel(Statement statement) {
+        try {
+            statement.cancel();
         } catch (SQLException e) {
-            sendText(exchange, 500, e.getMessage());
-            return "error";
+            log.warn("Could not cancel a running query", e);
         }
     }
 
@@ -265,16 +326,44 @@ public class QueryServer implements Closeable {
         }
     }
 
+    /** Queries executing right now; for tests. */
+    int runningQueries() {
+        return running.size();
+    }
+
+    /**
+     * Cancels the queries still running and waits for them to be answered, then stops the server, so
+     * none is left running on the shared DuckDB instance while the collector shuts down. The HTTP
+     * server stops last: stopping it closes open connections, so cancelled queries could no longer
+     * get their error response.
+     */
     @Override
     public void close() {
+        closing = true; // new requests get 503 from here on
+        running.forEach(QueryServer::cancel);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (!running.isEmpty() && System.nanoTime() < deadline) {
+            try {
+                Thread.sleep(20);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        if (!running.isEmpty()) {
+            log.warn("{} queries still running 10s after they were cancelled", running.size());
+        }
         server.stop(0);
-        requests.shutdownNow();
-        timeouts.shutdownNow();
+        requests.shutdown();
         try {
-            requests.awaitTermination(5, TimeUnit.SECONDS);
+            if (!requests.awaitTermination(5, TimeUnit.SECONDS)) {
+                requests.shutdownNow();
+            }
         } catch (InterruptedException e) {
+            requests.shutdownNow();
             Thread.currentThread().interrupt();
         }
+        timeouts.shutdownNow();
         try {
             allocator.close();
         } catch (RuntimeException e) {

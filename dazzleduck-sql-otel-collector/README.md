@@ -442,8 +442,10 @@ curl -o result.arrow "http://127.0.0.1:8082/v1/query?q=select%201"
 
 - **Streaming:** results are sent in chunks as DuckDB produces them.
 - **Read-only, but not a security boundary:** each query runs in a read-only transaction, which rejects writes to tables. `COPY ... TO`, `SET`, `ATTACH` and DuckLake maintenance functions are not blocked, so keep it on localhost.
-- **Errors:** `400` for a missing query or an invalid compression value, `405` for other HTTP methods, `504` when the timeout fires, `500` with DuckDB's error text otherwise.
-- **Metrics:** `dazzleduck.otel.query.duration`, tagged `format` and `outcome` (`ok`, `error`, `timeout`, `bad_request`).
+- **Requests from web pages are refused (`403`):** a request with an `Origin` header, or with `Sec-Fetch-Site` other than `none`, is rejected. Otherwise any page open in your browser could run SQL here, for example through an `<img>` pointing at `/v1/query?q=...`. While bound to localhost, the `Host` header must also name a loopback host, which blocks DNS rebinding. curl and other command-line clients send none of these headers and are unaffected.
+- **Errors:** `400` for a missing query or an invalid compression value, `405` for other HTTP methods, `504` when the timeout fires, `503` while shutting down, `500` with DuckDB's error text otherwise.
+- **Shutdown:** queries still running are cancelled and answered before the collector goes on to flush its queues.
+- **Metrics:** `dazzleduck.otel.query.duration`, tagged `format` and `outcome` (`ok`, `error`, `timeout`, `bad_request`, `forbidden`, `unavailable`).
 
 ### Compaction
 
