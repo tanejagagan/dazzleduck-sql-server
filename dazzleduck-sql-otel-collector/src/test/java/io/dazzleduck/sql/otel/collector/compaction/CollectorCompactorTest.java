@@ -170,6 +170,42 @@ class CollectorCompactorTest {
     }
 
     @Test
+    void statusRecordsEachJobsLastRunAndTheSnapshotCount() throws Exception {
+        var compactor = new CollectorCompactor(settings(Duration.ofMinutes(15), Duration.ofDays(2)), registry);
+        compactor.runMinor();
+        compactor.runMinor();
+
+        var status = compactor.status();
+        assertTrue(status.enabled());
+        var minor = status.jobs().stream().filter(j -> j.job().equals("minor")).findFirst().orElseThrow();
+        assertEquals(catalog, minor.catalog());
+        assertEquals(CollectorCompactor.Outcome.OK, minor.lastOutcome());
+        assertEquals(0, minor.lastFilesMerged(), "the second run had nothing left to merge");
+        assertEquals(10, minor.totalFilesMerged());
+        assertEquals(2, minor.runs());
+        assertEquals(0, minor.failedRuns());
+        assertNotNull(minor.lastStart());
+        assertTrue(minor.nextRun().isAfter(minor.lastStart()));
+        assertEquals(scalar("SELECT count(*) FROM %s.ducklake_snapshot".formatted(metadata)),
+                status.snapshotCounts().get(catalog));
+    }
+
+    @Test
+    void aFailedRunIsRecordedWithItsError() {
+        var settings = new CompactionSettings(true, List.of("no_such_catalog"), Duration.ofMinutes(1), 1024,
+                Duration.ofHours(1), Duration.ofMinutes(15), null, false, Duration.ofDays(1), Duration.ofDays(2));
+        var compactor = new CollectorCompactor(settings, registry);
+        compactor.runMajor();
+
+        var major = compactor.status().jobs().stream().filter(j -> j.job().equals("major")).findFirst().orElseThrow();
+        assertEquals(CollectorCompactor.Outcome.FAILED, major.lastOutcome());
+        assertEquals(1, major.failedRuns());
+        assertNotNull(major.lastError());
+        assertTrue(major.lastError().startsWith("flush_inlined: "), "names the first failing step: " + major.lastError());
+        assertEquals(-1L, compactor.status().snapshotCounts().get("no_such_catalog"), "unreadable catalog");
+    }
+
+    @Test
     void startIsANoOpWhenDisabled() throws Exception {
         var compactor = new CollectorCompactor(CompactionSettings.disabled(), registry);
         compactor.start();

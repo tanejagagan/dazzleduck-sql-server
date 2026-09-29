@@ -12,6 +12,12 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -37,11 +43,31 @@ public class CollectorCompactor implements Closeable {
     private static final Logger log = LoggerFactory.getLogger(CollectorCompactor.class);
     private static final Duration CLOSE_TIMEOUT = Duration.ofSeconds(10);
 
+    static final String MINOR = "minor";
+    static final String MAJOR = "major";
+    static final String ORPHAN_CLEANUP = "orphan_cleanup";
+
+    /** Outcome of a step, and of a job run as its worst step. */
+    public enum Outcome { OK, CONFLICT, FAILED }
+
+    /**
+     * Last run of one job on one catalog, for the {@code /stats} page. Times are null until the job
+     * has run; {@code nextRun} is when the scheduler will start it next.
+     */
+    public record JobStatus(String catalog, String job, Instant lastStart, long lastDurationMs, Outcome lastOutcome,
+                            String lastError, long lastFilesMerged, long lastFilesRewritten, long totalFilesMerged,
+                            long totalFilesRewritten, long runs, long failedRuns, Instant nextRun) {}
+
+    /** Everything the {@code /stats} page shows about compaction. */
+    public record Status(boolean enabled, List<JobStatus> jobs, Map<String, Long> snapshotCounts) {}
+
     private final CompactionSettings settings;
     private final MeterRegistry registry;
     private final ScheduledExecutorService scheduler;
     // The statement currently executing, so close() can cancel a long merge.
     private volatile Statement running;
+    // catalog|job -> last run, in catalog then job order.
+    private final Map<String, JobStatus> statuses = new ConcurrentHashMap<>();
 
     public CollectorCompactor(CompactionSettings settings, MeterRegistry registry) {
         this.settings = settings;
@@ -58,10 +84,10 @@ public class CollectorCompactor implements Closeable {
         if (!settings.enabled()) {
             return;
         }
-        schedule(this::runMinor, settings.minorFrequency());
-        schedule(this::runMajor, settings.majorFrequency());
+        schedule(MINOR, this::runMinor, settings.minorFrequency());
+        schedule(MAJOR, this::runMajor, settings.majorFrequency());
         if (settings.orphanCleanupEnabled()) {
-            schedule(this::runOrphanCleanup, settings.orphanFrequency());
+            schedule(ORPHAN_CLEANUP, this::runOrphanCleanup, settings.orphanFrequency());
         }
         log.info("Compaction enabled for {}: minor every {} (files < {} bytes), major every {} (retention {}), "
                         + "orphan cleanup {}",
@@ -72,17 +98,23 @@ public class CollectorCompactor implements Closeable {
                         : "off");
     }
 
-    private void schedule(Runnable job, Duration every) {
+    private void schedule(String job, Runnable run, Duration every) {
+        Instant first = Instant.now().plus(every);
+        for (String catalog : settings.catalogs()) {
+            statuses.put(key(catalog, job), new JobStatus(catalog, job, null, 0, null, null, 0, 0, 0, 0, 0, 0, first));
+        }
         long ms = every.toMillis();
         // Fixed delay: a slow run pushes the next one back instead of queueing runs behind it.
-        scheduler.scheduleWithFixedDelay(job, ms, ms, TimeUnit.MILLISECONDS);
+        scheduler.scheduleWithFixedDelay(run, ms, ms, TimeUnit.MILLISECONDS);
     }
 
     /** Merges files smaller than {@code minor.max_file_size}. */
     void runMinor() {
         for (String catalog : settings.catalogs()) {
-            step(catalog, "minor_merge", "CALL ducklake_merge_adjacent_files('%s', max_file_size => %d)"
-                    .formatted(catalog, settings.minorMaxFileSize()), "files_merged");
+            var run = new JobRun(catalog, MINOR, settings.minorFrequency());
+            run.add(step(catalog, "minor_merge", "CALL ducklake_merge_adjacent_files('%s', max_file_size => %d)"
+                    .formatted(catalog, settings.minorMaxFileSize()), "files_merged"));
+            run.finish();
         }
     }
 
@@ -90,16 +122,18 @@ public class CollectorCompactor implements Closeable {
     void runMajor() {
         long retentionSeconds = settings.snapshotRetention().toSeconds();
         for (String catalog : settings.catalogs()) {
-            step(catalog, "flush_inlined", "CALL ducklake_flush_inlined_data('%s')".formatted(catalog), null);
-            step(catalog, "expire_snapshots", "CALL ducklake_expire_snapshots('%s', older_than => now() - INTERVAL '%d seconds')"
-                    .formatted(catalog, retentionSeconds), null);
-            step(catalog, "major_merge", "CALL ducklake_merge_adjacent_files('%s')".formatted(catalog), "files_merged");
-            step(catalog, "rewrite_deletes", settings.rewriteDeleteThreshold() == null
+            var run = new JobRun(catalog, MAJOR, settings.majorFrequency());
+            run.add(step(catalog, "flush_inlined", "CALL ducklake_flush_inlined_data('%s')".formatted(catalog), null));
+            run.add(step(catalog, "expire_snapshots", "CALL ducklake_expire_snapshots('%s', older_than => now() - INTERVAL '%d seconds')"
+                    .formatted(catalog, retentionSeconds), null));
+            run.add(step(catalog, "major_merge", "CALL ducklake_merge_adjacent_files('%s')".formatted(catalog), "files_merged"));
+            run.add(step(catalog, "rewrite_deletes", settings.rewriteDeleteThreshold() == null
                     ? "CALL ducklake_rewrite_data_files('%s')".formatted(catalog)
                     : "CALL ducklake_rewrite_data_files('%s', delete_threshold => %s)"
-                            .formatted(catalog, settings.rewriteDeleteThreshold()), "files_rewritten");
-            step(catalog, "cleanup_old_files", "CALL ducklake_cleanup_old_files('%s', older_than => now() - INTERVAL '%d seconds')"
-                    .formatted(catalog, retentionSeconds), null);
+                            .formatted(catalog, settings.rewriteDeleteThreshold()), "files_rewritten"));
+            run.add(step(catalog, "cleanup_old_files", "CALL ducklake_cleanup_old_files('%s', older_than => now() - INTERVAL '%d seconds')"
+                    .formatted(catalog, retentionSeconds), null));
+            run.finish();
         }
     }
 
@@ -107,17 +141,22 @@ public class CollectorCompactor implements Closeable {
     void runOrphanCleanup() {
         long ageSeconds = settings.orphanOlderThan().toSeconds();
         for (String catalog : settings.catalogs()) {
-            step(catalog, "delete_orphaned_files", "CALL ducklake_delete_orphaned_files('%s', older_than => now() - INTERVAL '%d seconds')"
-                    .formatted(catalog, ageSeconds), null);
+            var run = new JobRun(catalog, ORPHAN_CLEANUP, settings.orphanFrequency());
+            run.add(step(catalog, "delete_orphaned_files", "CALL ducklake_delete_orphaned_files('%s', older_than => now() - INTERVAL '%d seconds')"
+                    .formatted(catalog, ageSeconds), null));
+            run.finish();
         }
     }
+
+    /** What one step did; {@code files} counts toward {@code filesCounter} when set. */
+    private record StepResult(String step, String filesCounter, long files, Outcome outcome, String error) {}
 
     /**
      * Runs one step and records its duration. Never throws: a scheduled task that throws is never
      * run again. When {@code filesCounter} is set, the step's {@code files_processed} total is added
      * to that counter.
      */
-    private void step(String catalog, String step, String sql, String filesCounter) {
+    private StepResult step(String catalog, String step, String sql, String filesCounter) {
         Timer.Sample sample = Timer.start(registry);
         try (Connection connection = ConnectionPool.getConnection();
              Statement statement = connection.createStatement()) {
@@ -135,13 +174,15 @@ public class CollectorCompactor implements Closeable {
             }
             log.debug("Compaction step {} on {} done{}", step, catalog,
                     filesCounter == null ? "" : " (" + processed + " files)");
+            return new StepResult(step, filesCounter, processed, Outcome.OK, null);
         } catch (Exception e) {
             counter("failures", catalog, "step", step).increment();
             if (isConflict(e)) {
                 log.info("Compaction step {} on {} lost a transaction conflict; retrying next run", step, catalog);
-            } else {
-                log.error("Compaction step {} on {} failed", step, catalog, e);
+                return new StepResult(step, filesCounter, 0, Outcome.CONFLICT, step + ": " + rootMessage(e));
             }
+            log.error("Compaction step {} on {} failed", step, catalog, e);
+            return new StepResult(step, filesCounter, 0, Outcome.FAILED, step + ": " + rootMessage(e));
         } finally {
             running = null;
             sample.stop(Timer.builder("dazzleduck.otel.compaction.duration")
@@ -150,6 +191,79 @@ public class CollectorCompactor implements Closeable {
                     .tag("step", step)
                     .register(registry));
         }
+    }
+
+    /** Folds a job's steps into its {@link JobStatus}. */
+    private final class JobRun {
+        private final String catalog;
+        private final String job;
+        private final Duration every;
+        private final Instant start = Instant.now();
+        private final long startNanos = System.nanoTime();
+        private Outcome outcome = Outcome.OK;
+        private String error;
+        private long merged;
+        private long rewritten;
+
+        JobRun(String catalog, String job, Duration every) {
+            this.catalog = catalog;
+            this.job = job;
+            this.every = every;
+        }
+
+        void add(StepResult result) {
+            if ("files_merged".equals(result.filesCounter())) merged += result.files();
+            if ("files_rewritten".equals(result.filesCounter())) rewritten += result.files();
+            if (result.outcome().ordinal() > outcome.ordinal()) outcome = result.outcome();
+            if (error == null && result.error() != null) error = result.error();
+        }
+
+        void finish() {
+            long durationMs = (System.nanoTime() - startNanos) / 1_000_000;
+            statuses.compute(key(catalog, job), (k, prev) -> new JobStatus(catalog, job, start, durationMs, outcome, error,
+                    merged, rewritten,
+                    (prev == null ? 0 : prev.totalFilesMerged()) + merged,
+                    (prev == null ? 0 : prev.totalFilesRewritten()) + rewritten,
+                    (prev == null ? 0 : prev.runs()) + 1,
+                    (prev == null ? 0 : prev.failedRuns()) + (outcome == Outcome.OK ? 0 : 1),
+                    Instant.now().plus(every)));
+        }
+    }
+
+    /**
+     * Current status for the {@code /stats} page. Snapshot counts are queried here, on the caller's
+     * thread and a connection of its own, so a page view never waits on the compaction thread; -1
+     * when a catalog cannot be read.
+     */
+    public Status status() {
+        List<JobStatus> jobs = new ArrayList<>();
+        for (String catalog : settings.catalogs()) {
+            for (String job : List.of(MINOR, MAJOR, ORPHAN_CLEANUP)) {
+                JobStatus status = statuses.get(key(catalog, job));
+                if (status != null) jobs.add(status);
+            }
+        }
+        Map<String, Long> snapshots = new LinkedHashMap<>();
+        if (settings.enabled()) {
+            for (String catalog : settings.catalogs()) {
+                snapshots.put(catalog, snapshotCount(catalog));
+            }
+        }
+        return new Status(settings.enabled(), jobs, snapshots);
+    }
+
+    private static long snapshotCount(String catalog) {
+        try {
+            Long count = ConnectionPool.collectFirst(
+                    "SELECT count(*) FROM \"__ducklake_metadata_%s\".ducklake_snapshot".formatted(catalog), Long.class);
+            return count == null ? -1 : count;
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+
+    private static String key(String catalog, String job) {
+        return catalog + "|" + job;
     }
 
     private Counter counter(String name, String catalog, String... extraTags) {
@@ -172,6 +286,13 @@ public class CollectorCompactor implements Closeable {
             }
         }
         return false;
+    }
+
+    private static String rootMessage(Throwable e) {
+        Throwable root = e;
+        while (root.getCause() != null) root = root.getCause();
+        String message = root.getMessage() != null ? root.getMessage() : root.getClass().getSimpleName();
+        return message.length() > 300 ? message.substring(0, 300) + "…" : message;
     }
 
     /** Stops scheduling; waits briefly for a running step, then cancels it. */

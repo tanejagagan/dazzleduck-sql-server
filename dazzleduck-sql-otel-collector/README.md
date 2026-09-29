@@ -440,6 +440,15 @@ otel_collector.compaction {
 - **Orphan cleanup is off by default.** A batch's file is unreferenced until the collector registers it, so `older_than` must exceed the longest write-to-register delay; values under 1 hour are rejected.
 - **Strict config:** an invalid value fails startup, and `enabled = true` requires `catalogs`.
 
+The health server's `/stats` page has a **Compaction** section below the queue table. It has one row per catalog and job, showing:
+- last and next run, outcome (OK, conflict or failed) and duration;
+- files merged and rewritten, for the last run and in total;
+- runs and failed runs;
+- the catalog's snapshot count, read when the page loads;
+- the last error, naming the step that failed.
+
+When compaction is off, the section says so.
+
 Metrics, tagged `catalog`: `dazzleduck.otel.compaction.duration` (timer, also tagged `step`), `dazzleduck.otel.compaction.files_merged`, `dazzleduck.otel.compaction.files_rewritten`, and `dazzleduck.otel.compaction.failures` (also tagged `step`; includes lost transaction conflicts, which are retried on the next run).
 
 ## Building

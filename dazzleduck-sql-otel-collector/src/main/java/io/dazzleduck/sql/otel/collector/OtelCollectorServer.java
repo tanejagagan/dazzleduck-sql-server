@@ -1,10 +1,11 @@
 package io.dazzleduck.sql.otel.collector;
 
-import io.dazzleduck.sql.otel.collector.compaction.CollectorCompactor;
 import io.dazzleduck.sql.commons.auth.Validator;
 import io.dazzleduck.sql.commons.ingestion.IngestionHandler;
 import io.dazzleduck.sql.otel.collector.auth.JwtServerInterceptor;
+import io.dazzleduck.sql.otel.collector.compaction.CollectorCompactor;
 import io.dazzleduck.sql.otel.collector.config.CollectorProperties;
+import io.dazzleduck.sql.otel.collector.health.CompactionStatusHtml;
 import io.dazzleduck.sql.otel.collector.health.CollectorHealth;
 import io.dazzleduck.sql.otel.collector.health.CollectorHealthStatus;
 import io.dazzleduck.sql.otel.collector.health.HealthServer;
@@ -140,12 +141,14 @@ public class OtelCollectorServer implements Closeable {
             grpcServer = builder.build().start();
 
             IngestionHandler statsHandler = handler;
+            // Built before the health server so /stats can show its status; started last, below.
+            compactor = new CollectorCompactor(props.getCompactionSettings(), props.getMeterRegistry());
+            CollectorCompactor statusSource = compactor;
             healthServer = new HealthServer(props.getHealthPort(), health, props.getGrpcPort(),
-                    statsHandler::getQueueStats);
+                    statsHandler::getQueueStats, () -> CompactionStatusHtml.render(statusSource.status()));
             healthServer.start();
             // Last: runs on the same DuckDB instance as ingestion, whose catalogs Main's startup
             // script has already attached. A no-op unless compaction.enabled is true.
-            compactor = new CollectorCompactor(props.getCompactionSettings(), props.getMeterRegistry());
             compactor.start();
             health.transitionTo(CollectorHealthStatus.HEALTHY);
             started = true;
