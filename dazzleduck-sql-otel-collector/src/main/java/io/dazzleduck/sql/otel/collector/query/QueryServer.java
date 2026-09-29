@@ -42,10 +42,12 @@ import java.util.concurrent.TimeUnit;
  * {@code application/x-ndjson}), otherwise an Arrow IPC stream (ZSTD unless
  * {@code x-dd-arrow-compression: none}). Results stream as DuckDB produces them.
  *
- * <p>Each query runs on its own {@link ConnectionPool} connection inside {@code BEGIN TRANSACTION
- * READ ONLY}, so it sees the catalogs ingestion writes to and cannot write to their tables. That is
- * a guard against mistakes, not a security boundary: {@code COPY ... TO}, {@code SET},
- * {@code ATTACH} and DuckLake maintenance functions are not blocked. There is no authentication,
+ * <p>Only a single SELECT is accepted (checked with DuckDB's parser; multiple statements, DDL, DML,
+ * COPY, SET, ATTACH, CALL and EXPLAIN get 400). It runs on its own {@link ConnectionPool}
+ * connection inside {@code BEGIN TRANSACTION READ ONLY}, so it sees the catalogs ingestion writes
+ * to and cannot write to their tables. That is a guard against mistakes, not a security boundary:
+ * a SELECT can still call a table function with side effects, such as DuckLake's maintenance
+ * functions. There is no authentication,
  * which is why it binds to localhost by default.
  *
  * <p>{@code query.timeout} bounds query execution, through the driver's
@@ -133,6 +135,12 @@ public class QueryServer implements Closeable {
                     return;
                 }
             }
+            String notSingleSelect = notASingleSelect(sql);
+            if (notSingleSelect != null) {
+                outcome = "bad_request";
+                sendText(exchange, 400, notSingleSelect);
+                return;
+            }
             outcome = run(exchange, sql, chosen, codec);
         } catch (Exception e) {
             log.error("Query request failed", e);
@@ -144,6 +152,38 @@ public class QueryServer implements Closeable {
                     .tag("format", format)
                     .tag("outcome", outcome)
                     .register(registry));
+        }
+    }
+
+    /**
+     * Why {@code sql} is not exactly one SELECT, or null when it is. DuckDB's JDBC driver runs every
+     * statement in a string (even through prepareStatement), so without this {@code COMMIT; DROP
+     * TABLE ...} would end the read-only transaction and write. DuckDB's own parser decides:
+     * {@code json_serialize_sql} accepts SELECT, WITH, FROM-first, DESCRIBE, SHOW and SUMMARIZE,
+     * and reports an error for anything else (COPY, SET, ATTACH, CALL, EXPLAIN, DDL, DML).
+     */
+    private static String notASingleSelect(String sql) throws SQLException {
+        String serialized;
+        try (DuckDBConnection connection = ConnectionPool.getConnection();
+             var statement = connection.prepareStatement("SELECT json_serialize_sql(?::VARCHAR)")) {
+            statement.setString(1, sql);
+            try (var rs = statement.executeQuery()) {
+                rs.next();
+                serialized = rs.getString(1);
+            }
+        }
+        try {
+            JsonNode tree = MAPPER.readTree(serialized);
+            if (tree.path("error").asBoolean(false)) {
+                return "Only a single SELECT statement is accepted: " + tree.path("error_message").asText();
+            }
+            int count = tree.path("statements").size();
+            if (count != 1) {
+                return "Only a single SELECT statement is accepted, got " + count;
+            }
+            return null;
+        } catch (IOException e) {
+            return "Could not parse the query: " + e.getMessage();
         }
     }
 
@@ -177,8 +217,12 @@ public class QueryServer implements Closeable {
         return colon >= 0 ? value.substring(0, colon) : value;
     }
 
+    private static final java.util.regex.Pattern IPV4_LOOPBACK =
+            java.util.regex.Pattern.compile("127\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}");
+
+    /** Exactly localhost, ::1, or an IPv4 literal 127.x.x.x; not a name that merely starts with 127. */
     private static boolean isLoopback(String host) {
-        return host.equalsIgnoreCase("localhost") || host.startsWith("127.") || host.equals("::1");
+        return host.equalsIgnoreCase("localhost") || host.equals("::1") || IPV4_LOOPBACK.matcher(host).matches();
     }
 
     /** The SQL from {@code ?q=} (GET) or {@code {"query": ...}} (POST); null after sending an error. */
@@ -261,6 +305,12 @@ public class QueryServer implements Closeable {
              Statement statement = connection.createStatement();
              BufferAllocator requestAllocator = allocator.newChildAllocator("query", 0, Long.MAX_VALUE)) {
             running.add(statement);
+            if (closing) {
+                // close() may have cancelled everything just before this registered; do not start.
+                running.remove(statement);
+                sendText(exchange, 503, "Shutting down");
+                return "unavailable";
+            }
             // The driver cancels execution after this; it does not bound reading a streamed result,
             // which ends when the client disconnects (the next write fails).
             statement.setQueryTimeout(timeoutSeconds());

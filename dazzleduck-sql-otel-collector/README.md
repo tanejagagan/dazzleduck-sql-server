@@ -441,7 +441,7 @@ curl -o result.arrow "http://127.0.0.1:8082/v1/query?q=select%201"
 ```
 
 - **Streaming:** results are sent in chunks as DuckDB produces them. `timeout` bounds query execution (via the JDBC driver's query timeout), not reading a streamed result; that ends when the client disconnects.
-- **Read-only, but not a security boundary:** each query runs in a read-only transaction, which rejects writes to tables. `COPY ... TO`, `SET`, `ATTACH` and DuckLake maintenance functions are not blocked, so keep it on localhost.
+- **Single SELECT, read-only, but not a security boundary:** DuckDB's parser checks that the request is exactly one `SELECT` (including `WITH`, `FROM ...`, `DESCRIBE`, `SHOW` and `SUMMARIZE`). Multiple statements, DDL, DML, `COPY`, `SET`, `ATTACH`, `CALL` and `EXPLAIN` get `400`. The query then runs in a read-only transaction. A `SELECT` can still call a table function with side effects, such as DuckLake's maintenance functions, so keep the endpoint on localhost.
 - **Requests from web pages are refused (`403`):** a request with an `Origin` header, or with `Sec-Fetch-Site` other than `none`, is rejected. Otherwise any page open in your browser could run SQL here, for example through an `<img>` pointing at `/v1/query?q=...`. While bound to localhost, the `Host` header must also name a loopback host, which blocks DNS rebinding. curl and other command-line clients send none of these headers and are unaffected.
 - **Errors:** `400` for a missing query or an invalid compression value, `405` for other HTTP methods, `504` when the timeout fires, `503` while shutting down, `500` with DuckDB's error text otherwise.
 - **Shutdown:** queries still running are cancelled and answered before the collector goes on to flush its queues.

@@ -132,10 +132,39 @@ class QueryServerTest {
     @Test
     void writesToTablesAreRejected() throws Exception {
         var response = get("INSERT INTO %s.main.events VALUES (99, 'x', DATE '2026-01-01', [1, 2])".formatted(CATALOG), null);
-        assertEquals(500, response.statusCode());
-        assertTrue(text(response).contains("read-only"), text(response));
-        assertEquals("3\n", text(get("SELECT count(*) AS n FROM %s.main.events".formatted(CATALOG), "text/tab-separated-values"))
-                .lines().skip(1).map(l -> l + "\n").findFirst().orElse(""), "nothing was inserted");
+        assertEquals(400, response.statusCode());
+        assertTrue(text(response).contains("single SELECT"), text(response));
+        assertEquals(3, eventCount(), "nothing was inserted");
+    }
+
+    private static long eventCount() throws Exception {
+        String tsv = text(get("SELECT count(*) AS n FROM %s.main.events".formatted(CATALOG), "text/tab-separated-values"));
+        return Long.parseLong(tsv.lines().skip(1).findFirst().orElseThrow());
+    }
+
+    @Test
+    void aSecondStatementCannotEscapeTheReadOnlyTransaction() throws Exception {
+        // DuckDB's JDBC driver runs every statement in a string, so this would COMMIT the read-only
+        // transaction and then drop the table if multiple statements were accepted.
+        var response = get("COMMIT; DROP TABLE %s.main.events".formatted(CATALOG), null);
+        assertEquals(400, response.statusCode(), text(response));
+        var twoSelects = get("SELECT 1; SELECT 2", null);
+        assertEquals(400, twoSelects.statusCode());
+        assertTrue(text(twoSelects).contains("single SELECT"), text(twoSelects));
+        assertEquals(3, eventCount(), "the table is still there with its rows");
+    }
+
+    @Test
+    void onlySelectLikeStatementsAreAccepted() throws Exception {
+        for (String sql : new String[]{"COPY (SELECT 1) TO 'x.csv'", "SET threads = 1", "ATTACH ':memory:' AS other",
+                "CALL ducklake_snapshots('%s')".formatted(CATALOG), "EXPLAIN SELECT 1",
+                "CREATE TABLE %s.main.x (i INT)".formatted(CATALOG)}) {
+            assertEquals(400, get(sql, null).statusCode(), sql);
+        }
+        for (String sql : new String[]{"WITH x AS (SELECT 1 AS n) SELECT * FROM x", "FROM %s.main.events".formatted(CATALOG),
+                "DESCRIBE %s.main.events".formatted(CATALOG), "SHOW TABLES", "SUMMARIZE %s.main.events".formatted(CATALOG)}) {
+            assertEquals(200, get(sql, "text/tab-separated-values").statusCode(), sql);
+        }
     }
 
     @Test
@@ -164,6 +193,9 @@ class QueryServerTest {
         // DNS rebinding: evil.example resolves to 127.0.0.1, so the request arrives with its Host.
         // java.net.http will not set Host, so this one goes over a raw socket.
         assertTrue(rawStatusLine("evil.example:" + server.getPort()).contains(" 403 "));
+        assertTrue(rawStatusLine("127.attacker.example:" + server.getPort()).contains(" 403 "),
+                "a name that merely starts with 127. is not loopback");
+        assertTrue(rawStatusLine("127.0.0.1:" + server.getPort()).contains(" 200 "));
         assertTrue(rawStatusLine("localhost:" + server.getPort()).contains(" 200 "));
         assertTrue(rawStatusLine("[::1]:" + server.getPort()).contains(" 200 "));
     }
@@ -208,7 +240,7 @@ class QueryServerTest {
                 .PUT(HttpRequest.BodyPublishers.noBody()).build(), HttpResponse.BodyHandlers.ofString());
         assertEquals(405, put.statusCode());
         var badSql = get("SELEKT 1", "text/tab-separated-values");
-        assertEquals(500, badSql.statusCode());
+        assertEquals(400, badSql.statusCode(), "rejected by the parser check before running");
         assertTrue(text(badSql).contains("syntax error"), text(badSql));
     }
 }
