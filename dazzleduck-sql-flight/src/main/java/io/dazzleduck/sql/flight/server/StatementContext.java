@@ -41,6 +41,8 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
     private Instant startTime;
     private Instant endTime;
     private int useCount;
+    // Set when the cursor cache evicts this context while a stream is using it (see closeWhenIdle).
+    private boolean closeWhenDone;
 
     private long bytesOut;
 
@@ -134,6 +136,22 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
     public synchronized void end() {
         inUse = false;
         this.endTime = Clock.systemUTC().instant();
+        if (closeWhenDone) {
+            close();
+        }
+    }
+
+    /**
+     * Closes the statement and connection now, or, if a stream is using them, when that stream
+     * {@link #end ends}. For automatic cache evictions: the cursor TTL is meant to reap cursors that
+     * were planned but never read, not to close a query that is still executing or streaming.
+     */
+    public synchronized void closeWhenIdle() {
+        if (inUse) {
+            closeWhenDone = true;
+        } else {
+            close();
+        }
     }
 
     public synchronized void bytesOut(long out) {

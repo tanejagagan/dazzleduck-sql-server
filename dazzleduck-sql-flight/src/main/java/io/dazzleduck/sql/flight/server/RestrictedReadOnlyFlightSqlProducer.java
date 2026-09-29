@@ -34,9 +34,22 @@ public class RestrictedReadOnlyFlightSqlProducer extends SelectOnlyFlightSqlProd
             Duration queryTimeout, Duration maxQueryTimeout,
             Clock clock, FlightRecorder recorder,
             IngestionConfig ingestionConfig, List<Location> dataProcessorLocations) {
+        this(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode,
+              tempDir, postIngestionHandler, scheduledExecutorService,
+              queryTimeout, maxQueryTimeout, clock, recorder, ingestionConfig, dataProcessorLocations, CursorConfig.DEFAULT);
+    }
+
+    public RestrictedReadOnlyFlightSqlProducer(
+            Location serverLocation, String producerId, String secretKey,
+            BufferAllocator allocator, String warehousePath, AccessMode accessMode,
+            Path tempDir, IngestionHandler postIngestionHandler,
+            ScheduledExecutorService scheduledExecutorService,
+            Duration queryTimeout, Duration maxQueryTimeout,
+            Clock clock, FlightRecorder recorder,
+            IngestionConfig ingestionConfig, List<Location> dataProcessorLocations, CursorConfig cursorConfig) {
         super(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode,
               tempDir, postIngestionHandler, scheduledExecutorService,
-              queryTimeout, maxQueryTimeout, clock, recorder, ingestionConfig, dataProcessorLocations);
+              queryTimeout, maxQueryTimeout, clock, recorder, ingestionConfig, dataProcessorLocations, cursorConfig);
     }
 
     // ── Block raw-SQL schema probe (prepared-statement entry points are allowed;

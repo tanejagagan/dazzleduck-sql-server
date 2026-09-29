@@ -1366,6 +1366,11 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
      * Injects a live cursor entry into the cache on behalf of {@code peerIdentity}.
      * Visible for testing only — do not call from production code.
      */
+    /** The cursor limits in effect; for tests. */
+    CursorConfig getCursorConfig() {
+        return cursorConfig;
+    }
+
     void injectTestCursor(String peerIdentity) {
         try {
             var conn = ConnectionPool.getConnection();
@@ -1409,7 +1414,14 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         public void onRemoval(final RemovalNotification<CacheKey, StatementContext<T>> notification) {
             try {
                 assert notification.getValue() != null;
-                notification.getValue().close();
+                if (notification.wasEvicted()) {
+                    // TTL or size eviction: never pull the connection out from under a running
+                    // stream; it is closed when the stream ends instead.
+                    notification.getValue().closeWhenIdle();
+                } else {
+                    // Explicit invalidation (a stream finishing, or a cancel) or replacement.
+                    notification.getValue().close();
+                }
             } catch (final Exception e) {
                 logger.atWarn().setCause(e).log("Failed to close statement during cache removal");
             }

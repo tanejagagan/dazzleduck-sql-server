@@ -465,7 +465,8 @@ public final class FlightSqlProducerFactory {
                     finalRecorder,
                     queryOptimizer,
                     ingestionConfig,
-                    dataProcessorLocations
+                    dataProcessorLocations,
+                    cursorConfig
                 );
             } else if (accessMode == AccessMode.RESTRICT_READ_ONLY) {
                 return new RestrictedReadOnlyFlightSqlProducer(
@@ -483,7 +484,8 @@ public final class FlightSqlProducerFactory {
                         clock,
                         finalRecorder,
                         ingestionConfig,
-                        dataProcessorLocations
+                        dataProcessorLocations,
+                    cursorConfig
                 );
             } else if (accessMode == AccessMode.READ_ONLY ) {
                 return new SelectOnlyFlightSqlProducer(
@@ -501,7 +503,8 @@ public final class FlightSqlProducerFactory {
                         clock,
                         finalRecorder,
                         ingestionConfig,
-                        dataProcessorLocations
+                        dataProcessorLocations,
+                    cursorConfig
                 );
             } else {
                 return new DuckDBFlightSqlProducer(
