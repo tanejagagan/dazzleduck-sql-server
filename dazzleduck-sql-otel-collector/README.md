@@ -415,6 +415,38 @@ otel_collector.ingestion_task_factory_provider {
 Watermarks are not available for dynamically registered queues — the SQLite registry does not
 store `additional_parameters`.
 
+### Local query endpoint
+
+For local testing, the collector can answer SQL queries against its own DuckDB instance, and so against the DuckLake catalogs it writes to. It's off by default:
+
+```hocon
+otel_collector.query {
+    enabled = true
+    host = "127.0.0.1"          # localhost only by default: there is no authentication
+    port = 8082
+    threads = 4                 # request threads, also the limit on concurrent queries
+    timeout = 30 seconds        # execution still running after this is cancelled (504); at least 1 second
+}
+```
+
+It has the same shape as the main server's `/v1/query`. The response format follows the `Accept` header:
+
+```bash
+# TSV
+curl -H "Accept: text/tab-separated-values" "http://127.0.0.1:8082/v1/query?q=select%201"
+# JSON Lines (also application/x-ndjson)
+curl -H "Accept: application/jsonl" -d '{"query": "select 1 as n"}' http://127.0.0.1:8082/v1/query
+# Arrow IPC stream, ZSTD-compressed (x-dd-arrow-compression: none to disable)
+curl -o result.arrow "http://127.0.0.1:8082/v1/query?q=select%201"
+```
+
+- **Streaming:** results are sent in chunks as DuckDB produces them. `timeout` bounds query execution (via the JDBC driver's query timeout), not reading a streamed result; that ends when the client disconnects. If the query fails after rows have been sent, the connection is dropped rather than ended normally, so a partial result can't be mistaken for a complete one.
+- **Single SELECT, read-only, but not a security boundary:** DuckDB's parser checks that the request is exactly one `SELECT` (including `WITH`, `FROM ...`, `DESCRIBE`, `SHOW` and `SUMMARIZE`). Multiple statements, DDL, DML, `COPY`, `SET`, `ATTACH`, `CALL` and `EXPLAIN` get `400`. The query then runs in a read-only transaction. A `SELECT` can still call a table function with side effects, such as DuckLake's maintenance functions, so keep the endpoint on localhost.
+- **Requests from web pages are refused (`403`):** a request with an `Origin` header, or with `Sec-Fetch-Site` other than `none`, is rejected. Otherwise any page open in your browser could run SQL here, for example through an `<img>` pointing at `/v1/query?q=...`. While bound to localhost, the `Host` header must also name a loopback host, which blocks DNS rebinding. curl and other command-line clients send none of these headers and are unaffected. Browsers too old to send `Sec-Fetch-Site`, such as Safari before 16.4, can still make a plain `GET` from a web page, for example through an `<img>` tag: another reason to use this endpoint only for local testing.
+- **Errors:** `400` for a missing query or an invalid compression value, `405` for other HTTP methods, `504` when the timeout fires, `503` while shutting down, `500` with DuckDB's error text otherwise.
+- **Shutdown:** queries still running are cancelled and answered before the collector goes on to flush its queues.
+- **Metrics:** `dazzleduck.otel.query.duration`, tagged `format` and `outcome` (`ok`, `error`, `timeout`, `bad_request`, `forbidden`, `unavailable`).
+
 ### Compaction
 
 The collector can maintain the DuckLake catalogs it writes to, on its own DuckDB instance, so no separate compactor is needed. This is required for DuckDB-file and SQLite catalogs, which can only be attached once per process. It is off unless `compaction.enabled = true`:
