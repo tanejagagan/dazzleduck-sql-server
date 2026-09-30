@@ -56,4 +56,4 @@ and hostname verification. Never set this in production.
 
 ## Requirements
 
-- Java 11+ (bytecode target 11; built with JDK 21)
+- Java 11+ (bytecode target 11; built with JDK 25)

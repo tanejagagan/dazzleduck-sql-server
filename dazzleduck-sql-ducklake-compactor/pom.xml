@@ -156,10 +156,7 @@
                 <configuration>
                     <!-- CompactionStressTest runs for a minute; run it with -Pstress -->
                     <excludedGroups>${excluded.test.groups}</excludedGroups>
-                    <argLine>
-                        --add-opens=java.base/java.nio=ALL-UNNAMED
-                        --add-opens=java.base/sun.nio.ch=ALL-UNNAMED
-                    </argLine>
+                    <argLine>${arrow.jvm.flags}</argLine>
                 </configuration>
             </plugin>
 
@@ -238,7 +235,7 @@
                 <version>3.5.1</version>
                 <configuration>
                     <from>
-                        <image>dazzleduck/base-jre:25-noble-duckdb-${duckdb.version}</image>
+                        <image>dazzleduck/base-jre:${java.runtime.version}-noble-duckdb-${duckdb.version}</image>
                         <platforms>
                             <platform>
                                 <os>linux</os>
@@ -257,6 +254,8 @@
                         <jvmFlags>
                             <jvmFlag>--add-opens=java.base/java.nio=ALL-UNNAMED</jvmFlag>
                             <jvmFlag>--add-opens=java.base/sun.nio.ch=ALL-UNNAMED</jvmFlag>
+                            <jvmFlag>--enable-native-access=ALL-UNNAMED</jvmFlag>
+                            <jvmFlag>--sun-misc-unsafe-memory-access=allow</jvmFlag>
                         </jvmFlags>
                     </container>
                     <!-- Bakes the just-downloaded patched extension into the exact local cache path

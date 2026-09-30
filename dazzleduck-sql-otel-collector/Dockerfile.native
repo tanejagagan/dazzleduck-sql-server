@@ -11,10 +11,11 @@
 # arch-independent; the arch-specific DuckDB .so is bundled via -Dduckdb.native.arch (see the pom).
 
 # ---- build stage: GraalVM native-image + Maven wrapper ----
-FROM ghcr.io/graalvm/native-image-community:21 AS build
+FROM ghcr.io/graalvm/native-image-community:25 AS build
 ARG TARGETARCH
-# zlib-devel provides libz.so, which the final native-image link needs (gcc ... -lz).
-RUN microdnf install -y zlib-devel && microdnf clean all
+# Nothing to install: the GraalVM 25 image (Oracle Linux 10) already has libz.so, which the
+# native-image link needs (gcc ... -lz), via zlib-ng-compat-devel. Installing zlib-devel
+# conflicts with it.
 WORKDIR /src
 COPY . .
 # -Pnative binds native-maven-plugin's compile-no-fork to the package phase and emits target/collector.

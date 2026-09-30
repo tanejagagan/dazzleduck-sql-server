@@ -8,11 +8,11 @@ pushed directly to `main`.
 
 ## Prerequisites
 
-- **JDK 21.** JDK 25 causes test failures. Everything below assumes:
+- **JDK 25**, the JVM CI and the images use. Everything below assumes:
 
   ```bash
-  export JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home
-  export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED"
+  export JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-25.jdk/Contents/Home
+  export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED --enable-native-access=ALL-UNNAMED --sun-misc-unsafe-memory-access=allow"
   ```
 
 - **Docker Hub credentials that Jib can read.** The base image `dazzleduck/base-jre` is private
@@ -179,6 +179,9 @@ publishing images.
   rather than by digest, so a release is not reproducible if that tag is republished. Pinning it
   would mean adding a digest property to the parent pom and referencing it from the four poms that
   name the base image.
-- `dazzleduck/dazzleduck-sql-scrapper` has a `latest` tag but no version tags. It is registered as
-  a single-architecture module and so never gets a manifest; whether it should be part of a release
-  at all is unresolved.
+- `dazzleduck/dazzleduck-sql-scrapper` is built per architecture like the other images
+  (`${project.version}-${arch}`, joined into a manifest by `scripts/docker-publish.sh`), but
+  `release.yml` does not publish it; whether it should be part of a release is unresolved.
+- The base image `dazzleduck/base-jre` is built from `dazzleduck-sql-runtime/docker/Dockerfile.base`
+  with `scripts/build-base-image.sh`, which takes the Java and DuckDB versions from the parent pom
+  so the tag always matches what the image contains.

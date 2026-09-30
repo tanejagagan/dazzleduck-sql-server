@@ -11,6 +11,16 @@ import java.util.List;
 
 public class Main {
 
+    static {
+        // Netty 4.2 on Java 24+ disables sun.misc.Unsafe unless told otherwise, and Arrow's Netty
+        // allocator then fails to initialize. The JVM images pass --sun-misc-unsafe-memory-access=allow,
+        // but a native image takes no JVM flags, so ask Netty directly. Runs before any Netty class
+        // loads; an explicit -Dio.netty.noUnsafe still wins.
+        if (System.getProperty("io.netty.noUnsafe") == null) {
+            System.setProperty("io.netty.noUnsafe", "false");
+        }
+    }
+
     private static final Logger logger = LoggerFactory.getLogger(Main.class);
 
     public static void main(String[] args) throws Exception {

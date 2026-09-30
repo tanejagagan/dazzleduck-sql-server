@@ -31,7 +31,9 @@ Two reasons:
 
 Hadoop (`hadoop-client-runtime` + `hadoop-client-api`, ~48 MB) is declared `provided` in the
 runtime module and excluded from the image by default. To enable Delta Lake, add the Hadoop jars
-to `/app/extra` at runtime.
+to `/app/extra` at runtime. Use Hadoop **3.4.3 or later** (the parent pom's `hadoop.version`):
+earlier releases call `Subject.getSubject`, which the image's Java 25 no longer supports, and every
+Delta read fails with "getSubject is not supported".
 
 ---
 

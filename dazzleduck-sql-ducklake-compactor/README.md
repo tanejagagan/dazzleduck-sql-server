@@ -186,7 +186,7 @@ reflect failing compaction cycles.
 ## Build
 
 ```bash
-export JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home
+export JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-25.jdk/Contents/Home
 
 # Build fat JAR
 ./mvnw clean package -pl dazzleduck-sql-ducklake-compactor
