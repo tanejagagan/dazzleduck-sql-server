@@ -88,11 +88,19 @@ public class ResultSetStreamUtil {
                                                       Runnable finalBlock, FlightRecorder recorder) {
 
         submit(executorService, finalBlock, () -> {
+            if (!statementContext.tryStart()) {
+                // Another stream is running this statement, or it was closed. Reject without touching
+                // its state (no end()), but still run this stream's own cleanup: for a plain
+                // statement, whose context can only fail here once closed, that removes the closed
+                // entry from the cursor cache instead of leaving it for the TTL.
+                listener.error(ErrorHandling.cannotStart(statementContext));
+                finalBlock.run();
+                return;
+            }
             BufferAllocator childAllocator = null;
             var error = false;
             try {
                 childAllocator = allocator.newChildAllocator("statement-allocator", 0, allocator.getLimit());
-                statementContext.start();
                 // A client that disconnects or cancels the DoGet must stop the query. Without this,
                 // Flight drops every later putNext() silently and the query runs to completion.
                 listener.setOnCancelHandler(() -> {

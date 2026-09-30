@@ -38,6 +38,7 @@ import org.apache.arrow.vector.ipc.WriteChannel;
 import org.apache.arrow.vector.ipc.message.MessageSerializer;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.duckdb.DuckDBConnection;
+import org.duckdb.DuckDBResultSet;
 import org.duckdb.DuckDBResultSetMetaData;
 import org.duckdb.StatementReturnType;
 import org.slf4j.Logger;
@@ -679,14 +680,37 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             ErrorHandling.handleContextNotFound();
             return; // Never reached if handleContextNotFound throws, but prevents NPE if it doesn't
         }
+        // Validated now (an invalid timeout header fails the call), but applied only when this run
+        // starts executing: the statement is shared, and a run rejected because another is still
+        // executing must not change that run's timeout.
+        final int queryTimeoutSeconds;
         try {
-            statementContext.getStatement().setQueryTimeout(getEffectiveQueryTimeoutSeconds(context));
-        } catch (SQLException e) {
+            queryTimeoutSeconds = getEffectiveQueryTimeoutSeconds(context);
+        } catch (RuntimeException e) {
             ErrorHandling.handleThrowable(listener, e);
             return;
         }
+        PreparedStatement preparedStatement = statementContext.getStatement();
+        OptionalResultSetSupplier run = OptionalResultSetSupplier.of(preparedStatement);
+        OptionalResultSetSupplier timedRun = new OptionalResultSetSupplier() {
+            @Override
+            public boolean hasResultSet() {
+                return run.hasResultSet();
+            }
+
+            @Override
+            public DuckDBResultSet get() throws SQLException {
+                return run.get();
+            }
+
+            @Override
+            public void execute() throws SQLException {
+                preparedStatement.setQueryTimeout(queryTimeoutSeconds);
+                run.execute();
+            }
+        };
         statementContext.markClaimed(); // like getStreamStatement: a queued run sees a cancel and counts as live
-        ResultSetStreamUtil.streamResultSet(executorService, statementContext, key, OptionalResultSetSupplier.of(statementContext.getStatement()),
+        ResultSetStreamUtil.streamResultSet(executorService, statementContext, key, timedRun,
             allocator, getBatchSize(context),
             listener, () -> {}, recorder);
     }
@@ -731,7 +755,16 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             var statementContext = new StatementContext<>(connection, statement, query);
             var key = new CacheKey(context.peerIdentity(), statementHandle.queryId());
             statementContext.markClaimed(); // the stream below will run it: never reaped while queued
-            statementLoadingCache.put(key, statementContext);
+            // One stream per ticket at a time: a second one would replace the first's entry (and
+            // whichever finished first would remove the other's), leaving a running stream that
+            // cancel cannot find and cursor limits do not count.
+            if (statementLoadingCache.asMap().putIfAbsent(key, statementContext) != null) {
+                statementContext.close(); // closes the new statement and connection
+                connection = null;
+                throw CallStatus.ALREADY_EXISTS
+                        .withDescription("This ticket is already being streamed")
+                        .toRuntimeException();
+            }
             connection = null; // ownership transferred to StatementContext — do not close here
             ResultSetStreamUtil.streamResultSet(executorService,
                     statementContext,
@@ -740,7 +773,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                     allocator,
                     getBatchSize(context),
                     listener,
-                    () -> statementLoadingCache.invalidate(key), recorder);
+                    () -> statementLoadingCache.asMap().remove(key, statementContext), recorder);
         } catch (Throwable e) {
             ErrorHandling.handleThrowable(listener, e);
         } finally {
@@ -879,6 +912,11 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                 return;
             }
             final PreparedStatement preparedStatement = statementContext.getStatement();
+            // Tracked like a stream, so a concurrent run is rejected and a close waits for it.
+            if (!statementContext.tryStart()) {
+                ackStream.onError(ErrorHandling.cannotStart(statementContext));
+                return;
+            }
             try {
                 while (flightStream.next()) {
                     final VectorSchemaRoot root = flightStream.getRoot();
@@ -909,6 +947,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                 ackStream.onCompleted();
             } catch (Throwable e) {
                 ErrorHandling.handleThrowable(ackStream, e);
+            } finally {
+                statementContext.end();
             }
         };
     }
