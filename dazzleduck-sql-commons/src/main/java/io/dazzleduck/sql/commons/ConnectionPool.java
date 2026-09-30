@@ -521,10 +521,8 @@ public enum ConnectionPool {
         // same JVM run their startup scripts against it at once. A DuckDB connection is
         // not safe for concurrent statement execution, so serialise on it here.
         synchronized (INSTANCE.connection) {
-            for (String sql : statements) {
-                if (sql.isBlank()) {
-                    continue;
-                }
+            for (int i = 0; i < statements.length; i++) {
+                String sql = statements[i];
                 // A fresh statement per SQL: reusing one across the script lets a failure
                 // in an earlier statement surface against a later one, which reports the
                 // opaque "unsuccessful or closed pending query result" instead of the
@@ -532,10 +530,21 @@ public enum ConnectionPool {
                 try (Statement statement = INSTANCE.connection.createStatement()) {
                     statement.execute(sql);
                 } catch (SQLException e) {
-                    throw new RuntimeSqlException("Failed to execute on singleton connection: " + sql, e);
+                    // Name the statement by position and leading keyword, never by its text: startup
+                    // scripts ATTACH catalogs and CREATE SECRETs, so the text carries credentials
+                    // (connection-string passwords, secret keys) into every log line and error
+                    // report that prints this message. DuckDB's own error stays as the cause.
+                    throw new RuntimeSqlException("Failed to execute statement %d of %d on the singleton connection (%s)"
+                            .formatted(i + 1, statements.length, leadingKeyword(sql)), e);
                 }
             }
         }
+    }
+
+    /** The statement's first word, upper-cased (ATTACH, CREATE, SET, ...): enough to find it, nothing sensitive. */
+    static String leadingKeyword(String sql) {
+        var m = java.util.regex.Pattern.compile("^\\s*([A-Za-z_]+)").matcher(sql);
+        return m.find() ? m.group(1).toUpperCase(java.util.Locale.ROOT) : "?";
     }
 
     /**

@@ -118,10 +118,14 @@ public class HttpMetricDuckLakeIntegrationTest {
                        10.0                as value,
                        'localhost'         as application_host
                 """;
+        // Summed: the registry publishes every step, so a step boundary during the test splits the
+        // count across rows (the increments in one, and an empty 0.0 step published on close in
+        // another). Asserting a single row made the test fail whenever a boundary fell inside it.
         String actual = """
-                select name, type, value, application_host
+                select name, type, sum(value) as value, application_host
                 from %s.%s.%s
                 where name = 'records.processed'
+                group by name, type, application_host
                 """.formatted(CATALOG_NAME, SCHEMA_NAME, TABLE_NAME);
 
         long deadline = System.currentTimeMillis() + 15_000;

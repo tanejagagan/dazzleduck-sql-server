@@ -15,6 +15,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
 
 public class ResultSetStreamUtil {
 
@@ -23,6 +24,20 @@ public class ResultSetStreamUtil {
     private ResultSetStreamUtil() {
         throw new UnsupportedOperationException("Utility class");
     }
+
+    /**
+     * Submits a stream task whose {@code finalBlock} releases what the stream holds (a connection,
+     * a cursor entry). If the executor rejects the task (shutting down), the task never runs, so
+     * {@code finalBlock} runs here instead; the rejection is rethrown for the caller to report.
+     */
+    private static void submit(ExecutorService executorService, Runnable finalBlock, Runnable task) {
+        try {
+            executorService.submit(task);
+        } catch (RejectedExecutionException e) {
+            finalBlock.run();
+            throw e;
+        }
+    }
     static void streamResultSet(ExecutorService executorService,
                                 ResultSetSupplier supplier,
                                 BufferAllocator allocator,
@@ -30,7 +45,7 @@ public class ResultSetStreamUtil {
                                 final FlightProducer.ServerStreamListener listener,
                                 Runnable finalBlock,
                                 FlightRecorder recorder) {
-        executorService.submit(() -> {
+        submit(executorService, finalBlock, () -> {
             BufferAllocator childAllocator = null;
             var error = false;
             try {
@@ -71,7 +86,7 @@ public class ResultSetStreamUtil {
                                                       final FlightProducer.ServerStreamListener listener,
                                                       Runnable finalBlock, FlightRecorder recorder) {
 
-        executorService.submit(() -> {
+        submit(executorService, finalBlock, () -> {
             BufferAllocator childAllocator = null;
             var error = false;
             try {

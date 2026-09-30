@@ -25,6 +25,7 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
 
@@ -44,6 +45,9 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
     // Set when the cursor cache evicts this context while a stream is using it (see closeWhenIdle).
     private boolean closeWhenDone;
     private boolean closed;
+    // A stream has been handed this context (see markClaimed), and when it was last active.
+    private boolean claimed;
+    private long lastActiveNanos = System.nanoTime();
 
     private long bytesOut;
 
@@ -144,6 +148,8 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
 
     public synchronized void end() {
         inUse = false;
+        claimed = false;
+        lastActiveNanos = System.nanoTime();
         this.endTime = Clock.systemUTC().instant();
         if (closeWhenDone) {
             close();
@@ -158,6 +164,24 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
         if (!closed && inUse) {
             statement.cancel();
         }
+    }
+
+    /**
+     * Marks that a stream has been handed this context and will start it. Set before the stream
+     * task is queued, so a query waiting for an executor thread counts as live just like a
+     * running one; cleared when the stream {@link #end ends}.
+     */
+    public synchronized void markClaimed() {
+        claimed = true;
+    }
+
+    /**
+     * Whether nothing will use this context again unless a client comes back for it: no stream
+     * has claimed it (or its stream has ended), it is not in use, and it has been idle for longer
+     * than {@code ttl}. A queued or running query is never idle, however long it takes.
+     */
+    public synchronized boolean idleLongerThan(Duration ttl) {
+        return !claimed && !inUse && System.nanoTime() - lastActiveNanos > ttl.toNanos();
     }
 
     /**

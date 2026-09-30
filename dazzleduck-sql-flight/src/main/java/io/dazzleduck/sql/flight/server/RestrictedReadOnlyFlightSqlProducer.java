@@ -26,6 +26,11 @@ import java.util.concurrent.ScheduledExecutorService;
  */
 public class RestrictedReadOnlyFlightSqlProducer extends SelectOnlyFlightSqlProducer {
 
+    /**
+     * @deprecated uses {@link CursorConfig#DEFAULT}, ignoring configured cursor limits; use the
+     * constructor that takes a {@link CursorConfig} (as {@link FlightSqlProducerFactory} does).
+     */
+    @Deprecated
     public RestrictedReadOnlyFlightSqlProducer(
             Location serverLocation, String producerId, String secretKey,
             BufferAllocator allocator, String warehousePath, AccessMode accessMode,
