@@ -90,8 +90,11 @@ public class ResultSetStreamUtil {
         submit(executorService, finalBlock, () -> {
             if (!statementContext.tryStart()) {
                 // Another stream is running this statement, or it was closed. Reject without touching
-                // its state.
+                // its state (no end()), but still run this stream's own cleanup: for a plain
+                // statement, whose context can only fail here once closed, that removes the closed
+                // entry from the cursor cache instead of leaving it for the TTL.
                 listener.error(ErrorHandling.cannotStart(statementContext));
+                finalBlock.run();
                 return;
             }
             BufferAllocator childAllocator = null;

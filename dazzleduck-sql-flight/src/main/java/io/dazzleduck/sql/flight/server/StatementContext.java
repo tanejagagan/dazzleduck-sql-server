@@ -154,16 +154,16 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
         }
     }
 
-    /**
-     * Marks the statement in use, or returns false if another call is already using it (a DuckDB
-     * statement runs one execution at a time) or it has been closed. A caller that gets false must
-     * not call {@link #end}: that would mark the other, still-running use as finished.
-     */
     /** Whether {@link #close} has run; a closed context can never be started again. */
     public synchronized boolean isClosed() {
         return closed;
     }
 
+    /**
+     * Marks the statement in use, or returns false if another call is already using it (a DuckDB
+     * statement runs one execution at a time) or it has been closed. A caller that gets false must
+     * not call {@link #end}: that would mark the other, still-running use as finished.
+     */
     public synchronized boolean tryStart() {
         if (inUse || closed) {
             return false;

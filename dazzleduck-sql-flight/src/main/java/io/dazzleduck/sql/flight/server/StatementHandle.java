@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Objects;
+import java.security.SecureRandom;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -28,7 +29,15 @@ import java.util.concurrent.atomic.AtomicLong;
 public record StatementHandle(String query, long queryId, @Nullable String producerId, long splitSize,
                               @Nullable String queryChecksum, @Nullable String principal, long expiresAtMillis) {
 
-    final private static AtomicLong queryIdCounter = new AtomicLong();
+    // Query ids key server state per (user, id), and a planned ticket is streamed on whichever node it
+    // names, so ids from different nodes must not collide. Each JVM starts at a random point in
+    // [2^32, 2^52): collisions across nodes are effectively impossible, small client-chosen HTTP
+    // ids (e.g. 11) never clash with server-issued ones, and ids stay below 2^53 so JSON clients
+    // (JavaScript numbers) read them exactly.
+    static final long QUERY_ID_MIN = 1L << 32;
+    static final long QUERY_ID_BOUND = 1L << 52;
+    final private static AtomicLong queryIdCounter =
+            new AtomicLong(new SecureRandom().nextLong(QUERY_ID_MIN, QUERY_ID_BOUND - (1L << 40)));
 
     public static long nextStatementId(){
         return queryIdCounter.incrementAndGet();
