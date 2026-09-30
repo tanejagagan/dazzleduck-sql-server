@@ -37,13 +37,13 @@ ADBC, plain HTTP, or DuckDB itself.
 
 Client-side artifacts (`dazzleduck-sql-client`, `dazzleduck-sql-client-grpc`,
 `dazzleduck-sql-common`, `dazzleduck-sql-logback`) target JDK 11 bytecode so they can be
-embedded in older applications. Everything is built and tested with **JDK 21**.
+embedded in older applications. Everything is built and tested with **JDK 25**, the JVM the Docker images run.
 
 ## Dev Setup
 
 ### Requirements
 
-- JDK 21 (build and test — JDK 25 causes test failures)
+- JDK 25 (build, test and runtime images)
 - Maven wrapper (`./mvnw`)
 
 ```bash

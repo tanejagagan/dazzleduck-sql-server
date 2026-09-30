@@ -62,5 +62,5 @@ validated but not currently applied as a per-call gRPC deadline.
 
 ## Requirements
 
-- Java 11+ (built and tested with JDK 21)
+- Java 11+ (built and tested with JDK 25)
 - Dependencies: `dazzleduck-sql-client` (base machinery), Arrow `flight-core` / `flight-sql`

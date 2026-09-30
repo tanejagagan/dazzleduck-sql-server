@@ -50,10 +50,17 @@
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <arrow.version>19.0.0</arrow.version>
+        <!-- The JVM the images run on (and CI builds/tests on). Names the base image tag. -->
+        <java.runtime.version>25</java.runtime.version>
         <duckdb.version>1.5.5.1</duckdb.version>
         <typesafe-config.version>1.4.4</typesafe-config.version>
         <calcite.version>1.25.0</calcite.version>
         <helidon.version>4.4.0</helidon.version>
+        <!-- JVM flags Arrow/Netty need on JDK 25: opens for Arrow's direct-buffer access, native
+             access for Netty's Java 24+ cleaner, and sun.misc.Unsafe memory access, which JDK 24+
+             disables by default. One definition, used by every surefire argLine; the same flags are
+             in the image entrypoints and in CLAUDE.md's MAVEN_OPTS. -->
+        <arrow.jvm.flags>--add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED --enable-native-access=ALL-UNNAMED --sun-misc-unsafe-memory-access=allow</arrow.jvm.flags>
         <junit.version>5.13.4</junit.version>
         <!-- Stuck-test guards (see CLAUDE.md "Stuck tests"): every test and lifecycle method times out
              after this unless it sets its own @Timeout, and a whole test JVM is killed after
@@ -193,7 +200,7 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.5.2</version>
                 <configuration>
-                    <argLine>--add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED</argLine>
+                    <argLine>${arrow.jvm.flags}</argLine>
                     <!-- A test JVM still running after this is killed, so a hang cannot stall the build. -->
                     <forkedProcessTimeoutInSeconds>${surefire.fork.timeout}</forkedProcessTimeoutInSeconds>
                     <properties>
@@ -202,36 +209,6 @@
                             junit.jupiter.execution.timeout.threaddump.enabled = true
                         </configurationParameters>
                     </properties>
-                </configuration>
-            </plugin>
-            <plugin>
-                <groupId>com.google.cloud.tools</groupId>
-                <artifactId>jib-maven-plugin</artifactId>
-                <version>3.4.4</version>
-                <configuration>
-                    <from>
-                        <image>eclipse-temurin:21-jre-jammy</image>
-                    </from>
-                    <to>
-                        <image>docker.io/dazzleduck/dazzleduck</image>
-                        <tags>
-                            <tag>${project.version}</tag> <!-- Tags the image with your project version -->
-                            <tag>latest</tag> <!-- Adds a 'latest' tag -->
-                        </tags>
-                    </to>
-                    <container>
-                        <mainClass>io.dazzleduck.sql.runtime.Main</mainClass>
-                        <jvmFlags>
-                            <jvmFlag>-Xms512m</jvmFlag>
-                            <jvmFlag>-XX:+UseContainerSupport</jvmFlag>
-                            <jvmFlag>-XX:+UseG1GC</jvmFlag>
-                            <jvmFlag>-XX:+UseStringDeduplication</jvmFlag>
-                            <jvmFlag>-XX:+ExitOnOutOfMemoryError</jvmFlag>
-                            <jvmFlag>--add-opens=java.base/sun.nio.ch=ALL-UNNAMED</jvmFlag>
-                            <jvmFlag>--add-opens=java.base/java.nio=ALL-UNNAMED</jvmFlag>
-                            <jvmFlag>--add-opens=java.base/sun.util.calendar=ALL-UNNAMED</jvmFlag>
-                        </jvmFlags>
-                    </container>
                 </configuration>
             </plugin>
             <plugin>

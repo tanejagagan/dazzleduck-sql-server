@@ -28,7 +28,7 @@ Run these in parallel:
 ### Step 2 — Maven install
 
 ```bash
-export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED"
+export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED --enable-native-access=ALL-UNNAMED --sun-misc-unsafe-memory-access=allow"
 ./mvnw clean install -DskipTests
 ```
 
@@ -38,7 +38,7 @@ Fail fast if this returns non-zero.
 
 **dazzleduck/dazzleduck arm64:**
 ```bash
-export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED"
+export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED --enable-native-access=ALL-UNNAMED --sun-misc-unsafe-memory-access=allow"
 ./mvnw package -DskipTests jib:build -pl dazzleduck-sql-runtime \
   -Djib.architecture=arm64 \
   -Djib.to.image=docker.io/dazzleduck/dazzleduck:<version>-arm64
@@ -46,7 +46,7 @@ export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java
 
 **dazzleduck/dazzleduck amd64:**
 ```bash
-export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED"
+export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED --enable-native-access=ALL-UNNAMED --sun-misc-unsafe-memory-access=allow"
 ./mvnw package -DskipTests jib:build -pl dazzleduck-sql-runtime \
   -Djib.architecture=amd64 \
   -Djib.to.image=docker.io/dazzleduck/dazzleduck:<version>-amd64
@@ -54,7 +54,7 @@ export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java
 
 **dazzleduck/dazzleduck-otel-collector arm64:**
 ```bash
-export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED"
+export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED --enable-native-access=ALL-UNNAMED --sun-misc-unsafe-memory-access=allow"
 ./mvnw package -DskipTests jib:build -pl dazzleduck-sql-otel-collector \
   -Djib.architecture=arm64 \
   -Djib.to.image=docker.io/dazzleduck/dazzleduck-otel-collector:<version>-arm64
@@ -62,7 +62,7 @@ export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java
 
 **dazzleduck/dazzleduck-otel-collector amd64:**
 ```bash
-export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED"
+export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED --enable-native-access=ALL-UNNAMED --sun-misc-unsafe-memory-access=allow"
 ./mvnw package -DskipTests jib:build -pl dazzleduck-sql-otel-collector \
   -Djib.architecture=amd64 \
   -Djib.to.image=docker.io/dazzleduck/dazzleduck-otel-collector:<version>-amd64
@@ -81,7 +81,7 @@ patched DuckLake extension (see `dazzleduck-sql-ducklake-compactor/DUCKLAKE_PATC
 download step is skipped by default, so it needs `-Dducklake.extension.download.skip=false` here.
 
 ```bash
-export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED"
+export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED --enable-native-access=ALL-UNNAMED --sun-misc-unsafe-memory-access=allow"
 ./mvnw package -DskipTests jib:build -pl dazzleduck-sql-ducklake-compactor -Djib.architecture=arm64 -Dducklake.extension.download.skip=false
 ./mvnw package -DskipTests jib:build -pl dazzleduck-sql-ducklake-compactor -Djib.architecture=amd64 -Dducklake.extension.download.skip=false
 ```

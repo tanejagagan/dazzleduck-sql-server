@@ -11,7 +11,7 @@
 # arch-independent; the arch-specific DuckDB .so is bundled via -Dduckdb.native.arch (see the pom).
 
 # ---- build stage: GraalVM native-image + Maven wrapper ----
-FROM ghcr.io/graalvm/native-image-community:21 AS build
+FROM ghcr.io/graalvm/native-image-community:25 AS build
 ARG TARGETARCH
 # zlib-devel provides libz.so, which the final native-image link needs (gcc ... -lz).
 RUN microdnf install -y zlib-devel && microdnf clean all

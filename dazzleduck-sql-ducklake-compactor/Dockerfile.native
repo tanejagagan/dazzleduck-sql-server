@@ -14,7 +14,7 @@
 # the arch-specific DuckDB .so is bundled via -Dduckdb.native.arch (see the pom's native profile).
 
 # ---- build stage: GraalVM native-image + Maven wrapper ----
-FROM ghcr.io/graalvm/native-image-community:21 AS build
+FROM ghcr.io/graalvm/native-image-community:25 AS build
 ARG TARGETARCH
 # zlib-devel provides libz.so, which the final native-image link needs (gcc ... -lz).
 # curl fetches the patched DuckLake extension binary below.

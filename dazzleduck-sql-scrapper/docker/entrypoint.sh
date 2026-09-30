@@ -10,6 +10,8 @@ JVM_OPTS=(
   "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED"
   "--add-opens=java.base/java.nio=ALL-UNNAMED"
   "--add-opens=java.base/sun.util.calendar=ALL-UNNAMED"
+  "--enable-native-access=ALL-UNNAMED"
+  "--sun-misc-unsafe-memory-access=allow"
 )
 
 # Jib-layered classpath layout
