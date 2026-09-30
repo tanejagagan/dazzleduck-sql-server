@@ -21,7 +21,6 @@ import org.apache.arrow.util.AutoCloseables;
 import org.duckdb.DuckDBConnection;
 
 import java.sql.Connection;
-import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Clock;
@@ -58,11 +57,22 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
     private final Connection connection;
 
 
+    /** A context for a plain statement (a Flight SQL statement query or cursor). */
     public StatementContext(final Connection connection, final T statement, final String query) {
+        this(connection, statement, query, false);
+    }
+
+    /**
+     * @param preparedStatementContext whether this holds a client's prepared statement. Stated by the
+     *        caller rather than derived from the statement's type: DuckDB's createStatement() also
+     *        returns a PreparedStatement, which counted every plain stream as a prepared one (#472).
+     */
+    public StatementContext(final Connection connection, final T statement, final String query,
+                            final boolean preparedStatementContext) {
         this.statement = Objects.requireNonNull(statement, "statement cannot be null.");
         this.query = query;
         this.connection = connection;
-        this.isPreparedStatementContext = statement instanceof PreparedStatement;
+        this.isPreparedStatementContext = preparedStatementContext;
     }
 
     /**

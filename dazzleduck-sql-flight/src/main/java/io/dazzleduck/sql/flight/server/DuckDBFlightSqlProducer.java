@@ -546,7 +546,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                 builder.setDatasetSchema(bytes);
                 final FlightSql.ActionCreatePreparedStatementResult result = builder.build();
                 preparedStatementLoadingCache.put(
-                        cacheKey, new StatementContext<>(connection, preparedStatement, authorizedSql));
+                        cacheKey, new StatementContext<>(connection, preparedStatement, authorizedSql, true));
                 cached = true;
                 listener.onNext(new Result(pack(result).toByteArray()));
             } catch (Throwable e ) {
