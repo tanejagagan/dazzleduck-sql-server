@@ -20,6 +20,11 @@ import java.util.List;
 import java.util.concurrent.ScheduledExecutorService;
 
 public class SelectOnlyFlightSqlProducer extends DuckDBFlightSqlProducer {
+    /**
+     * @deprecated uses {@link CursorConfig#DEFAULT}, ignoring configured cursor limits; use the
+     * constructor that takes a {@link CursorConfig} (as {@link FlightSqlProducerFactory} does).
+     */
+    @Deprecated
     public SelectOnlyFlightSqlProducer(Location serverLocation, String producerId, String secretKey, BufferAllocator allocator, String warehousePath, AccessMode accessMode, Path tempDir, IngestionHandler postIngestionHandler, ScheduledExecutorService scheduledExecutorService, Duration queryTimeout, Duration maxQueryTimeout, Clock clock, FlightRecorder recorder, IngestionConfig ingestionConfig, List<Location> dataProcessorLocations) {
         this(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionHandler, scheduledExecutorService, queryTimeout, maxQueryTimeout, clock, recorder, ingestionConfig, dataProcessorLocations, CursorConfig.DEFAULT);
     }

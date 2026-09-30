@@ -32,14 +32,29 @@ public class RestrictedFlightSqlProducer extends DuckDBFlightSqlProducer {
 
     private static final Logger logger = LoggerFactory.getLogger(RestrictedFlightSqlProducer.class);
     private final QueryOptimizer queryOptimizer;
+    /**
+     * @deprecated uses {@link CursorConfig#DEFAULT}, ignoring configured cursor limits; use the
+     * constructor that takes a {@link CursorConfig} (as {@link FlightSqlProducerFactory} does).
+     */
+    @Deprecated
     public RestrictedFlightSqlProducer(Location serverLocation, String producerId, String secretKey, BufferAllocator allocator, String warehousePath, AccessMode accessMode, Path tempDir, IngestionHandler postIngestionHandler, ScheduledExecutorService scheduledExecutorService, Duration queryTimeout, Clock clock, FlightRecorder recorder, QueryOptimizer queryOptimizer, IngestionConfig ingestionConfig) {
         this(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionHandler, scheduledExecutorService, queryTimeout, Duration.ZERO, clock, recorder, queryOptimizer, ingestionConfig, List.of());
     }
 
+    /**
+     * @deprecated uses {@link CursorConfig#DEFAULT}, ignoring configured cursor limits; use the
+     * constructor that takes a {@link CursorConfig} (as {@link FlightSqlProducerFactory} does).
+     */
+    @Deprecated
     public RestrictedFlightSqlProducer(Location serverLocation, String producerId, String secretKey, BufferAllocator allocator, String warehousePath,  AccessMode accessMode,  Path tempDir, IngestionHandler postIngestionHandler, ScheduledExecutorService scheduledExecutorService, Duration queryTimeout, Clock clock, FlightRecorder recorder, QueryOptimizer queryOptimizer, IngestionConfig ingestionConfig, List<Location> dataProcessorLocations) {
         this(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionHandler, scheduledExecutorService, queryTimeout, Duration.ZERO, clock, recorder, queryOptimizer, ingestionConfig, dataProcessorLocations);
     }
 
+    /**
+     * @deprecated uses {@link CursorConfig#DEFAULT}, ignoring configured cursor limits; use the
+     * constructor that takes a {@link CursorConfig} (as {@link FlightSqlProducerFactory} does).
+     */
+    @Deprecated
     public RestrictedFlightSqlProducer(Location serverLocation, String producerId, String secretKey, BufferAllocator allocator, String warehousePath, AccessMode accessMode, Path tempDir, IngestionHandler postIngestionHandler, ScheduledExecutorService scheduledExecutorService, Duration queryTimeout, Duration maxQueryTimeout, Clock clock, FlightRecorder recorder, QueryOptimizer queryOptimizer, IngestionConfig ingestionConfig, List<Location> dataProcessorLocations) {
         this(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionHandler, scheduledExecutorService, queryTimeout, maxQueryTimeout, clock, recorder, queryOptimizer, ingestionConfig, dataProcessorLocations, CursorConfig.DEFAULT);
     }

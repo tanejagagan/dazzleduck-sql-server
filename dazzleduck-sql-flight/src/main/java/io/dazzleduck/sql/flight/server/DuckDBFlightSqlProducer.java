@@ -404,10 +404,12 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                         .expireAfterAccess(10, TimeUnit.MINUTES)
                         .removalListener(new StatementRemovalListener<PreparedStatement>())
                         .build();
+        // No time- or size-based eviction: an evicted entry is gone from the cache, so a query still
+        // running would become impossible to cancel and would drop out of the cursor limits.
+        // Abandoned cursors are reaped by reapIdleCursors instead, and enforceCursorLimits caps the
+        // total.
         statementLoadingCache =
                 CacheBuilder.newBuilder()
-                        .maximumSize(cursorConfig.maxCursorsTotal())
-                        .expireAfterWrite(cursorConfig.cursorTtlMs(), TimeUnit.MILLISECONDS)
                         .removalListener(new StatementRemovalListener<>())
                         .build();
         this.warehousePath = warehousePath;
@@ -727,6 +729,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             statement.setQueryTimeout(getEffectiveQueryTimeoutSeconds(context));
             var statementContext = new StatementContext<>(connection, statement, query);
             var key = new CacheKey(context.peerIdentity(), statementHandle.queryId());
+            statementContext.markClaimed(); // the stream below will run it: never reaped while queued
             statementLoadingCache.put(key, statementContext);
             connection = null; // ownership transferred to StatementContext — do not close here
             ResultSetStreamUtil.streamResultSet(executorService,
@@ -1436,8 +1439,23 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
      * Throws a RESOURCE_EXHAUSTED FlightRuntimeException if either the
      * server-wide total or the per-identity cap is exceeded.
      */
+    /**
+     * Closes cursors nobody will use: not claimed by a stream (or already finished) and idle for
+     * longer than the cursor TTL. Runs on each new query, as the cache's own expiry did. A cursor
+     * that is queued or running is never reaped, so it stays cancellable and counted in the cursor
+     * limits however long its query runs.
+     */
+    void reapIdleCursors() {
+        Duration ttl = Duration.ofMillis(cursorConfig.cursorTtlMs());
+        statementLoadingCache.asMap().forEach((key, ctx) -> {
+            if (ctx.idleLongerThan(ttl)) {
+                statementLoadingCache.asMap().remove(key, ctx); // the removal listener closes it
+            }
+        });
+    }
+
     private void enforceCursorLimits(String identity) {
-        statementLoadingCache.cleanUp();
+        reapIdleCursors();
         long total = statementLoadingCache.size();
         if (total >= cursorConfig.maxCursorsTotal()) {
             throw CallStatus.RESOURCE_EXHAUSTED
