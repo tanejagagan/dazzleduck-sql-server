@@ -10,9 +10,10 @@ import io.dazzleduck.sql.common.ConfigConstants;
  * until the stream is fully consumed or evicted. Without limits, a client can
  * open arbitrarily many cursors to exhaust server connections and memory.
  *
- * <p>{@code cursorTtlMs} evicts a cursor that long after it was created. An idle
- * cursor is closed at once; one whose query is still executing or streaming is
- * closed when that stream ends, so a query may run longer than the TTL.
+ * <p>{@code cursorTtlMs} reaps a cursor that no stream is using once it has been idle that long
+ * (checked when the next query arrives). A query that is queued, executing or streaming is never
+ * reaped: it stays cancellable and counted in the limits however long it runs; the query timeout,
+ * not the TTL, bounds how long it may run.
  */
 public record CursorConfig(
         long cursorTtlMs,

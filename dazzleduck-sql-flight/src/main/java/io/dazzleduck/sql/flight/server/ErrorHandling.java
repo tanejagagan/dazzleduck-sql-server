@@ -229,23 +229,34 @@ public class ErrorHandling {
                 .toRuntimeException();
     }
 
+    /**
+     * Why {@code context} could not be started: it was closed in the meantime (e.g. a concurrent
+     * closePreparedStatement won the race), or another call is running it.
+     */
+    static FlightRuntimeException cannotStart(StatementContext<?> context) {
+        return context.isClosed()
+                ? CallStatus.NOT_FOUND.withDescription("The statement was closed").toRuntimeException()
+                : alreadyRunning();
+    }
+
     static void handleContextNotFound() {
         throw FlightRuntimeExceptionFactory.of(CallStatus.NOT_FOUND);
     }
 
-    static <T> void handleSignatureMismatch(FlightProducer.StreamListener<T> listener) {
+    // A signed handle that may not be used: bad signature, issued to another user, or expired.
+    static <T> void handleInvalidHandle(FlightProducer.StreamListener<T> listener) {
         listener.onError(FlightRuntimeExceptionFactory.of(
-                new CallStatus(CallStatus.UNAUTHORIZED.code(), null, "Signature in the handle do not match", null)));
+                new CallStatus(CallStatus.UNAUTHORIZED.code(), null, "Statement handle is invalid, expired or was issued to another user", null)));
     }
 
-    static void handleSignatureMismatch() {
+    static void handleInvalidHandle() {
         throw FlightRuntimeExceptionFactory.of(
-                new CallStatus(CallStatus.UNAUTHORIZED.code(), null, "Signature in the handle do not match", null));
+                new CallStatus(CallStatus.UNAUTHORIZED.code(), null, "Statement handle is invalid, expired or was issued to another user", null));
     }
 
-    static void handleSignatureMismatch(FlightProducer.ServerStreamListener listener) {
+    static void handleInvalidHandle(FlightProducer.ServerStreamListener listener) {
         listener.error(FlightRuntimeExceptionFactory.of(
-                new CallStatus(CallStatus.UNAUTHORIZED.code(), null, "Signature in the handle do not match", null)));
+                new CallStatus(CallStatus.UNAUTHORIZED.code(), null, "Statement handle is invalid, expired or was issued to another user", null)));
     }
 
     static void handleContextNotFound(FlightProducer.StreamListener<?> listener) {

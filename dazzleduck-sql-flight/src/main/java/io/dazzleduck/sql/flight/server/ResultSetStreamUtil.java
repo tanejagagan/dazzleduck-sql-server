@@ -2,6 +2,7 @@ package io.dazzleduck.sql.flight.server;
 
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.flight.FlightRecorder;
+import org.apache.arrow.flight.CallStatus;
 import org.apache.arrow.flight.FlightProducer;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.VectorSchemaRoot;
@@ -15,6 +16,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
 
 public class ResultSetStreamUtil {
 
@@ -77,6 +79,19 @@ public class ResultSetStreamUtil {
         }
     }
 
+    /**
+     * Submits a stream task whose {@code finalBlock} releases what the stream holds (a connection,
+     * a cursor entry). If the executor rejects the task (shutting down), the task never runs, so
+     * {@code finalBlock} runs here instead; the rejection is rethrown for the caller to report.
+     */
+    private static void submit(ExecutorService executorService, Runnable finalBlock, Runnable task) {
+        try {
+            executorService.submit(task);
+        } catch (RejectedExecutionException e) {
+            finalBlock.run();
+            throw e;
+        }
+    }
     static void streamResultSet(ExecutorService executorService,
                                 ResultSetSupplier supplier,
                                 BufferAllocator allocator,
@@ -84,7 +99,7 @@ public class ResultSetStreamUtil {
                                 final FlightProducer.ServerStreamListener listener,
                                 Runnable finalBlock,
                                 FlightRecorder recorder) {
-        executorService.submit(() -> {
+        submit(executorService, finalBlock, () -> {
             BufferAllocator childAllocator = null;
             var error = false;
             try {
@@ -129,10 +144,14 @@ public class ResultSetStreamUtil {
                                                       final FlightProducer.ServerStreamListener listener,
                                                       Runnable finalBlock, FlightRecorder recorder) {
 
-        executorService.submit(() -> {
+        submit(executorService, finalBlock, () -> {
             if (!statementContext.tryStart()) {
-                // Another stream is running this statement. Reject without touching its state.
-                listener.error(ErrorHandling.alreadyRunning());
+                // Another stream is running this statement, or it was closed. Reject without touching
+                // its state (no end()), but still run this stream's own cleanup: for a plain
+                // statement, whose context can only fail here once closed, that removes the closed
+                // entry from the cursor cache instead of leaving it for the TTL.
+                listener.error(ErrorHandling.cannotStart(statementContext));
+                finalBlock.run();
                 return;
             }
             BufferAllocator childAllocator = null;
@@ -152,6 +171,12 @@ public class ResultSetStreamUtil {
                 recorder.recordStatementStreamStart(key, statementContext);
                 if (listener.isCancelled()) {
                     return; // cancelled before the handler was registered; finally still cleans up
+                }
+                if (statementContext.isCancelRequested()) {
+                    // CancelFlightInfo reached it while it was queued: end without running it.
+                    error = true;
+                    listener.error(CallStatus.CANCELLED.withDescription("Query was cancelled").toRuntimeException());
+                    return;
                 }
                 supplier.execute();
                 if (supplier.hasResultSet()) {
@@ -177,6 +202,13 @@ public class ResultSetStreamUtil {
                 if (listener.isCancelled()) {
                     // The caller went away and we interrupted the query: not a query error.
                     logger.atDebug().setCause(throwable).log("Stream ended after the caller cancelled");
+                    return;
+                }
+                if (statementContext.isCancelRequested()) {
+                    // Interrupted by CancelFlightInfo while the client is still connected: tell it the
+                    // query was cancelled, and don't count it as a query error.
+                    logger.atDebug().setCause(throwable).log("Stream ended after a server-side cancel");
+                    listener.error(CallStatus.CANCELLED.withDescription("Query was cancelled").toRuntimeException());
                     return;
                 }
                 recorder.errorStream(statementContext.isPreparedStatementContext());

@@ -103,7 +103,7 @@ public class MicroMeterFlightRecorderTest {
 
     private static StatementContext<Statement> dummyContext(boolean prepared, String query) {
         Statement dummyStmt = (Statement) Proxy.newProxyInstance(MicroMeterFlightRecorderTest.class.getClassLoader(), new Class<?>[]{prepared ? PreparedStatement.class : Statement.class}, (proxy, method, args) -> 0);
-        StatementContext<Statement> ctx = new StatementContext<>(ConnectionPool.getConnection(), dummyStmt, query);
+        StatementContext<Statement> ctx = new StatementContext<>(ConnectionPool.getConnection(), dummyStmt, query, prepared);
         ctx.start();
         ctx.bytesOut(100);
         ctx.end();

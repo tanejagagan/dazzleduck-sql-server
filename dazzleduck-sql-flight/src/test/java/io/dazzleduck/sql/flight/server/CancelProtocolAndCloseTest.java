@@ -206,4 +206,52 @@ class CancelProtocolAndCloseTest {
             return true;
         }
     }
+
+    @Test
+    void aLateCancelOfAFinishedPreparedRunKeepsThePreparedStatement() throws Exception {
+        try (var prepared = client.prepare("SELECT 1")) {
+            FlightInfo info = prepared.execute();
+            try (FlightStream st = client.getStream(info.getEndpoints().get(0).getTicket())) {
+                while (st.next()) { }
+            }
+            await(() -> producer.preparedStatementLoadingCache.asMap().values().stream()
+                    .noneMatch(StatementContext::running), "the run to end");
+            var ex = assertThrows(FlightRuntimeException.class,
+                    () -> client.cancelFlightInfo(new CancelFlightInfoRequest(info), TIMEOUT));
+            assertEquals(FlightStatusCode.NOT_FOUND, ex.status().code(), "nothing was running to cancel");
+            assertEquals(1, producer.preparedStatementLoadingCache.size(), "the prepared statement stays");
+            try (FlightStream st = client.getStream(prepared.execute().getEndpoints().get(0).getTicket())) {
+                assertTrue(st.next(), "and runs again");
+            }
+        }
+    }
+
+    @Test
+    void cancellingAQueuedPreparedRunKeepsThePreparedStatement() throws Exception {
+        var connection = io.dazzleduck.sql.commons.ConnectionPool.getConnection();
+        var statement = connection.prepareStatement("SELECT 1");
+        var ctx = new StatementContext<>(connection, statement, "SELECT 1", true);
+        var key = new DuckDBFlightSqlProducer.CacheKey("admin", StatementHandle.nextStatementId());
+        producer.preparedStatementLoadingCache.put(key, ctx);
+        ctx.markClaimed(); // a run is queued, not yet executing
+        var caller = new io.dazzleduck.sql.flight.context.SyntheticFlightContext(Map.of(),
+                new io.dazzleduck.sql.commons.authorization.SubjectAndVerifiedClaims("admin", Map.of()));
+        assertTrue(producer.tryCancel(key.id(), caller), "the queued run was cancelled");
+        assertTrue(ctx.isCancelRequested());
+        assertSame(ctx, producer.preparedStatementLoadingCache.getIfPresent(key),
+                "it never executed, so DuckDB did not close it: keep it");
+        assertFalse(statement.isClosed());
+    }
+
+    @Test
+    void closeClosesAContextWhoseQueuedStreamNeverRan() throws Exception {
+        var connection = io.dazzleduck.sql.commons.ConnectionPool.getConnection();
+        var statement = connection.createStatement();
+        var ctx = new StatementContext<>(connection, statement, "SELECT 1");
+        ctx.markClaimed(); // its stream task was queued, and shutdown drops it before it runs
+        producer.statementLoadingCache.put(new DuckDBFlightSqlProducer.CacheKey("admin",
+                StatementHandle.nextStatementId()), ctx);
+        producer.close();
+        assertTrue(statement.isClosed(), "a claimed context must not outlive the producer");
+    }
 }

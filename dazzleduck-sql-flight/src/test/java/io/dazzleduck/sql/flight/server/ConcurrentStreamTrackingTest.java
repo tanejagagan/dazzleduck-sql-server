@@ -145,4 +145,77 @@ class ConcurrentStreamTrackingTest {
             assertEquals(5, rows(client.getStream(prepared.execute().getEndpoints().get(0).getTicket())));
         }
     }
+
+    @Test
+    void aRejectedPreparedRunDoesNotChangeTheRunningStatementsTimeout() throws Exception {
+        try (var prepared = client.prepare("SELECT 1")) {
+            var ctx = producer.preparedStatementLoadingCache.asMap().values().stream()
+                    .filter(c -> "SELECT 1".equals(c.getQuery())).findFirst().orElseThrow();
+            ctx.getStatement().setQueryTimeout(111);
+            assertTrue(ctx.tryStart()); // a run is executing on the shared statement
+            try {
+                var headers = new FlightCallHeaders();
+                headers.insert(io.dazzleduck.sql.common.Headers.HEADER_QUERY_TIMEOUT, "7");
+                var ticket = prepared.execute().getEndpoints().get(0).getTicket();
+                var ex = assertThrows(FlightRuntimeException.class,
+                        () -> rows(client.getStream(ticket, new HeaderCallOption(headers))));
+                assertEquals(FlightStatusCode.ALREADY_EXISTS, ex.status().code());
+                assertEquals(111, ctx.getStatement().getQueryTimeout(),
+                        "the rejected run must not change the running statement's timeout");
+            } finally {
+                ctx.end();
+            }
+        }
+    }
+
+    @Test
+    void aClosedPreparedStatementIsNotFoundNotAlreadyRunning() throws Exception {
+        var connection = io.dazzleduck.sql.commons.ConnectionPool.getConnection();
+        var ctx = new StatementContext<>(connection, connection.prepareStatement("SELECT 1"), "SELECT 1", true);
+        ctx.close(); // e.g. a concurrent closePreparedStatement won the race
+        var error = ErrorHandling.cannotStart(ctx);
+        assertEquals(FlightStatusCode.NOT_FOUND, error.status().code(), error.getMessage());
+        assertFalse(ctx.tryStart());
+    }
+
+    @Test
+    void queryIdsStartAtARandomPointBelowTwoToThe53() {
+        long id = StatementHandle.nextStatementId();
+        assertTrue(id >= StatementHandle.QUERY_ID_MIN, "not a small id another node or an HTTP client would also use: " + id);
+        assertTrue(id < StatementHandle.QUERY_ID_BOUND, "exact in JSON (JavaScript numbers): " + id);
+        assertTrue(StatementHandle.nextStatementId() > id, "still increasing");
+    }
+
+    @Test
+    void aRejectedStreamStillRunsItsOwnCleanup() throws Exception {
+        var connection = io.dazzleduck.sql.commons.ConnectionPool.getConnection();
+        var ctx = new StatementContext<>(connection, connection.createStatement(), "SELECT 1");
+        ctx.close(); // a plain context can only fail tryStart() once closed
+        var cleanedUp = new java.util.concurrent.CountDownLatch(1);
+        var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            ResultSetStreamUtil.streamResultSet(executor, ctx, new DuckDBFlightSqlProducer.CacheKey("admin", 1L),
+                    null, allocator, 1024, new NoOpListener(), cleanedUp::countDown,
+                    new io.dazzleduck.sql.flight.MicroMeterFlightRecorder(
+                            new io.micrometer.core.instrument.simple.SimpleMeterRegistry(), "test"));
+            assertTrue(cleanedUp.await(10, java.util.concurrent.TimeUnit.SECONDS),
+                    "the rejected stream's cleanup (removing its closed cursor entry) must run");
+        } finally {
+            executor.shutdown();
+        }
+    }
+
+    private static final class NoOpListener implements FlightProducer.ServerStreamListener {
+        @Override public boolean isCancelled() { return false; }
+        @Override public void setOnCancelHandler(Runnable handler) { }
+        @Override public boolean isReady() { return true; }
+        @Override public void start(org.apache.arrow.vector.VectorSchemaRoot root,
+                                    org.apache.arrow.vector.dictionary.DictionaryProvider dictionaries,
+                                    org.apache.arrow.vector.ipc.message.IpcOption option) { }
+        @Override public void putNext() { }
+        @Override public void putNext(org.apache.arrow.memory.ArrowBuf metadata) { }
+        @Override public void putMetadata(org.apache.arrow.memory.ArrowBuf metadata) { }
+        @Override public void error(Throwable ex) { }
+        @Override public void completed() { }
+    }
 }

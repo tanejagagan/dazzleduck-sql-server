@@ -20,6 +20,11 @@ import java.util.List;
 import java.util.concurrent.ScheduledExecutorService;
 
 public class SelectOnlyFlightSqlProducer extends DuckDBFlightSqlProducer {
+    /**
+     * @deprecated uses {@link CursorConfig#DEFAULT}, ignoring configured cursor limits; use the
+     * constructor that takes a {@link CursorConfig} (as {@link FlightSqlProducerFactory} does).
+     */
+    @Deprecated
     public SelectOnlyFlightSqlProducer(Location serverLocation, String producerId, String secretKey, BufferAllocator allocator, String warehousePath, AccessMode accessMode, Path tempDir, IngestionHandler postIngestionHandler, ScheduledExecutorService scheduledExecutorService, Duration queryTimeout, Duration maxQueryTimeout, Clock clock, FlightRecorder recorder, IngestionConfig ingestionConfig, List<Location> dataProcessorLocations) {
         this(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionHandler, scheduledExecutorService, queryTimeout, maxQueryTimeout, clock, recorder, ingestionConfig, dataProcessorLocations, CursorConfig.DEFAULT);
     }
@@ -78,6 +83,19 @@ public class SelectOnlyFlightSqlProducer extends DuckDBFlightSqlProducer {
         var authorized = authorizer.authorize(
                 context.peerIdentity(), databaseSchema.database(), databaseSchema.schema(), tree, claims);
         return Transformations.parseToSql(connection, authorized);
+    }
+
+    /**
+     * Update statements bypass {@link #transformQuery}, the only place SELECT-only is enforced, so
+     * READ_ONLY and RESTRICT_READ_ONLY must refuse them outright: otherwise {@code executeUpdate}
+     * over Flight SQL runs any SQL (DROP, DELETE, COPY ... TO) unchecked.
+     */
+    @Override
+    public Runnable acceptPutStatement(
+            FlightSql.CommandStatementUpdate command,
+            CallContext context, FlightStream flightStream,
+            StreamListener<PutResult> ackStream) {
+        return throwNotSupported("acceptPutStatement");
     }
 
     @Override

@@ -5,6 +5,7 @@ import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.flight.MicroMeterFlightRecorder;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.apache.arrow.flight.CancelFlightInfoRequest;
 import org.apache.arrow.flight.FlightClient;
 import org.apache.arrow.flight.FlightInfo;
 import org.apache.arrow.flight.FlightServer;
@@ -98,7 +99,7 @@ class CursorTtlTest {
             }
         });
         // Let the slow query's cursor outlive the TTL, then make the cache clean up by starting
-        // another query (enforceCursorLimits calls cleanUp()).
+        // another query (enforceCursorLimits reaps idle cursors).
         Thread.sleep(TTL_MS * 3);
         assertFalse(slow.isDone(), "the slow query must still be running for this test to mean anything");
         assertEquals(1L, firstLong("SELECT 1::BIGINT"));
@@ -113,9 +114,50 @@ class CursorTtlTest {
         var context = producer.statementLoadingCache.asMap().values().stream()
                 .filter(c -> !c.running()).findFirst().orElseThrow();
         Thread.sleep(TTL_MS * 3);
-        producer.statementLoadingCache.cleanUp();
+        producer.reapIdleCursors();
 
         assertFalse(producer.statementLoadingCache.asMap().containsValue(context), "evicted after the TTL");
         assertTrue(context.getStatement().isClosed(), "an idle cursor is closed on eviction, not deferred");
+    }
+
+    @Test
+    @Timeout(value = 60, unit = TimeUnit.SECONDS)
+    void aQueryRunningPastTheTtlStaysCancellableAndCounted() throws Exception {
+        FlightInfo info = client.execute(SLOW_QUERY);
+        CompletableFuture<Long> slow = CompletableFuture.supplyAsync(() -> {
+            try (FlightStream stream = client.getStream(info.getEndpoints().get(0).getTicket())) {
+                assertTrue(stream.next(), "expected a batch");
+                return ((BigIntVector) stream.getRoot().getVector(0)).get(0);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+        Thread.sleep(TTL_MS * 3);
+        assertEquals(1L, firstLong("SELECT 1::BIGINT")); // reaps idle cursors
+        assertFalse(slow.isDone(), "the slow query must still be running for this test to mean anything");
+        assertTrue(producer.statementLoadingCache.asMap().values().stream().anyMatch(StatementContext::running),
+                "a running query stays in the cache (findable by cancel, counted by the limits)");
+
+        client.cancelFlightInfo(new CancelFlightInfoRequest(info));
+        var ex = assertThrows(java.util.concurrent.ExecutionException.class, () -> slow.get(30, TimeUnit.SECONDS));
+        assertNotNull(ex.getCause(), "the cancelled query fails instead of running to the end");
+    }
+
+    @Test
+    void aClaimedCursorIsNotIdleWhileQueuedButIsAfterItsStreamEnds() throws Exception {
+        try (var connection = ConnectionPool.getConnection()) {
+            var ctx = new StatementContext<>(connection, connection.createStatement(), "SELECT 1");
+            Duration ttl = Duration.ofMillis(TTL_MS);
+            ctx.markClaimed(); // handed to a stream task still waiting for an executor thread
+            Thread.sleep(TTL_MS * 2);
+            assertFalse(ctx.idleLongerThan(ttl), "a queued query is never idle");
+            ctx.start();
+            Thread.sleep(TTL_MS * 2);
+            assertFalse(ctx.idleLongerThan(ttl), "a running query is never idle");
+            ctx.end();
+            assertFalse(ctx.idleLongerThan(ttl), "idle time counts from the end of the stream");
+            Thread.sleep(TTL_MS * 2);
+            assertTrue(ctx.idleLongerThan(ttl));
+        }
     }
 }
