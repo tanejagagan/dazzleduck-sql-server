@@ -68,9 +68,14 @@ public class JsonOutputStreamListener implements FlightProducer.ServerStreamList
         this.format = format;
     }
 
+    /**
+     * The response is over once the future is done: cancelled, failed (e.g. the HTTP client went
+     * away and a write failed), or completed. The stream loop stops on this, so a disconnected
+     * client stops its query instead of it running to the end with every write failing.
+     */
     @Override
     public boolean isCancelled() {
-        return future.isCancelled();
+        return future.isDone();
     }
 
     @Override

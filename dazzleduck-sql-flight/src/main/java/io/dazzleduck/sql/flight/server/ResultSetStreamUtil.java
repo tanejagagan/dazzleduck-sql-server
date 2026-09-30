@@ -23,6 +23,60 @@ public class ResultSetStreamUtil {
     private ResultSetStreamUtil() {
         throw new UnsupportedOperationException("Utility class");
     }
+
+    // How often a wait for a slow client re-checks the listener, in case a ready/cancel signal is missed.
+    private static final long READY_RECHECK_MS = 1_000;
+
+    /**
+     * Makes a stream wait for its client. Without it, putNext() hands every batch to gRPC as fast
+     * as DuckDB produces it, and a slow reader makes the server buffer the whole result in direct
+     * memory. Also runs {@code onCancel} (interrupting the query) when the call is cancelled: a
+     * client that disconnects or cancels must stop the query, not only the stream.
+     *
+     * <p>Not Arrow's CallbackBackpressureStrategy: that requires setOnReadyHandler, which the HTTP
+     * listeners do not implement (Arrow's default throws). They write synchronously to the response,
+     * so the blocking write is already their backpressure and they are ready once started.
+     */
+    static final class ReadyWaiter {
+        private final Object lock = new Object();
+
+        ReadyWaiter(FlightProducer.ServerStreamListener listener, Runnable onCancel) {
+            try {
+                listener.setOnReadyHandler(this::signal);
+            } catch (UnsupportedOperationException notSupported) {
+                // HTTP listeners: no transport buffer to wait for.
+            }
+            listener.setOnCancelHandler(() -> {
+                try {
+                    onCancel.run();
+                } finally {
+                    signal();
+                }
+            });
+        }
+
+        private void signal() {
+            synchronized (lock) {
+                lock.notifyAll();
+            }
+        }
+
+        /** Waits until the client can take another batch; false if the call was cancelled or the thread interrupted. */
+        boolean awaitReady(FlightProducer.ServerStreamListener listener) {
+            synchronized (lock) {
+                while (!listener.isReady() && !listener.isCancelled()) {
+                    try {
+                        lock.wait(READY_RECHECK_MS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt(); // e.g. the producer is shutting down
+                        return false;
+                    }
+                }
+            }
+            return !listener.isCancelled();
+        }
+    }
+
     static void streamResultSet(ExecutorService executorService,
                                 ResultSetSupplier supplier,
                                 BufferAllocator allocator,
@@ -36,10 +90,14 @@ public class ResultSetStreamUtil {
             try {
                 childAllocator = allocator.newChildAllocator("statement-allocator", 0, allocator.getLimit());
                 recorder.startStream(false);
+                var readiness = new ReadyWaiter(listener, () -> {});
                 try (DuckDBResultSet resultSet = supplier.get();
                      ArrowReader reader = (ArrowReader) resultSet.arrowExportStream(childAllocator, batchSize)) {
                     listener.start(reader.getVectorSchemaRoot());
                     while (!listener.isCancelled() && reader.loadNextBatch()) {
+                        if (!readiness.awaitReady(listener)) {
+                            break;
+                        }
                         var size = childAllocator.getAllocatedMemory();
                         recorder.recordGetStream(false, size);
                         listener.putNext();
@@ -83,7 +141,7 @@ public class ResultSetStreamUtil {
                 childAllocator = allocator.newChildAllocator("statement-allocator", 0, allocator.getLimit());
                 // A client that disconnects or cancels the DoGet must stop the query. Without this,
                 // Flight drops every later putNext() silently and the query runs to completion.
-                listener.setOnCancelHandler(() -> {
+                var readiness = new ReadyWaiter(listener, () -> {
                     try {
                         statementContext.cancel();
                     } catch (Exception e) {
@@ -101,6 +159,9 @@ public class ResultSetStreamUtil {
                          ArrowReader reader = (ArrowReader) resultSet.arrowExportStream(childAllocator, batchSize)) {
                         listener.start(reader.getVectorSchemaRoot());
                         while (!listener.isCancelled() && reader.loadNextBatch()) {
+                            if (!readiness.awaitReady(listener)) {
+                                break;
+                            }
                             listener.putNext();
                             var size = childAllocator.getAllocatedMemory();
                             statementContext.bytesOut(size);

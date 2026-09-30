@@ -74,9 +74,14 @@ public class DirectOutputStreamListener implements FlightProducer.ServerStreamLi
         logger.debug("DirectOutputStreamListener created with compression codec: {}", compressionCodec);
     }
 
+    /**
+     * The response is over once the future is done: cancelled, failed (e.g. the HTTP client went
+     * away and a write failed), or completed. The stream loop stops on this, so a disconnected
+     * client stops its query instead of it running to the end with every write failing.
+     */
     @Override
     public synchronized boolean isCancelled() {
-        return future.isCancelled();
+        return future.isDone();
     }
 
     @Override

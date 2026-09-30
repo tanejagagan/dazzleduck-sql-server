@@ -45,9 +45,14 @@ public class TsvOutputStreamListener implements FlightProducer.ServerStreamListe
         this.future = future;
     }
 
+    /**
+     * The response is over once the future is done: cancelled, failed (e.g. the HTTP client went
+     * away and a write failed), or completed. The stream loop stops on this, so a disconnected
+     * client stops its query instead of it running to the end with every write failing.
+     */
     @Override
     public boolean isCancelled() {
-        return future.isCancelled();
+        return future.isDone();
     }
 
     @Override
@@ -155,8 +160,15 @@ public class TsvOutputStreamListener implements FlightProducer.ServerStreamListe
                     TsvOutputStreamListener listener =
                             new TsvOutputStreamListener(outputStreamSupplier, tsvFuture);
                     listener.start(root, new DictionaryProvider.MapDictionaryProvider(), IpcOption.DEFAULT);
-                    while (reader.loadNextBatch()) listener.putNext();
-                    listener.completed();
+                    // Stop once the response is over (e.g. the client went away and a write failed).
+                    // Draining the pipe regardless would keep the Arrow side, and the query, running.
+                    while (!listener.isCancelled() && reader.loadNextBatch()) listener.putNext();
+                    if (listener.isCancelled()) {
+                        // Makes the producer's next write into the pipe fail, which stops its stream loop.
+                        pipeIn.close();
+                    } else {
+                        listener.completed();
+                    }
                 } catch (Exception e) {
                     try { pipeIn.close(); } catch (IOException ignored) {}
                     if (!tsvFuture.isDone()) tsvFuture.completeExceptionally(e);
