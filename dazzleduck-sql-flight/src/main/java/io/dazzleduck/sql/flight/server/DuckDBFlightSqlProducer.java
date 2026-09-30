@@ -244,7 +244,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
 
     protected final BufferAllocator allocator;
     private final String warehousePath;
-    private final Cache<CacheKey, StatementContext<PreparedStatement>> preparedStatementLoadingCache;
+    final Cache<CacheKey, StatementContext<PreparedStatement>> preparedStatementLoadingCache;
     protected final Cache<CacheKey, StatementContext<Statement>> statementLoadingCache;
     private final SqlAuthorizer sqlAuthorizer;
 
@@ -507,8 +507,12 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         var cacheKey = new CacheKey(context.peerIdentity(), handle.queryId());
 
         Runnable runnable = () -> {
-            // Until the context is cached, this method owns the connection and must close it on
-            // failure; after, the cache owns it (closePreparedStatement or eviction closes it).
+            // This method owns the connection until the context is cached, and closes it on any
+            // failure; after, the cache owns it (closePreparedStatement or eviction closes it). The
+            // put is the last step before replying: if it came earlier, a later failure (e.g. a
+            // result type the Arrow schema conversion cannot map, such as LIST or HUGEINT) would
+            // leave a cached statement the client never got a handle for, holding its connection
+            // until eviction.
             boolean cached = false;
             try {
                 final ByteString serializedHandle =
@@ -517,12 +521,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                 final PreparedStatement preparedStatement =
                         connection.prepareStatement(
                                 authorizedSql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
-                final StatementContext<PreparedStatement> preparedStatementContext =
-                        new StatementContext<>(connection, preparedStatement, authorizedSql);
-                preparedStatementLoadingCache.put(
-                        cacheKey, preparedStatementContext);
-                cached = true;
-
                 final Schema parameterSchema =
                         JdbcToArrowUtils.jdbcToArrowSchema(preparedStatement.getParameterMetaData(), DEFAULT_CALENDAR);
 
@@ -542,6 +540,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                 }
                 builder.setDatasetSchema(bytes);
                 final FlightSql.ActionCreatePreparedStatementResult result = builder.build();
+                preparedStatementLoadingCache.put(
+                        cacheKey, new StatementContext<>(connection, preparedStatement, authorizedSql));
+                cached = true;
                 listener.onNext(new Result(pack(result).toByteArray()));
             } catch (Throwable e ) {
                 if (!cached) {
@@ -554,7 +555,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         };
         try {
             executorService.submit(runnable);
-        } catch (java.util.concurrent.RejectedExecutionException e) {
+        } catch (RejectedExecutionException e) {
             // Shutting down: the runnable will never run to take ownership.
             closeQuietly(connection);
             ErrorHandling.handleThrowable(listener, e);

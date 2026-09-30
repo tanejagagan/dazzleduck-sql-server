@@ -15,6 +15,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
 
 public class ResultSetStreamUtil {
 
@@ -30,6 +31,23 @@ public class ResultSetStreamUtil {
                                 final FlightProducer.ServerStreamListener listener,
                                 Runnable finalBlock,
                                 FlightRecorder recorder) {
+        try {
+            submitStream(executorService, supplier, allocator, batchSize, listener, finalBlock, recorder);
+        } catch (RejectedExecutionException e) {
+            // Shutting down: the task will never run, so run its cleanup (e.g. closing the
+            // connection it was given) here.
+            finalBlock.run();
+            throw e;
+        }
+    }
+
+    private static void submitStream(ExecutorService executorService,
+                                     ResultSetSupplier supplier,
+                                     BufferAllocator allocator,
+                                     final int batchSize,
+                                     final FlightProducer.ServerStreamListener listener,
+                                     Runnable finalBlock,
+                                     FlightRecorder recorder) {
         executorService.submit(() -> {
             BufferAllocator childAllocator = null;
             var error = false;
