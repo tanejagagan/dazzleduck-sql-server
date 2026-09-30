@@ -1547,13 +1547,34 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
 
 
 
-    /** How long a statement ticket stays usable after it is issued. */
-    static final Duration TICKET_TTL = Duration.ofHours(1);
+    /** How long a statement ticket stays usable after it is issued, unless configured ({@code ticket_ttl_ms}). */
+    public static final Duration DEFAULT_TICKET_TTL = Duration.ofHours(1);
 
-    /** A signed statement ticket, usable only by the caller and only until {@link #TICKET_TTL} passes. */
+    private volatile Duration ticketTtl = DEFAULT_TICKET_TTL;
+
+    /**
+     * Sets how long statement tickets issued from now on stay usable. Must be positive: tickets are
+     * signed and skip authorization, so they always expire.
+     */
+    public void setTicketTtl(Duration ticketTtl) {
+        this.ticketTtl = requirePositiveTicketTtl(ticketTtl);
+    }
+
+    static Duration requirePositiveTicketTtl(Duration ticketTtl) {
+        if (ticketTtl == null || ticketTtl.isZero() || ticketTtl.isNegative()) {
+            throw new IllegalArgumentException(ConfigConstants.TICKET_TTL_MS_KEY + " must be positive, got " + ticketTtl);
+        }
+        return ticketTtl;
+    }
+
+    public Duration getTicketTtl() {
+        return ticketTtl;
+    }
+
+    /** A signed statement ticket, usable only by the caller and only until the ticket TTL passes. */
     protected StatementHandle newStatementHandle(String query, long splitSize, CallContext context) {
         return StatementHandle.newStatementHandle(query, producerId, splitSize)
-                .signed(secretKey, context.peerIdentity(), clock.millis() + TICKET_TTL.toMillis());
+                .signed(secretKey, context.peerIdentity(), clock.millis() + ticketTtl.toMillis());
     }
 
     /**

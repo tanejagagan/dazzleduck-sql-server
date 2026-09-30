@@ -111,6 +111,7 @@ public final class FlightSqlProducerFactory {
         private QueryOptimizer queryOptimizer;
         private ScheduledExecutorService scheduledExecutorService;
         private Duration queryTimeout;
+        private Duration ticketTtl;
         private Duration maxQueryTimeout;
         private Clock clock;
         private IngestionConfig ingestionConfig;
@@ -161,6 +162,13 @@ public final class FlightSqlProducerFactory {
                 throw new IllegalArgumentException("Required configuration missing: " + ConfigConstants.MAX_QUERY_TIMEOUT_MS_KEY);
             }
             this.maxQueryTimeout = Duration.ofMillis(config.getLong(ConfigConstants.MAX_QUERY_TIMEOUT_MS_KEY));
+
+            // Ticket TTL (optional; reference.conf sets the default)
+            // Validated here so a bad value fails before anything is built.
+            this.ticketTtl = DuckDBFlightSqlProducer.requirePositiveTicketTtl(
+                    config.hasPath(ConfigConstants.TICKET_TTL_MS_KEY)
+                            ? Duration.ofMillis(config.getLong(ConfigConstants.TICKET_TTL_MS_KEY))
+                            : DuckDBFlightSqlProducer.DEFAULT_TICKET_TTL);
 
             // Ingestion config
             this.ingestionConfig = loadIngestionConfig(config);
@@ -385,6 +393,17 @@ public final class FlightSqlProducerFactory {
          * @param maxTimeout the maximum query timeout duration
          * @return this builder
          */
+        /**
+         * Sets how long signed statement tickets stay usable (default from {@code ticket_ttl_ms}).
+         *
+         * @param ticketTtl a positive duration
+         * @return this builder
+         */
+        public ProducerBuilder withTicketTtl(Duration ticketTtl) {
+            this.ticketTtl = DuckDBFlightSqlProducer.requirePositiveTicketTtl(ticketTtl);
+            return this;
+        }
+
         public ProducerBuilder withMaxQueryTimeout(Duration maxTimeout) {
             this.maxQueryTimeout = maxTimeout;
             return this;
@@ -447,6 +466,15 @@ public final class FlightSqlProducerFactory {
                 ? flightRecorder
                 : buildRecorder();
 
+            DuckDBFlightSqlProducer producer = createProducer(finalAllocator, finalExecutorService, finalRecorder);
+            // Applied here, for every access mode, rather than threaded through each constructor.
+            producer.setTicketTtl(ticketTtl);
+            return producer;
+        }
+
+        private DuckDBFlightSqlProducer createProducer(BufferAllocator finalAllocator,
+                                                       ScheduledExecutorService finalExecutorService,
+                                                       FlightRecorder finalRecorder) {
             // Create appropriate producer based on access mode
             if (accessMode == AccessMode.RESTRICTED ) {
                 return new RestrictedFlightSqlProducer(

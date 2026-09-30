@@ -40,13 +40,14 @@ class TicketBindingTest {
     private FlightServer server;
     private FlightSqlClient alice;
     private FlightSqlClient bob;
+    private DuckDBFlightSqlProducer producer;
 
     @BeforeAll
     void setup() throws Exception {
         allocator = new RootAllocator(Long.MAX_VALUE);
         ConnectionPool.executeBatch(new String[]{"INSTALL arrow FROM community", "LOAD arrow"});
         Location location = FlightTestUtils.findNextLocation();
-        var producer = new DuckDBFlightSqlProducer(
+        producer = new DuckDBFlightSqlProducer(
                 location,
                 UUID.randomUUID().toString(),
                 SECRET,
@@ -114,8 +115,30 @@ class TicketBindingTest {
     @Test
     void ticketIsRejectedAfterItExpires() {
         Ticket ticket = ticketOf(alice.execute("SELECT * FROM range(3)"));
-        clock.advanceBy(DuckDBFlightSqlProducer.TICKET_TTL.plusSeconds(1));
+        clock.advanceBy(DuckDBFlightSqlProducer.DEFAULT_TICKET_TTL.plusSeconds(1));
         assertRejected(alice, ticket);
+    }
+
+    @Test
+    void aConfiguredTicketTtlIsHonoured() throws Exception {
+        producer.setTicketTtl(Duration.ofMinutes(5));
+        try {
+            Ticket ticket = ticketOf(alice.execute("SELECT * FROM range(3)"));
+            clock.advanceBy(Duration.ofMinutes(4));
+            assertEquals(3, rows(alice, ticket), "still valid before the configured TTL");
+            Ticket expiring = ticketOf(alice.execute("SELECT * FROM range(3)"));
+            clock.advanceBy(Duration.ofMinutes(5).plusSeconds(1));
+            assertRejected(alice, expiring);
+        } finally {
+            producer.setTicketTtl(DuckDBFlightSqlProducer.DEFAULT_TICKET_TTL);
+        }
+    }
+
+    @Test
+    void aNonPositiveTicketTtlIsRefused() {
+        assertThrows(IllegalArgumentException.class, () -> producer.setTicketTtl(Duration.ZERO));
+        assertThrows(IllegalArgumentException.class, () -> producer.setTicketTtl(Duration.ofSeconds(-1)));
+        assertEquals(DuckDBFlightSqlProducer.DEFAULT_TICKET_TTL, producer.getTicketTtl());
     }
 
     @Test

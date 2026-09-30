@@ -48,7 +48,9 @@ public record StatementHandle(String query, long queryId, @Nullable String produ
         return queryId + ":" + expiresAtMillis + ":" + p.length() + ":" + p + ":" + query;
     }
 
-    public boolean signatureMismatch(String key) {
+    // Private: a matching signature alone is not enough to trust a handle. Callers use validFor,
+    // which also checks the principal and the expiry.
+    private boolean signatureMismatch(String key) {
         return !CryptoUtils.generateHMACSHA1(key, signedContent(queryId, query, principal, expiresAtMillis))
                 .equals(queryChecksum);
     }
