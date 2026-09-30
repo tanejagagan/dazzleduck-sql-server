@@ -498,6 +498,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         try {
             authorizedSql = transformPreparedStatementQuery(context, connection, request.getQuery());
         } catch (Throwable t) {
+            // Not yet owned by a cache entry, so nothing else will close it.
+            closeQuietly(connection);
             ErrorHandling.handleThrowable(listener, t);
             return;
         }
@@ -505,10 +507,12 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         var cacheKey = new CacheKey(context.peerIdentity(), handle.queryId());
 
         Runnable runnable = () -> {
+            // Until the context is cached, this method owns the connection and must close it on
+            // failure; after, the cache owns it (closePreparedStatement or eviction closes it).
+            boolean cached = false;
             try {
                 final ByteString serializedHandle =
                         copyFrom(handle.serialize());
-                // Ownership of the connection will be passed to the context. Do NOT close!
 
                 final PreparedStatement preparedStatement =
                         connection.prepareStatement(
@@ -517,6 +521,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                         new StatementContext<>(connection, preparedStatement, authorizedSql);
                 preparedStatementLoadingCache.put(
                         cacheKey, preparedStatementContext);
+                cached = true;
 
                 final Schema parameterSchema =
                         JdbcToArrowUtils.jdbcToArrowSchema(preparedStatement.getParameterMetaData(), DEFAULT_CALENDAR);
@@ -539,12 +544,21 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                 final FlightSql.ActionCreatePreparedStatementResult result = builder.build();
                 listener.onNext(new Result(pack(result).toByteArray()));
             } catch (Throwable e ) {
+                if (!cached) {
+                    closeQuietly(connection); // also closes a prepared statement created on it
+                }
                 ErrorHandling.handleThrowable(listener, e);
                 return;
             }
             listener.onCompleted();
         };
-        executorService.submit(runnable);
+        try {
+            executorService.submit(runnable);
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            // Shutting down: the runnable will never run to take ownership.
+            closeQuietly(connection);
+            ErrorHandling.handleThrowable(listener, e);
+        }
     }
 
     @Override
@@ -1366,6 +1380,14 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
      * Injects a live cursor entry into the cache on behalf of {@code peerIdentity}.
      * Visible for testing only — do not call from production code.
      */
+    private static void closeQuietly(Connection connection) {
+        try {
+            connection.close();
+        } catch (Exception e) {
+            logger.atWarn().setCause(e).log("Failed to close connection");
+        }
+    }
+
     void injectTestCursor(String peerIdentity) {
         try {
             var conn = ConnectionPool.getConnection();
