@@ -145,4 +145,36 @@ class ConcurrentStreamTrackingTest {
             assertEquals(5, rows(client.getStream(prepared.execute().getEndpoints().get(0).getTicket())));
         }
     }
+
+    @Test
+    void aRejectedPreparedRunDoesNotChangeTheRunningStatementsTimeout() throws Exception {
+        try (var prepared = client.prepare("SELECT 1")) {
+            var ctx = producer.preparedStatementLoadingCache.asMap().values().stream()
+                    .filter(c -> "SELECT 1".equals(c.getQuery())).findFirst().orElseThrow();
+            ctx.getStatement().setQueryTimeout(111);
+            assertTrue(ctx.tryStart()); // a run is executing on the shared statement
+            try {
+                var headers = new FlightCallHeaders();
+                headers.insert(io.dazzleduck.sql.common.Headers.HEADER_QUERY_TIMEOUT, "7");
+                var ticket = prepared.execute().getEndpoints().get(0).getTicket();
+                var ex = assertThrows(FlightRuntimeException.class,
+                        () -> rows(client.getStream(ticket, new HeaderCallOption(headers))));
+                assertEquals(FlightStatusCode.ALREADY_EXISTS, ex.status().code());
+                assertEquals(111, ctx.getStatement().getQueryTimeout(),
+                        "the rejected run must not change the running statement's timeout");
+            } finally {
+                ctx.end();
+            }
+        }
+    }
+
+    @Test
+    void aClosedPreparedStatementIsNotFoundNotAlreadyRunning() throws Exception {
+        var connection = io.dazzleduck.sql.commons.ConnectionPool.getConnection();
+        var ctx = new StatementContext<>(connection, connection.prepareStatement("SELECT 1"), "SELECT 1", true);
+        ctx.close(); // e.g. a concurrent closePreparedStatement won the race
+        var error = ErrorHandling.cannotStart(ctx);
+        assertEquals(FlightStatusCode.NOT_FOUND, error.status().code(), error.getMessage());
+        assertFalse(ctx.tryStart());
+    }
 }

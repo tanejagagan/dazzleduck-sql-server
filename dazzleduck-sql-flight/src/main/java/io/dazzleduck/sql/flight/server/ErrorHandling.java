@@ -229,6 +229,16 @@ public class ErrorHandling {
                 .toRuntimeException();
     }
 
+    /**
+     * Why {@code context} could not be started: it was closed in the meantime (e.g. a concurrent
+     * closePreparedStatement won the race), or another call is running it.
+     */
+    static FlightRuntimeException cannotStart(StatementContext<?> context) {
+        return context.isClosed()
+                ? CallStatus.NOT_FOUND.withDescription("The statement was closed").toRuntimeException()
+                : alreadyRunning();
+    }
+
     static void handleContextNotFound() {
         throw FlightRuntimeExceptionFactory.of(CallStatus.NOT_FOUND);
     }

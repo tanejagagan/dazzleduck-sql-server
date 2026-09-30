@@ -89,8 +89,9 @@ public class ResultSetStreamUtil {
 
         submit(executorService, finalBlock, () -> {
             if (!statementContext.tryStart()) {
-                // Another stream is running this statement. Reject without touching its state.
-                listener.error(ErrorHandling.alreadyRunning());
+                // Another stream is running this statement, or it was closed. Reject without touching
+                // its state.
+                listener.error(ErrorHandling.cannotStart(statementContext));
                 return;
             }
             BufferAllocator childAllocator = null;
