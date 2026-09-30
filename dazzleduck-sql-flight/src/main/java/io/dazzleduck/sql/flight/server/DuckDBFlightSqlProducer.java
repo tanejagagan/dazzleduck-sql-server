@@ -1377,10 +1377,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
     }
 
 
-    /**
-     * Injects a live cursor entry into the cache on behalf of {@code peerIdentity}.
-     * Visible for testing only — do not call from production code.
-     */
+    /** Closes {@code connection}, logging instead of throwing: for cleanup on a failure path. */
     private static void closeQuietly(Connection connection) {
         try {
             connection.close();
@@ -1389,6 +1386,10 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         }
     }
 
+    /**
+     * Injects a live cursor entry into the cache on behalf of {@code peerIdentity}.
+     * Visible for testing only — do not call from production code.
+     */
     void injectTestCursor(String peerIdentity) {
         try {
             var conn = ConnectionPool.getConnection();
