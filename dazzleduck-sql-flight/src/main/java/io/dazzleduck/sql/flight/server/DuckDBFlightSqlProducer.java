@@ -501,7 +501,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             ErrorHandling.handleThrowable(listener, t);
             return;
         }
-        StatementHandle handle = newStatementHandle(authorizedSql);
+        // Bound to the caller but not expiring: the prepared-statement cache bounds its lifetime.
+        StatementHandle handle = StatementHandle.newStatementHandle(authorizedSql, producerId, -1)
+                .signed(secretKey, context.peerIdentity(), 0);
         var cacheKey = new CacheKey(context.peerIdentity(), handle.queryId());
 
         Runnable runnable = () -> {
@@ -550,7 +552,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
     @Override
     public void closePreparedStatement(FlightSql.ActionClosePreparedStatementRequest request, CallContext context, StreamListener<Result> listener) {
         final StatementHandle statementHandle = StatementHandle.deserialize(request.getPreparedStatementHandle());
-        if (statementHandle.signatureMismatch(secretKey)) {
+        if (invalidHandle(statementHandle, context)) {
             ErrorHandling.handleSignatureMismatch(listener);
             return;
         }
@@ -574,7 +576,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             final CallContext context,
             final FlightDescriptor descriptor) {
         StatementHandle statementHandle = StatementHandle.deserialize(command.getPreparedStatementHandle());
-        if (statementHandle.signatureMismatch(secretKey)) {
+        if (invalidHandle(statementHandle, context)) {
             ErrorHandling.handleSignatureMismatch();
             return null; // Never reached if handleSignatureMismatch throws, but prevents execution if it doesn't
         }
@@ -648,7 +650,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                                            ServerStreamListener listener) {
 
         StatementHandle statementHandle = StatementHandle.deserialize(command.getPreparedStatementHandle());
-        if (statementHandle.signatureMismatch(secretKey)) {
+        if (invalidHandle(statementHandle, context)) {
             ErrorHandling.handleSignatureMismatch(listener);
             return;
         }
@@ -697,7 +699,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             connection = getConnection(context, getAccessMode());
             String query = statementHandle.query();
             if (statementHandle.queryChecksum() != null
-                    && statementHandle.signatureMismatch(secretKey)) {
+                    && invalidHandle(statementHandle, context)) {
                 ErrorHandling.handleSignatureMismatch(listener);
                 return;
             }
@@ -845,7 +847,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                                                      StreamListener<PutResult> ackStream) {
         return () -> {
             StatementHandle statementHandle = StatementHandle.deserialize(command.getPreparedStatementHandle());
-            if (statementHandle.signatureMismatch(secretKey)) {
+            if (invalidHandle(statementHandle, context)) {
                 ErrorHandling.handleSignatureMismatch(ackStream);
                 return;
             }
@@ -1517,7 +1519,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         } catch (Exception e){
             throw CallStatus.INTERNAL.withCause(e).withDescription("Failed to transform query: " + e.getMessage()).toRuntimeException();
         }
-        StatementHandle handle = newStatementHandle(query);
+        StatementHandle handle = newStatementHandle(query, -1, context);
         final ByteString serializedHandle =
                 copyFrom(handle.serialize());
         FlightSql.TicketStatementQuery ticket =
@@ -1545,12 +1547,22 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
 
 
 
-    protected StatementHandle newStatementHandle(String query, long splitSize) {
-        return StatementHandle.newStatementHandle(query, producerId, splitSize).signed(secretKey);
+    /** How long a statement ticket stays usable after it is issued. */
+    static final Duration TICKET_TTL = Duration.ofHours(1);
+
+    /** A signed statement ticket, usable only by the caller and only until {@link #TICKET_TTL} passes. */
+    protected StatementHandle newStatementHandle(String query, long splitSize, CallContext context) {
+        return StatementHandle.newStatementHandle(query, producerId, splitSize)
+                .signed(secretKey, context.peerIdentity(), clock.millis() + TICKET_TTL.toMillis());
     }
 
-    protected StatementHandle newStatementHandle(String query) {
-        return newStatementHandle(query, -1);
+    /**
+     * Whether a signed handle may NOT be used by this caller: a bad signature, issued to another
+     * principal, or expired. Signed handles skip authorization, so this is what stops a leaked
+     * ticket from being replayed by another user or indefinitely.
+     */
+    protected boolean invalidHandle(StatementHandle handle, CallContext context) {
+        return !handle.validFor(secretKey, context.peerIdentity(), clock.millis());
     }
 
     protected static <T> T throwNotSupported(String operation) {

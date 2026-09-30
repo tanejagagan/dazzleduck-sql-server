@@ -8,10 +8,18 @@ import org.apache.arrow.flight.FlightDescriptor;
 
 import javax.annotation.Nullable;
 import java.io.IOException;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
 
+/**
+ * A query handle, carried in Flight tickets and prepared-statement handles. When signed, the
+ * server trusts its query without re-authorizing it (it may already carry the planning user's
+ * row filters), so the signature also covers who it was issued to ({@code principal}) and until
+ * when it may be used ({@code expiresAtMillis}, 0 = no expiry): a leaked or logged handle cannot
+ * be replayed by another user, nor forever.
+ */
 public record StatementHandle(String query, long queryId, @Nullable String producerId, long splitSize,
-                              @Nullable String queryChecksum) {
+                              @Nullable String queryChecksum, @Nullable String principal, long expiresAtMillis) {
 
     final private static AtomicLong queryIdCounter = new AtomicLong();
 
@@ -20,7 +28,7 @@ public record StatementHandle(String query, long queryId, @Nullable String produ
     }
 
     public StatementHandle(String query, long queryId, String producerId, long splitSize){
-        this(query, queryId, producerId, splitSize, null);
+        this(query, queryId, producerId, splitSize, null, null, 0);
     }
 
 
@@ -34,13 +42,35 @@ public record StatementHandle(String query, long queryId, @Nullable String produ
         }
     }
 
-    public boolean signatureMismatch(String key) {
-        return !CryptoUtils.generateHMACSHA1(key, queryId + ":" + query).equals(queryChecksum);
+    // The principal is length-prefixed so no principal/query split of the same bytes can collide.
+    private static String signedContent(long queryId, String query, String principal, long expiresAtMillis) {
+        String p = principal == null ? "" : principal;
+        return queryId + ":" + expiresAtMillis + ":" + p.length() + ":" + p + ":" + query;
     }
 
-    public StatementHandle signed(String key) {
-        String checksum = CryptoUtils.generateHMACSHA1(key, queryId + ":" + query);
-        return new StatementHandle(this.query, this.queryId, this.producerId(), this.splitSize, checksum);
+    public boolean signatureMismatch(String key) {
+        return !CryptoUtils.generateHMACSHA1(key, signedContent(queryId, query, principal, expiresAtMillis))
+                .equals(queryChecksum);
+    }
+
+    /**
+     * Whether a caller may use this signed handle: the signature matches, it was issued to
+     * {@code caller}, and (if it expires) it has not expired at {@code nowMillis}.
+     */
+    public boolean validFor(String key, String caller, long nowMillis) {
+        return !signatureMismatch(key)
+                && Objects.equals(principal, caller)
+                && (expiresAtMillis == 0 || nowMillis < expiresAtMillis);
+    }
+
+    /**
+     * Signs the handle for {@code principal}; {@code expiresAtMillis} 0 means it does not expire
+     * (prepared-statement handles, whose lifetime the server's prepared-statement cache bounds).
+     */
+    public StatementHandle signed(String key, String principal, long expiresAtMillis) {
+        String checksum = CryptoUtils.generateHMACSHA1(key, signedContent(queryId, query, principal, expiresAtMillis));
+        return new StatementHandle(this.query, this.queryId, this.producerId(), this.splitSize, checksum,
+                principal, expiresAtMillis);
     }
     public static StatementHandle deserialize(byte[] bytes) {
         try {

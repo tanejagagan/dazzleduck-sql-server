@@ -229,17 +229,17 @@ public class ErrorHandling {
 
     static <T> void handleSignatureMismatch(FlightProducer.StreamListener<T> listener) {
         listener.onError(FlightRuntimeExceptionFactory.of(
-                new CallStatus(CallStatus.UNAUTHORIZED.code(), null, "Signature in the handle do not match", null)));
+                new CallStatus(CallStatus.UNAUTHORIZED.code(), null, "Statement handle is invalid, expired or was issued to another user", null)));
     }
 
     static void handleSignatureMismatch() {
         throw FlightRuntimeExceptionFactory.of(
-                new CallStatus(CallStatus.UNAUTHORIZED.code(), null, "Signature in the handle do not match", null));
+                new CallStatus(CallStatus.UNAUTHORIZED.code(), null, "Statement handle is invalid, expired or was issued to another user", null));
     }
 
     static void handleSignatureMismatch(FlightProducer.ServerStreamListener listener) {
         listener.error(FlightRuntimeExceptionFactory.of(
-                new CallStatus(CallStatus.UNAUTHORIZED.code(), null, "Signature in the handle do not match", null)));
+                new CallStatus(CallStatus.UNAUTHORIZED.code(), null, "Statement handle is invalid, expired or was issued to another user", null)));
     }
 
     static void handleContextNotFound(FlightProducer.StreamListener<?> listener) {

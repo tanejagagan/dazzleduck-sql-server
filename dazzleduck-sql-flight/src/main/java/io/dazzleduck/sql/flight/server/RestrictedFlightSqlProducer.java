@@ -542,7 +542,7 @@ public class RestrictedFlightSqlProducer extends DuckDBFlightSqlProducer {
             var list = splits.stream().map(split -> {
                 try {
                     var sql = Transformations.parseToSql(split.tree());
-                    StatementHandle handle = newStatementHandle(sql, split.size());
+                    StatementHandle handle = newStatementHandle(sql, split.size(), context);
                     final ByteString serializedHandle =
                             copyFrom(handle.serialize());
                     return FlightSql.TicketStatementQuery.newBuilder().setStatementHandle(serializedHandle).build();
