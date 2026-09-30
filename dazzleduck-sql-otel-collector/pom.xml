@@ -146,10 +146,7 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>${surefire.version}</version>
                 <configuration>
-                    <argLine>
-                        --add-opens=java.base/java.nio=ALL-UNNAMED
-                        --add-opens=java.base/sun.nio.ch=ALL-UNNAMED
-                    </argLine>
+                    <argLine>${arrow.jvm.flags}</argLine>
                 </configuration>
             </plugin>
 
@@ -173,7 +170,7 @@
                 <version>3.5.1</version>
                 <configuration>
                     <from>
-                        <image>dazzleduck/base-jre:25-noble-duckdb-${duckdb.version}</image>
+                        <image>dazzleduck/base-jre:${java.runtime.version}-noble-duckdb-${duckdb.version}</image>
                         <platforms>
                             <platform>
                                 <os>linux</os>
@@ -189,6 +186,20 @@
                     </to>
                     <container>
                         <mainClass>${exec.mainClass}</mainClass>
+                        <!-- Declared here (previously inherited from the parent pom's Jib block, now removed).
+                             Arrow/Netty on JDK 25 need the last two. -->
+                        <jvmFlags>
+                            <jvmFlag>-Xms512m</jvmFlag>
+                            <jvmFlag>-XX:+UseContainerSupport</jvmFlag>
+                            <jvmFlag>-XX:+UseG1GC</jvmFlag>
+                            <jvmFlag>-XX:+UseStringDeduplication</jvmFlag>
+                            <jvmFlag>-XX:+ExitOnOutOfMemoryError</jvmFlag>
+                            <jvmFlag>--add-opens=java.base/sun.nio.ch=ALL-UNNAMED</jvmFlag>
+                            <jvmFlag>--add-opens=java.base/java.nio=ALL-UNNAMED</jvmFlag>
+                            <jvmFlag>--add-opens=java.base/sun.util.calendar=ALL-UNNAMED</jvmFlag>
+                            <jvmFlag>--enable-native-access=ALL-UNNAMED</jvmFlag>
+                            <jvmFlag>--sun-misc-unsafe-memory-access=allow</jvmFlag>
+                        </jvmFlags>
                     </container>
                 </configuration>
             </plugin>

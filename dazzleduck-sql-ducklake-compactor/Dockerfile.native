@@ -14,11 +14,11 @@
 # the arch-specific DuckDB .so is bundled via -Dduckdb.native.arch (see the pom's native profile).
 
 # ---- build stage: GraalVM native-image + Maven wrapper ----
-FROM ghcr.io/graalvm/native-image-community:21 AS build
+FROM ghcr.io/graalvm/native-image-community:25 AS build
 ARG TARGETARCH
-# zlib-devel provides libz.so, which the final native-image link needs (gcc ... -lz).
-# curl fetches the patched DuckLake extension binary below.
-RUN microdnf install -y zlib-devel curl && microdnf clean all
+# Nothing to install: the GraalVM 25 image (Oracle Linux 10) already has libz.so, which the
+# native-image link needs (gcc ... -lz), via zlib-ng-compat-devel, and curl, which fetches the
+# patched DuckLake extension below. Installing zlib-devel conflicts with zlib-ng-compat-devel.
 WORKDIR /src
 COPY . .
 # -Pnative emits target/compactor; duckdb.native.arch picks the DuckDB .so for this arch.

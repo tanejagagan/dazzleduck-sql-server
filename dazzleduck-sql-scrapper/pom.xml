@@ -16,6 +16,8 @@
     <properties>
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
+        <!-- Override with -Djib.architecture=arm64 on Apple Silicon -->
+        <jib.architecture>amd64</jib.architecture>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <slf4j.version>2.0.16</slf4j.version>
         <typesafe.config.version>1.4.3</typesafe.config.version>
@@ -96,7 +98,7 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>${surefire.version}</version>
                 <configuration>
-                    <argLine>--add-opens=java.base/java.nio=ALL-UNNAMED</argLine>
+                    <argLine>${arrow.jvm.flags}</argLine>
                 </configuration>
             </plugin>
             <!-- Maven JAR Plugin to set main class -->
@@ -119,12 +121,18 @@
                 <version>3.5.1</version>
                 <configuration>
                     <from>
-                        <image>dazzleduck/base-jre:25-noble-duckdb-${duckdb.version}</image>
+                        <image>dazzleduck/base-jre:${java.runtime.version}-noble-duckdb-${duckdb.version}</image>
+                        <platforms>
+                            <platform>
+                                <os>linux</os>
+                                <architecture>${jib.architecture}</architecture>
+                            </platform>
+                        </platforms>
                     </from>
                     <to>
-                        <image>dazzleduck/dazzleduck-sql-scrapper:${project.version}</image>
+                        <image>dazzleduck/dazzleduck-sql-scrapper:${project.version}-${jib.architecture}</image>
                         <tags>
-                            <tag>latest</tag>
+                            <tag>latest-${jib.architecture}</tag>
                         </tags>
                     </to>
                     <container>

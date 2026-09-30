@@ -85,5 +85,5 @@ dev/test against self-signed certificates (never in production).
 
 ## Requirements
 
-- Java 11+ (built and tested with JDK 21)
+- Java 11+ (built and tested with JDK 25)
 - Dependencies: `dazzleduck-sql-common`, Arrow (with ZSTD compression), SLF4J

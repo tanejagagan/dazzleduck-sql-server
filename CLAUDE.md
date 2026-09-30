@@ -10,7 +10,7 @@ JWT authentication, Arrow-native data transfers, Delta Lake and Hive partition p
 
 ## Build & Development
 
-**Requirements:** JDK 21 (server), JDK 11+ (client modules), Maven wrapper (`./mvnw`)
+**Requirements:** JDK 25 (build, tests, and the runtime images), client modules keep bytecode target 11, Maven wrapper (`./mvnw`)
 
 ```bash
 # Build
@@ -30,9 +30,9 @@ docker run -ti -p 59307:59307 -p 8081:8081 dazzleduck/dazzleduck:latest --conf w
 ./mvnw package -DskipTests jib:dockerBuild -pl dazzleduck-sql-runtime -Djib.architecture=arm64
 ```
 
-**Required JVM flags** (Arrow memory management):
+**Required JVM flags** (Arrow memory management on JDK 25):
 ```bash
-export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED"
+export MAVEN_OPTS="--add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED --enable-native-access=ALL-UNNAMED --sun-misc-unsafe-memory-access=allow"
 ```
 
 ## Project Structure
@@ -219,10 +219,10 @@ Note: the JWT filter is always installed on versioned HTTP endpoints — the `ht
 
 **Frameworks:** JUnit 5, JMock, Testcontainers (MinIO, etc.)
 
-**Required:** Use JDK 21 (`JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home`). JDK 25 causes test failures.
+**Required:** Use JDK 25 (`JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-25.jdk/Contents/Home`), the same JVM the images run. Arrow/Netty need `--enable-native-access=ALL-UNNAMED` and `--sun-misc-unsafe-memory-access=allow` on it; surefire gets them from the parent pom's `arrow.jvm.flags`. Delta Lake reads go through Hadoop, which needs 3.4.3+ (`hadoop.version`) on JDK 23+; older Hadoop calls `Subject.getSubject` and fails.
 
 ```bash
-export JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home
+export JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-25.jdk/Contents/Home
 ./mvnw test
 ./mvnw test -pl dazzleduck-sql-http
 ./mvnw test -pl dazzleduck-sql-http -Dtest=QueryServiceTest

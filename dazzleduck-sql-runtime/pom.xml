@@ -150,7 +150,7 @@
                      Lifecycle-bound multi-arch builds use the <executions> below. -->
                 <configuration>
                     <from>
-                        <image>dazzleduck/base-jre:25-noble-duckdb-${duckdb.version}</image>
+                        <image>dazzleduck/base-jre:${java.runtime.version}-noble-duckdb-${duckdb.version}</image>
                         <platforms>
                             <platform>
                                 <os>linux</os>
@@ -264,7 +264,7 @@
                         <configuration>
                             <skip>${skip.docker.arm64}</skip>
                             <from>
-                                <image>dazzleduck/base-jre:25-noble-duckdb-${duckdb.version}</image>
+                                <image>dazzleduck/base-jre:${java.runtime.version}-noble-duckdb-${duckdb.version}</image>
                                 <platforms>
                                     <platform><os>linux</os><architecture>arm64</architecture></platform>
                                 </platforms>
@@ -283,7 +283,7 @@
                         <configuration>
                             <skip>${skip.docker.amd64}</skip>
                             <from>
-                                <image>dazzleduck/base-jre:25-noble-duckdb-${duckdb.version}</image>
+                                <image>dazzleduck/base-jre:${java.runtime.version}-noble-duckdb-${duckdb.version}</image>
                                 <platforms>
                                     <platform><os>linux</os><architecture>amd64</architecture></platform>
                                 </platforms>

@@ -22,7 +22,7 @@ that exclusion.
   `latest-amd64`):
 
   ```bash
-  export JAVA_HOME=$(/usr/libexec/java_home -v 21)   # build on JDK 21
+  export JAVA_HOME=$(/usr/libexec/java_home -v 25)   # build on JDK 25
   # Install the reactor so the runtime image picks up local changes.
   # (jib:dockerBuild is a direct goal and will NOT rebuild upstream modules,
   #  so -am is not enough — install first.)
@@ -41,7 +41,7 @@ This module has `packaging=pom`, so the default Maven lifecycle binds neither
 directly:
 
 ```bash
-export JAVA_HOME=$(/usr/libexec/java_home -v 21)
+export JAVA_HOME=$(/usr/libexec/java_home -v 25)
 ./mvnw -pl dazzleduck-sql-examples -Pdocker-compose \
   resources:testResources compiler:testCompile surefire:test
 ```
