@@ -685,6 +685,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             ErrorHandling.handleThrowable(listener, e);
             return;
         }
+        statementContext.markClaimed(); // like getStreamStatement: a queued run sees a cancel and counts as live
         ResultSetStreamUtil.streamResultSet(executorService, statementContext, key, OptionalResultSetSupplier.of(statementContext.getStatement()),
             allocator, getBatchSize(context),
             listener, () -> {}, recorder);

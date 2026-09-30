@@ -167,9 +167,12 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
         if (closed) {
             return;
         }
-        // Recorded even when nothing is running yet: a stream that is queued (claimed) sees it right
-        // after start() and ends instead of running the query.
-        cancelRequested = true;
+        // Recorded only while a stream exists to see it: one queued (claimed) checks it right after
+        // start() and ends instead of running the query. A late cancel, after the stream ended, must
+        // not stick to a context that stays open (a prepared statement) and cancel its next run.
+        if (claimed || inUse) {
+            cancelRequested = true;
+        }
         if (inUse) {
             statement.cancel();
         }

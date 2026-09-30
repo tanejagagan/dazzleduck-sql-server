@@ -236,4 +236,23 @@ class StreamCancellationTest {
             executor.shutdown();
         }
     }
+
+    @Test
+    void aLateCancelDoesNotCancelTheNextRunOfAPreparedStatement() throws Exception {
+        var connection = ConnectionPool.getConnection();
+        var ctx = new StatementContext<>(connection, connection.prepareStatement("SELECT 1"), "SELECT 1");
+        try {
+            ctx.markClaimed();
+            ctx.start();
+            ctx.end();       // the first run finished; the prepared statement stays open
+            ctx.cancel();    // e.g. a gRPC cancel handler firing after the stream ended
+            assertFalse(ctx.isCancelRequested(), "a cancel with no stream to see it must not stick");
+            ctx.markClaimed();
+            ctx.start();     // the client runs it again
+            assertFalse(ctx.isCancelRequested(), "the next run must not be cancelled");
+            ctx.end();
+        } finally {
+            ctx.close();
+        }
+    }
 }
