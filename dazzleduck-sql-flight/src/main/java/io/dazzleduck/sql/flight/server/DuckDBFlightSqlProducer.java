@@ -1048,43 +1048,88 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         };
     }
 
+    /**
+     * Cancels every endpoint of the FlightInfo (a RESTRICTED query can be split across several),
+     * replying with a single status: CANCELLED if any of them was still known here, NOT_FOUND if
+     * none was. A ticket that cannot be read is INVALID_ARGUMENT.
+     */
     @Override
     public void cancelFlightInfo(
             CancelFlightInfoRequest request, CallContext context, StreamListener<CancelStatus> listener) {
-        Ticket ticket = request.getInfo().getEndpoints().get(0).getTicket();
-        final Any command;
+        boolean found = false;
         try {
-            command = Any.parseFrom(ticket.getBytes());
-        } catch (InvalidProtocolBufferException e) {
+            // Read every ticket first, so a bad request cancels nothing.
+            var queryIds = new ArrayList<Long>();
+            for (FlightEndpoint endpoint : request.getInfo().getEndpoints()) {
+                queryIds.add(queryIdOf(endpoint.getTicket()));
+            }
+            for (long queryId : queryIds) {
+                found |= cancelRunning(new CacheKey(context.peerIdentity(), queryId));
+            }
+        } catch (FlightRuntimeException e) {
             listener.onError(e);
             return;
+        } catch (SQLException e) {
+            ErrorHandling.handleSqlException(listener, e);
+            return;
         }
-        if (command.is(FlightSql.TicketStatementQuery.class)) {
-            cancelStatement(
-                    FlightSqlUtils.unpackOrThrow(command, FlightSql.TicketStatementQuery.class), context, listener);
-        } else if (command.is(FlightSql.CommandPreparedStatementQuery.class)) {
-            cancelPreparedStatement(
-                    FlightSqlUtils.unpackOrThrow(command, FlightSql.CommandPreparedStatementQuery.class),
-                    context,
-                    listener);
+        if (!found) {
+            ErrorHandling.handleContextNotFound(listener);
+            return;
+        }
+        listener.onNext(CancelStatus.CANCELLED);
+        listener.onCompleted();
+    }
+
+    private static long queryIdOf(Ticket ticket) {
+        try {
+            Any command = Any.parseFrom(ticket.getBytes());
+            if (command.is(FlightSql.TicketStatementQuery.class)) {
+                return StatementHandle.deserialize(command.unpack(FlightSql.TicketStatementQuery.class)
+                        .getStatementHandle()).queryId();
+            }
+            if (command.is(FlightSql.CommandPreparedStatementQuery.class)) {
+                return StatementHandle.deserialize(command.unpack(FlightSql.CommandPreparedStatementQuery.class)
+                        .getPreparedStatementHandle()).queryId();
+            }
+            throw CallStatus.INVALID_ARGUMENT
+                    .withDescription("Cannot cancel ticket of type " + command.getTypeUrl())
+                    .toRuntimeException();
+        } catch (InvalidProtocolBufferException | RuntimeException e) {
+            if (e instanceof FlightRuntimeException fre) throw fre;
+            throw CallStatus.INVALID_ARGUMENT.withDescription("Unreadable ticket").withCause(e).toRuntimeException();
         }
     }
 
     @Override
     public boolean tryCancel(Long queryId, CallContext context) throws SQLException {
-        var key = new CacheKey(context.peerIdentity(), queryId);
-        StatementContext<?> statementContext = getStatementContext(key);
+        return cancelRunning(new CacheKey(context.peerIdentity(), queryId));
+    }
 
-        if (statementContext == null) {
+    /**
+     * Interrupts the query under {@code key} and removes it, returning false if nothing is known
+     * under it; the removal listener closes it once no stream is using it. This removes a prepared
+     * statement too: DuckDB's JDBC driver closes a prepared statement whose execution is
+     * interrupted, so it could not be run again anyway, and NOT_FOUND is clearer than a closed-
+     * statement error on the next execute.
+     */
+    private boolean cancelRunning(CacheKey key) throws SQLException {
+        return cancelIn(statementLoadingCache, key) || cancelIn(preparedStatementLoadingCache, key);
+    }
+
+    private <T extends Statement> boolean cancelIn(Cache<CacheKey, StatementContext<T>> cache, CacheKey key)
+            throws SQLException {
+        StatementContext<T> ctx = cache.getIfPresent(key);
+        if (ctx == null) {
             return false;
         }
+        recorder.recordStatementCancel(key, ctx);
         try {
-            recorder.recordStatementCancel(key, statementContext);
-            statementContext.cancel();
-            return true;
+            ctx.cancel();
         } finally {
-          invalidateCache(key, statementContext);
+            cache.asMap().remove(key, ctx);
         }
+        return true;
     }
 
 
@@ -1260,9 +1305,15 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         executorService.shutdown();
         scheduledExecutorService.shutdown();
         try {
-            if (!executorService.awaitTermination(30, TimeUnit.SECONDS)) {
-                logger.atWarn().log("ExecutorService did not terminate in 30 seconds, forcing shutdown");
+            if (!executorService.awaitTermination(closeGrace.toMillis(), TimeUnit.MILLISECONDS)) {
+                // Thread interrupts do not stop a query inside DuckDB: cancel the statements too,
+                // so their streams end and give back their connections and Arrow memory.
+                logger.atWarn().log("Queries still running after {}, cancelling them", closeGrace);
+                cancelAllRunning();
                 executorService.shutdownNow();
+                if (!executorService.awaitTermination(10, TimeUnit.SECONDS)) {
+                    logger.atWarn().log("Query streams did not stop within 10 seconds of being cancelled");
+                }
             }
             if (!scheduledExecutorService.awaitTermination(10, TimeUnit.SECONDS)) {
                 logger.atWarn().log("ScheduledExecutorService did not terminate in 10 seconds, forcing shutdown");
@@ -1270,22 +1321,56 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             }
         } catch (InterruptedException e) {
             logger.atWarn().setCause(e).log("Interrupted while waiting for executor services to terminate");
+            cancelAllRunning();
             executorService.shutdownNow();
             scheduledExecutorService.shutdownNow();
             Thread.currentThread().interrupt();
         }
 
-        ingestionHandler.closeQueues();
+        // Each step runs even if an earlier one fails, so one problem does not leak everything after it.
+        // Cursors and prepared statements hold DuckDB connections; the removal listener closes each
+        // (one still in use by a stream is closed when that stream ends).
+        runQuietly("statement caches", () -> {
+            statementLoadingCache.invalidateAll();
+            preparedStatementLoadingCache.invalidateAll();
+            statementLoadingCache.cleanUp();
+            preparedStatementLoadingCache.cleanUp();
+        });
+        if (ingestionHandler != null) {
+            runQuietly("ingestion queues", ingestionHandler::closeQueues);
+        }
         // Shut down after the queues have drained/closed — draining does not depend on the scheduler,
         // but this keeps any in-flight flush trigger valid until the queues are gone.
-        bulkIngestFlushScheduler.shutdownNow();
-
-        allocator.close();
+        runQuietly("ingestion flush scheduler", bulkIngestFlushScheduler::shutdownNow);
+        runQuietly("allocator", allocator::close);
 
         try (var stream = Files.walk(tempDir)) {
             stream.sorted(Comparator.reverseOrder())
                   .forEach(p -> { try { Files.deleteIfExists(p); } catch (IOException ignored) {} });
         } catch (IOException ignored) {}
+    }
+
+    /** How long close() lets running queries finish before cancelling them; shortened by tests. */
+    Duration closeGrace = Duration.ofSeconds(30);
+
+    private void cancelAllRunning() {
+        for (var cache : List.of(statementLoadingCache.asMap(), preparedStatementLoadingCache.asMap())) {
+            for (StatementContext<?> ctx : cache.values()) {
+                try {
+                    ctx.cancel();
+                } catch (Exception e) {
+                    logger.atWarn().setCause(e).log("Failed to cancel a running query during shutdown");
+                }
+            }
+        }
+    }
+
+    private static void runQuietly(String what, Runnable step) {
+        try {
+            step.run();
+        } catch (Exception e) {
+            logger.atWarn().setCause(e).log("Failed to close {} during shutdown", what);
+        }
     }
 
     public SqlAuthorizer getSqlAuthorizer(){
@@ -1315,65 +1400,6 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         var newLocations = new LinkedHashSet<Location>();
         newLocations.addAll(dataProcessorLocations);
         this.dataProcessorLocations = newLocations;
-    }
-
-
-    private void cancelStatement(final FlightSql.TicketStatementQuery ticketStatementQuery,
-                                 CallContext context,
-                                 StreamListener<CancelStatus> listener) {
-        StatementHandle statementHandle = StatementHandle.deserialize(ticketStatementQuery.getStatementHandle());
-        cancel(statementHandle.queryId(), listener, context.peerIdentity());
-    }
-
-
-    private void cancelPreparedStatement(FlightSql.CommandPreparedStatementQuery ticketPreparedStatementQuery,
-                                         CallContext context,
-                                         StreamListener<CancelStatus> listener) {
-        final StatementHandle statementHandle = StatementHandle.deserialize(ticketPreparedStatementQuery.getPreparedStatementHandle());
-        cancel(statementHandle.queryId(), listener, context.peerIdentity());
-    }
-
-
-    private void cancel(Long queryId,
-                       StreamListener<CancelStatus> listener,
-                       String peerIdentity) {
-        var key = new CacheKey(peerIdentity, queryId);
-        StatementContext<?> context = getStatementContext(key);
-
-        if (context == null) {
-            ErrorHandling.handleContextNotFound(listener);
-            return;
-        }
-        try {
-            listener.onNext(CancelStatus.CANCELLING);
-            recorder.recordStatementCancel(key, context);
-            try {
-                context.cancel();
-                listener.onNext(CancelStatus.CANCELLED);
-            } catch (SQLException e) {
-                ErrorHandling.handleSqlException(listener, e);
-            }
-        } finally {
-            listener.onCompleted();
-            invalidateCache(key, context);
-        }
-    }
-
-    private StatementContext<?> getStatementContext(CacheKey key) {
-        StatementContext<?> context = statementLoadingCache.getIfPresent(key);
-        if (context == null) {
-            context = preparedStatementLoadingCache.getIfPresent(key);
-        }
-        return context;
-    }
-
-    // Removes this exact context from whichever cache holds it. (Not by statement type: DuckDB's
-    // createStatement() also returns a PreparedStatement, so a type check picks the wrong cache.)
-    // The removal listener then closes it, once no stream is using it.
-    private void invalidateCache(CacheKey key, StatementContext<?> context) {
-        if (!statementLoadingCache.asMap().remove(key, context)) {
-            preparedStatementLoadingCache.asMap().remove(key, context);
-        }
     }
 
 
