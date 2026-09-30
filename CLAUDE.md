@@ -204,6 +204,7 @@ dazzleduck_server = {
     ingestion.max_delay_ms = 2000
 
     jwt_token.expiration = 60m
+    ticket_ttl_ms = 3600000          # signed Flight ticket lifetime (bound to the issuing user); allow for clock skew between nodes
     jwt_token.claims.generate.headers = [database, schema, x-dd-table, x-dd-filter, x-dd-access, x-dd-path, x-dd-function, x-dd-access-type, x-dd-variables]
 
     users = [{ username = admin, password = admin, groups = [admin, general] }]

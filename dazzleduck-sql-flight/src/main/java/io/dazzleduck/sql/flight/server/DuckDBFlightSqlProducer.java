@@ -504,7 +504,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             ErrorHandling.handleThrowable(listener, t);
             return;
         }
-        StatementHandle handle = newStatementHandle(authorizedSql);
+        // Bound to the caller but not expiring: the prepared-statement cache bounds its lifetime.
+        StatementHandle handle = StatementHandle.newStatementHandle(authorizedSql, producerId, -1)
+                .signed(secretKey, context.peerIdentity(), 0);
         var cacheKey = new CacheKey(context.peerIdentity(), handle.queryId());
 
         Runnable runnable = () -> {
@@ -566,8 +568,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
     @Override
     public void closePreparedStatement(FlightSql.ActionClosePreparedStatementRequest request, CallContext context, StreamListener<Result> listener) {
         final StatementHandle statementHandle = StatementHandle.deserialize(request.getPreparedStatementHandle());
-        if (statementHandle.signatureMismatch(secretKey)) {
-            ErrorHandling.handleSignatureMismatch(listener);
+        if (invalidHandle(statementHandle, context)) {
+            ErrorHandling.handleInvalidHandle(listener);
             return;
         }
         Runnable runnable = () -> {
@@ -590,9 +592,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             final CallContext context,
             final FlightDescriptor descriptor) {
         StatementHandle statementHandle = StatementHandle.deserialize(command.getPreparedStatementHandle());
-        if (statementHandle.signatureMismatch(secretKey)) {
-            ErrorHandling.handleSignatureMismatch();
-            return null; // Never reached if handleSignatureMismatch throws, but prevents execution if it doesn't
+        if (invalidHandle(statementHandle, context)) {
+            ErrorHandling.handleInvalidHandle();
+            return null; // Never reached if handleInvalidHandle throws, but prevents execution if it doesn't
         }
         var key = new CacheKey(context.peerIdentity(), statementHandle.queryId());
         StatementContext<PreparedStatement> statementContext =
@@ -664,8 +666,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                                            ServerStreamListener listener) {
 
         StatementHandle statementHandle = StatementHandle.deserialize(command.getPreparedStatementHandle());
-        if (statementHandle.signatureMismatch(secretKey)) {
-            ErrorHandling.handleSignatureMismatch(listener);
+        if (invalidHandle(statementHandle, context)) {
+            ErrorHandling.handleInvalidHandle(listener);
             return;
         }
         var key = new CacheKey(context.peerIdentity(), statementHandle.queryId());
@@ -713,8 +715,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             connection = getConnection(context, getAccessMode());
             String query = statementHandle.query();
             if (statementHandle.queryChecksum() != null
-                    && statementHandle.signatureMismatch(secretKey)) {
-                ErrorHandling.handleSignatureMismatch(listener);
+                    && invalidHandle(statementHandle, context)) {
+                ErrorHandling.handleInvalidHandle(listener);
                 return;
             }
             if (statementHandle.queryChecksum() == null) {
@@ -861,8 +863,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                                                      StreamListener<PutResult> ackStream) {
         return () -> {
             StatementHandle statementHandle = StatementHandle.deserialize(command.getPreparedStatementHandle());
-            if (statementHandle.signatureMismatch(secretKey)) {
-                ErrorHandling.handleSignatureMismatch(ackStream);
+            if (invalidHandle(statementHandle, context)) {
+                ErrorHandling.handleInvalidHandle(ackStream);
                 return;
             }
             var key = new CacheKey(context.peerIdentity(),statementHandle.queryId());
@@ -1571,7 +1573,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         } catch (Exception e){
             throw CallStatus.INTERNAL.withCause(e).withDescription("Failed to transform query: " + e.getMessage()).toRuntimeException();
         }
-        StatementHandle handle = newStatementHandle(query);
+        StatementHandle handle = newStatementHandle(query, -1, context);
         final ByteString serializedHandle =
                 copyFrom(handle.serialize());
         FlightSql.TicketStatementQuery ticket =
@@ -1599,12 +1601,43 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
 
 
 
-    protected StatementHandle newStatementHandle(String query, long splitSize) {
-        return StatementHandle.newStatementHandle(query, producerId, splitSize).signed(secretKey);
+    /** How long a statement ticket stays usable after it is issued, unless configured ({@code ticket_ttl_ms}). */
+    public static final Duration DEFAULT_TICKET_TTL = Duration.ofHours(1);
+
+    private volatile Duration ticketTtl = DEFAULT_TICKET_TTL;
+
+    /**
+     * Sets how long statement tickets issued from now on stay usable. Must be positive: tickets are
+     * signed and skip authorization, so they always expire.
+     */
+    public void setTicketTtl(Duration ticketTtl) {
+        this.ticketTtl = requirePositiveTicketTtl(ticketTtl);
     }
 
-    protected StatementHandle newStatementHandle(String query) {
-        return newStatementHandle(query, -1);
+    static Duration requirePositiveTicketTtl(Duration ticketTtl) {
+        if (ticketTtl == null || ticketTtl.isZero() || ticketTtl.isNegative()) {
+            throw new IllegalArgumentException(ConfigConstants.TICKET_TTL_MS_KEY + " must be positive, got " + ticketTtl);
+        }
+        return ticketTtl;
+    }
+
+    public Duration getTicketTtl() {
+        return ticketTtl;
+    }
+
+    /** A signed statement ticket, usable only by the caller and only until the ticket TTL passes. */
+    protected StatementHandle newStatementHandle(String query, long splitSize, CallContext context) {
+        return StatementHandle.newStatementHandle(query, producerId, splitSize)
+                .signed(secretKey, context.peerIdentity(), clock.millis() + ticketTtl.toMillis());
+    }
+
+    /**
+     * Whether a signed handle may NOT be used by this caller: a bad signature, issued to another
+     * principal, or expired. Signed handles skip authorization, so this is what stops a leaked
+     * ticket from being replayed by another user or indefinitely.
+     */
+    protected boolean invalidHandle(StatementHandle handle, CallContext context) {
+        return !handle.validFor(secretKey, context.peerIdentity(), clock.millis());
     }
 
     protected static <T> T throwNotSupported(String operation) {

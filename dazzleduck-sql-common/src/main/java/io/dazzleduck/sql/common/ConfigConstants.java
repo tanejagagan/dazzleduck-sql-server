@@ -38,6 +38,7 @@ public class ConfigConstants {
     public static final String PRODUCER_ID_KEY = "producer_id";
     public static final String QUERY_TIMEOUT_MS_KEY = "query_timeout_ms";
     public static final String MAX_QUERY_TIMEOUT_MS_KEY = "max_query_timeout_ms";
+    public static final String TICKET_TTL_MS_KEY = "ticket_ttl_ms";
 
     // Ingestion queue transformation keys
     public static final String TRANSFORMATION_KEY = "transformation";
