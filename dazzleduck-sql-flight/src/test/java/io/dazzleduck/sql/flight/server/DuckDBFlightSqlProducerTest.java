@@ -283,7 +283,6 @@ public class DuckDBFlightSqlProducerTest {
 
     @Test
     @Timeout(value = 30, unit = TimeUnit.SECONDS)
-    @Disabled("Delta partition pruning is no longer used, and fails on JDK 25: Delta Kernel reads through Hadoop, whose UserGroupInformation calls Subject.getSubject (unsupported since JDK 23)")
     public void testStatementSplittableDelta() throws Exception {
         // Use dynamic port allocation
         var serverLocation = FlightTestUtils.findNextLocation();

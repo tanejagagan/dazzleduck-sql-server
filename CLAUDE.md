@@ -219,7 +219,7 @@ Note: the JWT filter is always installed on versioned HTTP endpoints — the `ht
 
 **Frameworks:** JUnit 5, JMock, Testcontainers (MinIO, etc.)
 
-**Required:** Use JDK 25 (`JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-25.jdk/Contents/Home`), the same JVM the images run. Arrow/Netty need `--enable-native-access=ALL-UNNAMED` and `--sun-misc-unsafe-memory-access=allow` on it; surefire gets them from the parent pom's `arrow.jvm.flags`. The Delta Lake tests are disabled: Delta Kernel reads through Hadoop, which calls `Subject.getSubject`, unsupported since JDK 23 (and Delta pruning is no longer used).
+**Required:** Use JDK 25 (`JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-25.jdk/Contents/Home`), the same JVM the images run. Arrow/Netty need `--enable-native-access=ALL-UNNAMED` and `--sun-misc-unsafe-memory-access=allow` on it; surefire gets them from the parent pom's `arrow.jvm.flags`. Delta Lake reads go through Hadoop, which needs 3.4.3+ (`hadoop.version`) on JDK 23+; older Hadoop calls `Subject.getSubject` and fails.
 
 ```bash
 export JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-25.jdk/Contents/Home
