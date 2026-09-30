@@ -72,11 +72,15 @@ public class ResultSetStreamUtil {
                                                       Runnable finalBlock, FlightRecorder recorder) {
 
         executorService.submit(() -> {
+            if (!statementContext.tryStart()) {
+                // Another stream is running this statement. Reject without touching its state.
+                listener.error(ErrorHandling.alreadyRunning());
+                return;
+            }
             BufferAllocator childAllocator = null;
             var error = false;
             try {
                 childAllocator = allocator.newChildAllocator("statement-allocator", 0, allocator.getLimit());
-                statementContext.start();
                 // A client that disconnects or cancels the DoGet must stop the query. Without this,
                 // Flight drops every later putNext() silently and the query runs to completion.
                 listener.setOnCancelHandler(() -> {

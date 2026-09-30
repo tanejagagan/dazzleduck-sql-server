@@ -223,6 +223,12 @@ public class ErrorHandling {
         listener.onCompleted();
     }
 
+    static FlightRuntimeException alreadyRunning() {
+        return CallStatus.ALREADY_EXISTS
+                .withDescription("This statement is already executing; wait for it to finish or cancel it")
+                .toRuntimeException();
+    }
+
     static void handleContextNotFound() {
         throw FlightRuntimeExceptionFactory.of(CallStatus.NOT_FOUND);
     }

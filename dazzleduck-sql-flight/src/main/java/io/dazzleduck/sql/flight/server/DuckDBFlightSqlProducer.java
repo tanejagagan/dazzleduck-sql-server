@@ -709,7 +709,16 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             statement.setQueryTimeout(getEffectiveQueryTimeoutSeconds(context));
             var statementContext = new StatementContext<>(connection, statement, query);
             var key = new CacheKey(context.peerIdentity(), statementHandle.queryId());
-            statementLoadingCache.put(key, statementContext);
+            // One stream per ticket at a time: a second one would replace the first's entry (and
+            // whichever finished first would remove the other's), leaving a running stream that
+            // cancel cannot find and cursor limits do not count.
+            if (statementLoadingCache.asMap().putIfAbsent(key, statementContext) != null) {
+                statementContext.close(); // closes the new statement and connection
+                connection = null;
+                throw CallStatus.ALREADY_EXISTS
+                        .withDescription("This ticket is already being streamed")
+                        .toRuntimeException();
+            }
             connection = null; // ownership transferred to StatementContext — do not close here
             ResultSetStreamUtil.streamResultSet(executorService,
                     statementContext,
@@ -718,7 +727,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                     allocator,
                     getBatchSize(context),
                     listener,
-                    () -> statementLoadingCache.invalidate(key), recorder);
+                    () -> statementLoadingCache.asMap().remove(key, statementContext), recorder);
         } catch (Throwable e) {
             ErrorHandling.handleThrowable(listener, e);
         } finally {
@@ -857,6 +866,11 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                 return;
             }
             final PreparedStatement preparedStatement = statementContext.getStatement();
+            // Tracked like a stream, so a concurrent run is rejected and a close waits for it.
+            if (!statementContext.tryStart()) {
+                ackStream.onError(ErrorHandling.alreadyRunning());
+                return;
+            }
             try {
                 while (flightStream.next()) {
                     final VectorSchemaRoot root = flightStream.getRoot();
@@ -887,6 +901,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                 ackStream.onCompleted();
             } catch (Throwable e) {
                 ErrorHandling.handleThrowable(ackStream, e);
+            } finally {
+                statementContext.end();
             }
         };
     }
