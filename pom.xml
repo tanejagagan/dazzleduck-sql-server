@@ -66,6 +66,14 @@
     </properties>
     <dependencyManagement>
         <dependencies>
+            <!-- Pinned: jinjava (in dazzleduck-sql-http) brings slf4j-api 1.7.25, which Maven picks as
+                 the nearest version there. The code uses the SLF4J 2 fluent API (logger.atDebug()...),
+                 which then throws NoSuchMethodError on the HTTP path. -->
+            <dependency>
+                <groupId>org.slf4j</groupId>
+                <artifactId>slf4j-api</artifactId>
+                <version>${slf4j.version}</version>
+            </dependency>
             <!-- One JUnit version for every artifact (jupiter and platform) in every module. -->
             <dependency>
                 <groupId>org.junit</groupId>

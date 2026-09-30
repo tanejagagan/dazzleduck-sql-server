@@ -2,6 +2,7 @@ package io.dazzleduck.sql.flight.server;
 
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.flight.FlightRecorder;
+import org.apache.arrow.flight.CallStatus;
 import org.apache.arrow.flight.FlightProducer;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.VectorSchemaRoot;
@@ -106,6 +107,12 @@ public class ResultSetStreamUtil {
                 if (listener.isCancelled()) {
                     return; // cancelled before the handler was registered; finally still cleans up
                 }
+                if (statementContext.isCancelRequested()) {
+                    // CancelFlightInfo reached it while it was queued: end without running it.
+                    error = true;
+                    listener.error(CallStatus.CANCELLED.withDescription("Query was cancelled").toRuntimeException());
+                    return;
+                }
                 supplier.execute();
                 if (supplier.hasResultSet()) {
                     try (DuckDBResultSet resultSet = supplier.get();
@@ -127,6 +134,13 @@ public class ResultSetStreamUtil {
                 if (listener.isCancelled()) {
                     // The caller went away and we interrupted the query: not a query error.
                     logger.atDebug().setCause(throwable).log("Stream ended after the caller cancelled");
+                    return;
+                }
+                if (statementContext.isCancelRequested()) {
+                    // Interrupted by CancelFlightInfo while the client is still connected: tell it the
+                    // query was cancelled, and don't count it as a query error.
+                    logger.atDebug().setCause(throwable).log("Stream ended after a server-side cancel");
+                    listener.error(CallStatus.CANCELLED.withDescription("Query was cancelled").toRuntimeException());
                     return;
                 }
                 recorder.errorStream(statementContext.isPreparedStatementContext());

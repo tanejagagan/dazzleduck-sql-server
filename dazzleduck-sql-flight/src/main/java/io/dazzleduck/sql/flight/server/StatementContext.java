@@ -47,6 +47,8 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
     private boolean closed;
     // A stream has been handed this context (see markClaimed), and when it was last active.
     private boolean claimed;
+    // Set by cancel(); a queued stream checks it after start() and ends without running the query.
+    private boolean cancelRequested;
     private long lastActiveNanos = System.nanoTime();
 
     private long bytesOut;
@@ -149,6 +151,7 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
     public synchronized void end() {
         inUse = false;
         claimed = false;
+        cancelRequested = false;
         lastActiveNanos = System.nanoTime();
         this.endTime = Clock.systemUTC().instant();
         if (closeWhenDone) {
@@ -161,9 +164,20 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
      * any thread, e.g. a gRPC cancel handler or a Flight CancelFlightInfo call.
      */
     public synchronized void cancel() throws SQLException {
-        if (!closed && inUse) {
+        if (closed) {
+            return;
+        }
+        // Recorded even when nothing is running yet: a stream that is queued (claimed) sees it right
+        // after start() and ends instead of running the query.
+        cancelRequested = true;
+        if (inUse) {
             statement.cancel();
         }
+    }
+
+    /** Whether {@link #cancel} was called since this context's last stream ended. */
+    public synchronized boolean isCancelRequested() {
+        return cancelRequested;
     }
 
     /**
@@ -190,7 +204,9 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
      * were planned but never read, not to close a query that is still executing or streaming.
      */
     public synchronized void closeWhenIdle() {
-        if (inUse) {
+        // Claimed covers a stream still queued for an executor thread: closing now would fail its
+        // task with "statement closed" instead of letting it see the cancel and end cleanly.
+        if (inUse || claimed) {
             closeWhenDone = true;
         } else {
             close();
