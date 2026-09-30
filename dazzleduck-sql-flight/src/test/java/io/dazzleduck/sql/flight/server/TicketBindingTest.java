@@ -171,4 +171,22 @@ class TicketBindingTest {
         var shifted = new StatementHandle("x", 5, "p", -1, handle.queryChecksum(), "a:1", 0);
         assertFalse(shifted.validFor(SECRET, "a:1", 0));
     }
+
+    @Test
+    void aMissingPrincipalCannotBeRelabelledAsEmptyOrBack() {
+        var forEmpty = new StatementHandle("SELECT 1", 7, "p", -1).signed(SECRET, "", 0);
+        var relabelledMissing = new StatementHandle("SELECT 1", 7, "p", -1, forEmpty.queryChecksum(), null, 0);
+        assertTrue(forEmpty.validFor(SECRET, "", 0));
+        assertFalse(relabelledMissing.validFor(SECRET, null, 0));
+
+        var forMissing = new StatementHandle("SELECT 1", 7, "p", -1).signed(SECRET, null, 0);
+        var relabelledEmpty = new StatementHandle("SELECT 1", 7, "p", -1, forMissing.queryChecksum(), "", 0);
+        assertTrue(forMissing.validFor(SECRET, null, 0));
+        assertFalse(relabelledEmpty.validFor(SECRET, "", 0));
+    }
+
+    @Test
+    void anUnsignedHandleIsNeverValid() {
+        assertFalse(new StatementHandle("SELECT 1", 7, "p", -1).validFor(SECRET, null, 0));
+    }
 }

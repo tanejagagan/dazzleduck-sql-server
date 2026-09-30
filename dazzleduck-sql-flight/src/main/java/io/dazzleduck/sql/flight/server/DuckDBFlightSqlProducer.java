@@ -553,7 +553,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
     public void closePreparedStatement(FlightSql.ActionClosePreparedStatementRequest request, CallContext context, StreamListener<Result> listener) {
         final StatementHandle statementHandle = StatementHandle.deserialize(request.getPreparedStatementHandle());
         if (invalidHandle(statementHandle, context)) {
-            ErrorHandling.handleSignatureMismatch(listener);
+            ErrorHandling.handleInvalidHandle(listener);
             return;
         }
         Runnable runnable = () -> {
@@ -577,8 +577,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             final FlightDescriptor descriptor) {
         StatementHandle statementHandle = StatementHandle.deserialize(command.getPreparedStatementHandle());
         if (invalidHandle(statementHandle, context)) {
-            ErrorHandling.handleSignatureMismatch();
-            return null; // Never reached if handleSignatureMismatch throws, but prevents execution if it doesn't
+            ErrorHandling.handleInvalidHandle();
+            return null; // Never reached if handleInvalidHandle throws, but prevents execution if it doesn't
         }
         var key = new CacheKey(context.peerIdentity(), statementHandle.queryId());
         StatementContext<PreparedStatement> statementContext =
@@ -651,7 +651,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
 
         StatementHandle statementHandle = StatementHandle.deserialize(command.getPreparedStatementHandle());
         if (invalidHandle(statementHandle, context)) {
-            ErrorHandling.handleSignatureMismatch(listener);
+            ErrorHandling.handleInvalidHandle(listener);
             return;
         }
         var key = new CacheKey(context.peerIdentity(), statementHandle.queryId());
@@ -700,7 +700,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             String query = statementHandle.query();
             if (statementHandle.queryChecksum() != null
                     && invalidHandle(statementHandle, context)) {
-                ErrorHandling.handleSignatureMismatch(listener);
+                ErrorHandling.handleInvalidHandle(listener);
                 return;
             }
             if (statementHandle.queryChecksum() == null) {
@@ -848,7 +848,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         return () -> {
             StatementHandle statementHandle = StatementHandle.deserialize(command.getPreparedStatementHandle());
             if (invalidHandle(statementHandle, context)) {
-                ErrorHandling.handleSignatureMismatch(ackStream);
+                ErrorHandling.handleInvalidHandle(ackStream);
                 return;
             }
             var key = new CacheKey(context.peerIdentity(),statementHandle.queryId());
