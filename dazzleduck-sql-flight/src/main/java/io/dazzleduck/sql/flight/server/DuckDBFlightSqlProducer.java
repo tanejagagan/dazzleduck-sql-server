@@ -1174,27 +1174,45 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
     }
 
     /**
-     * Interrupts the query under {@code key} and removes it, returning false if nothing is known
-     * under it; the removal listener closes it once no stream is using it. This removes a prepared
-     * statement too: DuckDB's JDBC driver closes a prepared statement whose execution is
-     * interrupted, so it could not be run again anyway, and NOT_FOUND is clearer than a closed-
-     * statement error on the next execute.
+     * Cancels the query under {@code key}, returning false if there is nothing to cancel. A cursor is
+     * removed (the removal listener closes it once no stream is using it). A prepared statement is
+     * removed only if a running execution was interrupted, since DuckDB closes it then; one whose
+     * run was still queued, or that is idle (a late cancel), stays usable.
      */
     private boolean cancelRunning(CacheKey key) throws SQLException {
-        return cancelIn(statementLoadingCache, key) || cancelIn(preparedStatementLoadingCache, key);
+        return cancelIn(statementLoadingCache, key, false) || cancelIn(preparedStatementLoadingCache, key, true);
     }
 
-    private <T extends Statement> boolean cancelIn(Cache<CacheKey, StatementContext<T>> cache, CacheKey key)
-            throws SQLException {
+    private <T extends Statement> boolean cancelIn(Cache<CacheKey, StatementContext<T>> cache, CacheKey key,
+                                                   boolean preparedStatements) throws SQLException {
         StatementContext<T> ctx = cache.getIfPresent(key);
         if (ctx == null) {
             return false;
         }
-        recorder.recordStatementCancel(key, ctx);
+        StatementContext.CancelOutcome outcome;
         try {
-            ctx.cancel();
+            outcome = ctx.cancel();
         } finally {
-            cache.asMap().remove(key, ctx);
+            if (!preparedStatements) {
+                // A cursor serves one stream, so it is removed whatever the cancel found.
+                cache.asMap().remove(key, ctx);
+            }
+        }
+        if (preparedStatements) {
+            if (outcome == StatementContext.CancelOutcome.NOTHING_RUNNING) {
+                // A late cancel (the run already ended): nothing to cancel, and the client's prepared
+                // statement stays usable.
+                return false;
+            }
+            if (outcome == StatementContext.CancelOutcome.INTERRUPTED) {
+                // DuckDB closes a prepared statement whose execution is interrupted, so it could not
+                // run again; removing it gives the next run NOT_FOUND instead of a closed-statement
+                // error. A run cancelled while still queued never executed, so its statement stays.
+                cache.asMap().remove(key, ctx);
+            }
+        }
+        if (outcome != StatementContext.CancelOutcome.NOTHING_RUNNING) {
+            recorder.recordStatementCancel(key, ctx);
         }
         return true;
     }
@@ -1397,6 +1415,15 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         // Each step runs even if an earlier one fails, so one problem does not leak everything after it.
         // Cursors and prepared statements hold DuckDB connections; the removal listener closes each
         // (one still in use by a stream is closed when that stream ends).
+        if (executorService.isTerminated()) {
+            // No stream thread is left, so nothing can be using a context: close them all outright.
+            // Deferring would leak those claimed by stream tasks that shutdownNow() dropped before
+            // they ran, since no stream would ever end to close them.
+            runQuietly("statement contexts", () -> {
+                statementLoadingCache.asMap().values().forEach(StatementContext::close);
+                preparedStatementLoadingCache.asMap().values().forEach(StatementContext::close);
+            });
+        }
         runQuietly("statement caches", () -> {
             statementLoadingCache.invalidateAll();
             preparedStatementLoadingCache.invalidateAll();
