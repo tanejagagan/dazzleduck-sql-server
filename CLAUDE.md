@@ -204,6 +204,7 @@ dazzleduck_server = {
     ingestion.max_delay_ms = 2000
 
     jwt_token.expiration = 60m
+    ticket_ttl_ms = 3600000          # signed Flight ticket lifetime (bound to the issuing user); allow for clock skew between nodes
     jwt_token.claims.generate.headers = [database, schema, x-dd-table, x-dd-filter, x-dd-access, x-dd-path, x-dd-function, x-dd-access-type, x-dd-variables]
 
     users = [{ username = admin, password = admin, groups = [admin, general] }]
@@ -228,6 +229,23 @@ export JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home
 ```
 
 Patterns: `SharedTestServer` for server reuse, `MutableClock` for time-sensitive tests, `TestUtils.isEqual()` for result comparison.
+
+**Stuck tests.** A hung test fails instead of stalling the build:
+- Every test and lifecycle method times out after 5 minutes (`junit.default.timeout` in the parent pom). A test that legitimately needs longer sets its own `@Timeout`.
+- On a timeout JUnit prints a thread dump to the test output before interrupting the test.
+- A test JVM still running after `surefire.fork.timeout` seconds (1800) is killed ("There was a timeout in the fork").
+
+Both can be tightened for a local run:
+
+```bash
+./mvnw test -pl dazzleduck-sql-http -Djunit.default.timeout="30 s" -Dsurefire.fork.timeout=300
+```
+
+The JUnit dump lists platform threads only. Helidon handles HTTP requests on virtual threads, so for a live hang in the HTTP server take a full dump of the surefire fork (`pgrep -f surefirebooter` gives its PID):
+
+```bash
+jcmd PID Thread.dump_to_file -format=text /tmp/threads.txt
+```
 
 Key test classes: `DuckDBFlightJDBCTest`, `FlightSqlProducerFactoryTest`, `QueryServiceTest`, `HttpMetricIntegrationTest`.
 

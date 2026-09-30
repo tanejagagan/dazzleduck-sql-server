@@ -54,16 +54,40 @@
         <typesafe-config.version>1.4.4</typesafe-config.version>
         <calcite.version>1.25.0</calcite.version>
         <helidon.version>4.4.0</helidon.version>
-        <junit.version>5.10.0</junit.version>
+        <junit.version>5.13.4</junit.version>
+        <!-- Stuck-test guards (see CLAUDE.md "Stuck tests"): every test and lifecycle method times out
+             after this unless it sets its own @Timeout, and a whole test JVM is killed after
+             surefire.fork.timeout seconds. Both can be overridden with -D. -->
+        <junit.default.timeout>5 m</junit.default.timeout>
+        <surefire.fork.timeout>1800</surefire.fork.timeout>
         <slf4j.version>2.0.16</slf4j.version>
         <hadoop.version>3.3.4</hadoop.version>
 	    <gpg.keyname>BC7688F69A9CF5D5</gpg.keyname>
     </properties>
+    <dependencyManagement>
+        <dependencies>
+            <!-- Pinned: jinjava (in dazzleduck-sql-http) brings slf4j-api 1.7.25, which Maven picks as
+                 the nearest version there. The code uses the SLF4J 2 fluent API (logger.atDebug()...),
+                 which then throws NoSuchMethodError on the HTTP path. -->
+            <dependency>
+                <groupId>org.slf4j</groupId>
+                <artifactId>slf4j-api</artifactId>
+                <version>${slf4j.version}</version>
+            </dependency>
+            <!-- One JUnit version for every artifact (jupiter and platform) in every module. -->
+            <dependency>
+                <groupId>org.junit</groupId>
+                <artifactId>junit-bom</artifactId>
+                <version>${junit.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
     <dependencies>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
-            <version>5.8.1</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -178,6 +202,14 @@
                 <version>3.5.2</version>
                 <configuration>
                     <argLine>--add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED</argLine>
+                    <!-- A test JVM still running after this is killed, so a hang cannot stall the build. -->
+                    <forkedProcessTimeoutInSeconds>${surefire.fork.timeout}</forkedProcessTimeoutInSeconds>
+                    <properties>
+                        <configurationParameters>
+                            junit.jupiter.execution.timeout.default = ${junit.default.timeout}
+                            junit.jupiter.execution.timeout.threaddump.enabled = true
+                        </configurationParameters>
+                    </properties>
                 </configuration>
             </plugin>
             <plugin>
