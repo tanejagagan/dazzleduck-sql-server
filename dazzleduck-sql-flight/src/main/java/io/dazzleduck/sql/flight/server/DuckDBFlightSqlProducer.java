@@ -983,6 +983,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             FlightStream flightStream,
             StreamListener<PutResult> ackStream) {
         IngestionParameters ingestionParameters = IngestionParameters.getIngestionParameters(command);
+        if (!hasWriteAccess(context, ingestionParameters.ingestionQueue(), ackStream)) {
+            return () -> {};
+        }
         var ingestionQueue = getOrCreateIngestionQueue(ingestionParameters.ingestionQueue());
         if( ingestionQueue == null) {
             return () -> ErrorHandling.handleThrowable(ackStream,
@@ -997,12 +1000,30 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             IngestionParameters ingestionParameters,
             InputStream inputStream,
             StreamListener<PutResult> ackStream) {
+        if (!hasWriteAccess(context, ingestionParameters.ingestionQueue(), ackStream)) {
+            return () -> {};
+        }
         var ingestionQueue = getOrCreateIngestionQueue(ingestionParameters.ingestionQueue());
         if( ingestionQueue == null) {
             return () -> ErrorHandling.handleThrowable(ackStream,
                     new IllegalArgumentException("Ingestion queue '" + ingestionParameters.ingestionQueue() + "' not found. No target path is configured for this queue."));
         }
         return ingestFromReader(new ArrowStreamReader(inputStream, allocator), ingestionQueue, ingestionParameters, ackStream);
+    }
+
+    /**
+     * Bulk ingest writes to an ingestion queue without going through SQL, so the query authorizers
+     * never see it: every ingest, Flight {@code executeIngest} or HTTP {@code /v1/ingest}, is gated on
+     * the authorizer's write check here. COMPLETE allows all writes, RESTRICTED checks the write
+     * claim, and READ_ONLY / RESTRICT_READ_ONLY refuse every ingest. (HTTP also checks in its JWT
+     * filter; this keeps the rule in force whatever the transport.)
+     */
+    private boolean hasWriteAccess(CallContext context, String queue, StreamListener<PutResult> ackStream) {
+        if (sqlAuthorizer.hasWriteAccess(context.peerIdentity(), queue, getVerifiedClaims(context))) {
+            return true;
+        }
+        ErrorHandling.handleUnauthorized(ackStream, new UnauthorizedException("No write access to ingestion_queue:" + queue));
+        return false;
     }
 
     private Runnable ingestFromReader(
