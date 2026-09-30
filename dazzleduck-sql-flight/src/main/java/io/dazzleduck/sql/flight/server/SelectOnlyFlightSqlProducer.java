@@ -20,8 +20,17 @@ import java.util.List;
 import java.util.concurrent.ScheduledExecutorService;
 
 public class SelectOnlyFlightSqlProducer extends DuckDBFlightSqlProducer {
+    /**
+     * @deprecated uses {@link CursorConfig#DEFAULT}, ignoring configured cursor limits; use the
+     * constructor that takes a {@link CursorConfig} (as {@link FlightSqlProducerFactory} does).
+     */
+    @Deprecated
     public SelectOnlyFlightSqlProducer(Location serverLocation, String producerId, String secretKey, BufferAllocator allocator, String warehousePath, AccessMode accessMode, Path tempDir, IngestionHandler postIngestionHandler, ScheduledExecutorService scheduledExecutorService, Duration queryTimeout, Duration maxQueryTimeout, Clock clock, FlightRecorder recorder, IngestionConfig ingestionConfig, List<Location> dataProcessorLocations) {
-        super(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionHandler, scheduledExecutorService, queryTimeout, maxQueryTimeout, clock, recorder, ingestionConfig, dataProcessorLocations);
+        this(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionHandler, scheduledExecutorService, queryTimeout, maxQueryTimeout, clock, recorder, ingestionConfig, dataProcessorLocations, CursorConfig.DEFAULT);
+    }
+
+    public SelectOnlyFlightSqlProducer(Location serverLocation, String producerId, String secretKey, BufferAllocator allocator, String warehousePath, AccessMode accessMode, Path tempDir, IngestionHandler postIngestionHandler, ScheduledExecutorService scheduledExecutorService, Duration queryTimeout, Duration maxQueryTimeout, Clock clock, FlightRecorder recorder, IngestionConfig ingestionConfig, List<Location> dataProcessorLocations, CursorConfig cursorConfig) {
+        super(serverLocation, producerId, secretKey, allocator, warehousePath, accessMode, tempDir, postIngestionHandler, scheduledExecutorService, queryTimeout, maxQueryTimeout, clock, recorder, ingestionConfig, dataProcessorLocations, cursorConfig);
     }
 
     private static final java.util.regex.Pattern EXPLAIN_PATTERN = java.util.regex.Pattern.compile("^\\s*(EXPLAIN\\s+(ANALYZE\\s+)?)", java.util.regex.Pattern.CASE_INSENSITIVE);

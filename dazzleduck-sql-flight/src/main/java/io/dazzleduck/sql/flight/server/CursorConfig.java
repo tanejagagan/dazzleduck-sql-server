@@ -9,6 +9,11 @@ import io.dazzleduck.sql.common.ConfigConstants;
  * A cursor is created each time a client opens a streaming query and lives
  * until the stream is fully consumed or evicted. Without limits, a client can
  * open arbitrarily many cursors to exhaust server connections and memory.
+ *
+ * <p>{@code cursorTtlMs} reaps a cursor that no stream is using once it has been idle that long
+ * (checked when the next query arrives). A query that is queued, executing or streaming is never
+ * reaped: it stays cancellable and counted in the limits however long it runs; the query timeout,
+ * not the TTL, bounds how long it may run.
  */
 public record CursorConfig(
         long cursorTtlMs,
