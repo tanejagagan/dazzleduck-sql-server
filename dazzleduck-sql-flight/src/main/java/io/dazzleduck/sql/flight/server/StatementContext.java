@@ -44,8 +44,11 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
     private int useCount;
     // Set when the cursor cache evicts this context while a stream is using it (see closeWhenIdle).
     private boolean closeWhenDone;
+    private boolean closed;
     // A stream has been handed this context (see markClaimed), and when it was last active.
     private boolean claimed;
+    // Set by cancel(); a queued stream checks it after start() and ends without running the query.
+    private boolean cancelRequested;
     private long lastActiveNanos = System.nanoTime();
 
     private long bytesOut;
@@ -83,8 +86,16 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
         return query;
     }
 
+    /**
+     * Closes the statement and connection. Idempotent. Synchronized with {@link #cancel} so a
+     * cancel arriving from another thread never touches a statement that is being closed.
+     */
     @Override
-    public void close()  {
+    public synchronized void close()  {
+        if (closed) {
+            return;
+        }
+        closed = true;
         try {
             if ( !statement.isClosed())
                 statement.close();
@@ -140,11 +151,36 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
     public synchronized void end() {
         inUse = false;
         claimed = false;
+        cancelRequested = false;
         lastActiveNanos = System.nanoTime();
         this.endTime = Clock.systemUTC().instant();
         if (closeWhenDone) {
             close();
         }
+    }
+
+    /**
+     * Interrupts the query if it is executing or streaming; a no-op once closed. Safe to call from
+     * any thread, e.g. a gRPC cancel handler or a Flight CancelFlightInfo call.
+     */
+    public synchronized void cancel() throws SQLException {
+        if (closed) {
+            return;
+        }
+        // Recorded only while a stream exists to see it: one queued (claimed) checks it right after
+        // start() and ends instead of running the query. A late cancel, after the stream ended, must
+        // not stick to a context that stays open (a prepared statement) and cancel its next run.
+        if (claimed || inUse) {
+            cancelRequested = true;
+        }
+        if (inUse) {
+            statement.cancel();
+        }
+    }
+
+    /** Whether {@link #cancel} was called since this context's last stream ended. */
+    public synchronized boolean isCancelRequested() {
+        return cancelRequested;
     }
 
     /**
@@ -171,7 +207,9 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
      * were planned but never read, not to close a query that is still executing or streaming.
      */
     public synchronized void closeWhenIdle() {
-        if (inUse) {
+        // Claimed covers a stream still queued for an executor thread: closing now would fail its
+        // task with "statement closed" instead of letting it see the cancel and end cleanly.
+        if (inUse || claimed) {
             closeWhenDone = true;
         } else {
             close();
