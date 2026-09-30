@@ -1403,15 +1403,15 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
     }
 
 
-    /**
-     * Injects a live cursor entry into the cache on behalf of {@code peerIdentity}.
-     * Visible for testing only — do not call from production code.
-     */
     /** The cursor limits in effect; for tests. */
     CursorConfig getCursorConfig() {
         return cursorConfig;
     }
 
+    /**
+     * Injects a live cursor entry into the cache on behalf of {@code peerIdentity}.
+     * Visible for testing only — do not call from production code.
+     */
     void injectTestCursor(String peerIdentity) {
         try {
             var conn = ConnectionPool.getConnection();
