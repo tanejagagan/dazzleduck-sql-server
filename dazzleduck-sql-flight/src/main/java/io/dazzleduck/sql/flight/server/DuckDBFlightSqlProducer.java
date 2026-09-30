@@ -244,7 +244,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
 
     protected final BufferAllocator allocator;
     private final String warehousePath;
-    private final Cache<CacheKey, StatementContext<PreparedStatement>> preparedStatementLoadingCache;
+    final Cache<CacheKey, StatementContext<PreparedStatement>> preparedStatementLoadingCache;
     protected final Cache<CacheKey, StatementContext<Statement>> statementLoadingCache;
     private final SqlAuthorizer sqlAuthorizer;
 
@@ -1063,9 +1063,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             return false;
         }
         try {
-            Statement statement = statementContext.getStatement();
             recorder.recordStatementCancel(key, statementContext);
-            statement.cancel();
+            statementContext.cancel();
             return true;
         } finally {
           invalidateCache(key, statementContext);
@@ -1330,11 +1329,10 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             return;
         }
         try {
-            Statement statement = context.getStatement();
             listener.onNext(CancelStatus.CANCELLING);
             recorder.recordStatementCancel(key, context);
             try {
-                statement.cancel();
+                context.cancel();
                 listener.onNext(CancelStatus.CANCELLED);
             } catch (SQLException e) {
                 ErrorHandling.handleSqlException(listener, e);
@@ -1353,11 +1351,12 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         return context;
     }
 
+    // Removes this exact context from whichever cache holds it. (Not by statement type: DuckDB's
+    // createStatement() also returns a PreparedStatement, so a type check picks the wrong cache.)
+    // The removal listener then closes it, once no stream is using it.
     private void invalidateCache(CacheKey key, StatementContext<?> context) {
-        if (context.getStatement() instanceof PreparedStatement) {
-            preparedStatementLoadingCache.invalidate(key);
-        } else {
-            statementLoadingCache.invalidate(key);
+        if (!statementLoadingCache.asMap().remove(key, context)) {
+            preparedStatementLoadingCache.asMap().remove(key, context);
         }
     }
 
@@ -1414,14 +1413,10 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         public void onRemoval(final RemovalNotification<CacheKey, StatementContext<T>> notification) {
             try {
                 assert notification.getValue() != null;
-                if (notification.wasEvicted()) {
-                    // TTL or size eviction: never pull the connection out from under a running
-                    // stream; it is closed when the stream ends instead.
-                    notification.getValue().closeWhenIdle();
-                } else {
-                    // Explicit invalidation (a stream finishing, or a cancel) or replacement.
-                    notification.getValue().close();
-                }
+                // Never pull the connection out from under a running stream, whether the entry was
+                // evicted (TTL/size) or invalidated by a cancel: the stream thread may still be
+                // inside DuckDB on it. The stream closes it when it ends instead.
+                notification.getValue().closeWhenIdle();
             } catch (final Exception e) {
                 logger.atWarn().setCause(e).log("Failed to close statement during cache removal");
             }

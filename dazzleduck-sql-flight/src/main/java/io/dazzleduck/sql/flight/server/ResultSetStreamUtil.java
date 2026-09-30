@@ -39,7 +39,7 @@ public class ResultSetStreamUtil {
                 try (DuckDBResultSet resultSet = supplier.get();
                      ArrowReader reader = (ArrowReader) resultSet.arrowExportStream(childAllocator, batchSize)) {
                     listener.start(reader.getVectorSchemaRoot());
-                    while (reader.loadNextBatch()) {
+                    while (!listener.isCancelled() && reader.loadNextBatch()) {
                         var size = childAllocator.getAllocatedMemory();
                         recorder.recordGetStream(false, size);
                         listener.putNext();
@@ -50,7 +50,7 @@ public class ResultSetStreamUtil {
                 recorder.errorStream(false);
                 ErrorHandling.handleThrowable(listener, throwable);
             } finally {
-                if (!error) {
+                if (!error && !listener.isCancelled()) {
                     listener.completed();
                 }
                 recorder.endStream(false);
@@ -77,14 +77,26 @@ public class ResultSetStreamUtil {
             try {
                 childAllocator = allocator.newChildAllocator("statement-allocator", 0, allocator.getLimit());
                 statementContext.start();
+                // A client that disconnects or cancels the DoGet must stop the query. Without this,
+                // Flight drops every later putNext() silently and the query runs to completion.
+                listener.setOnCancelHandler(() -> {
+                    try {
+                        statementContext.cancel();
+                    } catch (Exception e) {
+                        logger.atDebug().setCause(e).log("Failed to cancel statement for a cancelled stream");
+                    }
+                });
                 recorder.startStream(statementContext.isPreparedStatementContext());
                 recorder.recordStatementStreamStart(key, statementContext);
+                if (listener.isCancelled()) {
+                    return; // cancelled before the handler was registered; finally still cleans up
+                }
                 supplier.execute();
                 if (supplier.hasResultSet()) {
                     try (DuckDBResultSet resultSet = supplier.get();
                          ArrowReader reader = (ArrowReader) resultSet.arrowExportStream(childAllocator, batchSize)) {
                         listener.start(reader.getVectorSchemaRoot());
-                        while (reader.loadNextBatch()) {
+                        while (!listener.isCancelled() && reader.loadNextBatch()) {
                             listener.putNext();
                             var size = childAllocator.getAllocatedMemory();
                             statementContext.bytesOut(size);
@@ -97,12 +109,17 @@ public class ResultSetStreamUtil {
                 }
             } catch (Throwable throwable) {
                 error = true;
+                if (listener.isCancelled()) {
+                    // The caller went away and we interrupted the query: not a query error.
+                    logger.atDebug().setCause(throwable).log("Stream ended after the caller cancelled");
+                    return;
+                }
                 recorder.errorStream(statementContext.isPreparedStatementContext());
                 recorder.recordStatementStreamError(key, statementContext, throwable);
                 ErrorHandling.handleThrowable(listener, throwable);
             } finally {
                 try {
-                    if (!error) {
+                    if (!error && !listener.isCancelled()) {
                         listener.completed();
                     }
                     statementContext.end();

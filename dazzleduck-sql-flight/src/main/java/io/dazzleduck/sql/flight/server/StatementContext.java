@@ -43,6 +43,7 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
     private int useCount;
     // Set when the cursor cache evicts this context while a stream is using it (see closeWhenIdle).
     private boolean closeWhenDone;
+    private boolean closed;
 
     private long bytesOut;
 
@@ -79,8 +80,16 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
         return query;
     }
 
+    /**
+     * Closes the statement and connection. Idempotent. Synchronized with {@link #cancel} so a
+     * cancel arriving from another thread never touches a statement that is being closed.
+     */
     @Override
-    public void close()  {
+    public synchronized void close()  {
+        if (closed) {
+            return;
+        }
+        closed = true;
         try {
             if ( !statement.isClosed())
                 statement.close();
@@ -138,6 +147,16 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
         this.endTime = Clock.systemUTC().instant();
         if (closeWhenDone) {
             close();
+        }
+    }
+
+    /**
+     * Interrupts the query if it is executing or streaming; a no-op once closed. Safe to call from
+     * any thread, e.g. a gRPC cancel handler or a Flight CancelFlightInfo call.
+     */
+    public synchronized void cancel() throws SQLException {
+        if (!closed && inUse) {
+            statement.cancel();
         }
     }
 
