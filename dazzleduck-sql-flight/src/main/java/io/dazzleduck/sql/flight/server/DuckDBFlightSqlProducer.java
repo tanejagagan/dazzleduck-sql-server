@@ -236,7 +236,13 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
     private final Instant startTime;
     private final AccessMode accessMode;
     private final Set<Integer> supportedSqlInfo;
+    // Platform threads: every DuckDB call a stream makes runs here (native calls must not run on a
+    // virtual thread, see StreamExecutors), which also bounds how many run at once. Also runs
+    // createPreparedStatement's prepare.
     protected final ExecutorService executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+    // Stream tasks on virtual threads, so a client that stops reading parks a virtual thread
+    // instead of holding one of executorService's few platform threads.
+    protected final StreamExecutors streamExecutors = StreamExecutors.create(executorService);
     private final static Logger logger = LoggerFactory.getLogger(DuckDBFlightSqlProducer.class);
     private Set<Location> dataProcessorLocations = new LinkedHashSet<>();
     private final Location serverLocation;
@@ -710,7 +716,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             }
         };
         statementContext.markClaimed(); // like getStreamStatement: a queued run sees a cancel and counts as live
-        ResultSetStreamUtil.streamResultSet(executorService, statementContext, key, timedRun,
+        ResultSetStreamUtil.streamResultSet(streamExecutors, statementContext, key, timedRun,
             allocator, getBatchSize(context),
             listener, () -> {}, recorder);
     }
@@ -766,7 +772,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                         .toRuntimeException();
             }
             connection = null; // ownership transferred to StatementContext — do not close here
-            ResultSetStreamUtil.streamResultSet(executorService,
+            ResultSetStreamUtil.streamResultSet(streamExecutors,
                     statementContext,
                     key,
                     createResultSetSupplier(statement, query),
@@ -1264,7 +1270,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
 
     @Override
     public void getStreamCatalogs(final CallContext context, final ServerStreamListener listener) {
-        ResultSetStreamUtil.streamResultSet(executorService, DuckDBDatabaseMetadataUtil::getCatalogs, context, accessMode, allocator, listener, recorder);
+        ResultSetStreamUtil.streamResultSet(streamExecutors, DuckDBDatabaseMetadataUtil::getCatalogs, context, accessMode, allocator, listener, recorder);
     }
 
     @Override
@@ -1278,7 +1284,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         final String catalog = command.hasCatalog() ? command.getCatalog() : null;
         final String schemaFilterPattern =
                 command.hasDbSchemaFilterPattern() ? command.getDbSchemaFilterPattern() : null;
-        ResultSetStreamUtil.streamResultSet(executorService, connection ->
+        ResultSetStreamUtil.streamResultSet(streamExecutors, connection ->
                         DuckDBDatabaseMetadataUtil.getSchemas(connection, catalog, schemaFilterPattern),
                 context, accessMode, allocator, listener, recorder);
     }
@@ -1309,7 +1315,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         final int protocolSize = protocolStringList.size();
         final String[] tableTypes =
                 protocolSize == 0 ? null : protocolStringList.toArray(new String[protocolSize]);
-        ResultSetStreamUtil.streamResultSet(executorService, connection ->
+        ResultSetStreamUtil.streamResultSet(streamExecutors, connection ->
             DuckDBDatabaseMetadataUtil.getTables(connection, catalog, schemaFilterPattern, tableFilterPattern, tableTypes),
                 context, accessMode, allocator, listener, recorder);
     }
@@ -1323,7 +1329,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
 
     @Override
     public void getStreamTableTypes(CallContext context, ServerStreamListener listener) {
-        ResultSetStreamUtil.streamResultSet(executorService, DuckDBDatabaseMetadataUtil::getTableTypes, context, accessMode, allocator, listener, recorder);
+        ResultSetStreamUtil.streamResultSet(streamExecutors, DuckDBDatabaseMetadataUtil::getTableTypes, context, accessMode, allocator, listener, recorder);
     }
 
     @Override
@@ -1387,18 +1393,24 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
 
     @Override
     public void close() {
-        executorService.shutdown();
+        ExecutorService streams = streamExecutors.streams();
+        streams.shutdown();
         scheduledExecutorService.shutdown();
         try {
-            if (!executorService.awaitTermination(closeGrace.toMillis(), TimeUnit.MILLISECONDS)) {
+            if (!streams.awaitTermination(closeGrace.toMillis(), TimeUnit.MILLISECONDS)) {
                 // Thread interrupts do not stop a query inside DuckDB: cancel the statements too,
                 // so their streams end and give back their connections and Arrow memory.
                 logger.atWarn().log("Queries still running after {}, cancelling them", closeGrace);
                 cancelAllRunning();
-                executorService.shutdownNow();
-                if (!executorService.awaitTermination(10, TimeUnit.SECONDS)) {
+                streams.shutdownNow();
+                if (!streams.awaitTermination(10, TimeUnit.SECONDS)) {
                     logger.atWarn().log("Query streams did not stop within 10 seconds of being cancelled");
                 }
+            }
+            // Streams have stopped (or been given up on): now the DuckDB pool they submitted to.
+            executorService.shutdown();
+            if (!executorService.awaitTermination(10, TimeUnit.SECONDS)) {
+                executorService.shutdownNow();
             }
             if (!scheduledExecutorService.awaitTermination(10, TimeUnit.SECONDS)) {
                 logger.atWarn().log("ScheduledExecutorService did not terminate in 10 seconds, forcing shutdown");
@@ -1407,6 +1419,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         } catch (InterruptedException e) {
             logger.atWarn().setCause(e).log("Interrupted while waiting for executor services to terminate");
             cancelAllRunning();
+            streams.shutdownNow();
             executorService.shutdownNow();
             scheduledExecutorService.shutdownNow();
             Thread.currentThread().interrupt();
@@ -1415,7 +1428,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         // Each step runs even if an earlier one fails, so one problem does not leak everything after it.
         // Cursors and prepared statements hold DuckDB connections; the removal listener closes each
         // (one still in use by a stream is closed when that stream ends).
-        if (executorService.isTerminated()) {
+        if (streams.isTerminated() && executorService.isTerminated()) {
             // No stream thread is left, so nothing can be using a context: close them all outright.
             // Deferring would leak those claimed by stream tasks that shutdownNow() dropped before
             // they ran, since no stream would ever end to close them.

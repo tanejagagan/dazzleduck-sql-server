@@ -213,7 +213,7 @@ class StreamCancellationTest {
             producer.statementLoadingCache.put(key, ctx);
             var executed = new java.util.concurrent.atomic.AtomicBoolean();
             var listener = new RecordingListener();
-            ResultSetStreamUtil.streamResultSet(executor, ctx, key, new OptionalResultSetSupplier() {
+            ResultSetStreamUtil.streamResultSet(StreamExecutors.sameThread(executor), ctx, key, new OptionalResultSetSupplier() {
                         @Override public boolean hasResultSet() { return false; }
                         @Override public org.duckdb.DuckDBResultSet get() { return null; }
                         @Override public void execute() { executed.set(true); }
@@ -270,7 +270,7 @@ class StreamCancellationTest {
             var executed = new java.util.concurrent.atomic.AtomicBoolean();
             var listener = new RecordingListener();
             ctx.markClaimed();
-            ResultSetStreamUtil.streamResultSet(executor, ctx, new DuckDBFlightSqlProducer.CacheKey("admin", 1L),
+            ResultSetStreamUtil.streamResultSet(StreamExecutors.sameThread(executor), ctx, new DuckDBFlightSqlProducer.CacheKey("admin", 1L),
                     new OptionalResultSetSupplier() {
                         @Override public boolean hasResultSet() { return false; }
                         @Override public org.duckdb.DuckDBResultSet get() { return null; }

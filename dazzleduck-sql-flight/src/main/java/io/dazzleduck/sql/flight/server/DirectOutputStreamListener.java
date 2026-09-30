@@ -32,7 +32,15 @@ import java.util.function.Supplier;
  *   <li>Completes the future when streaming finishes or fails</li>
  * </ul>
  */
-public class DirectOutputStreamListener implements FlightProducer.ServerStreamListener {
+public class DirectOutputStreamListener implements FlightProducer.ServerStreamListener, HttpResponseListener {
+
+    // Why a start or write failed, if one did (see HttpResponseListener).
+    private volatile Throwable writeFailure;
+
+    @Override
+    public Throwable writeFailure() {
+        return writeFailure;
+    }
 
     private static final Logger logger = LoggerFactory.getLogger(DirectOutputStreamListener.class);
 
@@ -110,6 +118,7 @@ public class DirectOutputStreamListener implements FlightProducer.ServerStreamLi
             logger.debug("writer.start() and flush completed successfully with compression: {}", compressionCodec);
         } catch (IOException e) {
             logger.error("Error in start()", e);
+            writeFailure = e;
             future.completeExceptionally(e);
         }
     }
@@ -124,6 +133,7 @@ public class DirectOutputStreamListener implements FlightProducer.ServerStreamLi
             logger.debug("writeBatch() and flush completed for batch #{}", batchCount);
         } catch (IOException e) {
             logger.error("Error in putNext()", e);
+            writeFailure = e;
             future.completeExceptionally(e);
         }
     }

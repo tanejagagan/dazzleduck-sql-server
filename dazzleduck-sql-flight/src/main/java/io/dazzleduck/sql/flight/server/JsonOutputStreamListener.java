@@ -31,7 +31,15 @@ import java.util.function.Supplier;
  * <p>Each row is written by {@link ResultStreams#writeJsonRow}, which also backs
  * {@link ResultStreams#writeJsonl} for non-Flight callers, so value formatting is shared.
  */
-public class JsonOutputStreamListener implements FlightProducer.ServerStreamListener {
+public class JsonOutputStreamListener implements FlightProducer.ServerStreamListener, HttpResponseListener {
+
+    // Why a start or write failed, if one did (see HttpResponseListener).
+    private volatile Throwable writeFailure;
+
+    @Override
+    public Throwable writeFailure() {
+        return writeFailure;
+    }
 
     /** Output shape written by this listener. */
     public enum Format {
@@ -103,6 +111,7 @@ public class JsonOutputStreamListener implements FlightProducer.ServerStreamList
                     root.getSchema(), format);
         } catch (Exception e) {
             logger.error("Error in start()", e);
+            writeFailure = e;
             future.completeExceptionally(e);
         }
     }
@@ -127,6 +136,7 @@ public class JsonOutputStreamListener implements FlightProducer.ServerStreamList
             generator.flush();
         } catch (IOException e) {
             logger.error("Error in putNext()", e);
+            writeFailure = e;
             future.completeExceptionally(e);
         }
     }

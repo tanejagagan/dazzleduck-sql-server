@@ -15,7 +15,6 @@ import org.slf4j.LoggerFactory;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
 
 public class ResultSetStreamUtil {
@@ -84,32 +83,79 @@ public class ResultSetStreamUtil {
      * a cursor entry). If the executor rejects the task (shutting down), the task never runs, so
      * {@code finalBlock} runs here instead; the rejection is rethrown for the caller to report.
      */
-    private static void submit(ExecutorService executorService, Runnable finalBlock, Runnable task) {
+    private static void submit(StreamExecutors executors, Runnable finalBlock, Runnable task) {
         try {
-            executorService.submit(task);
+            executors.submit(task);
         } catch (RejectedExecutionException e) {
             finalBlock.run();
             throw e;
         }
     }
-    static void streamResultSet(ExecutorService executorService,
+
+    /** Runs {@code finalBlock} (it closes DuckDB resources) on the DuckDB pool; logs, never throws. */
+    private static void runFinalBlock(StreamExecutors executors, Runnable finalBlock) {
+        try {
+            executors.duckdbRun(finalBlock::run);
+        } catch (Exception e) {
+            logger.atError().setCause(e).log("Error running a stream's final block");
+        }
+    }
+
+    /**
+     * An HTTP response whose write failed for a reason other than its client going away (e.g. a
+     * serialization error), or null. The stream stopped on it like on a disconnect, but it is a
+     * server-side failure and must still count as one.
+     */
+    private static Throwable serverWriteFailure(FlightProducer.ServerStreamListener listener) {
+        if (listener instanceof HttpResponseListener response) {
+            Throwable failure = response.writeFailure();
+            if (failure != null && !HttpResponseListener.isClientGone(failure)) {
+                return failure;
+            }
+        }
+        return null;
+    }
+
+    /** Closes the Arrow reader, then the result set, on the DuckDB pool (both are native). */
+    private static void closeOnDuckDb(StreamExecutors executors, ArrowReader reader, DuckDBResultSet resultSet)
+            throws Exception {
+        executors.duckdbRun(() -> {
+            try {
+                if (reader != null) {
+                    reader.close();
+                }
+            } finally {
+                if (resultSet != null) {
+                    resultSet.close();
+                }
+            }
+        });
+    }
+
+    static void streamResultSet(StreamExecutors executors,
                                 ResultSetSupplier supplier,
                                 BufferAllocator allocator,
                                 final int batchSize,
                                 final FlightProducer.ServerStreamListener listener,
                                 Runnable finalBlock,
                                 FlightRecorder recorder) {
-        submit(executorService, finalBlock, () -> {
+        submit(executors, finalBlock, () -> {
             BufferAllocator childAllocator = null;
             var error = false;
             try {
                 childAllocator = allocator.newChildAllocator("statement-allocator", 0, allocator.getLimit());
+                final BufferAllocator streamAllocator = childAllocator;
                 recorder.startStream(false);
                 var readiness = new ReadyWaiter(listener, () -> {});
-                try (DuckDBResultSet resultSet = supplier.get();
-                     ArrowReader reader = (ArrowReader) resultSet.arrowExportStream(childAllocator, batchSize)) {
-                    listener.start(reader.getVectorSchemaRoot());
-                    while (!listener.isCancelled() && reader.loadNextBatch()) {
+                DuckDBResultSet resultSet = null;
+                ArrowReader reader = null;
+                try {
+                    resultSet = executors.duckdb(supplier::get);
+                    final DuckDBResultSet rs = resultSet;
+                    reader = executors.duckdb(() -> (ArrowReader) rs.arrowExportStream(streamAllocator, batchSize));
+                    final ArrowReader batches = reader;
+                    listener.start(batches.getVectorSchemaRoot());
+                    while (!listener.isCancelled() && executors.duckdb(batches::loadNextBatch)) {
                         if (!readiness.awaitReady(listener)) {
                             break;
                         }
@@ -117,6 +163,8 @@ public class ResultSetStreamUtil {
                         recorder.recordGetStream(false, size);
                         listener.putNext();
                     }
+                } finally {
+                    closeOnDuckDb(executors, reader, resultSet);
                 }
             } catch (Throwable throwable) {
                 error = true;
@@ -126,8 +174,13 @@ public class ResultSetStreamUtil {
                 if (!error && !listener.isCancelled()) {
                     listener.completed();
                 }
+                Throwable writeFailure = error ? null : serverWriteFailure(listener);
+                if (writeFailure != null) {
+                    logger.atError().setCause(writeFailure).log("Failed to write a stream's response");
+                    recorder.errorStream(false);
+                }
                 recorder.endStream(false);
-                finalBlock.run();
+                runFinalBlock(executors, finalBlock);
                 if (childAllocator != null) {
                     childAllocator.close();
                 }
@@ -135,7 +188,7 @@ public class ResultSetStreamUtil {
         });
     }
 
-    static <T extends Statement> void streamResultSet(ExecutorService executorService,
+    static <T extends Statement> void streamResultSet(StreamExecutors executors,
                                                       StatementContext<T> statementContext,
                                                       DuckDBFlightSqlProducer.CacheKey key,
                                                       OptionalResultSetSupplier supplier,
@@ -144,20 +197,21 @@ public class ResultSetStreamUtil {
                                                       final FlightProducer.ServerStreamListener listener,
                                                       Runnable finalBlock, FlightRecorder recorder) {
 
-        submit(executorService, finalBlock, () -> {
+        submit(executors, finalBlock, () -> {
             if (!statementContext.tryStart()) {
                 // Another stream is running this statement, or it was closed. Reject without touching
                 // its state (no end()), but still run this stream's own cleanup: for a plain
                 // statement, whose context can only fail here once closed, that removes the closed
                 // entry from the cursor cache instead of leaving it for the TTL.
                 listener.error(ErrorHandling.cannotStart(statementContext));
-                finalBlock.run();
+                runFinalBlock(executors, finalBlock);
                 return;
             }
             BufferAllocator childAllocator = null;
             var error = false;
             try {
                 childAllocator = allocator.newChildAllocator("statement-allocator", 0, allocator.getLimit());
+                final BufferAllocator streamAllocator = childAllocator;
                 // A client that disconnects or cancels the DoGet must stop the query. Without this,
                 // Flight drops every later putNext() silently and the query runs to completion.
                 var readiness = new ReadyWaiter(listener, () -> {
@@ -178,12 +232,17 @@ public class ResultSetStreamUtil {
                     listener.error(CallStatus.CANCELLED.withDescription("Query was cancelled").toRuntimeException());
                     return;
                 }
-                supplier.execute();
+                executors.duckdbRun(supplier::execute);
                 if (supplier.hasResultSet()) {
-                    try (DuckDBResultSet resultSet = supplier.get();
-                         ArrowReader reader = (ArrowReader) resultSet.arrowExportStream(childAllocator, batchSize)) {
-                        listener.start(reader.getVectorSchemaRoot());
-                        while (!listener.isCancelled() && reader.loadNextBatch()) {
+                    DuckDBResultSet resultSet = null;
+                    ArrowReader reader = null;
+                    try {
+                        resultSet = executors.duckdb(supplier::get);
+                        final DuckDBResultSet rs = resultSet;
+                        reader = executors.duckdb(() -> (ArrowReader) rs.arrowExportStream(streamAllocator, batchSize));
+                        final ArrowReader batches = reader;
+                        listener.start(batches.getVectorSchemaRoot());
+                        while (!listener.isCancelled() && executors.duckdb(batches::loadNextBatch)) {
                             if (!readiness.awaitReady(listener)) {
                                 break;
                             }
@@ -193,6 +252,8 @@ public class ResultSetStreamUtil {
                             recorder.recordGetStream(statementContext.isPreparedStatementContext(),
                                     size);
                         }
+                    } finally {
+                        closeOnDuckDb(executors, reader, resultSet);
                     }
                 } else {
                     listener.start(new VectorSchemaRoot(List.of()));
@@ -219,10 +280,15 @@ public class ResultSetStreamUtil {
                     if (!error && !listener.isCancelled()) {
                         listener.completed();
                     }
+                    Throwable writeFailure = error ? null : serverWriteFailure(listener);
+                    if (writeFailure != null) {
+                        recorder.errorStream(statementContext.isPreparedStatementContext());
+                        recorder.recordStatementStreamError(key, statementContext, writeFailure);
+                    }
                     statementContext.end();
                     recorder.endStream(statementContext.isPreparedStatementContext());
                     recorder.recordStatementStreamEnd(key, statementContext);
-                    finalBlock.run();
+                    runFinalBlock(executors, finalBlock);
                     if (childAllocator != null) {
                         childAllocator.close();
                     }
@@ -233,16 +299,16 @@ public class ResultSetStreamUtil {
         });
     }
 
-    static void streamResultSet(ExecutorService executorService,
+    static void streamResultSet(StreamExecutors executors,
                                 ResultSetSupplierFromConnection supplier,
                                 FlightProducer.CallContext context, AccessMode accessMode,
                                 BufferAllocator allocator,
                                 final FlightProducer.ServerStreamListener listener, FlightRecorder recorder) {
 
-        streamResultSet(executorService, supplier, context, accessMode, allocator, listener, () -> {}, recorder);
+        streamResultSet(executors, supplier, context, accessMode, allocator, listener, () -> {}, recorder);
     }
 
-    static void streamResultSet(ExecutorService executorService,
+    static void streamResultSet(StreamExecutors executors,
                                         ResultSetSupplierFromConnection supplier,
                                         FlightProducer.CallContext context,
                                         AccessMode  accessMode,
@@ -252,7 +318,7 @@ public class ResultSetStreamUtil {
                                         FlightRecorder recorder) {
         try {
             DuckDBConnection connection = DuckDBFlightSqlProducer.getConnection(context, accessMode );
-            streamResultSet(executorService,
+            streamResultSet(executors,
                     () -> supplier.get(connection),
                     allocator,
                     DuckDBFlightSqlProducer.getBatchSize(context),

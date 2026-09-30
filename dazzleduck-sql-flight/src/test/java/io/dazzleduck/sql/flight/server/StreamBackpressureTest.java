@@ -170,4 +170,78 @@ class StreamBackpressureTest {
     void anHttpTsvClientThatDisconnectsStopsItsQuery() throws Exception {
         assertHttpDisconnectStopsTheQuery((t, out) -> producer.streamTsv(t, admin, out));
     }
+
+    @Test
+    void stalledClientsDoNotHoldTheThreadsOtherQueriesNeed() throws Exception {
+        // More stalled streams than the DuckDB platform pool has threads. Each client reads one batch
+        // of an endless query and stops. With stream tasks on that fixed pool, every thread would be
+        // parked in the backpressure wait and the query below would queue forever; on virtual
+        // threads a stalled stream holds no platform thread.
+        int stalled = Runtime.getRuntime().availableProcessors() + 2;
+        var streams = new java.util.ArrayList<FlightStream>();
+        try {
+            for (int i = 0; i < stalled; i++) {
+                FlightStream stream = client.getStream(client.execute(ENDLESS_STREAM).getEndpoints().get(0).getTicket());
+                assertTrue(stream.next(), "stalled client " + i + " got its first batch");
+                streams.add(stream);
+            }
+            var answer = CompletableFuture.supplyAsync(() -> {
+                try (FlightStream s = client.getStream(client.execute("SELECT 42 AS answer").getEndpoints().get(0).getTicket())) {
+                    assertTrue(s.next());
+                    return ((org.apache.arrow.vector.IntVector) s.getRoot().getVector(0)).get(0);
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+            assertEquals(42, answer.get(20, java.util.concurrent.TimeUnit.SECONDS),
+                    "a new query must run while " + stalled + " clients are stalled");
+        } finally {
+            for (FlightStream stream : streams) {
+                try {
+                    stream.cancel("done", null);
+                    stream.close();
+                } catch (Exception ignored) {
+                    // a cancelled stream may report the cancellation on close
+                }
+            }
+        }
+        await(() -> producer.statementLoadingCache.size() == 0, "the stalled queries to stop");
+    }
+
+    @Test
+    void streamsWaitOnVirtualThreadsAndCallDuckDbOnPlatformThreads() throws Exception {
+        var streamThreadVirtual = new java.util.concurrent.atomic.AtomicReference<Boolean>();
+        var duckdbThreadVirtual = new java.util.concurrent.atomic.AtomicReference<Boolean>();
+        var connection = io.dazzleduck.sql.commons.ConnectionPool.getConnection();
+        var ctx = new StatementContext<>(connection, connection.createStatement(), "SELECT 1");
+        var done = new java.util.concurrent.CountDownLatch(1);
+        var listener = new FlightProducer.ServerStreamListener() {
+            @Override public boolean isCancelled() { return false; }
+            @Override public void setOnCancelHandler(Runnable handler) { }
+            @Override public boolean isReady() { return true; }
+            @Override public void start(org.apache.arrow.vector.VectorSchemaRoot root,
+                                        org.apache.arrow.vector.dictionary.DictionaryProvider dictionaries,
+                                        org.apache.arrow.vector.ipc.message.IpcOption option) {
+                streamThreadVirtual.set(Thread.currentThread().isVirtual());
+            }
+            @Override public void putNext() { }
+            @Override public void putNext(org.apache.arrow.memory.ArrowBuf metadata) { }
+            @Override public void putMetadata(org.apache.arrow.memory.ArrowBuf metadata) { }
+            @Override public void error(Throwable ex) { done.countDown(); }
+            @Override public void completed() { done.countDown(); }
+        };
+        ResultSetStreamUtil.streamResultSet(producer.streamExecutors, ctx,
+                new DuckDBFlightSqlProducer.CacheKey("admin", StatementHandle.nextStatementId()),
+                new OptionalResultSetSupplier() {
+                    @Override public boolean hasResultSet() { return false; }
+                    @Override public org.duckdb.DuckDBResultSet get() { return null; }
+                    @Override public void execute() { duckdbThreadVirtual.set(Thread.currentThread().isVirtual()); }
+                }, allocator, 1024, listener, ctx::close,
+                new io.dazzleduck.sql.flight.MicroMeterFlightRecorder(
+                        new io.micrometer.core.instrument.simple.SimpleMeterRegistry(), "test"));
+        assertTrue(done.await(10, java.util.concurrent.TimeUnit.SECONDS));
+        assertEquals(Boolean.TRUE, streamThreadVirtual.get(), "the stream task runs on a virtual thread");
+        assertEquals(Boolean.FALSE, duckdbThreadVirtual.get(),
+                "DuckDB calls run on a platform thread (a native call would pin a virtual thread's carrier)");
+    }
 }

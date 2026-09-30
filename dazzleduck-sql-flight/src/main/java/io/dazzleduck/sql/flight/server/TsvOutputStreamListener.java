@@ -29,7 +29,15 @@ import java.util.function.Supplier;
  * {@link #putNext()} writes all rows from the current {@link VectorSchemaRoot} as TSV lines.
  * Null values are written as empty strings.
  */
-public class TsvOutputStreamListener implements FlightProducer.ServerStreamListener {
+public class TsvOutputStreamListener implements FlightProducer.ServerStreamListener, HttpResponseListener {
+
+    // Why a start or write failed, if one did (see HttpResponseListener).
+    private volatile Throwable writeFailure;
+
+    @Override
+    public Throwable writeFailure() {
+        return writeFailure;
+    }
 
     private static final Logger logger = LoggerFactory.getLogger(TsvOutputStreamListener.class);
 
@@ -74,6 +82,7 @@ public class TsvOutputStreamListener implements FlightProducer.ServerStreamListe
             logger.debug("TsvOutputStreamListener started with schema: {}", root.getSchema());
         } catch (Exception e) {
             logger.error("Error in start()", e);
+            writeFailure = e;
             future.completeExceptionally(e);
         }
     }
@@ -89,6 +98,7 @@ public class TsvOutputStreamListener implements FlightProducer.ServerStreamListe
             writer.flush();
         } catch (IOException e) {
             logger.error("Error in putNext()", e);
+            writeFailure = e;
             future.completeExceptionally(e);
         }
     }
