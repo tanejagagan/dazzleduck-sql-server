@@ -190,9 +190,19 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
      * Interrupts the query if it is executing or streaming; a no-op once closed. Safe to call from
      * any thread, e.g. a gRPC cancel handler or a Flight CancelFlightInfo call.
      */
-    public synchronized void cancel() throws SQLException {
+    /** What {@link #cancel} found to cancel. */
+    public enum CancelOutcome {
+        /** Closed, or no stream queued or running: nothing was cancelled. */
+        NOTHING_RUNNING,
+        /** A stream was queued; it will end with CANCELLED without executing the query. */
+        CANCELLED_BEFORE_START,
+        /** A running execution was interrupted (DuckDB then closes a prepared statement). */
+        INTERRUPTED
+    }
+
+    public synchronized CancelOutcome cancel() throws SQLException {
         if (closed) {
-            return;
+            return CancelOutcome.NOTHING_RUNNING;
         }
         // Recorded only while a stream exists to see it: one queued (claimed) checks it right after
         // start() and ends instead of running the query. A late cancel, after the stream ended, must
@@ -202,7 +212,9 @@ public final class StatementContext<T extends Statement> implements AutoCloseabl
         }
         if (inUse) {
             statement.cancel();
+            return CancelOutcome.INTERRUPTED;
         }
+        return claimed ? CancelOutcome.CANCELLED_BEFORE_START : CancelOutcome.NOTHING_RUNNING;
     }
 
     /** Whether {@link #cancel} was called since this context's last stream ended. */
