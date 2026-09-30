@@ -163,6 +163,49 @@ public class SelectOnlyFlightSqlTest {
 
     @Test
     @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testExecuteUpdateBlocked() throws Exception {
+        // executeUpdate goes through acceptPutStatement, not the query path the tests below use.
+        assertThrows(FlightRuntimeException.class, () ->
+                serverClient.flightSqlClient().executeUpdate("DROP TABLE t_select_only"));
+        assertThrows(FlightRuntimeException.class, () ->
+                serverClient.flightSqlClient().executeUpdate("DELETE FROM t_select_only"));
+        assertEquals(100L, ConnectionPool.collectFirst("SELECT count(*) FROM t_select_only", Long.class),
+                "the table is still there with its rows");
+    }
+
+    @Test
+    @Timeout(value = 60, unit = TimeUnit.SECONDS)
+    public void testDatabaseHeaderCannotInjectStatements() throws Exception {
+        // Before quoting, this header made the connection setup run
+        // "USE memory.main; DELETE FROM t_select_only; USE memory.main" ahead of any authorization.
+        var location = FlightTestUtils.findNextLocation();
+        var utils = FlightTestUtils.createForDatabaseSchema(TEST_USER, "password", TEST_CATALOG, TEST_SCHEMA);
+        try (var injected = utils.createReadOnlyServerClient(location, java.util.Map.of(
+                Headers.HEADER_DATABASE, "memory.main; DELETE FROM t_select_only; USE memory"))) {
+            assertThrows(FlightRuntimeException.class, () -> {
+                FlightInfo info = injected.flightSqlClient().execute("SELECT 1");
+                try (FlightStream stream = injected.flightSqlClient().getStream(info.getEndpoints().get(0).getTicket())) {
+                    while (stream.next()) {
+                        // drain
+                    }
+                }
+            }, "the header names no catalog, so the query fails instead of running extra statements");
+        }
+        assertEquals(100L, ConnectionPool.collectFirst("SELECT count(*) FROM t_select_only", Long.class),
+                "nothing was deleted");
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testBulkIngestBlocked() throws Exception {
+        // executeIngest writes to an ingestion queue without going through SQL, so the
+        // SELECT-only check never sees it; it must be refused by the write-access check.
+        var refused = assertThrows(FlightRuntimeException.class, () -> FlightTestUtils.bulkIngest(serverClient, "ro_queue"));
+        assertTrue(refused.getMessage().contains("No write access"), "refused by authorization: " + refused.getMessage());
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
     public void testInsertBlocked() {
         // INSERT should be blocked
         String query = "INSERT INTO test_table VALUES (1, 'test')";

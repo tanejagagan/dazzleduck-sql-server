@@ -178,4 +178,81 @@ class StreamCancellationTest {
         assertTrue(producer.tryCancel(id, caller));
         assertTrue(connection.isClosed());
     }
+
+    /** Records what a stream sends to its client; the client stays connected. */
+    private static final class RecordingListener implements FlightProducer.ServerStreamListener {
+        volatile Throwable error;
+        volatile boolean completed;
+        final java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
+
+        @Override public boolean isCancelled() { return false; }
+        @Override public void setOnCancelHandler(Runnable handler) { }
+        @Override public boolean isReady() { return true; }
+        @Override public void start(org.apache.arrow.vector.VectorSchemaRoot root,
+                                    org.apache.arrow.vector.dictionary.DictionaryProvider dictionaries,
+                                    org.apache.arrow.vector.ipc.message.IpcOption option) { }
+        @Override public void putNext() { }
+        @Override public void putNext(org.apache.arrow.memory.ArrowBuf metadata) { }
+        @Override public void putMetadata(org.apache.arrow.memory.ArrowBuf metadata) { }
+        @Override public void error(Throwable ex) { error = ex; done.countDown(); }
+        @Override public void completed() { completed = true; done.countDown(); }
+    }
+
+    @Test
+    void cancellingAQueuedQueryEndsItCleanlyWithoutRunningIt() throws Exception {
+        var executor = Executors.newSingleThreadExecutor();
+        var release = new java.util.concurrent.CountDownLatch(1);
+        executor.submit(() -> { release.await(); return null; }); // keeps the stream below queued
+        try {
+            var connection = ConnectionPool.getConnection();
+            Statement statement = connection.createStatement();
+            var ctx = new StatementContext<>(connection, statement, "SELECT 1");
+            long id = StatementHandle.nextStatementId();
+            var key = new DuckDBFlightSqlProducer.CacheKey("admin", id);
+            ctx.markClaimed();
+            producer.statementLoadingCache.put(key, ctx);
+            var executed = new java.util.concurrent.atomic.AtomicBoolean();
+            var listener = new RecordingListener();
+            ResultSetStreamUtil.streamResultSet(executor, ctx, key, new OptionalResultSetSupplier() {
+                        @Override public boolean hasResultSet() { return false; }
+                        @Override public org.duckdb.DuckDBResultSet get() { return null; }
+                        @Override public void execute() { executed.set(true); }
+                    }, allocator, 1024, listener,
+                    () -> producer.statementLoadingCache.asMap().remove(key, ctx),
+                    new MicroMeterFlightRecorder(new SimpleMeterRegistry(), "test"));
+
+            var caller = new SyntheticFlightContext(Map.of(), new SubjectAndVerifiedClaims("admin", Map.of()));
+            assertTrue(producer.tryCancel(id, caller));
+            assertFalse(statement.isClosed(), "a queued query must not be closed under its pending task");
+
+            release.countDown();
+            assertTrue(listener.done.await(10, java.util.concurrent.TimeUnit.SECONDS));
+            assertFalse(executed.get(), "a query cancelled while queued must not run");
+            assertInstanceOf(FlightRuntimeException.class, listener.error);
+            assertEquals(FlightStatusCode.CANCELLED, ((FlightRuntimeException) listener.error).status().code());
+            assertTrue(statement.isClosed(), "closed once its stream ended");
+        } finally {
+            release.countDown();
+            executor.shutdown();
+        }
+    }
+
+    @Test
+    void aLateCancelDoesNotCancelTheNextRunOfAPreparedStatement() throws Exception {
+        var connection = ConnectionPool.getConnection();
+        var ctx = new StatementContext<>(connection, connection.prepareStatement("SELECT 1"), "SELECT 1");
+        try {
+            ctx.markClaimed();
+            ctx.start();
+            ctx.end();       // the first run finished; the prepared statement stays open
+            ctx.cancel();    // e.g. a gRPC cancel handler firing after the stream ended
+            assertFalse(ctx.isCancelRequested(), "a cancel with no stream to see it must not stick");
+            ctx.markClaimed();
+            ctx.start();     // the client runs it again
+            assertFalse(ctx.isCancelRequested(), "the next run must not be cancelled");
+            ctx.end();
+        } finally {
+            ctx.close();
+        }
+    }
 }

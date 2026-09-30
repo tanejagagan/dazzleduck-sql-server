@@ -127,4 +127,27 @@ public class ConnectionPoolTest {
         Assertions.assertThrowsExactly(RuntimeSqlException.class,
                 () -> ConnectionPool.execute("desc batch_in_txn"));
     }
+
+    @Test
+    public void executeOnSingletonErrorsNameTheStatementNotItsText() {
+        // Startup scripts carry credentials; a failing statement must be identified without them.
+        String script = "SELECT 1;\n"
+                + "CREATE SECRET leak_check (TYPE s3, KEY_ID 'FAKE_KEY_ID', SECRET 'FAKE_SECRET_VALUE', BOGUS_OPTION 'x');\n"
+                + "SELECT 2;";
+        RuntimeSqlException e = Assertions.assertThrows(RuntimeSqlException.class,
+                () -> ConnectionPool.executeOnSingleton(script));
+        Assertions.assertEquals("Failed to execute statement 2 of 3 on the singleton connection (CREATE)", e.getMessage());
+        Assertions.assertNotNull(e.getCause(), "DuckDB's error is kept as the cause");
+        var trace = new java.io.StringWriter();
+        e.printStackTrace(new java.io.PrintWriter(trace));
+        Assertions.assertFalse(trace.toString().contains("FAKE_SECRET_VALUE"), trace.toString());
+        Assertions.assertFalse(trace.toString().contains("FAKE_KEY_ID"), trace.toString());
+    }
+
+    @Test
+    public void leadingKeywordIsTheFirstWordOnly() {
+        Assertions.assertEquals("ATTACH", ConnectionPool.leadingKeyword("  attach 'ducklake:postgres:password=x' AS lake"));
+        Assertions.assertEquals("CREATE", ConnectionPool.leadingKeyword("CREATE SECRET s (SECRET 'x')"));
+        Assertions.assertEquals("?", ConnectionPool.leadingKeyword("'x'"));
+    }
 }
