@@ -244,6 +244,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
 
     protected final BufferAllocator allocator;
     private final String warehousePath;
+    // Package-private only so tests (ConnectionLeakTest) can inspect it; not for production use.
     final Cache<CacheKey, StatementContext<PreparedStatement>> preparedStatementLoadingCache;
     protected final Cache<CacheKey, StatementContext<Statement>> statementLoadingCache;
     private final SqlAuthorizer sqlAuthorizer;

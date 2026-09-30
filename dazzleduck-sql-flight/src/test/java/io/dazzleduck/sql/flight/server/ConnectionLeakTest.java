@@ -1,6 +1,8 @@
 package io.dazzleduck.sql.flight.server;
 
+import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
+import io.dazzleduck.sql.commons.ingestion.NOOPIngestionTaskFactoryProvider;
 import io.dazzleduck.sql.flight.MicroMeterFlightRecorder;
 import io.dazzleduck.sql.flight.server.auth2.AuthUtils;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -41,7 +43,9 @@ class ConnectionLeakTest {
         producer = new DuckDBFlightSqlProducer(
                 location, UUID.randomUUID().toString(), "test-secret", allocator,
                 System.getProperty("java.io.tmpdir"), AccessMode.COMPLETE, DuckDBFlightSqlProducer.newTempDir(),
-                null, Executors.newSingleThreadScheduledExecutor(), Duration.ofMinutes(1), Duration.ZERO,
+                // A real (no-op) handler: close() closes the ingestion queues.
+                new NOOPIngestionTaskFactoryProvider(DuckDBFlightSqlProducer.newTempDir().toString()).getIngestionHandler(),
+                Executors.newSingleThreadScheduledExecutor(), Duration.ofMinutes(1), Duration.ZERO,
                 Clock.systemDefaultZone(), new MicroMeterFlightRecorder(new SimpleMeterRegistry(), "test"),
                 DuckDBFlightSqlProducer.DEFAULT_INGESTION_CONFIG, List.of());
         server = FlightServer.builder(allocator, location, producer)
@@ -57,6 +61,8 @@ class ConnectionLeakTest {
     void teardown() throws Exception {
         if (client != null) client.close();
         if (server != null) server.close();
+        // FlightServer.close() does not close the producer; this also closes its executors and the allocator.
+        if (producer != null) producer.close();
     }
 
     @Test
@@ -88,5 +94,20 @@ class ConnectionLeakTest {
                 null, () -> cleanedUp.set(true),
                 new MicroMeterFlightRecorder(new SimpleMeterRegistry(), "test")));
         assertTrue(cleanedUp.get(), "the stream's cleanup (which closes its connection) did not run");
+    }
+
+    @Test
+    void aCursorStreamRejectedAtShutdownStillRunsItsCleanup() throws Exception {
+        var executor = Executors.newSingleThreadExecutor();
+        executor.shutdown();
+        var cleanedUp = new AtomicBoolean();
+        try (var connection = ConnectionPool.getConnection()) {
+            var ctx = new StatementContext<>(connection, connection.createStatement(), "SELECT 1");
+            assertThrows(RejectedExecutionException.class, () -> ResultSetStreamUtil.streamResultSet(
+                    executor, ctx, new DuckDBFlightSqlProducer.CacheKey("admin", 1), null, allocator, 1024,
+                    null, () -> cleanedUp.set(true),
+                    new MicroMeterFlightRecorder(new SimpleMeterRegistry(), "test")));
+        }
+        assertTrue(cleanedUp.get(), "the stream's cleanup (which releases its cursor entry) did not run");
     }
 }

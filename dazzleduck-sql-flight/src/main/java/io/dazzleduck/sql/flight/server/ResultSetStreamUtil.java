@@ -24,6 +24,20 @@ public class ResultSetStreamUtil {
     private ResultSetStreamUtil() {
         throw new UnsupportedOperationException("Utility class");
     }
+
+    /**
+     * Submits a stream task whose {@code finalBlock} releases what the stream holds (a connection,
+     * a cursor entry). If the executor rejects the task (shutting down), the task never runs, so
+     * {@code finalBlock} runs here instead; the rejection is rethrown for the caller to report.
+     */
+    private static void submit(ExecutorService executorService, Runnable finalBlock, Runnable task) {
+        try {
+            executorService.submit(task);
+        } catch (RejectedExecutionException e) {
+            finalBlock.run();
+            throw e;
+        }
+    }
     static void streamResultSet(ExecutorService executorService,
                                 ResultSetSupplier supplier,
                                 BufferAllocator allocator,
@@ -31,24 +45,7 @@ public class ResultSetStreamUtil {
                                 final FlightProducer.ServerStreamListener listener,
                                 Runnable finalBlock,
                                 FlightRecorder recorder) {
-        try {
-            submitStream(executorService, supplier, allocator, batchSize, listener, finalBlock, recorder);
-        } catch (RejectedExecutionException e) {
-            // Shutting down: the task will never run, so run its cleanup (e.g. closing the
-            // connection it was given) here.
-            finalBlock.run();
-            throw e;
-        }
-    }
-
-    private static void submitStream(ExecutorService executorService,
-                                     ResultSetSupplier supplier,
-                                     BufferAllocator allocator,
-                                     final int batchSize,
-                                     final FlightProducer.ServerStreamListener listener,
-                                     Runnable finalBlock,
-                                     FlightRecorder recorder) {
-        executorService.submit(() -> {
+        submit(executorService, finalBlock, () -> {
             BufferAllocator childAllocator = null;
             var error = false;
             try {
@@ -89,7 +86,7 @@ public class ResultSetStreamUtil {
                                                       final FlightProducer.ServerStreamListener listener,
                                                       Runnable finalBlock, FlightRecorder recorder) {
 
-        executorService.submit(() -> {
+        submit(executorService, finalBlock, () -> {
             BufferAllocator childAllocator = null;
             var error = false;
             try {
