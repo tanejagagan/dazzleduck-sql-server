@@ -8,7 +8,6 @@ import io.dazzleduck.sql.commons.Transformations;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.authorization.UnauthorizedException;
 import io.dazzleduck.sql.commons.ingestion.IngestionHandler;
-import io.dazzleduck.sql.flight.ingestion.IngestionParameters;
 import io.dazzleduck.sql.commons.planner.SplitPlanner;
 import io.dazzleduck.sql.flight.FlightRecorder;
 import io.dazzleduck.sql.flight.optimizer.QueryOptimizer;
@@ -149,24 +148,6 @@ public class RestrictedFlightSqlProducer extends DuckDBFlightSqlProducer {
             StreamListener<PutResult> ackStream) {
         return throwNotSupported("Update statements are not supported in restricted mode");
     }
-
-    @Override
-    public Runnable acceptPutStatementBulkIngest(
-            FlightSql.CommandStatementIngest command,
-            CallContext context,
-            FlightStream flightStream,
-            StreamListener<PutResult> ackStream) {
-        var queue = IngestionParameters.getIngestionParameters(command).ingestionQueue();
-        var user = context.peerIdentity();
-        var verifiedClaims = getVerifiedClaims(context);
-        if (!getSqlAuthorizer().hasWriteAccess(user, queue, verifiedClaims)) {
-            ErrorHandling.handleUnauthorized(ackStream,
-                    new UnauthorizedException("No write access to ingestion_queue:" + queue));
-            return () -> {};
-        }
-        return super.acceptPutStatementBulkIngest(command, context, flightStream, ackStream);
-    }
-
     /**
      * Handle a Substrait plan with uploaded data.
      *
@@ -494,8 +475,9 @@ public class RestrictedFlightSqlProducer extends DuckDBFlightSqlProducer {
     @Override
     protected FlightInfo getFlightInfoStatementFromQuery(final String query, final CallContext context, final FlightDescriptor descriptor) {
         JsonNode authorizedTree = null;
-        try {
-            var connection = getConnection(context, getAccessMode());
+        // Only needed to parse and authorize the query; it was never closed, leaking one DuckDB
+        // connection per planning call.
+        try (var connection = getConnection(context, getAccessMode())) {
             authorizedTree = transformQueryToTree(context, connection, query);
         } catch (Exception e) {
             ErrorHandling.handleThrowable(e);
@@ -546,7 +528,7 @@ public class RestrictedFlightSqlProducer extends DuckDBFlightSqlProducer {
             var list = splits.stream().map(split -> {
                 try {
                     var sql = Transformations.parseToSql(split.tree());
-                    StatementHandle handle = newStatementHandle(sql, split.size());
+                    StatementHandle handle = newStatementHandle(sql, split.size(), context);
                     final ByteString serializedHandle =
                             copyFrom(handle.serialize());
                     return FlightSql.TicketStatementQuery.newBuilder().setStatementHandle(serializedHandle).build();

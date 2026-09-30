@@ -80,6 +80,19 @@ public class SelectOnlyFlightSqlProducer extends DuckDBFlightSqlProducer {
         return Transformations.parseToSql(connection, authorized);
     }
 
+    /**
+     * Update statements bypass {@link #transformQuery}, the only place SELECT-only is enforced, so
+     * READ_ONLY and RESTRICT_READ_ONLY must refuse them outright: otherwise {@code executeUpdate}
+     * over Flight SQL runs any SQL (DROP, DELETE, COPY ... TO) unchecked.
+     */
+    @Override
+    public Runnable acceptPutStatement(
+            FlightSql.CommandStatementUpdate command,
+            CallContext context, FlightStream flightStream,
+            StreamListener<PutResult> ackStream) {
+        return throwNotSupported("acceptPutStatement");
+    }
+
     @Override
     public Runnable acceptPutPreparedStatementUpdate(
             FlightSql.CommandPreparedStatementUpdate command,

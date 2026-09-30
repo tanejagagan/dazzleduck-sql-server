@@ -244,7 +244,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
 
     protected final BufferAllocator allocator;
     private final String warehousePath;
-    private final Cache<CacheKey, StatementContext<PreparedStatement>> preparedStatementLoadingCache;
+    // Package-private only so tests (ConnectionLeakTest) can inspect it; not for production use.
+    final Cache<CacheKey, StatementContext<PreparedStatement>> preparedStatementLoadingCache;
     protected final Cache<CacheKey, StatementContext<Statement>> statementLoadingCache;
     private final SqlAuthorizer sqlAuthorizer;
 
@@ -498,26 +499,31 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         try {
             authorizedSql = transformPreparedStatementQuery(context, connection, request.getQuery());
         } catch (Throwable t) {
+            // Not yet owned by a cache entry, so nothing else will close it.
+            closeQuietly(connection);
             ErrorHandling.handleThrowable(listener, t);
             return;
         }
-        StatementHandle handle = newStatementHandle(authorizedSql);
+        // Bound to the caller but not expiring: the prepared-statement cache bounds its lifetime.
+        StatementHandle handle = StatementHandle.newStatementHandle(authorizedSql, producerId, -1)
+                .signed(secretKey, context.peerIdentity(), 0);
         var cacheKey = new CacheKey(context.peerIdentity(), handle.queryId());
 
         Runnable runnable = () -> {
+            // This method owns the connection until the context is cached, and closes it on any
+            // failure; after, the cache owns it (closePreparedStatement or eviction closes it). The
+            // put is the last step before replying: if it came earlier, a later failure (e.g. a
+            // result type the Arrow schema conversion cannot map, such as LIST or HUGEINT) would
+            // leave a cached statement the client never got a handle for, holding its connection
+            // until eviction.
+            boolean cached = false;
             try {
                 final ByteString serializedHandle =
                         copyFrom(handle.serialize());
-                // Ownership of the connection will be passed to the context. Do NOT close!
 
                 final PreparedStatement preparedStatement =
                         connection.prepareStatement(
                                 authorizedSql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
-                final StatementContext<PreparedStatement> preparedStatementContext =
-                        new StatementContext<>(connection, preparedStatement, authorizedSql);
-                preparedStatementLoadingCache.put(
-                        cacheKey, preparedStatementContext);
-
                 final Schema parameterSchema =
                         JdbcToArrowUtils.jdbcToArrowSchema(preparedStatement.getParameterMetaData(), DEFAULT_CALENDAR);
 
@@ -537,21 +543,33 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                 }
                 builder.setDatasetSchema(bytes);
                 final FlightSql.ActionCreatePreparedStatementResult result = builder.build();
+                preparedStatementLoadingCache.put(
+                        cacheKey, new StatementContext<>(connection, preparedStatement, authorizedSql));
+                cached = true;
                 listener.onNext(new Result(pack(result).toByteArray()));
             } catch (Throwable e ) {
+                if (!cached) {
+                    closeQuietly(connection); // also closes a prepared statement created on it
+                }
                 ErrorHandling.handleThrowable(listener, e);
                 return;
             }
             listener.onCompleted();
         };
-        executorService.submit(runnable);
+        try {
+            executorService.submit(runnable);
+        } catch (RejectedExecutionException e) {
+            // Shutting down: the runnable will never run to take ownership.
+            closeQuietly(connection);
+            ErrorHandling.handleThrowable(listener, e);
+        }
     }
 
     @Override
     public void closePreparedStatement(FlightSql.ActionClosePreparedStatementRequest request, CallContext context, StreamListener<Result> listener) {
         final StatementHandle statementHandle = StatementHandle.deserialize(request.getPreparedStatementHandle());
-        if (statementHandle.signatureMismatch(secretKey)) {
-            ErrorHandling.handleSignatureMismatch(listener);
+        if (invalidHandle(statementHandle, context)) {
+            ErrorHandling.handleInvalidHandle(listener);
             return;
         }
         Runnable runnable = () -> {
@@ -574,9 +592,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             final CallContext context,
             final FlightDescriptor descriptor) {
         StatementHandle statementHandle = StatementHandle.deserialize(command.getPreparedStatementHandle());
-        if (statementHandle.signatureMismatch(secretKey)) {
-            ErrorHandling.handleSignatureMismatch();
-            return null; // Never reached if handleSignatureMismatch throws, but prevents execution if it doesn't
+        if (invalidHandle(statementHandle, context)) {
+            ErrorHandling.handleInvalidHandle();
+            return null; // Never reached if handleInvalidHandle throws, but prevents execution if it doesn't
         }
         var key = new CacheKey(context.peerIdentity(), statementHandle.queryId());
         StatementContext<PreparedStatement> statementContext =
@@ -648,8 +666,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                                            ServerStreamListener listener) {
 
         StatementHandle statementHandle = StatementHandle.deserialize(command.getPreparedStatementHandle());
-        if (statementHandle.signatureMismatch(secretKey)) {
-            ErrorHandling.handleSignatureMismatch(listener);
+        if (invalidHandle(statementHandle, context)) {
+            ErrorHandling.handleInvalidHandle(listener);
             return;
         }
         var key = new CacheKey(context.peerIdentity(), statementHandle.queryId());
@@ -697,8 +715,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             connection = getConnection(context, getAccessMode());
             String query = statementHandle.query();
             if (statementHandle.queryChecksum() != null
-                    && statementHandle.signatureMismatch(secretKey)) {
-                ErrorHandling.handleSignatureMismatch(listener);
+                    && invalidHandle(statementHandle, context)) {
+                ErrorHandling.handleInvalidHandle(listener);
                 return;
             }
             if (statementHandle.queryChecksum() == null) {
@@ -845,8 +863,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                                                      StreamListener<PutResult> ackStream) {
         return () -> {
             StatementHandle statementHandle = StatementHandle.deserialize(command.getPreparedStatementHandle());
-            if (statementHandle.signatureMismatch(secretKey)) {
-                ErrorHandling.handleSignatureMismatch(ackStream);
+            if (invalidHandle(statementHandle, context)) {
+                ErrorHandling.handleInvalidHandle(ackStream);
                 return;
             }
             var key = new CacheKey(context.peerIdentity(),statementHandle.queryId());
@@ -983,6 +1001,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             FlightStream flightStream,
             StreamListener<PutResult> ackStream) {
         IngestionParameters ingestionParameters = IngestionParameters.getIngestionParameters(command);
+        if (!hasWriteAccess(context, ingestionParameters.ingestionQueue(), ackStream)) {
+            return () -> {};
+        }
         var ingestionQueue = getOrCreateIngestionQueue(ingestionParameters.ingestionQueue());
         if( ingestionQueue == null) {
             return () -> ErrorHandling.handleThrowable(ackStream,
@@ -997,12 +1018,30 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             IngestionParameters ingestionParameters,
             InputStream inputStream,
             StreamListener<PutResult> ackStream) {
+        if (!hasWriteAccess(context, ingestionParameters.ingestionQueue(), ackStream)) {
+            return () -> {};
+        }
         var ingestionQueue = getOrCreateIngestionQueue(ingestionParameters.ingestionQueue());
         if( ingestionQueue == null) {
             return () -> ErrorHandling.handleThrowable(ackStream,
                     new IllegalArgumentException("Ingestion queue '" + ingestionParameters.ingestionQueue() + "' not found. No target path is configured for this queue."));
         }
         return ingestFromReader(new ArrowStreamReader(inputStream, allocator), ingestionQueue, ingestionParameters, ackStream);
+    }
+
+    /**
+     * Bulk ingest writes to an ingestion queue without going through SQL, so the query authorizers
+     * never see it: every ingest, Flight {@code executeIngest} or HTTP {@code /v1/ingest}, is gated on
+     * the authorizer's write check here. COMPLETE allows all writes, RESTRICTED checks the write
+     * claim, and READ_ONLY / RESTRICT_READ_ONLY refuse every ingest. (HTTP also checks in its JWT
+     * filter; this keeps the rule in force whatever the transport.)
+     */
+    private boolean hasWriteAccess(CallContext context, String queue, StreamListener<PutResult> ackStream) {
+        if (sqlAuthorizer.hasWriteAccess(context.peerIdentity(), queue, getVerifiedClaims(context))) {
+            return true;
+        }
+        ErrorHandling.handleUnauthorized(ackStream, new UnauthorizedException("No write access to ingestion_queue:" + queue));
+        return false;
     }
 
     private Runnable ingestFromReader(
@@ -1367,6 +1406,15 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         return cursorConfig;
     }
 
+    /** Closes {@code connection}, logging instead of throwing: for cleanup on a failure path. */
+    private static void closeQuietly(Connection connection) {
+        try {
+            connection.close();
+        } catch (Exception e) {
+            logger.atWarn().setCause(e).log("Failed to close connection");
+        }
+    }
+
     /**
      * Injects a live cursor entry into the cache on behalf of {@code peerIdentity}.
      * Visible for testing only — do not call from production code.
@@ -1450,7 +1498,10 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         var databaseSchema = getDatabaseSchema(context, accessMode);
         String dbSchema = format("%s.%s", databaseSchema.database, databaseSchema.schema);
         List<String> sqls = new ArrayList<>();
-        sqls.add(format("USE %s", dbSchema));
+        // Quoted: database and schema come from client headers in every mode except RESTRICTED, and
+        // the setup batch runs every statement in a string, so an unquoted value such as
+        // "memory.main; DELETE FROM t; USE memory" would run the DELETE before any authorization.
+        sqls.add(format("USE %s.%s", quoteIdentifier(databaseSchema.database), quoteIdentifier(databaseSchema.schema)));
         // Session variables are read only from the verified (signed) claims, never from client
         // headers, so they cannot be overridden per-request. Applied as SET VARIABLE so queries and
         // injected RLS filters can read them via getvariable('name'). A malformed claim throws here
@@ -1478,6 +1529,11 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
     protected static List<String> sessionSetupSqls(CallContext context) {
         return SessionVariables.toSetStatements(
                 getVerifiedClaims(context).get(Headers.CLAIM_SESSION_VARIABLES));
+    }
+
+    /** A SQL identifier in double quotes, with embedded quotes doubled, so it can only name an object. */
+    static String quoteIdentifier(String identifier) {
+        return '"' + identifier.replace("\"", "\"\"") + '"';
     }
 
     protected static DatabaseSchema getDatabaseSchema(CallContext context, AccessMode accessMode){
@@ -1529,7 +1585,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         } catch (Exception e){
             throw CallStatus.INTERNAL.withCause(e).withDescription("Failed to transform query: " + e.getMessage()).toRuntimeException();
         }
-        StatementHandle handle = newStatementHandle(query);
+        StatementHandle handle = newStatementHandle(query, -1, context);
         final ByteString serializedHandle =
                 copyFrom(handle.serialize());
         FlightSql.TicketStatementQuery ticket =
@@ -1557,12 +1613,43 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
 
 
 
-    protected StatementHandle newStatementHandle(String query, long splitSize) {
-        return StatementHandle.newStatementHandle(query, producerId, splitSize).signed(secretKey);
+    /** How long a statement ticket stays usable after it is issued, unless configured ({@code ticket_ttl_ms}). */
+    public static final Duration DEFAULT_TICKET_TTL = Duration.ofHours(1);
+
+    private volatile Duration ticketTtl = DEFAULT_TICKET_TTL;
+
+    /**
+     * Sets how long statement tickets issued from now on stay usable. Must be positive: tickets are
+     * signed and skip authorization, so they always expire.
+     */
+    public void setTicketTtl(Duration ticketTtl) {
+        this.ticketTtl = requirePositiveTicketTtl(ticketTtl);
     }
 
-    protected StatementHandle newStatementHandle(String query) {
-        return newStatementHandle(query, -1);
+    static Duration requirePositiveTicketTtl(Duration ticketTtl) {
+        if (ticketTtl == null || ticketTtl.isZero() || ticketTtl.isNegative()) {
+            throw new IllegalArgumentException(ConfigConstants.TICKET_TTL_MS_KEY + " must be positive, got " + ticketTtl);
+        }
+        return ticketTtl;
+    }
+
+    public Duration getTicketTtl() {
+        return ticketTtl;
+    }
+
+    /** A signed statement ticket, usable only by the caller and only until the ticket TTL passes. */
+    protected StatementHandle newStatementHandle(String query, long splitSize, CallContext context) {
+        return StatementHandle.newStatementHandle(query, producerId, splitSize)
+                .signed(secretKey, context.peerIdentity(), clock.millis() + ticketTtl.toMillis());
+    }
+
+    /**
+     * Whether a signed handle may NOT be used by this caller: a bad signature, issued to another
+     * principal, or expired. Signed handles skip authorization, so this is what stops a leaked
+     * ticket from being replayed by another user or indefinitely.
+     */
+    protected boolean invalidHandle(StatementHandle handle, CallContext context) {
+        return !handle.validFor(secretKey, context.peerIdentity(), clock.millis());
     }
 
     protected static <T> T throwNotSupported(String operation) {
