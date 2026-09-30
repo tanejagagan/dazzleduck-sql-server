@@ -471,8 +471,9 @@ public class RestrictedFlightSqlProducer extends DuckDBFlightSqlProducer {
     @Override
     protected FlightInfo getFlightInfoStatementFromQuery(final String query, final CallContext context, final FlightDescriptor descriptor) {
         JsonNode authorizedTree = null;
-        try {
-            var connection = getConnection(context, getAccessMode());
+        // Only needed to parse and authorize the query; it was never closed, leaking one DuckDB
+        // connection per planning call.
+        try (var connection = getConnection(context, getAccessMode())) {
             authorizedTree = transformQueryToTree(context, connection, query);
         } catch (Exception e) {
             ErrorHandling.handleThrowable(e);

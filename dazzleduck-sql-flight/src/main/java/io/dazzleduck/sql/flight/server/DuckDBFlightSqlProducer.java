@@ -244,7 +244,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
 
     protected final BufferAllocator allocator;
     private final String warehousePath;
-    private final Cache<CacheKey, StatementContext<PreparedStatement>> preparedStatementLoadingCache;
+    // Package-private only so tests (ConnectionLeakTest) can inspect it; not for production use.
+    final Cache<CacheKey, StatementContext<PreparedStatement>> preparedStatementLoadingCache;
     protected final Cache<CacheKey, StatementContext<Statement>> statementLoadingCache;
     private final SqlAuthorizer sqlAuthorizer;
 
@@ -498,6 +499,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         try {
             authorizedSql = transformPreparedStatementQuery(context, connection, request.getQuery());
         } catch (Throwable t) {
+            // Not yet owned by a cache entry, so nothing else will close it.
+            closeQuietly(connection);
             ErrorHandling.handleThrowable(listener, t);
             return;
         }
@@ -505,19 +508,20 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         var cacheKey = new CacheKey(context.peerIdentity(), handle.queryId());
 
         Runnable runnable = () -> {
+            // This method owns the connection until the context is cached, and closes it on any
+            // failure; after, the cache owns it (closePreparedStatement or eviction closes it). The
+            // put is the last step before replying: if it came earlier, a later failure (e.g. a
+            // result type the Arrow schema conversion cannot map, such as LIST or HUGEINT) would
+            // leave a cached statement the client never got a handle for, holding its connection
+            // until eviction.
+            boolean cached = false;
             try {
                 final ByteString serializedHandle =
                         copyFrom(handle.serialize());
-                // Ownership of the connection will be passed to the context. Do NOT close!
 
                 final PreparedStatement preparedStatement =
                         connection.prepareStatement(
                                 authorizedSql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
-                final StatementContext<PreparedStatement> preparedStatementContext =
-                        new StatementContext<>(connection, preparedStatement, authorizedSql);
-                preparedStatementLoadingCache.put(
-                        cacheKey, preparedStatementContext);
-
                 final Schema parameterSchema =
                         JdbcToArrowUtils.jdbcToArrowSchema(preparedStatement.getParameterMetaData(), DEFAULT_CALENDAR);
 
@@ -537,14 +541,26 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                 }
                 builder.setDatasetSchema(bytes);
                 final FlightSql.ActionCreatePreparedStatementResult result = builder.build();
+                preparedStatementLoadingCache.put(
+                        cacheKey, new StatementContext<>(connection, preparedStatement, authorizedSql));
+                cached = true;
                 listener.onNext(new Result(pack(result).toByteArray()));
             } catch (Throwable e ) {
+                if (!cached) {
+                    closeQuietly(connection); // also closes a prepared statement created on it
+                }
                 ErrorHandling.handleThrowable(listener, e);
                 return;
             }
             listener.onCompleted();
         };
-        executorService.submit(runnable);
+        try {
+            executorService.submit(runnable);
+        } catch (RejectedExecutionException e) {
+            // Shutting down: the runnable will never run to take ownership.
+            closeQuietly(connection);
+            ErrorHandling.handleThrowable(listener, e);
+        }
     }
 
     @Override
@@ -1382,6 +1398,15 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         }
     }
 
+
+    /** Closes {@code connection}, logging instead of throwing: for cleanup on a failure path. */
+    private static void closeQuietly(Connection connection) {
+        try {
+            connection.close();
+        } catch (Exception e) {
+            logger.atWarn().setCause(e).log("Failed to close connection");
+        }
+    }
 
     /**
      * Injects a live cursor entry into the cache on behalf of {@code peerIdentity}.
