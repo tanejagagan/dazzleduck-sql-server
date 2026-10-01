@@ -32,7 +32,15 @@ import java.util.function.Supplier;
  *   <li>Completes the future when streaming finishes or fails</li>
  * </ul>
  */
-public class DirectOutputStreamListener implements FlightProducer.ServerStreamListener {
+public class DirectOutputStreamListener implements FlightProducer.ServerStreamListener, HttpResponseListener {
+
+    // Why a start or write failed, if one did (see HttpResponseListener).
+    private volatile Throwable writeFailure;
+
+    @Override
+    public Throwable writeFailure() {
+        return writeFailure;
+    }
 
     private static final Logger logger = LoggerFactory.getLogger(DirectOutputStreamListener.class);
 
@@ -74,9 +82,14 @@ public class DirectOutputStreamListener implements FlightProducer.ServerStreamLi
         logger.debug("DirectOutputStreamListener created with compression codec: {}", compressionCodec);
     }
 
+    /**
+     * The response is over once the future is done: cancelled, failed (e.g. the HTTP client went
+     * away and a write failed), or completed. The stream loop stops on this, so a disconnected
+     * client stops its query instead of it running to the end with every write failing.
+     */
     @Override
     public synchronized boolean isCancelled() {
-        return future.isCancelled();
+        return future.isDone();
     }
 
     @Override
@@ -103,8 +116,9 @@ public class DirectOutputStreamListener implements FlightProducer.ServerStreamLi
             writer.start();
             outputStream.flush();
             logger.debug("writer.start() and flush completed successfully with compression: {}", compressionCodec);
-        } catch (IOException e) {
-            logger.error("Error in start()", e);
+        } catch (IOException | RuntimeException e) {
+            HttpResponseListener.logWriteFailure(logger, "start()", e);
+            writeFailure = e;
             future.completeExceptionally(e);
         }
     }
@@ -117,8 +131,9 @@ public class DirectOutputStreamListener implements FlightProducer.ServerStreamLi
             writer.writeBatch();
             outputStream.flush();
             logger.debug("writeBatch() and flush completed for batch #{}", batchCount);
-        } catch (IOException e) {
-            logger.error("Error in putNext()", e);
+        } catch (IOException | RuntimeException e) {
+            HttpResponseListener.logWriteFailure(logger, "putNext()", e);
+            writeFailure = e;
             future.completeExceptionally(e);
         }
     }
@@ -162,7 +177,7 @@ public class DirectOutputStreamListener implements FlightProducer.ServerStreamLi
             future.complete(null);
             logger.debug("future completed successfully");
         } catch (Exception e) {
-            logger.error("Error in completed()", e);
+            HttpResponseListener.logWriteFailure(logger, "completed()", e);
             future.completeExceptionally(e);
         } finally {
             this.completed = true;

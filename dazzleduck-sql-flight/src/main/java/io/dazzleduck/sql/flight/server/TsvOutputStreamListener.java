@@ -29,7 +29,15 @@ import java.util.function.Supplier;
  * {@link #putNext()} writes all rows from the current {@link VectorSchemaRoot} as TSV lines.
  * Null values are written as empty strings.
  */
-public class TsvOutputStreamListener implements FlightProducer.ServerStreamListener {
+public class TsvOutputStreamListener implements FlightProducer.ServerStreamListener, HttpResponseListener {
+
+    // Why a start or write failed, if one did (see HttpResponseListener).
+    private volatile Throwable writeFailure;
+
+    @Override
+    public Throwable writeFailure() {
+        return writeFailure;
+    }
 
     private static final Logger logger = LoggerFactory.getLogger(TsvOutputStreamListener.class);
 
@@ -45,9 +53,14 @@ public class TsvOutputStreamListener implements FlightProducer.ServerStreamListe
         this.future = future;
     }
 
+    /**
+     * The response is over once the future is done: cancelled, failed (e.g. the HTTP client went
+     * away and a write failed), or completed. The stream loop stops on this, so a disconnected
+     * client stops its query instead of it running to the end with every write failing.
+     */
     @Override
     public boolean isCancelled() {
-        return future.isCancelled();
+        return future.isDone();
     }
 
     @Override
@@ -68,7 +81,8 @@ public class TsvOutputStreamListener implements FlightProducer.ServerStreamListe
             this.writer = new OutputStreamWriter(outputStream, StandardCharsets.UTF_8);
             logger.debug("TsvOutputStreamListener started with schema: {}", root.getSchema());
         } catch (Exception e) {
-            logger.error("Error in start()", e);
+            HttpResponseListener.logWriteFailure(logger, "start()", e);
+            writeFailure = e;
             future.completeExceptionally(e);
         }
     }
@@ -82,8 +96,9 @@ public class TsvOutputStreamListener implements FlightProducer.ServerStreamListe
             }
             writeRows();
             writer.flush();
-        } catch (IOException e) {
-            logger.error("Error in putNext()", e);
+        } catch (IOException | RuntimeException e) {
+            HttpResponseListener.logWriteFailure(logger, "putNext()", e);
+            writeFailure = e;
             future.completeExceptionally(e);
         }
     }
@@ -123,7 +138,7 @@ public class TsvOutputStreamListener implements FlightProducer.ServerStreamListe
             }
             future.complete(null);
         } catch (Exception e) {
-            logger.error("Error in completed()", e);
+            HttpResponseListener.logWriteFailure(logger, "completed()", e);
             future.completeExceptionally(e);
         }
     }
@@ -155,8 +170,15 @@ public class TsvOutputStreamListener implements FlightProducer.ServerStreamListe
                     TsvOutputStreamListener listener =
                             new TsvOutputStreamListener(outputStreamSupplier, tsvFuture);
                     listener.start(root, new DictionaryProvider.MapDictionaryProvider(), IpcOption.DEFAULT);
-                    while (reader.loadNextBatch()) listener.putNext();
-                    listener.completed();
+                    // Stop once the response is over (e.g. the client went away and a write failed).
+                    // Draining the pipe regardless would keep the Arrow side, and the query, running.
+                    while (!listener.isCancelled() && reader.loadNextBatch()) listener.putNext();
+                    if (listener.isCancelled()) {
+                        // Makes the producer's next write into the pipe fail, which stops its stream loop.
+                        pipeIn.close();
+                    } else {
+                        listener.completed();
+                    }
                 } catch (Exception e) {
                     try { pipeIn.close(); } catch (IOException ignored) {}
                     if (!tsvFuture.isDone()) tsvFuture.completeExceptionally(e);

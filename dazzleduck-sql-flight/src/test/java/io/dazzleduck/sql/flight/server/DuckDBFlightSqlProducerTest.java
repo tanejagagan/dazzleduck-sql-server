@@ -716,7 +716,7 @@ public class DuckDBFlightSqlProducerTest {
             DirectOutputStreamListener listener = new DirectOutputStreamListener(ByteArrayOutputStream::new, future);
 
             ResultSetStreamUtil.streamResultSet(
-                    producer.executorService, supplier, serverAllocator, 1000, listener, () -> {}, new SimpleFlightRecorder());
+                    producer.streamExecutors, supplier, serverAllocator, 1000, listener, () -> {}, new SimpleFlightRecorder());
 
             assertThrows(ExecutionException.class, () -> future.get(10, TimeUnit.SECONDS),
                     "streamResultSet should complete exceptionally when DuckDB query timeout fires");

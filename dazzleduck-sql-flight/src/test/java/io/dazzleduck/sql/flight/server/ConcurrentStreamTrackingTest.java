@@ -194,7 +194,7 @@ class ConcurrentStreamTrackingTest {
         var cleanedUp = new java.util.concurrent.CountDownLatch(1);
         var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
         try {
-            ResultSetStreamUtil.streamResultSet(executor, ctx, new DuckDBFlightSqlProducer.CacheKey("admin", 1L),
+            ResultSetStreamUtil.streamResultSet(StreamExecutors.sameThread(executor), ctx, new DuckDBFlightSqlProducer.CacheKey("admin", 1L),
                     null, allocator, 1024, new NoOpListener(), cleanedUp::countDown,
                     new io.dazzleduck.sql.flight.MicroMeterFlightRecorder(
                             new io.micrometer.core.instrument.simple.SimpleMeterRegistry(), "test"));

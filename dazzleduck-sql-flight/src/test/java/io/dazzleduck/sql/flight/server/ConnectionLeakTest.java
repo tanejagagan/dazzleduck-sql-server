@@ -90,7 +90,7 @@ class ConnectionLeakTest {
         executor.shutdown();
         var cleanedUp = new AtomicBoolean();
         assertThrows(RejectedExecutionException.class, () -> ResultSetStreamUtil.streamResultSet(
-                executor, () -> { throw new AssertionError("must not run"); }, allocator, 1024,
+                StreamExecutors.sameThread(executor), () -> { throw new AssertionError("must not run"); }, allocator, 1024,
                 null, () -> cleanedUp.set(true),
                 new MicroMeterFlightRecorder(new SimpleMeterRegistry(), "test")));
         assertTrue(cleanedUp.get(), "the stream's cleanup (which closes its connection) did not run");
@@ -104,7 +104,7 @@ class ConnectionLeakTest {
         try (var connection = ConnectionPool.getConnection()) {
             var ctx = new StatementContext<>(connection, connection.createStatement(), "SELECT 1");
             assertThrows(RejectedExecutionException.class, () -> ResultSetStreamUtil.streamResultSet(
-                    executor, ctx, new DuckDBFlightSqlProducer.CacheKey("admin", 1), null, allocator, 1024,
+                    StreamExecutors.sameThread(executor), ctx, new DuckDBFlightSqlProducer.CacheKey("admin", 1), null, allocator, 1024,
                     null, () -> cleanedUp.set(true),
                     new MicroMeterFlightRecorder(new SimpleMeterRegistry(), "test")));
         }

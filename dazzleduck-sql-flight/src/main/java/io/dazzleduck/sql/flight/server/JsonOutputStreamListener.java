@@ -31,7 +31,15 @@ import java.util.function.Supplier;
  * <p>Each row is written by {@link ResultStreams#writeJsonRow}, which also backs
  * {@link ResultStreams#writeJsonl} for non-Flight callers, so value formatting is shared.
  */
-public class JsonOutputStreamListener implements FlightProducer.ServerStreamListener {
+public class JsonOutputStreamListener implements FlightProducer.ServerStreamListener, HttpResponseListener {
+
+    // Why a start or write failed, if one did (see HttpResponseListener).
+    private volatile Throwable writeFailure;
+
+    @Override
+    public Throwable writeFailure() {
+        return writeFailure;
+    }
 
     /** Output shape written by this listener. */
     public enum Format {
@@ -68,9 +76,14 @@ public class JsonOutputStreamListener implements FlightProducer.ServerStreamList
         this.format = format;
     }
 
+    /**
+     * The response is over once the future is done: cancelled, failed (e.g. the HTTP client went
+     * away and a write failed), or completed. The stream loop stops on this, so a disconnected
+     * client stops its query instead of it running to the end with every write failing.
+     */
     @Override
     public boolean isCancelled() {
-        return future.isCancelled();
+        return future.isDone();
     }
 
     @Override
@@ -97,7 +110,8 @@ public class JsonOutputStreamListener implements FlightProducer.ServerStreamList
             logger.debug("JsonOutputStreamListener started with schema: {}, format: {}",
                     root.getSchema(), format);
         } catch (Exception e) {
-            logger.error("Error in start()", e);
+            HttpResponseListener.logWriteFailure(logger, "start()", e);
+            writeFailure = e;
             future.completeExceptionally(e);
         }
     }
@@ -120,8 +134,9 @@ public class JsonOutputStreamListener implements FlightProducer.ServerStreamList
             ensureGenerator();
             writeRows();
             generator.flush();
-        } catch (IOException e) {
-            logger.error("Error in putNext()", e);
+        } catch (IOException | RuntimeException e) {
+            HttpResponseListener.logWriteFailure(logger, "putNext()", e);
+            writeFailure = e;
             future.completeExceptionally(e);
         }
     }
@@ -166,7 +181,7 @@ public class JsonOutputStreamListener implements FlightProducer.ServerStreamList
             future.complete(null);
         } catch (Exception e) {
             if (!(e instanceof NoSuchElementException)) {
-                logger.error("Error in completed()", e);
+                HttpResponseListener.logWriteFailure(logger, "completed()", e);
             }
             future.completeExceptionally(e);
         }
