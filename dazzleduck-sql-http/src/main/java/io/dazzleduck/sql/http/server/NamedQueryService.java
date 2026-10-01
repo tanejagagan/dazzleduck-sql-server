@@ -56,7 +56,7 @@ public class NamedQueryService implements HttpService, ControllerService {
 
         var callContext = ControllerService.createContext(request);
         response.headers().set(HeaderNames.CONTENT_TYPE, ContentTypes.APPLICATION_JSON);
-        var future = adaptor.listItemsDirect(offset, limit, callContext, () -> response.outputStream());
+        var future = adaptor.listItemsDirect(offset, limit, callContext, () -> ResponseBodies.of(response));
 
         await(future, response, (cause, res) -> {
             logger.error("Error listing named queries", cause);
@@ -71,7 +71,7 @@ public class NamedQueryService implements HttpService, ControllerService {
 
         var callContext = ControllerService.createContext(request);
         response.headers().set(HeaderNames.CONTENT_TYPE, ContentTypes.APPLICATION_JSON);
-        var future = adaptor.getNamedQueryDirect(name, callContext, () -> response.outputStream());
+        var future = adaptor.getNamedQueryDirect(name, callContext, () -> ResponseBodies.of(response));
         await(future, response, (cause, res) -> {
             if (cause instanceof NamedQueryServiceAdaptor.TemplateNotFoundException) {
                 logger.warn("Named query not found: {}", name);
@@ -109,17 +109,17 @@ public class NamedQueryService implements HttpService, ControllerService {
         if (wantsTsv) {
             response.headers().set(HeaderNames.CONTENT_TYPE, ContentTypes.TEXT_TSV_UTF8);
             future = new CompletableFuture<>();
-            var listener = new TsvOutputStreamListener(() -> response.outputStream(), future);
+            var listener = new TsvOutputStreamListener(() -> ResponseBodies.of(response), future);
             adaptor.getStreamNamedQuery(namedQuery.name(), namedQuery.parameters(), callContext, listener);
         } else if (wantsJsonl) {
             response.headers().set(HeaderNames.CONTENT_TYPE, ContentTypes.APPLICATION_JSONL_UTF8);
             future = adaptor.streamJsonlNamedQuery(namedQuery.name(), namedQuery.parameters(),
-                    callContext, () -> response.outputStream());
+                    callContext, () -> ResponseBodies.of(response));
         } else {
             response.headers().set(HeaderNames.CONTENT_TYPE, ContentTypes.APPLICATION_ARROW);
             var compressionCodec = ParameterUtils.getArrowCompression(request);
             future = adaptor.getStreamNamedQueryDirect(namedQuery.name(), namedQuery.parameters(),
-                    callContext, () -> response.outputStream(), compressionCodec);
+                    callContext, () -> ResponseBodies.of(response), compressionCodec);
         }
 
         await(future, response, (cause, res) -> {

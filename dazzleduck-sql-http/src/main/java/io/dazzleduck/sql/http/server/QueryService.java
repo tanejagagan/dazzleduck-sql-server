@@ -59,18 +59,18 @@ public class QueryService extends AbstractQueryBasedService {
             if (wantsTsv) {
                 logger.debug("TSV output requested for query: {}", query.query());
                 response.header("Content-Type", ContentTypes.TEXT_TSV_UTF8);
-                future = httpFlightAdaptor.streamTsv(ticket, context, () -> response.outputStream());
+                future = httpFlightAdaptor.streamTsv(ticket, context, () -> ResponseBodies.of(response));
             } else if (wantsJsonl) {
                 logger.debug("JSONL output requested for query: {}", query.query());
                 response.header("Content-Type", ContentTypes.APPLICATION_JSONL_UTF8);
-                future = httpFlightAdaptor.streamJsonl(ticket, context, () -> response.outputStream());
+                future = httpFlightAdaptor.streamJsonl(ticket, context, () -> ResponseBodies.of(response));
             } else {
                 // Get Arrow compression codec from header (defaults to ZSTD)
                 CompressionUtil.CodecType compressionCodec = ParameterUtils.getArrowCompression(request);
                 logger.debug("Using Arrow compression codec: {}", compressionCodec);
                 logger.debug("Calling getStreamStatementDirect for query: {}", query.query());
                 response.header("Content-Type", ContentTypes.APPLICATION_ARROW);
-                future = httpFlightAdaptor.getStreamStatementDirect(ticket, context, () -> response.outputStream(), compressionCodec);
+                future = httpFlightAdaptor.getStreamStatementDirect(ticket, context, () -> ResponseBodies.of(response), compressionCodec);
             }
 
             logger.debug("Waiting for future.get() with timeout {}ms", httpConfig.getQueryTimeoutMs());

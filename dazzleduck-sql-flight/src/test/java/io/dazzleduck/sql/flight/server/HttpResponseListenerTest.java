@@ -45,20 +45,19 @@ class HttpResponseListenerTest {
     }
 
     @Test
-    void helidonsWrappedSocketErrorIsTheClientGoingAway() {
-        // Helidon's PlainSocket.write throws UncheckedIOException wrapping the IOException.
+    void aWrappedSocketErrorIsTheClientGoingAway() {
         assertTrue(HttpResponseListener.isClientGone(new java.io.UncheckedIOException(new IOException("Broken pipe"))));
         assertFalse(HttpResponseListener.isClientGone(new java.io.UncheckedIOException(
                 new JsonGenerationException("bad value", (com.fasterxml.jackson.core.JsonGenerator) null))));
     }
 
     @Test
-    void aListenerRecordsAHelidonStyleDisconnect() throws Exception {
+    void aListenerRecordsAnUncheckedSocketErrorAsADisconnect() throws Exception {
         var future = new CompletableFuture<Void>();
-        var helidonLike = new OutputStream() {
+        var unchecked = new OutputStream() {
             @Override public void write(int b) { throw new java.io.UncheckedIOException(new IOException("Connection reset")); }
         };
-        var listener = new TsvOutputStreamListener(() -> helidonLike, future);
+        var listener = new TsvOutputStreamListener(() -> unchecked, future);
         try (var allocator = new org.apache.arrow.memory.RootAllocator();
              var root = org.apache.arrow.vector.VectorSchemaRoot.create(new org.apache.arrow.vector.types.pojo.Schema(
                      java.util.List.of(org.apache.arrow.vector.types.pojo.Field.nullable("x",
@@ -68,20 +67,6 @@ class HttpResponseListenerTest {
         }
         assertTrue(listener.isCancelled());
         assertTrue(HttpResponseListener.isClientGone(listener.writeFailure()), String.valueOf(listener.writeFailure()));
-    }
-
-    @Test
-    void anHttp2StreamThatHelidonAlreadyClosedIsTheClientGoingAway() {
-        // Helidon's Http2ServerStream throws IllegalStateException("Stream is already closed.") when the
-        // client reset the stream before the write. (Its CloseConnectionException and Http2Exception
-        // cases are covered through the real server in the http module's HttpListenerDisconnectTest.)
-        var alreadyClosed = new IllegalStateException("Stream is already closed.");
-        alreadyClosed.setStackTrace(new StackTraceElement[]{
-                new StackTraceElement("io.helidon.webserver.http2.Http2ServerStream$WriteState", "checkAndMove",
-                        "Http2ServerStream.java", 1)});
-        assertTrue(HttpResponseListener.isClientGone(alreadyClosed));
-        // The same exception type thrown anywhere else is a server error.
-        assertFalse(HttpResponseListener.isClientGone(new IllegalStateException("Stream is already closed.")));
     }
 
     @Test
