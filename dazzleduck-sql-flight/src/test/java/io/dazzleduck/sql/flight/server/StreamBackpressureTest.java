@@ -1,6 +1,7 @@
 package io.dazzleduck.sql.flight.server;
 
 import com.google.protobuf.ByteString;
+import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.authorization.AccessMode;
 import io.dazzleduck.sql.commons.authorization.SubjectAndVerifiedClaims;
 import io.dazzleduck.sql.flight.MicroMeterFlightRecorder;
@@ -12,6 +13,7 @@ import org.apache.arrow.flight.sql.FlightSqlClient;
 import org.apache.arrow.flight.sql.impl.FlightSql;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
+import org.duckdb.DuckDBResultSet;
 import org.junit.jupiter.api.*;
 
 import java.io.IOException;
@@ -22,7 +24,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.function.BiFunction;
 import java.util.concurrent.atomic.AtomicLong;
@@ -31,8 +36,9 @@ import java.util.function.Supplier;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * The server must not produce results faster than the client takes them, and must stop a query
- * whose HTTP client went away.
+ * The server must not produce results faster than the client takes them, must stop a query whose
+ * HTTP client went away, and must end a stream waiting for a stalled client with an error when the
+ * server stops it (shutdown, server-side cancel).
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @Timeout(60)
@@ -243,5 +249,102 @@ class StreamBackpressureTest {
         assertEquals(Boolean.TRUE, streamThreadVirtual.get(), "the stream task runs on a virtual thread");
         assertEquals(Boolean.FALSE, duckdbThreadVirtual.get(),
                 "DuckDB calls run on a platform thread (a native call would pin a virtual thread's carrier)");
+    }
+
+    /** A client that has stopped reading: never ready. */
+    private static final class StalledListener implements FlightProducer.ServerStreamListener {
+        final CountDownLatch waiting = new CountDownLatch(1);
+        final CountDownLatch done = new CountDownLatch(1);
+        volatile Throwable error;
+        volatile boolean completed;
+
+        @Override public boolean isCancelled() { return false; }
+        @Override public void setOnCancelHandler(Runnable handler) { }
+        @Override public void setOnReadyHandler(Runnable handler) { }
+        @Override public boolean isReady() { waiting.countDown(); return false; }
+        @Override public void start(org.apache.arrow.vector.VectorSchemaRoot root,
+                                    org.apache.arrow.vector.dictionary.DictionaryProvider dictionaries,
+                                    org.apache.arrow.vector.ipc.message.IpcOption option) { }
+        @Override public void putNext() { }
+        @Override public void putNext(org.apache.arrow.memory.ArrowBuf metadata) { }
+        @Override public void putMetadata(org.apache.arrow.memory.ArrowBuf metadata) { }
+        @Override public void error(Throwable ex) { error = ex; done.countDown(); }
+        @Override public void completed() { completed = true; done.countDown(); }
+    }
+
+    /**
+     * A stream waiting for a stalled client that the server, not the client, ends must end with an
+     * error status: completing it would tell the client a cut-off result was the whole result.
+     */
+    private static void assertEndedWith(StalledListener listener, CallStatus status) throws InterruptedException {
+        assertTrue(listener.done.await(10, TimeUnit.SECONDS), "the stream must end");
+        assertFalse(listener.completed, "a cut-off result must not be reported as complete");
+        var error = assertInstanceOf(FlightRuntimeException.class, listener.error);
+        assertEquals(status.code(), error.status().code(), String.valueOf(error));
+    }
+
+    /** Streams a never-ending statement query to a stalled client on {@code streams}. */
+    private StatementContext<?> streamToAStalledClient(ExecutorService streams, StalledListener listener,
+                                                       CountDownLatch cleanedUp) throws Exception {
+        var connection = ConnectionPool.getConnection();
+        var ctx = new StatementContext<>(connection, connection.createStatement(), ENDLESS_STREAM);
+        ctx.markClaimed();
+        ResultSetStreamUtil.streamResultSet(StreamExecutors.sameThread(streams), ctx,
+                new DuckDBFlightSqlProducer.CacheKey("admin", StatementHandle.nextStatementId()),
+                OptionalResultSetSupplier.of(ctx.getStatement(), ENDLESS_STREAM),
+                allocator, 1024, listener, () -> { ctx.close(); cleanedUp.countDown(); },
+                new MicroMeterFlightRecorder(new SimpleMeterRegistry(), "test"));
+        assertTrue(listener.waiting.await(10, TimeUnit.SECONDS), "the stream waits for its client");
+        return ctx;
+    }
+
+    @Test
+    void aStatementStreamInterruptedByShutdownEndsWithAnError() throws Exception {
+        ExecutorService streams = Executors.newSingleThreadExecutor();
+        var listener = new StalledListener();
+        var cleanedUp = new CountDownLatch(1);
+        streamToAStalledClient(streams, listener, cleanedUp);
+
+        streams.shutdownNow(); // close()'s fallback, without a cancel first
+
+        assertEndedWith(listener, CallStatus.UNAVAILABLE);
+        assertTrue(cleanedUp.await(10, TimeUnit.SECONDS), "the stream gives back its connection");
+    }
+
+    @Test
+    void aMetadataStreamInterruptedByShutdownEndsWithAnError() throws Exception {
+        ExecutorService streams = Executors.newSingleThreadExecutor();
+        var connection = ConnectionPool.getConnection();
+        var listener = new StalledListener();
+        ResultSetStreamUtil.streamResultSet(StreamExecutors.sameThread(streams),
+                () -> (DuckDBResultSet) connection.createStatement().executeQuery(ENDLESS_STREAM),
+                allocator, 1024, listener, () -> {
+                    try { connection.close(); } catch (Exception ignored) { }
+                },
+                new MicroMeterFlightRecorder(new SimpleMeterRegistry(), "test"));
+        assertTrue(listener.waiting.await(10, TimeUnit.SECONDS));
+
+        streams.shutdownNow();
+
+        assertEndedWith(listener, CallStatus.UNAVAILABLE);
+    }
+
+    @Test
+    void aServerSideCancelEndsAStreamWaitingForItsClient() throws Exception {
+        ExecutorService streams = Executors.newSingleThreadExecutor();
+        try {
+            var listener = new StalledListener();
+            var cleanedUp = new CountDownLatch(1);
+            var ctx = streamToAStalledClient(streams, listener, cleanedUp);
+
+            assertEquals(StatementContext.CancelOutcome.INTERRUPTED, ctx.cancel()); // like CancelFlightInfo
+
+            // Without the client reading again: the stream notices on its next recheck and ends,
+            // giving back its connection.
+            assertEndedWith(listener, CallStatus.CANCELLED);
+            assertTrue(cleanedUp.await(10, TimeUnit.SECONDS), "the stream gives back its connection");
+        } finally {
+            streams.shutdownNow();
+        }
     }
 }

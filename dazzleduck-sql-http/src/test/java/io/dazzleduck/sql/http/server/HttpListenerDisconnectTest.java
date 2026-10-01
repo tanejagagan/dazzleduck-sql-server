@@ -14,6 +14,7 @@ import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -34,12 +35,13 @@ import java.util.function.Supplier;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * A client that goes away mid-response, through Helidon's real HTTP/1.1 and HTTP/2 (h2c) servers.
+ * A client that goes away mid-response, through Helidon's real HTTP/1.1 and HTTP/2 (h2c) servers,
+ * writing through {@link ResponseBodies} as the services do.
  *
- * <p>The listeners must recognise the exceptions Helidon actually throws on such a write as the
- * client going away: the response ends, and the failure is not counted as a server error. Tests
- * that write to their own {@code OutputStream} can't show this, since each Helidon protocol reports a
- * gone client its own way.
+ * <p>The listeners must see the exceptions Helidon actually throws on such a write as the client
+ * going away: the response ends, and the failure is not counted as a server error. Tests that write
+ * to their own {@code OutputStream} can't show this, since each Helidon protocol reports a gone
+ * client its own way.
  */
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
 class HttpListenerDisconnectTest {
@@ -62,7 +64,7 @@ class HttpListenerDisconnectTest {
                 .addProtocol(Http2Config.builder().flowControlTimeout(Duration.ofSeconds(1)).build())
                 .routing(routing -> routing.get("/stream/{format}", (req, res) -> {
                     String format = req.path().pathParameters().get("format");
-                    outcome.complete(writeUntilTheClientGoesAway(format, res::outputStream));
+                    outcome.complete(writeUntilTheClientGoesAway(format, () -> ResponseBodies.of(res)));
                 }))
                 .build()
                 .start();
@@ -156,5 +158,44 @@ class HttpListenerDisconnectTest {
         assertNotNull(result.writeFailure(), () -> "the failed write is recorded: " + result);
         assertTrue(HttpResponseListener.isClientGone(result.writeFailure()),
                 () -> "a gone client is not a server error: " + result.writeFailure());
+    }
+
+    // ResponseBodies on its own: which of Helidon's exceptions mean the client went away.
+
+    private static OutputStream throwing(RuntimeException failure) {
+        return new ResponseBodies.ClientGoneAsIOException(new OutputStream() {
+            @Override public void write(int b) { throw failure; }
+            @Override public void flush() { throw failure; }
+        });
+    }
+
+    @Test
+    void helidonsDisconnectsReachTheListenersAsIOExceptions() {
+        var socketError = new java.io.IOException("Broken pipe");
+        var http1 = assertThrows(java.io.IOException.class,
+                () -> throwing(new java.io.UncheckedIOException(socketError)).write(1));
+        assertSame(socketError, http1, "HTTP/1.1: the socket's own IOException");
+
+        var closed = new io.helidon.webserver.ServerConnectionException("Failed to write frame data", socketError);
+        assertSame(closed, assertThrows(java.io.IOException.class, () -> throwing(closed).write(1)).getCause());
+
+        var flowControl = new io.helidon.http.http2.Http2Exception(
+                io.helidon.http.http2.Http2ErrorCode.FLOW_CONTROL, "Flow control update wait time-out.");
+        assertSame(flowControl, assertThrows(java.io.IOException.class, () -> throwing(flowControl).write(1)).getCause());
+
+        // Helidon's Http2ServerStream throws this when the client reset the stream before the write.
+        var alreadyClosed = new IllegalStateException("Stream is already closed.");
+        alreadyClosed.setStackTrace(new StackTraceElement[]{
+                new StackTraceElement("io.helidon.webserver.http2.Http2ServerStream$WriteState", "checkAndMove",
+                        "Http2ServerStream.java", 1)});
+        assertThrows(java.io.IOException.class, () -> throwing(alreadyClosed).write(1));
+    }
+
+    @Test
+    void otherFailuresPassThroughAsServerErrors() {
+        var bug = new IllegalStateException("Stream is already closed."); // not thrown by Helidon's HTTP/2 stream
+        assertSame(bug, assertThrows(IllegalStateException.class, () -> throwing(bug).write(1)));
+        var other = new IllegalArgumentException("bug");
+        assertSame(other, assertThrows(IllegalArgumentException.class, () -> throwing(other).flush()));
     }
 }

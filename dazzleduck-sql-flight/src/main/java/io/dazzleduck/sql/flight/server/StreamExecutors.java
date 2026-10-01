@@ -17,8 +17,8 @@ import java.util.concurrent.RejectedExecutionException;
  * {@code synchronized}/{@code wait()} no longer pin a virtual thread since JDK 24 (JEP 491).
  *
  * <p>Every DuckDB call is native, and a virtual thread inside a native call pins its carrier until
- * the call returns; carriers are shared by every virtual thread in the JVM (including Helidon's HTTP
- * handlers), so a few long queries on virtual threads would freeze all of them. DuckDB calls therefore
+ * the call returns; carriers are shared by every virtual thread in the JVM (including the HTTP
+ * server's handlers), so a few long queries on virtual threads would freeze all of them. DuckDB calls therefore
  * run on bounded platform pools while the virtual thread waits for them:
  * <ul>
  *   <li>{@link #execute}: starting a query (the call that can take as long as the query plans and,
