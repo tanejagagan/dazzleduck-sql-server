@@ -110,7 +110,7 @@ public class JsonOutputStreamListener implements FlightProducer.ServerStreamList
             logger.debug("JsonOutputStreamListener started with schema: {}, format: {}",
                     root.getSchema(), format);
         } catch (Exception e) {
-            logger.error("Error in start()", e);
+            HttpResponseListener.logWriteFailure(logger, "start()", e);
             writeFailure = e;
             future.completeExceptionally(e);
         }
@@ -134,8 +134,8 @@ public class JsonOutputStreamListener implements FlightProducer.ServerStreamList
             ensureGenerator();
             writeRows();
             generator.flush();
-        } catch (IOException e) {
-            logger.error("Error in putNext()", e);
+        } catch (IOException | java.io.UncheckedIOException e) {
+            HttpResponseListener.logWriteFailure(logger, "putNext()", e);
             writeFailure = e;
             future.completeExceptionally(e);
         }

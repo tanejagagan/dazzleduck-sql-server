@@ -236,13 +236,16 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
     private final Instant startTime;
     private final AccessMode accessMode;
     private final Set<Integer> supportedSqlInfo;
-    // Platform threads: every DuckDB call a stream makes runs here (native calls must not run on a
-    // virtual thread, see StreamExecutors), which also bounds how many run at once. Also runs
-    // createPreparedStatement's prepare.
+    // Platform threads that start queries (a stream's execute, createPreparedStatement's prepare):
+    // native DuckDB calls must not run on a virtual thread (see StreamExecutors). Also bounds how
+    // many queries start at once.
     protected final ExecutorService executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+    // Platform threads for everything a running stream fetches (each batch) and its cleanup: kept
+    // apart from executorService so streams already running never wait behind new long executes.
+    protected final ExecutorService fetchExecutorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
     // Stream tasks on virtual threads, so a client that stops reading parks a virtual thread
-    // instead of holding one of executorService's few platform threads.
-    protected final StreamExecutors streamExecutors = StreamExecutors.create(executorService);
+    // instead of holding one of the few platform threads.
+    protected final StreamExecutors streamExecutors = StreamExecutors.create(executorService, fetchExecutorService);
     private final static Logger logger = LoggerFactory.getLogger(DuckDBFlightSqlProducer.class);
     private Set<Location> dataProcessorLocations = new LinkedHashSet<>();
     private final Location serverLocation;
@@ -1407,12 +1410,16 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                     logger.atWarn().log("Query streams did not stop within 10 seconds of being cancelled");
                 }
             }
-            // Streams have stopped (or been given up on): now the DuckDB pool they submitted to.
-            executorService.shutdown();
-            if (!executorService.awaitTermination(10, TimeUnit.SECONDS)) {
-                executorService.shutdownNow();
-                if (!executorService.awaitTermination(10, TimeUnit.SECONDS)) {
-                    logger.atWarn().log("DuckDB calls did not stop within 20 seconds of shutdown");
+            // Streams have stopped (or been given up on): now the DuckDB pools they submitted to.
+            for (ExecutorService pool : List.of(executorService, fetchExecutorService)) {
+                pool.shutdown();
+            }
+            for (ExecutorService pool : List.of(executorService, fetchExecutorService)) {
+                if (!pool.awaitTermination(10, TimeUnit.SECONDS)) {
+                    pool.shutdownNow();
+                    if (!pool.awaitTermination(10, TimeUnit.SECONDS)) {
+                        logger.atWarn().log("DuckDB calls did not stop within 20 seconds of shutdown");
+                    }
                 }
             }
             if (!scheduledExecutorService.awaitTermination(10, TimeUnit.SECONDS)) {
@@ -1424,6 +1431,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             cancelAllRunning();
             streams.shutdownNow();
             executorService.shutdownNow();
+            fetchExecutorService.shutdownNow();
             scheduledExecutorService.shutdownNow();
             Thread.currentThread().interrupt();
         }
@@ -1431,7 +1439,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         // Each step runs even if an earlier one fails, so one problem does not leak everything after it.
         // Cursors and prepared statements hold DuckDB connections; the removal listener closes each
         // (one still in use by a stream is closed when that stream ends).
-        if (streams.isTerminated() && executorService.isTerminated()) {
+        if (streams.isTerminated() && executorService.isTerminated() && fetchExecutorService.isTerminated()) {
             // No stream thread is left, so nothing can be using a context: close them all outright.
             // Deferring would leak those claimed by stream tasks that shutdownNow() dropped before
             // they ran, since no stream would ever end to close them.

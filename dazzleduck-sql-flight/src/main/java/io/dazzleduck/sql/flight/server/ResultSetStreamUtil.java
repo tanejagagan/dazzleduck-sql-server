@@ -92,10 +92,10 @@ public class ResultSetStreamUtil {
         }
     }
 
-    /** Runs {@code finalBlock} (it closes DuckDB resources) on the DuckDB pool; logs, never throws. */
+    /** Runs {@code finalBlock} (it closes DuckDB resources) on the fetch pool; logs, never throws. */
     private static void runFinalBlock(StreamExecutors executors, Runnable finalBlock) {
         try {
-            executors.duckdbRun(finalBlock::run);
+            executors.cleanup(finalBlock::run);
         } catch (Exception e) {
             logger.atError().setCause(e).log("Error running a stream's final block");
         }
@@ -116,10 +116,10 @@ public class ResultSetStreamUtil {
         return null;
     }
 
-    /** Closes the Arrow reader, then the result set, on the DuckDB pool (both are native). */
+    /** Closes the Arrow reader, then the result set, on the fetch pool (both are native). */
     private static void closeOnDuckDb(StreamExecutors executors, ArrowReader reader, DuckDBResultSet resultSet)
             throws Exception {
-        executors.duckdbRun(() -> {
+        executors.cleanup(() -> {
             try {
                 if (reader != null) {
                     reader.close();
@@ -150,12 +150,12 @@ public class ResultSetStreamUtil {
                 DuckDBResultSet resultSet = null;
                 ArrowReader reader = null;
                 try {
-                    resultSet = executors.duckdb(supplier::get);
+                    resultSet = executors.execute(supplier::get); // runs the metadata query
                     final DuckDBResultSet rs = resultSet;
-                    reader = executors.duckdb(() -> (ArrowReader) rs.arrowExportStream(streamAllocator, batchSize));
+                    reader = executors.fetch(() -> (ArrowReader) rs.arrowExportStream(streamAllocator, batchSize));
                     final ArrowReader batches = reader;
                     listener.start(batches.getVectorSchemaRoot());
-                    while (!listener.isCancelled() && executors.duckdb(batches::loadNextBatch)) {
+                    while (!listener.isCancelled() && executors.fetch(batches::loadNextBatch)) {
                         if (!readiness.awaitReady(listener)) {
                             break;
                         }
@@ -232,17 +232,20 @@ public class ResultSetStreamUtil {
                     listener.error(CallStatus.CANCELLED.withDescription("Query was cancelled").toRuntimeException());
                     return;
                 }
-                executors.duckdbRun(supplier::execute);
+                executors.execute(() -> {
+                    supplier.execute();
+                    return null;
+                });
                 if (supplier.hasResultSet()) {
                     DuckDBResultSet resultSet = null;
                     ArrowReader reader = null;
                     try {
-                        resultSet = executors.duckdb(supplier::get);
+                        resultSet = executors.fetch(supplier::get);
                         final DuckDBResultSet rs = resultSet;
-                        reader = executors.duckdb(() -> (ArrowReader) rs.arrowExportStream(streamAllocator, batchSize));
+                        reader = executors.fetch(() -> (ArrowReader) rs.arrowExportStream(streamAllocator, batchSize));
                         final ArrowReader batches = reader;
                         listener.start(batches.getVectorSchemaRoot());
-                        while (!listener.isCancelled() && executors.duckdb(batches::loadNextBatch)) {
+                        while (!listener.isCancelled() && executors.fetch(batches::loadNextBatch)) {
                             if (!readiness.awaitReady(listener)) {
                                 break;
                             }

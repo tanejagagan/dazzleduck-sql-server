@@ -81,7 +81,7 @@ public class TsvOutputStreamListener implements FlightProducer.ServerStreamListe
             this.writer = new OutputStreamWriter(outputStream, StandardCharsets.UTF_8);
             logger.debug("TsvOutputStreamListener started with schema: {}", root.getSchema());
         } catch (Exception e) {
-            logger.error("Error in start()", e);
+            HttpResponseListener.logWriteFailure(logger, "start()", e);
             writeFailure = e;
             future.completeExceptionally(e);
         }
@@ -96,8 +96,8 @@ public class TsvOutputStreamListener implements FlightProducer.ServerStreamListe
             }
             writeRows();
             writer.flush();
-        } catch (IOException e) {
-            logger.error("Error in putNext()", e);
+        } catch (IOException | java.io.UncheckedIOException e) {
+            HttpResponseListener.logWriteFailure(logger, "putNext()", e);
             writeFailure = e;
             future.completeExceptionally(e);
         }

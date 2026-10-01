@@ -19,9 +19,28 @@ public interface HttpResponseListener {
      * Whether {@code failure} means the client went away (broken pipe, connection reset: an
      * IOException from the response stream), as opposed to the server failing to produce output
      * (e.g. a JSON serialization error, which Jackson also reports as an IOException subclass).
+     * Helidon reports socket failures as an UncheckedIOException wrapping the IOException.
      */
     static boolean isClientGone(Throwable failure) {
-        return failure instanceof IOException
-                && !(failure instanceof com.fasterxml.jackson.core.JacksonException);
+        // Walks the cause chain: Helidon's socket writes throw UncheckedIOException wrapping the
+        // IOException. A Jackson exception anywhere in the chain is a serialization failure.
+        for (Throwable t = failure; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            if (t instanceof com.fasterxml.jackson.core.JacksonException) {
+                return false;
+            }
+            if (t instanceof IOException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Logs a failed write: at debug when the client simply went away, at error otherwise. */
+    static void logWriteFailure(org.slf4j.Logger logger, String where, Throwable failure) {
+        if (isClientGone(failure)) {
+            logger.atDebug().setCause(failure).log("Client went away during {}", where);
+        } else {
+            logger.atError().setCause(failure).log("Error in {}", where);
+        }
     }
 }

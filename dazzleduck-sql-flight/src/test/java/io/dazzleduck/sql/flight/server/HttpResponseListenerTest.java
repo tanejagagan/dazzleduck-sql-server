@@ -43,4 +43,30 @@ class HttpResponseListenerTest {
         assertInstanceOf(IOException.class, listener.writeFailure());
         assertTrue(HttpResponseListener.isClientGone(listener.writeFailure()));
     }
+
+    @Test
+    void helidonsWrappedSocketErrorIsTheClientGoingAway() {
+        // Helidon's PlainSocket.write throws UncheckedIOException wrapping the IOException.
+        assertTrue(HttpResponseListener.isClientGone(new java.io.UncheckedIOException(new IOException("Broken pipe"))));
+        assertFalse(HttpResponseListener.isClientGone(new java.io.UncheckedIOException(
+                new JsonGenerationException("bad value", (com.fasterxml.jackson.core.JsonGenerator) null))));
+    }
+
+    @Test
+    void aListenerRecordsAHelidonStyleDisconnect() throws Exception {
+        var future = new CompletableFuture<Void>();
+        var helidonLike = new OutputStream() {
+            @Override public void write(int b) { throw new java.io.UncheckedIOException(new IOException("Connection reset")); }
+        };
+        var listener = new TsvOutputStreamListener(() -> helidonLike, future);
+        try (var allocator = new org.apache.arrow.memory.RootAllocator();
+             var root = org.apache.arrow.vector.VectorSchemaRoot.create(new org.apache.arrow.vector.types.pojo.Schema(
+                     java.util.List.of(org.apache.arrow.vector.types.pojo.Field.nullable("x",
+                             new org.apache.arrow.vector.types.pojo.ArrowType.Int(32, true)))), allocator)) {
+            listener.start(root, null, org.apache.arrow.vector.ipc.message.IpcOption.DEFAULT);
+            listener.putNext(); // must not throw out of the listener
+        }
+        assertTrue(listener.isCancelled());
+        assertTrue(HttpResponseListener.isClientGone(listener.writeFailure()), String.valueOf(listener.writeFailure()));
+    }
 }

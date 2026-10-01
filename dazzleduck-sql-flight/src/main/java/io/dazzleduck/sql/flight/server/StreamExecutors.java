@@ -4,6 +4,7 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
 
 /**
@@ -17,31 +18,39 @@ import java.util.concurrent.RejectedExecutionException;
  *
  * <p>Every DuckDB call is native, and a virtual thread inside a native call pins its carrier until
  * the call returns; carriers are shared by every virtual thread in the JVM (including Helidon's HTTP
- * handlers), so a few long queries on virtual threads would freeze all of them. DuckDB calls
- * therefore go through {@link #duckdb(Callable)}, which runs them on the bounded platform pool
- * ({@link #duckdb}) while the virtual thread parks on the result. That pool is also what bounds how
- * many DuckDB operations run at once.
+ * handlers), so a few long queries on virtual threads would freeze all of them. DuckDB calls therefore
+ * run on bounded platform pools while the virtual thread waits for them:
+ * <ul>
+ *   <li>{@link #execute}: starting a query (the call that can take as long as the query plans and,
+ *       for a non-streaming result, runs);</li>
+ *   <li>{@link #fetch}: everything a running stream needs next (the result set, the Arrow export,
+ *       each batch) and its cleanup. A separate pool, so streams already running are never queued
+ *       behind new long executes.</li>
+ * </ul>
+ * The pools also bound how many DuckDB operations run at once.
  */
 public final class StreamExecutors {
 
     private final ExecutorService streams;
-    private final ExecutorService duckdb;
+    private final ExecutorService execute;
+    private final ExecutorService fetch;
 
-    private StreamExecutors(ExecutorService streams, ExecutorService duckdb) {
+    private StreamExecutors(ExecutorService streams, ExecutorService execute, ExecutorService fetch) {
         this.streams = streams;
-        this.duckdb = duckdb;
+        this.execute = execute;
+        this.fetch = fetch;
     }
 
-    /** Virtual threads for stream tasks, and {@code duckdbPool} (platform threads) for DuckDB calls. */
-    public static StreamExecutors create(ExecutorService duckdbPool) {
+    /** Virtual threads for stream tasks; platform pools for starting queries and for fetching from them. */
+    public static StreamExecutors create(ExecutorService executePool, ExecutorService fetchPool) {
         return new StreamExecutors(
                 Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("flight-stream-", 0).factory()),
-                duckdbPool);
+                executePool, fetchPool);
     }
 
     /** For tests: stream tasks on {@code streams}, DuckDB calls inline on the stream's own thread. */
     static StreamExecutors sameThread(ExecutorService streams) {
-        return new StreamExecutors(streams, null);
+        return new StreamExecutors(streams, null, null);
     }
 
     /** Submits a stream task. Throws {@link RejectedExecutionException} if shutting down. */
@@ -49,40 +58,68 @@ public final class StreamExecutors {
         streams.submit(task);
     }
 
-    /**
-     * Runs a DuckDB call on the platform pool and waits for it (a virtual thread parks meanwhile).
-     * The call's own exception is rethrown as is; if the pool is shutting down, it runs inline.
-     */
-    <V> V duckdb(Callable<V> call) throws Exception {
-        if (duckdb == null) {
-            return call.call();
-        }
-        java.util.concurrent.Future<V> result;
-        try {
-            result = duckdb.submit(call);
-        } catch (RejectedExecutionException shuttingDown) {
-            return call.call();
-        }
-        try {
-            return result.get();
-        } catch (ExecutionException e) {
-            Throwable cause = e.getCause();
-            if (cause instanceof Exception ex) {
-                throw ex;
-            }
-            if (cause instanceof Error err) {
-                throw err;
-            }
-            throw e;
-        }
+    /** Starts a query on the execute pool and waits for it. Rejected (shutting down) is rethrown. */
+    <V> V execute(Callable<V> call) throws Exception {
+        return runOn(execute, call, false);
     }
 
-    /** {@link #duckdb(Callable)} for a call without a result. */
-    void duckdbRun(ThrowingRunnable call) throws Exception {
-        duckdb(() -> {
+    /** Fetches from a running query on the fetch pool and waits. Rejected (shutting down) is rethrown. */
+    <V> V fetch(Callable<V> call) throws Exception {
+        return runOn(fetch, call, false);
+    }
+
+    /**
+     * Closes DuckDB resources on the fetch pool and waits. If the pool is already shut down, runs
+     * inline instead: briefly pinning a carrier during shutdown is better than leaking the native
+     * result or connection.
+     */
+    void cleanup(ThrowingRunnable call) throws Exception {
+        runOn(fetch, () -> {
             call.run();
             return null;
-        });
+        }, true);
+    }
+
+    private static <V> V runOn(ExecutorService pool, Callable<V> call, boolean inlineIfRejected) throws Exception {
+        if (pool == null) {
+            return call.call();
+        }
+        Future<V> result;
+        try {
+            result = pool.submit(call);
+        } catch (RejectedExecutionException shuttingDown) {
+            if (inlineIfRejected) {
+                return call.call();
+            }
+            throw shuttingDown;
+        }
+        // Once submitted, wait for the call to finish even if this thread is interrupted (e.g. by
+        // close()'s shutdownNow): the native call keeps running on the pool, and returning early would
+        // let the stream close the result set or reader while DuckDB is still using it. The wait is
+        // bounded because close() cancels running queries first. The interrupt is restored after.
+        boolean interrupted = false;
+        try {
+            while (true) {
+                try {
+                    return result.get();
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                } catch (ExecutionException e) {
+                    Throwable cause = e.getCause();
+                    if (cause instanceof Exception ex) {
+                        throw ex;
+                    }
+                    if (cause instanceof Error err) {
+                        throw err;
+                    }
+                    throw e;
+                }
+            }
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     @FunctionalInterface
