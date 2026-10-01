@@ -239,10 +239,10 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
     // Platform threads that start queries (a stream's execute, createPreparedStatement's prepare):
     // native DuckDB calls must not run on a virtual thread (see StreamExecutors). Also bounds how
     // many queries start at once.
-    protected final ExecutorService executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+    protected final ExecutorService executorService = StreamExecutors.duckDbPool("duckdb-execute", Runtime.getRuntime().availableProcessors());
     // Platform threads for everything a running stream fetches (each batch) and its cleanup: kept
     // apart from executorService so streams already running never wait behind new long executes.
-    protected final ExecutorService fetchExecutorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+    protected final ExecutorService fetchExecutorService = StreamExecutors.duckDbPool("duckdb-fetch", Runtime.getRuntime().availableProcessors());
     // Stream tasks on virtual threads, so a client that stops reading parks a virtual thread
     // instead of holding one of the few platform threads.
     protected final StreamExecutors streamExecutors = StreamExecutors.create(executorService, fetchExecutorService);
@@ -1414,11 +1414,11 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             for (ExecutorService pool : List.of(executorService, fetchExecutorService)) {
                 pool.shutdown();
             }
-            for (ExecutorService pool : List.of(executorService, fetchExecutorService)) {
-                if (!pool.awaitTermination(10, TimeUnit.SECONDS)) {
-                    pool.shutdownNow();
-                    if (!pool.awaitTermination(10, TimeUnit.SECONDS)) {
-                        logger.atWarn().log("DuckDB calls did not stop within 20 seconds of shutdown");
+            for (var pool : Map.of("execute", executorService, "fetch", fetchExecutorService).entrySet()) {
+                if (!pool.getValue().awaitTermination(10, TimeUnit.SECONDS)) {
+                    StreamExecutors.shutdownNowAndCancel(pool.getValue());
+                    if (!pool.getValue().awaitTermination(10, TimeUnit.SECONDS)) {
+                        logger.atWarn().log("DuckDB {} calls did not stop within 20 seconds of shutdown", pool.getKey());
                     }
                 }
             }
@@ -1430,8 +1430,8 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             logger.atWarn().setCause(e).log("Interrupted while waiting for executor services to terminate");
             cancelAllRunning();
             streams.shutdownNow();
-            executorService.shutdownNow();
-            fetchExecutorService.shutdownNow();
+            StreamExecutors.shutdownNowAndCancel(executorService);
+            StreamExecutors.shutdownNowAndCancel(fetchExecutorService);
             scheduledExecutorService.shutdownNow();
             Thread.currentThread().interrupt();
         }

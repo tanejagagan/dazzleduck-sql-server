@@ -3,6 +3,7 @@ package io.dazzleduck.sql.flight.server;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
@@ -42,6 +43,48 @@ class StreamExecutorsTest {
         assertTrue(finishedBeforeReturn.get(), "must not return (and close the result) while the native call runs");
         assertTrue(interruptRestored.get(), "the interrupt is kept for the caller");
         pool.shutdown();
+    }
+
+    @Test
+    void aCallDroppedAtShutdownDoesNotLeaveItsStreamWaitingForever() throws Exception {
+        var pool = StreamExecutors.duckDbPool("test-fetch", 1);
+        var executors = StreamExecutors.create(pool, pool);
+        var release = new CountDownLatch(1);
+        pool.submit(() -> { release.await(); return null; }); // a long fetch holds the only thread
+        var waitEnded = new CountDownLatch(1);
+        var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        Thread stream = Thread.ofVirtual().start(() -> {
+            try {
+                executors.fetch(() -> 42); // queued behind it
+            } catch (Throwable t) {
+                failure.set(t);
+            } finally {
+                waitEnded.countDown();
+            }
+        });
+        while (((java.util.concurrent.ThreadPoolExecutor) pool).getQueue().isEmpty()) {
+            Thread.sleep(10);
+        }
+        stream.interrupt(); // close()'s streams.shutdownNow(): the stream keeps waiting for its call
+        StreamExecutors.shutdownNowAndCancel(pool); // close()'s fallback drops the queued call
+        try {
+            assertTrue(waitEnded.await(5, TimeUnit.SECONDS), "the stream must not wait forever for a dropped call");
+            assertInstanceOf(CancellationException.class, failure.get());
+        } finally {
+            release.countDown();
+        }
+    }
+
+    @Test
+    void duckDbPoolsUseNamedPlatformThreads() throws Exception {
+        var pool = StreamExecutors.duckDbPool("duckdb-fetch", 1);
+        try {
+            Thread thread = pool.submit(Thread::currentThread).get();
+            assertFalse(thread.isVirtual());
+            assertEquals("duckdb-fetch-0", thread.getName());
+        } finally {
+            pool.shutdown();
+        }
     }
 
     @Test
