@@ -97,7 +97,7 @@ public final class StreamExecutors {
         // close()'s shutdownNow): the native call keeps running on the pool, and returning early would
         // let the stream close the result set or reader while DuckDB is still using it. The wait is
         // bounded because close() cancels running queries first, and a call the pool drops at shutdown is
-    // cancelled (shutdownNowAndCancel), which ends the wait. The interrupt is restored after.
+        // cancelled (shutdownNowAndCancel), which ends the wait. The interrupt is restored after.
         boolean interrupted = false;
         try {
             while (true) {

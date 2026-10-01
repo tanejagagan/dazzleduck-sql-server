@@ -96,7 +96,7 @@ public class TsvOutputStreamListener implements FlightProducer.ServerStreamListe
             }
             writeRows();
             writer.flush();
-        } catch (IOException | java.io.UncheckedIOException e) {
+        } catch (IOException | RuntimeException e) {
             HttpResponseListener.logWriteFailure(logger, "putNext()", e);
             writeFailure = e;
             future.completeExceptionally(e);
@@ -138,7 +138,7 @@ public class TsvOutputStreamListener implements FlightProducer.ServerStreamListe
             }
             future.complete(null);
         } catch (Exception e) {
-            logger.error("Error in completed()", e);
+            HttpResponseListener.logWriteFailure(logger, "completed()", e);
             future.completeExceptionally(e);
         }
     }

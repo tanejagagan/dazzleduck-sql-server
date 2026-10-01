@@ -134,7 +134,7 @@ public class JsonOutputStreamListener implements FlightProducer.ServerStreamList
             ensureGenerator();
             writeRows();
             generator.flush();
-        } catch (IOException | java.io.UncheckedIOException e) {
+        } catch (IOException | RuntimeException e) {
             HttpResponseListener.logWriteFailure(logger, "putNext()", e);
             writeFailure = e;
             future.completeExceptionally(e);
@@ -181,7 +181,7 @@ public class JsonOutputStreamListener implements FlightProducer.ServerStreamList
             future.complete(null);
         } catch (Exception e) {
             if (!(e instanceof NoSuchElementException)) {
-                logger.error("Error in completed()", e);
+                HttpResponseListener.logWriteFailure(logger, "completed()", e);
             }
             future.completeExceptionally(e);
         }

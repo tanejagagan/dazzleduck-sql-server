@@ -116,7 +116,7 @@ public class DirectOutputStreamListener implements FlightProducer.ServerStreamLi
             writer.start();
             outputStream.flush();
             logger.debug("writer.start() and flush completed successfully with compression: {}", compressionCodec);
-        } catch (IOException | java.io.UncheckedIOException e) {
+        } catch (IOException | RuntimeException e) {
             HttpResponseListener.logWriteFailure(logger, "start()", e);
             writeFailure = e;
             future.completeExceptionally(e);
@@ -131,7 +131,7 @@ public class DirectOutputStreamListener implements FlightProducer.ServerStreamLi
             writer.writeBatch();
             outputStream.flush();
             logger.debug("writeBatch() and flush completed for batch #{}", batchCount);
-        } catch (IOException | java.io.UncheckedIOException e) {
+        } catch (IOException | RuntimeException e) {
             HttpResponseListener.logWriteFailure(logger, "putNext()", e);
             writeFailure = e;
             future.completeExceptionally(e);
@@ -177,7 +177,7 @@ public class DirectOutputStreamListener implements FlightProducer.ServerStreamLi
             future.complete(null);
             logger.debug("future completed successfully");
         } catch (Exception e) {
-            logger.error("Error in completed()", e);
+            HttpResponseListener.logWriteFailure(logger, "completed()", e);
             future.completeExceptionally(e);
         } finally {
             this.completed = true;
