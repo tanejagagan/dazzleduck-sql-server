@@ -1411,6 +1411,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             executorService.shutdown();
             if (!executorService.awaitTermination(10, TimeUnit.SECONDS)) {
                 executorService.shutdownNow();
+                if (!executorService.awaitTermination(10, TimeUnit.SECONDS)) {
+                    logger.atWarn().log("DuckDB calls did not stop within 20 seconds of shutdown");
+                }
             }
             if (!scheduledExecutorService.awaitTermination(10, TimeUnit.SECONDS)) {
                 logger.atWarn().log("ScheduledExecutorService did not terminate in 10 seconds, forcing shutdown");
