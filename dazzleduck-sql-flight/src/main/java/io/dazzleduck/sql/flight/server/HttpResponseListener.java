@@ -28,7 +28,11 @@ public interface HttpResponseListener {
      *       arrived first, an IllegalStateException from Helidon's HTTP/2 stream ("Stream is already
      *       closed.").</li>
      * </ul>
-     * Helidon's types are matched by name: this module doesn't depend on Helidon.
+     * Helidon's types are matched by name: this module doesn't depend on Helidon. The match is
+     * deliberately broad: any {@code Http2Exception} counts, whatever its error code. One raised
+     * while writing a response is about that client's connection or stream (most often the
+     * flow-control timeout above, which also ends a client that stopped reading for that long),
+     * not about the query.
      */
     static boolean isClientGone(Throwable failure) {
         // Walks the cause chain. A Jackson exception anywhere in it is a serialization failure.

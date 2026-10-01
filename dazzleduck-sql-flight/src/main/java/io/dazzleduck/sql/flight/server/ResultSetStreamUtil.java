@@ -16,6 +16,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.function.BooleanSupplier;
 
 public class ResultSetStreamUtil {
 
@@ -25,7 +26,8 @@ public class ResultSetStreamUtil {
         throw new UnsupportedOperationException("Utility class");
     }
 
-    // How often a wait for a slow client re-checks the listener, in case a ready/cancel signal is missed.
+    // How often a wait for a slow client re-checks the listener (in case a ready/cancel signal is
+    // missed) and whether the query was cancelled server-side.
     private static final long READY_RECHECK_MS = 1_000;
 
     /**
@@ -40,8 +42,16 @@ public class ResultSetStreamUtil {
      */
     static final class ReadyWaiter {
         private final Object lock = new Object();
+        private final BooleanSupplier cancelRequested;
 
-        ReadyWaiter(FlightProducer.ServerStreamListener listener, Runnable onCancel) {
+        /**
+         * @param cancelRequested whether the query was cancelled server-side (CancelFlightInfo, or
+         *     close() cancelling running queries). Polled on each recheck rather than signalled:
+         *     the statement's cancel() holds its context's monitor, and calling into this waiter's
+         *     lock from there while the waiter checks the context under its lock would deadlock.
+         */
+        ReadyWaiter(FlightProducer.ServerStreamListener listener, Runnable onCancel, BooleanSupplier cancelRequested) {
+            this.cancelRequested = cancelRequested;
             try {
                 listener.setOnReadyHandler(this::signal);
             } catch (UnsupportedOperationException notSupported) {
@@ -62,15 +72,24 @@ public class ResultSetStreamUtil {
             }
         }
 
-        /** Waits until the client can take another batch; false if the call was cancelled or the thread interrupted. */
+        /**
+         * Waits until the client can take another batch. Returns false if the client went away (the
+         * stream just stops; there is no one to tell). Throws if the stream must end with an error
+         * instead: the query was cancelled server-side (CANCELLED), or this thread was interrupted
+         * because the producer is shutting down (UNAVAILABLE). Breaking out normally there would
+         * let the stream call completed() and report a cut-off result as complete.
+         */
         boolean awaitReady(FlightProducer.ServerStreamListener listener) {
             synchronized (lock) {
                 while (!listener.isReady() && !listener.isCancelled()) {
+                    if (cancelRequested.getAsBoolean()) {
+                        throw CallStatus.CANCELLED.withDescription("Query was cancelled").toRuntimeException();
+                    }
                     try {
                         lock.wait(READY_RECHECK_MS);
                     } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt(); // e.g. the producer is shutting down
-                        return false;
+                        Thread.currentThread().interrupt();
+                        throw CallStatus.UNAVAILABLE.withDescription("Server is shutting down").toRuntimeException();
                     }
                 }
             }
@@ -146,7 +165,7 @@ public class ResultSetStreamUtil {
                 childAllocator = allocator.newChildAllocator("statement-allocator", 0, allocator.getLimit());
                 final BufferAllocator streamAllocator = childAllocator;
                 recorder.startStream(false);
-                var readiness = new ReadyWaiter(listener, () -> {});
+                var readiness = new ReadyWaiter(listener, () -> {}, () -> false);
                 DuckDBResultSet resultSet = null;
                 ArrowReader reader = null;
                 try {
@@ -176,8 +195,7 @@ public class ResultSetStreamUtil {
                 }
                 Throwable writeFailure = error ? null : serverWriteFailure(listener);
                 if (writeFailure != null) {
-                    logger.atError().setCause(writeFailure).log("Failed to write a stream's response");
-                    recorder.errorStream(false);
+                    recorder.errorStream(false); // the listener has logged it
                 }
                 recorder.endStream(false);
                 runFinalBlock(executors, finalBlock);
@@ -220,7 +238,7 @@ public class ResultSetStreamUtil {
                     } catch (Exception e) {
                         logger.atDebug().setCause(e).log("Failed to cancel statement for a cancelled stream");
                     }
-                });
+                }, statementContext::isCancelRequested);
                 recorder.startStream(statementContext.isPreparedStatementContext());
                 recorder.recordStatementStreamStart(key, statementContext);
                 if (listener.isCancelled()) {
