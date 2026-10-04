@@ -200,8 +200,10 @@ ingestion_queue_table_mapping = [{
 }]
 ```
 
-The relation is read at startup and again on every `queue_config_refresh_delay_ms` — the same tick
-that re-derives a view-based transformation — so a value changes without restarting the server.
+The relation is read at startup and again on every `queue_config_refresh_delay_ms` — the copy of
+that key inside the `ingestion_task_factory_provider` block, which is what the handler reads
+(default 2 minutes); the dynamic provider uses `config_load_interval_ms` instead. It is the same
+tick that re-derives a view-based transformation, so a value changes without restarting the server.
 Rows are data, not schema, so that reload deliberately does not wait for a DuckLake schema change.
 The relation holds that one queue's variables — every row is applied, and a key that is not a usable
 variable name fails the queue instead of being skipped; to keep several queues' variables in one
