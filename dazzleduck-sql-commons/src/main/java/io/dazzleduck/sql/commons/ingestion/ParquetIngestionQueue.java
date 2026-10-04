@@ -1,6 +1,7 @@
 package io.dazzleduck.sql.commons.ingestion;
 
 import io.dazzleduck.sql.commons.ConnectionPool;
+import io.dazzleduck.sql.commons.SqlVariables;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -275,6 +276,24 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
         return sql;
     }
 
+    /**
+     * Sets the queue's configured session variables on this write's connection, so a transformation
+     * can read a deployment- or operator-supplied value with {@code getvariable('name')} instead of
+     * carrying it as a literal. Read from the handler on every write, like the transformation
+     * itself, so a reloaded value takes effect on the next batch.
+     */
+    protected void applyVariables(java.sql.Statement stmt) throws java.sql.SQLException {
+        var variables = postIngestionHandler.getVariables(queueId);
+        if (variables.isEmpty()) {
+            return;
+        }
+        for (String setSql : SqlVariables.toSetStatements(variables, IngestionVariables.NOUN)) {
+            stmt.execute(setSql);
+        }
+        logger.debug("Queue '{}': applied {} session variable(s): {}",
+                queueId, variables.size(), variables.keySet());
+    }
+
     private IngestionResult tryWrite(WriteTask<String, IngestionResult> writeTask) throws Exception {
         var sql = constructWriteQuery(writeTask);
         logger.debug("Executing COPY SQL: {}", sql);
@@ -288,6 +307,12 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
         List<List<String>> watermarkRows = null;
         try (var conn = ConnectionPool.getConnection();
              var stmt = conn.createStatement()) {
+
+            // The queue's session variables, before anything reads the relation: the transformation
+            // inside it (and so the watermark rows computed over it, and the COPY) may reference
+            // them with getvariable(). ConnectionPool hands out a duplicate per use, so these are
+            // scoped to this write and cannot leak into another queue's connection.
+            applyVariables(stmt);
 
             if (watermarkSpec != null) {
                 watermarkRows = watermarkSpec.computeRows(conn, constructSourceRelation(writeTask));

@@ -28,8 +28,9 @@ public abstract class AbstractIngestionTaskFactoryProvider implements IngestionT
     protected abstract Map<String, QueueIdToTableMapping> loadMappings();
 
     /**
-     * Validates transformation SQL for every mapping returned by {@link #loadMappings()}.
-     * Only entries with a non-null {@code transformation} or {@code view} are checked.
+     * Validates transformation SQL, and the session variables, for every mapping returned by
+     * {@link #loadMappings()}. Only entries with a non-null {@code transformation} or {@code view}
+     * are checked for SQL.
      */
     @Override
     public void validate() {
@@ -40,7 +41,28 @@ public abstract class AbstractIngestionTaskFactoryProvider implements IngestionT
             if (mapping.view() != null) {
                 validateViewTransformation(mapping.ingestionQueue(), mapping.view(), mapping.inputTable());
             }
+            validateVariables(mapping);
         });
+    }
+
+    /**
+     * Fails startup on a variable the write path could not apply. The static pairs and the
+     * relation's identifiers are already checked when the mapping is built; reading the relation
+     * here is what turns a missing view or an unusable row into a startup error rather than a
+     * failed batch hours later.
+     */
+    protected static void validateVariables(QueueIdToTableMapping mapping) {
+        if (mapping.variables().isEmpty()) {
+            return;
+        }
+        try {
+            mapping.variables().resolve(mapping.ingestionQueue());
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalArgumentException(
+                    "Invalid variables for queue '%s': %s".formatted(mapping.ingestionQueue(), e.getMessage()), e);
+        }
     }
 
     protected static void validateViewTransformation(String queueId, String fqView, String fqInputTable) {

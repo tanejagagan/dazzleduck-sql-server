@@ -45,6 +45,13 @@ public class PartitionedIngestionQueue extends ParquetIngestionQueue {
     private final String inputFormat;
     private final int numPartitions;
     private final String partitionExpression;
+    /**
+     * Whether {@link #partitionExpression} could read a session variable. Decided once here, not
+     * per batch: {@link #add} runs on the caller's thread for every batch, and asking the handler
+     * for the queue's variables can cost DuckLake metadata reads when its cached state has gone
+     * stale. A queue whose expression names no variable must not pay that on its routing path.
+     */
+    private final boolean partitionExpressionReadsVariables;
     private final List<ParquetIngestionQueue> children;
     private final java.util.concurrent.atomic.LongAccumulator rejectedMultiPartition =
             new java.util.concurrent.atomic.LongAccumulator(Long::sum, 0L);
@@ -80,6 +87,8 @@ public class PartitionedIngestionQueue extends ParquetIngestionQueue {
         this.inputFormat = inputFormat;
         this.numPartitions = numPartitions;
         this.partitionExpression = partitionExpression;
+        this.partitionExpressionReadsVariables =
+                partitionExpression.toLowerCase(java.util.Locale.ROOT).contains("getvariable");
         List<ParquetIngestionQueue> built = new ArrayList<>(numPartitions);
         for (int i = 0; i < numPartitions; i++) {
             // Children are plain queues with the parent's exact configuration (same queue id, so the
@@ -133,19 +142,26 @@ public class PartitionedIngestionQueue extends ParquetIngestionQueue {
                 + "FROM (SELECT (hash(%s) %% %d)::BIGINT AS part FROM %s)")
                 .formatted(partitionExpression, numPartitions, relation);
         try (var conn = ConnectionPool.getConnection();
-             var stmt = conn.createStatement();
-             var rs = stmt.executeQuery(sql)) {
-            if (!rs.next()) {
-                return 0; // no rows at all
+             var stmt = conn.createStatement()) {
+            if (partitionExpressionReadsVariables) {
+                // Only then: a partition expression may read a variable with getvariable() exactly
+                // as the transformation does, and without it set the expression would evaluate
+                // against NULL and route every row to the same child, silently.
+                applyVariables(stmt);
             }
-            long distinct = rs.getLong("distinct_count");
-            if (distinct == 0) {
-                return 0; // empty batch — route to partition 0 (writes nothing)
+            try (var rs = stmt.executeQuery(sql)) {
+                if (!rs.next()) {
+                    return 0; // no rows at all
+                }
+                long distinct = rs.getLong("distinct_count");
+                if (distinct == 0) {
+                    return 0; // empty batch — route to partition 0 (writes nothing)
+                }
+                if (distinct > 1) {
+                    return MULTIPLE_PARTITIONS;
+                }
+                return (int) rs.getLong("partition");
             }
-            if (distinct > 1) {
-                return MULTIPLE_PARTITIONS;
-            }
-            return (int) rs.getLong("partition");
         }
     }
 

@@ -340,4 +340,71 @@ public class PartitionedIngestionQueueTest {
                 MIN_BATCH_SIZE, Long.MAX_VALUE, Integer.MAX_VALUE, Long.MAX_VALUE,
                 MAX_DELAY, null, handler, scheduler, clock, 1, PARTITION_EXPRESSION));
     }
+
+    // -----------------------------------------------------------------------
+    // Session variables on the routing path
+    // -----------------------------------------------------------------------
+
+    /** Counts how often routing asked the handler for the queue's variables. */
+    private IngestionHandler countingHandler(java.util.Map<String, String> variables,
+                                             java.util.concurrent.atomic.AtomicInteger lookups,
+                                             String expression) {
+        return new IngestionHandler() {
+            @Override public PostIngestionTask createPostIngestionTask(IngestionResult r) { return PostIngestionTask.NOOP; }
+            @Override public String getTargetPath(String queueId) { return targetPath.toString(); }
+            @Override public String[] getPartitionBy(String queueId) { return new String[0]; }
+            @Override public int getNumPartitions(String queueId) { return NUM_PARTITIONS; }
+            @Override public String getPartitionExpression(String queueId) { return expression; }
+            @Override public java.util.Map<String, String> getVariables(String queueId) {
+                lookups.incrementAndGet();
+                return variables;
+            }
+        };
+    }
+
+    @Test
+    public void routingDoesNotAskForVariablesWhenTheExpressionNamesNone() throws Exception {
+        // add() runs on the caller's thread for every batch, and asking the handler for variables
+        // can cost DuckLake metadata reads when its cached state is stale. A queue whose expression
+        // reads no variable must not pay that to route.
+        var scheduler = new DeterministicScheduler();
+        var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
+        var lookups = new java.util.concurrent.atomic.AtomicInteger();
+        Path source = singleKeyFile("no-vars.parquet", 7, 10);
+
+        try (var queue = new PartitionedIngestionQueue(
+                TEST_APP_ID, INPUT_FORMAT, targetPath.toString(), "test-queue",
+                MIN_BATCH_SIZE, Long.MAX_VALUE, Integer.MAX_VALUE, Long.MAX_VALUE,
+                MAX_DELAY, null, countingHandler(java.util.Map.of(), lookups, PARTITION_EXPRESSION),
+                scheduler, clock, NUM_PARTITIONS, PARTITION_EXPRESSION)) {
+
+            queue.add(batch(source, "producer1", 0, MIN_BATCH_SIZE + 1));
+            // Before any flush: routing alone must not have consulted the handler's variables.
+            assertEquals(0, lookups.get(), "routing must not read variables for a plain expression");
+        }
+    }
+
+    @Test
+    public void anExpressionReadingAVariableIsRoutedWithItApplied() throws Exception {
+        var scheduler = new DeterministicScheduler();
+        var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
+        var lookups = new java.util.concurrent.atomic.AtomicInteger();
+        // Every row maps to one partition because the expression is the variable's value itself;
+        // unset, it would be NULL — which is why routing has to apply the variables first.
+        String expression = "getvariable('shard_key')";
+        Path source = singleKeyFile("vars.parquet", 7, 10);
+
+        try (var queue = new PartitionedIngestionQueue(
+                TEST_APP_ID, INPUT_FORMAT, targetPath.toString(), "test-queue",
+                MIN_BATCH_SIZE, Long.MAX_VALUE, Integer.MAX_VALUE, Long.MAX_VALUE,
+                MAX_DELAY, null, countingHandler(java.util.Map.of("shard_key", "tenant-a"), lookups, expression),
+                scheduler, clock, NUM_PARTITIONS, expression)) {
+
+            var future = queue.add(batch(source, "producer1", 0, MIN_BATCH_SIZE + 1));
+            assertTrue(lookups.get() > 0, "routing must apply the variables the expression reads");
+            scheduler.tick(1, TimeUnit.MILLISECONDS);
+            var result = future.get(5, SECONDS);
+            assertEquals(10, result.rowCount());
+        }
+    }
 }

@@ -1,6 +1,8 @@
 package io.dazzleduck.sql.commons.ingestion;
 
+import com.typesafe.config.ConfigFactory;
 import io.dazzleduck.sql.commons.ConnectionPool;
+import io.dazzleduck.sql.commons.util.MutableClock;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -11,6 +13,8 @@ import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 
@@ -678,5 +682,82 @@ class DuckLakeIngestionHandlerTest {
         assertArrayEquals(new String[]{"day", "day_b"}, factory.getPartitionBy("dual_day_events"));
         assertArrayEquals(new String[]{"day(\"a\") AS \"day\"", "day(\"b\") AS \"day_b\""},
                 factory.getPartitionProjections("dual_day_events"));
+    }
+
+    // -----------------------------------------------------------------------
+    // getVariables
+    // -----------------------------------------------------------------------
+
+    private static final String VARS_RELATION = "handler_vars";
+
+    private static IngestionVariables variablesFrom(String hocon) {
+        return IngestionVariables.fromConfig(ConfigFactory.parseString(hocon));
+    }
+
+    @Test
+    void shouldResolveStaticVariablesAtConstruction() {
+        var mapping = mapping(QUEUE_ID, null)
+                .withVariables(variablesFrom("variables { env = \"prod\" }"));
+        var handler = new DuckLakeIngestionHandler(Map.of(QUEUE_ID, mapping));
+
+        assertEquals(Map.of("env", "prod"), handler.getVariables(QUEUE_ID));
+        assertEquals(Map.of(), handler.getVariables("unknown-queue"));
+    }
+
+    @Test
+    void shouldLoadRelationVariablesAtStartupAndReloadThemOnRefresh() throws Exception {
+        ConnectionPool.execute("CREATE OR REPLACE TABLE %s(key VARCHAR, value VARCHAR)".formatted(VARS_RELATION));
+        try {
+            ConnectionPool.execute("INSERT INTO %s VALUES ('env', 'prod')".formatted(VARS_RELATION));
+            var mapping = mapping(QUEUE_ID, null)
+                    .withVariables(variablesFrom("variables_view = \"%s\"".formatted(VARS_RELATION)));
+            var clock = new MutableClock(Instant.now(), ZoneId.of("UTC"));
+            Duration refreshInterval = Duration.ofMinutes(1);
+            var handler = new DuckLakeIngestionHandler(Map.of(QUEUE_ID, mapping), refreshInterval, clock);
+
+            // Loaded into memory at startup, without any write having happened.
+            assertEquals(Map.of("env", "prod"), handler.getVariables(QUEUE_ID));
+
+            ConnectionPool.execute("UPDATE %s SET value = 'staging' WHERE key = 'env'".formatted(VARS_RELATION));
+            assertEquals(Map.of("env", "prod"), handler.getVariables(QUEUE_ID),
+                    "within the refresh interval the cached value must be reused");
+
+            // Changing a row is data, not DDL, so the DuckLake schema_version shortcut must not be
+            // what decides this: the refresh tick alone has to pick the new value up.
+            clock.advanceBy(refreshInterval.plusSeconds(1));
+            assertEquals(Map.of("env", "staging"), handler.getVariables(QUEUE_ID));
+        } finally {
+            ConnectionPool.execute("DROP TABLE IF EXISTS " + VARS_RELATION);
+        }
+    }
+
+    @Test
+    void shouldStopApplyingAVariableOnceItsRowHasExpired() throws Exception {
+        ConnectionPool.execute(
+                "CREATE OR REPLACE TABLE %s(key VARCHAR, value VARCHAR, expires_at TIMESTAMPTZ)"
+                        .formatted(VARS_RELATION));
+        try {
+            ConnectionPool.execute(("INSERT INTO %s VALUES ('token', 'live', now() + INTERVAL 1 HOUR)")
+                    .formatted(VARS_RELATION));
+            var mapping = mapping(QUEUE_ID, null).withVariables(variablesFrom("""
+                    variables_view              = "%s"
+                    variables_expiration_column = "expires_at"
+                    """.formatted(VARS_RELATION)));
+            var clock = new MutableClock(Instant.now(), ZoneId.of("UTC"));
+            Duration refreshInterval = Duration.ofMinutes(1);
+            var handler = new DuckLakeIngestionHandler(Map.of(QUEUE_ID, mapping), refreshInterval, clock);
+
+            assertEquals(Map.of("token", "live"), handler.getVariables(QUEUE_ID));
+
+            // Expire the row. Its expiry is compared against DuckDB's now(), so move the row rather
+            // than the test clock; the test clock is what releases the next refresh.
+            ConnectionPool.execute("UPDATE %s SET expires_at = now() - INTERVAL 1 HOUR".formatted(VARS_RELATION));
+            clock.advanceBy(refreshInterval.plusSeconds(1));
+
+            assertEquals(Map.of(), handler.getVariables(QUEUE_ID),
+                    "an expired variable must no longer be applied");
+        } finally {
+            ConnectionPool.execute("DROP TABLE IF EXISTS " + VARS_RELATION);
+        }
     }
 }

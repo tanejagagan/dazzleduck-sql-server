@@ -28,12 +28,14 @@ import java.util.regex.Pattern;
  * <p>Two independent caches are maintained per queue:
  * <ul>
  *   <li><b>stateCache</b> — the refreshable state: target path, resolved transformation SQL,
- *       and partition columns. All three are resolved together at construction time and again
- *       lazily whenever {@link #getTargetPath}, {@link #getTransformation}, or
- *       {@link #getPartitionBy} are called and the cached state is older than
- *       {@code refreshInterval}. Read accessors call {@link #getOrRefreshState} which uses
+ *       partition columns and session variables. All are resolved together at construction time
+ *       and again lazily whenever {@link #getTargetPath}, {@link #getTransformation},
+ *       {@link #getVariables} or {@link #getPartitionBy} are called and the cached state is older
+ *       than {@code refreshInterval}. Read accessors call {@link #getOrRefreshState} which uses
  *       {@code stateCache.compute()} to atomically check and refresh — no DuckDB round-trip
- *       on the hot write path when state is fresh.</li>
+ *       on the hot write path when state is fresh. A queue whose variables come from a relation
+ *       (see {@link IngestionVariables}) re-reads them on every refresh even when the schema has
+ *       not changed, because rows are data, not schema.</li>
  *   <li><b>queueCache</b> — the {@link ParquetIngestionQueue} instance. The queue is created
  *       exactly once per queue ID (via {@link #getOrCreateQueue}) and is never replaced unless
  *       the target path disappears and the queue is evicted.</li>
@@ -76,7 +78,8 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
      * COPY path (see {@link UnsupportedPartitionTransformException}); only this queue is affected.
      */
     private record QueueState(String targetPath, String transformation, String[] partitionColumns,
-                               String[] partitionProjections, long schemaChangeId, Instant refreshedAt,
+                               String[] partitionProjections, Map<String, String> variables,
+                               long schemaChangeId, Instant refreshedAt,
                                String partitionError) {}
 
     /**
@@ -166,6 +169,12 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
     public String getTransformation(String queueId) {
         QueueState s = getOrRefreshState(queueId);
         return s != null ? s.transformation() : null;
+    }
+
+    @Override
+    public Map<String, String> getVariables(String queueId) {
+        QueueState s = getOrRefreshState(queueId);
+        return s != null ? s.variables() : Map.of();
     }
 
     @Override
@@ -384,8 +393,14 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
         if (existing != null && existing.schemaChangeId() == currentSchemaChangeId) {
             logger.atDebug().log("Schema unchanged (id={}) for {}.{}.{}, skipping full refresh",
                     currentSchemaChangeId, mapping.catalog(), mapping.schema(), mapping.table());
+            // Variables from a relation are the exception: their rows change without any DDL, so
+            // the schema-version shortcut would pin them forever. Re-read them on this tick (one
+            // query, only for a queue that configures a relation) and keep everything else.
+            Map<String, String> variables = mapping.variables().hasView()
+                    ? mapping.variables().resolve(mapping.ingestionQueue())
+                    : existing.variables();
             return new QueueState(existing.targetPath(), existing.transformation(),
-                    existing.partitionColumns(), existing.partitionProjections(),
+                    existing.partitionColumns(), existing.partitionProjections(), variables,
                     existing.schemaChangeId(), clock.instant(), existing.partitionError());
         }
         return buildState(mapping, currentSchemaChangeId, clock.instant(), existing == null);
@@ -400,6 +415,7 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
                                          boolean firstBuild) {
         String path           = fetchPath(mapping.catalog(), mapping.schema(), mapping.table());
         String transformation = resolveTransformation(mapping);
+        Map<String, String> variables = mapping.variables().resolve(mapping.ingestionQueue());
         if (firstBuild) {
             warnIfClaimsColumnMissing(mapping, transformation);
         }
@@ -410,13 +426,14 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
             // Isolate to this queue: the handler (and every other queue) must keep working.
             logger.error("Queue '{}' ({}.{}.{}) cannot be ingested until its partitioning is changed: {}",
                     mapping.ingestionQueue(), mapping.catalog(), mapping.schema(), mapping.table(), e.getMessage());
-            return new QueueState(path, transformation, new String[0], new String[0], schemaChangeId, refreshedAt,
-                    e.getMessage());
+            return new QueueState(path, transformation, new String[0], new String[0], variables,
+                    schemaChangeId, refreshedAt, e.getMessage());
         }
         String[] tokens      = partitions.stream().map(ResolvedPartition::token).toArray(String[]::new);
         String[] projections = partitions.stream().map(ResolvedPartition::projection)
                 .filter(java.util.Objects::nonNull).toArray(String[]::new);
-        return new QueueState(path, transformation, tokens, projections, schemaChangeId, refreshedAt, null);
+        return new QueueState(path, transformation, tokens, projections, variables, schemaChangeId,
+                refreshedAt, null);
     }
 
     /** Convenience overload that fetches schema change ID itself (used at construction time). */

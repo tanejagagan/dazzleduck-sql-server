@@ -52,7 +52,8 @@ public class DuckLakeIngestionTaskFactoryProvider extends AbstractIngestionTaskF
                     ingestionQueue, c.getString("catalog"), c.getString("schema"), c.getString("table"),
                     additionalParameters, transformation, view, inputTable)
                     .withExtractClaims(extractClaims)
-                    .withPartitioning(numPartitions, partitionExpression);
+                    .withPartitioning(numPartitions, partitionExpression)
+                    .withVariables(IngestionVariables.fromConfig(c));
             mappings.put(mapping.ingestionQueue(), mapping);
         });
         return mappings;

@@ -29,6 +29,9 @@ import java.util.Map;
  *                      child queues — independent writers with their own backpressure, all writing
  *                      into the target path; a batch is routed to the single partition its rows map
  *                      to and rejected if its rows span more than one partition.
+ * @param variables     DuckDB session variables set on the connection that writes this queue's
+ *                      batches, so the transformation can read them with {@code getvariable('name')};
+ *                      {@link IngestionVariables#NONE} when none are configured
  * @param partitionExpression SQL expression over the raw input row that the partition index is
  *                      derived from as {@code hash(partitionExpression) % numPartitions} — e.g. a
  *                      column {@code "user_id"}, a map/struct field access
@@ -48,10 +51,14 @@ public record QueueIdToTableMapping(
         String inputSchema,
         boolean extractClaims,
         int numPartitions,
-        String partitionExpression) {
+        String partitionExpression,
+        IngestionVariables variables) {
 
     /** Validates invariants on every construction path. */
     public QueueIdToTableMapping {
+        if (variables == null) {
+            variables = IngestionVariables.NONE;
+        }
         if ((view == null) != (inputTable == null)) {
             throw new IllegalArgumentException(
                     "Queue '%s': 'view' and 'input_table' must both be provided or both omitted"
@@ -81,13 +88,15 @@ public record QueueIdToTableMapping(
     public QueueIdToTableMapping(String ingestionQueue, String catalog, String schema, String table,
                                  Map<String, String> additionalParameters, String transformation,
                                  String view, String inputTable) {
-        this(ingestionQueue, null, catalog, schema, table, additionalParameters, transformation, view, inputTable, null, false, 1, null);
+        this(ingestionQueue, null, catalog, schema, table, additionalParameters, transformation, view,
+                inputTable, null, false, 1, null, IngestionVariables.NONE);
     }
 
     /** Convenience constructor for mappings that use an explicit transformation or none at all. */
     public QueueIdToTableMapping(String ingestionQueue, String catalog, String schema, String table,
                                  Map<String, String> additionalParameters, String transformation) {
-        this(ingestionQueue, null, catalog, schema, table, additionalParameters, transformation, null, null, null, false, 1, null);
+        this(ingestionQueue, null, catalog, schema, table, additionalParameters, transformation, null,
+                null, null, false, 1, null, IngestionVariables.NONE);
     }
 
     public boolean hasViewTransformation() {
@@ -103,20 +112,27 @@ public record QueueIdToTableMapping(
     public QueueIdToTableMapping withInputSchema(String inputSchema) {
         return new QueueIdToTableMapping(ingestionQueue, outputPath, catalog, schema, table,
                 additionalParameters, transformation, view, inputTable, inputSchema, extractClaims,
-                numPartitions, partitionExpression);
+                numPartitions, partitionExpression, variables);
     }
 
     /** Returns a copy of this mapping with {@code extractClaims} set. */
     public QueueIdToTableMapping withExtractClaims(boolean extractClaims) {
         return new QueueIdToTableMapping(ingestionQueue, outputPath, catalog, schema, table,
                 additionalParameters, transformation, view, inputTable, inputSchema, extractClaims,
-                numPartitions, partitionExpression);
+                numPartitions, partitionExpression, variables);
     }
 
     /** Returns a copy of this mapping with the partitioning fields set. */
     public QueueIdToTableMapping withPartitioning(int numPartitions, String partitionExpression) {
         return new QueueIdToTableMapping(ingestionQueue, outputPath, catalog, schema, table,
                 additionalParameters, transformation, view, inputTable, inputSchema, extractClaims,
-                numPartitions, partitionExpression);
+                numPartitions, partitionExpression, variables);
+    }
+
+    /** Returns a copy of this mapping with its session variables set. */
+    public QueueIdToTableMapping withVariables(IngestionVariables variables) {
+        return new QueueIdToTableMapping(ingestionQueue, outputPath, catalog, schema, table,
+                additionalParameters, transformation, view, inputTable, inputSchema, extractClaims,
+                numPartitions, partitionExpression, variables);
     }
 }
