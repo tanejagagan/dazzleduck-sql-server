@@ -63,7 +63,6 @@ otel_collector {
     ingestion {
         min_bucket_size = 1048576   # 1 MB — flush when accumulated batch size exceeds this
         max_delay_ms    = 5000      # flush after this many ms even if min_bucket_size not reached
-        queue_config_refresh_delay_ms = 120000
     }
 
     # One entry per ingestion queue. Without a provider class, batches are written
@@ -71,6 +70,11 @@ otel_collector {
     # partition_by, min_bucket_size, max_delay_ms, and (with DuckLake)
     # catalog / schema / table / additional_parameters.
     ingestion_task_factory_provider {
+        # How often each queue's state is re-read from the catalog — target path, partition
+        # columns, a view-derived transformation, per-queue session variables. Default 2 min.
+        # This is the block the provider reads; the key has no effect in `ingestion` above.
+        # queue_config_refresh_delay_ms = 120000
+
         ingestion_queue_table_mapping = [
             { ingestion_queue = "logs",    output_path = "./otel-logs" }
             { ingestion_queue = "traces",  output_path = "./otel-traces" }

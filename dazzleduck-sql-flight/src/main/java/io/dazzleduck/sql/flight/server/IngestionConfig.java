@@ -6,7 +6,10 @@ import java.time.Duration;
 
 /**
  * @deprecated Use {@link io.dazzleduck.sql.commons.ingestion.IngestionConfig}.
- *             <p>Source-compatible: existing call sites compile unchanged.
+ *             <p><b>Source-incompatible</b> since the refresh-delay removal: the constructor lost
+ *             its trailing {@code Duration configRefreshDelay} parameter and the
+ *             {@code configRefreshDelay()} accessor is gone, because nothing read the value. A
+ *             call site passing it must drop that argument.
  *             <p><b>Binary-incompatible</b>: this was previously a {@code record}; it is now a
  *             {@code final class}. Pre-compiled artifacts that pattern-match on it as a record
  *             or use its component accessors reflectively must be recompiled.

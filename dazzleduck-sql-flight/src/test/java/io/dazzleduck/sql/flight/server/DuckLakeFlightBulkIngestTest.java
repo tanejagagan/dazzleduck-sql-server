@@ -177,7 +177,8 @@ public class DuckLakeFlightBulkIngestTest {
 
     /**
      * Test queue deletion behavior when the mapping is removed from the handler.
-     * This creates a new producer with 0 refresh delay so refresh happens immediately.
+     * The producer's handler is replaced with one holding no mappings, so the next access
+     * rebuilds queue state from it and finds the queue gone — no refresh interval is involved.
      */
     @Test
     @Timeout(value = 30, unit = TimeUnit.SECONDS)
@@ -278,7 +279,9 @@ public class DuckLakeFlightBulkIngestTest {
 
     /**
      * Test queue addition behavior when a new mapping is added to the handler.
-     * This creates a new producer with 0 refresh delay so refresh happens immediately.
+     * The producer's handler starts with no mappings and is replaced with one holding the new
+     * mapping, so the next access builds that queue's state for the first time — no refresh
+     * interval is involved.
      */
     @Test
     @Timeout(value = 30, unit = TimeUnit.SECONDS)
