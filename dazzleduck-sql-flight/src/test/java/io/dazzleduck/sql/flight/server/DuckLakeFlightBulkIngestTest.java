@@ -183,7 +183,7 @@ public class DuckLakeFlightBulkIngestTest {
     @Timeout(value = 30, unit = TimeUnit.SECONDS)
     @Order(2)
     void queueDeletion_whenMappingRemoved_shouldBecomeTombstone() throws Exception {
-        // Create a new producer with 0 refresh delay for immediate refresh
+        // A fresh handler, so its queue state is built on first access rather than refreshed.
         var mapping = new QueueIdToTableMapping(KNOWN_QUEUE, DUCKLAKE_CATALOG, "main", "events", Map.of(), null);
         var deletionTestHandler = new DuckLakeIngestionHandler(Map.of(KNOWN_QUEUE, mapping));
 
@@ -194,8 +194,7 @@ public class DuckLakeFlightBulkIngestTest {
                 1024 * 1024 * 1024L,              // maxBucketSize
                 2048,                                 // maxBatches
                 256 * 1024 * 1024L,                // maxPendingWrite
-                Duration.ofSeconds(2),                  // maxDelay
-                Duration.ZERO                          // configRefreshDelay - immediate refresh!
+                Duration.ofSeconds(2)                   // maxDelay
         );
 
         var testProducer = new DuckDBFlightSqlProducer(
@@ -251,7 +250,7 @@ public class DuckLakeFlightBulkIngestTest {
             ingestionHandlerField.set(testProducer, emptyHandler);
 
             // Step 3: Trigger refresh by calling getOrCreateIngestionQueue
-            // Since configRefreshDelay is 0, this will immediately refresh
+            // The handler was swapped above, so this builds state from the empty mapping set.
             var queue = testProducer.getOrCreateIngestionQueue(KNOWN_QUEUE);
             assertNull(queue, "Queue should be null after mapping is removed (tombstone)");
 
@@ -285,7 +284,7 @@ public class DuckLakeFlightBulkIngestTest {
     @Timeout(value = 30, unit = TimeUnit.SECONDS)
     @Order(3)
     void queueAddition_whenMappingAdded_shouldBecomeAvailable() throws Exception {
-        // Create a new producer with 0 refresh delay for immediate refresh
+        // A fresh handler, so its queue state is built on first access rather than refreshed.
         var emptyHandler = new DuckLakeIngestionHandler(Map.of());
 
         Location testLocation = FlightTestUtils.findNextLocation();
@@ -295,8 +294,7 @@ public class DuckLakeFlightBulkIngestTest {
                 1024 * 1024 * 1024L,              // maxBucketSize
                 2048,                                 // maxBatches
                 256 * 1024 * 1024L,                // maxPendingWrite
-                Duration.ofSeconds(2),                  // maxDelay
-                Duration.ZERO                          // configRefreshDelay - immediate refresh!
+                Duration.ofSeconds(2)                   // maxDelay
         );
 
         var testProducer = new DuckDBFlightSqlProducer(
@@ -350,7 +348,7 @@ public class DuckLakeFlightBulkIngestTest {
             ingestionHandlerField.set(testProducer, updatedHandler);
 
             // Step 3: Trigger refresh by calling getOrCreateIngestionQueue
-            // Since configRefreshDelay is 0, this will immediately refresh
+            // The handler was swapped above, so this builds state from the empty mapping set.
             var queue = testProducer.getOrCreateIngestionQueue("new_queue");
             assertNotNull(queue, "Queue should be created after mapping is added");
 
@@ -407,8 +405,7 @@ public class DuckLakeFlightBulkIngestTest {
                 1024 * 1024 * 1024L,              // maxBucketSize
                 2048,                                 // maxBatches
                 256 * 1024 * 1024L,                // maxPendingWrite
-                Duration.ofSeconds(2),                  // maxDelay
-                Duration.ZERO                          // configRefreshDelay - immediate refresh!
+                Duration.ofSeconds(2)                   // maxDelay
         );
 
         var testProducer = new DuckDBFlightSqlProducer(

@@ -175,7 +175,7 @@ public class CollectorConfig {
         }
         return new IngestionConfig(1_048_576L, IngestionConfig.DEFAULT_MAX_BUCKET_SIZE,
                 IngestionConfig.DEFAULT_MAX_BATCHES, IngestionConfig.DEFAULT_MAX_PENDING_WRITE,
-                java.time.Duration.ofSeconds(5), IngestionConfig.DEFAULT_CONFIG_REFRESH);
+                java.time.Duration.ofSeconds(5));
     }
 
     /**

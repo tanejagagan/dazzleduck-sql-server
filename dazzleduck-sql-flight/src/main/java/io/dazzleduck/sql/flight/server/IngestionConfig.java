@@ -17,9 +17,9 @@ public final class IngestionConfig {
     private final io.dazzleduck.sql.commons.ingestion.IngestionConfig delegate;
 
     public IngestionConfig(long minBucketSize, long maxBucketSize, int maxBatches,
-                           long maxPendingWrite, Duration maxDelay, Duration configRefreshDelay) {
+                           long maxPendingWrite, Duration maxDelay) {
         this(new io.dazzleduck.sql.commons.ingestion.IngestionConfig(
-                minBucketSize, maxBucketSize, maxBatches, maxPendingWrite, maxDelay, configRefreshDelay));
+                minBucketSize, maxBucketSize, maxBatches, maxPendingWrite, maxDelay));
     }
 
     private IngestionConfig(io.dazzleduck.sql.commons.ingestion.IngestionConfig delegate) {
@@ -31,7 +31,6 @@ public final class IngestionConfig {
     public int      maxBatches()       { return delegate.maxBatches(); }
     public long     maxPendingWrite()  { return delegate.maxPendingWrite(); }
     public Duration maxDelay()         { return delegate.maxDelay(); }
-    public Duration configRefreshDelay(){ return delegate.configRefreshDelay(); }
     public String   parquetCompression(){ return delegate.parquetCompression(); }
 
     public static IngestionConfig fromConfig(Config config) {

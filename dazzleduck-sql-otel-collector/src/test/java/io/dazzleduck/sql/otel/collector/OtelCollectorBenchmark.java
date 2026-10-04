@@ -108,8 +108,7 @@ public class OtelCollectorBenchmark {
                 io.dazzleduck.sql.commons.ingestion.IngestionConfig.DEFAULT_MAX_BUCKET_SIZE,
                 io.dazzleduck.sql.commons.ingestion.IngestionConfig.DEFAULT_MAX_BATCHES,
                 io.dazzleduck.sql.commons.ingestion.IngestionConfig.DEFAULT_MAX_PENDING_WRITE,
-                java.time.Duration.ofMillis(1000L),
-                io.dazzleduck.sql.commons.ingestion.IngestionConfig.DEFAULT_CONFIG_REFRESH));
+                java.time.Duration.ofMillis(1000L)));
         props.setSecretKey(SECRET_KEY_BASE64);
         props.setUsers(Map.of("admin", "admin"));
 

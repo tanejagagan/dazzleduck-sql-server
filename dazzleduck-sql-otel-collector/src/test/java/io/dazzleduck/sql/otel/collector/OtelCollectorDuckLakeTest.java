@@ -112,7 +112,7 @@ class OtelCollectorDuckLakeTest {
         // minBucketSize=1 ensures any batch triggers an immediate flush without relying on the timer.
         props.setIngestionConfig(new IngestionConfig(1L, IngestionConfig.DEFAULT_MAX_BUCKET_SIZE,
                 IngestionConfig.DEFAULT_MAX_BATCHES, IngestionConfig.DEFAULT_MAX_PENDING_WRITE,
-                java.time.Duration.ofSeconds(60), IngestionConfig.DEFAULT_CONFIG_REFRESH));
+                java.time.Duration.ofSeconds(60)));
 
         otelServer = new OtelCollectorServer(props);
         otelServer.start();

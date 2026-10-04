@@ -35,6 +35,6 @@ class IngestionConfigTest {
     @Test
     void shouldLeaveCodecUnsetForProgrammaticCallers() {
         assertNull(new IngestionConfig(1024L, 2048L, 4, 4096L,
-                Duration.ofMillis(10), Duration.ofMinutes(1)).parquetCompression());
+                Duration.ofMillis(10)).parquetCompression());
     }
 }

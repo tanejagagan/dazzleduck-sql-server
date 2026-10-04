@@ -65,8 +65,7 @@ public class FlightPendingWriteTest {
                 1024 * 1024 * 1024L,   // maxBucketSize
                 2048,                  // maxBatches
                 1L,                    // maxPendingWrite - set to 1 byte to trigger limit
-                Duration.ofSeconds(2),
-                Duration.ofMinutes(2)    // configRefreshDelay
+                Duration.ofSeconds(2)
         );
 
         String producerId = UUID.randomUUID().toString();

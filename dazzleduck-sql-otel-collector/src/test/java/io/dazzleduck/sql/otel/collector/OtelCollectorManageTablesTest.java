@@ -108,7 +108,7 @@ class OtelCollectorManageTablesTest {
         props.setIngestionHandler(handler);
         props.setIngestionConfig(new IngestionConfig(1L, IngestionConfig.DEFAULT_MAX_BUCKET_SIZE,
                 IngestionConfig.DEFAULT_MAX_BATCHES, IngestionConfig.DEFAULT_MAX_PENDING_WRITE,
-                Duration.ofSeconds(60), IngestionConfig.DEFAULT_CONFIG_REFRESH));
+                Duration.ofSeconds(60)));
 
         otelServer = new OtelCollectorServer(props);
         otelServer.start();
