@@ -107,16 +107,15 @@ public class DuckLakeFlightViewTransformationTest {
 
         Location serverLocation = FlightTestUtils.findNextLocation();
         String producerId = UUID.randomUUID().toString();
-        // Only two knobs differ from the defaults: flush every batch immediately, and
-        // refresh queue state on every request so a view change is picked up at once.
+        // One knob differs from the defaults: flush every batch immediately. (How often queue
+        // state is refreshed is the handler's own setting, from the provider config.)
         var defaults = DuckDBFlightSqlProducer.DEFAULT_INGESTION_CONFIG;
         var ingestionConfig = new IngestionConfig(
                 1,
                 defaults.maxBucketSize(),
                 defaults.maxBatches(),
                 defaults.maxPendingWrite(),
-                defaults.maxDelay(),
-                Duration.ZERO);
+                defaults.maxDelay());
         producer = new DuckDBFlightSqlProducer(
                 serverLocation,
                 producerId,

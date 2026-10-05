@@ -156,8 +156,7 @@ public class OtelCollectorCustomQueueTest {
                 io.dazzleduck.sql.commons.ingestion.IngestionConfig.DEFAULT_MAX_BUCKET_SIZE,
                 io.dazzleduck.sql.commons.ingestion.IngestionConfig.DEFAULT_MAX_BATCHES,
                 io.dazzleduck.sql.commons.ingestion.IngestionConfig.DEFAULT_MAX_PENDING_WRITE,
-                Duration.ofMillis(60_000),
-                io.dazzleduck.sql.commons.ingestion.IngestionConfig.DEFAULT_CONFIG_REFRESH);
+                Duration.ofMillis(60_000));
     }
 
     // -------------------------------------------------------------------------

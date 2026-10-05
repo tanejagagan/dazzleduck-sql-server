@@ -36,8 +36,7 @@ class CollectorTempWriteLocationTest {
 
     private static final IngestionConfig CONFIG = new IngestionConfig(
             1024L, IngestionConfig.DEFAULT_MAX_BUCKET_SIZE, IngestionConfig.DEFAULT_MAX_BATCHES,
-            IngestionConfig.DEFAULT_MAX_PENDING_WRITE, Duration.ofSeconds(5),
-            IngestionConfig.DEFAULT_CONFIG_REFRESH);
+            IngestionConfig.DEFAULT_MAX_PENDING_WRITE, Duration.ofSeconds(5));
 
     /** Minimal handler — these tests only construct and close, never submit a batch. */
     private static final IngestionHandler NOOP_HANDLER = new IngestionHandler() {

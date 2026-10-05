@@ -6,7 +6,10 @@ import java.time.Duration;
 
 /**
  * @deprecated Use {@link io.dazzleduck.sql.commons.ingestion.IngestionConfig}.
- *             <p>Source-compatible: existing call sites compile unchanged.
+ *             <p><b>Source-incompatible</b> since the refresh-delay removal: the constructor lost
+ *             its trailing {@code Duration configRefreshDelay} parameter and the
+ *             {@code configRefreshDelay()} accessor is gone, because nothing read the value. A
+ *             call site passing it must drop that argument.
  *             <p><b>Binary-incompatible</b>: this was previously a {@code record}; it is now a
  *             {@code final class}. Pre-compiled artifacts that pattern-match on it as a record
  *             or use its component accessors reflectively must be recompiled.
@@ -17,9 +20,9 @@ public final class IngestionConfig {
     private final io.dazzleduck.sql.commons.ingestion.IngestionConfig delegate;
 
     public IngestionConfig(long minBucketSize, long maxBucketSize, int maxBatches,
-                           long maxPendingWrite, Duration maxDelay, Duration configRefreshDelay) {
+                           long maxPendingWrite, Duration maxDelay) {
         this(new io.dazzleduck.sql.commons.ingestion.IngestionConfig(
-                minBucketSize, maxBucketSize, maxBatches, maxPendingWrite, maxDelay, configRefreshDelay));
+                minBucketSize, maxBucketSize, maxBatches, maxPendingWrite, maxDelay));
     }
 
     private IngestionConfig(io.dazzleduck.sql.commons.ingestion.IngestionConfig delegate) {
@@ -31,7 +34,6 @@ public final class IngestionConfig {
     public int      maxBatches()       { return delegate.maxBatches(); }
     public long     maxPendingWrite()  { return delegate.maxPendingWrite(); }
     public Duration maxDelay()         { return delegate.maxDelay(); }
-    public Duration configRefreshDelay(){ return delegate.configRefreshDelay(); }
     public String   parquetCompression(){ return delegate.parquetCompression(); }
 
     public static IngestionConfig fromConfig(Config config) {

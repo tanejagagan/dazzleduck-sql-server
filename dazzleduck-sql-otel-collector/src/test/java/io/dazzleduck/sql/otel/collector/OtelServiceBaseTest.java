@@ -49,8 +49,7 @@ class OtelServiceBaseTest {
     /** Values are irrelevant; no batch is ever written. */
     private static final IngestionConfig CONFIG = new IngestionConfig(
             1L, IngestionConfig.DEFAULT_MAX_BUCKET_SIZE, IngestionConfig.DEFAULT_MAX_BATCHES,
-            IngestionConfig.DEFAULT_MAX_PENDING_WRITE, Duration.ofSeconds(10),
-            IngestionConfig.DEFAULT_CONFIG_REFRESH);
+            IngestionConfig.DEFAULT_MAX_PENDING_WRITE, Duration.ofSeconds(10));
 
     @TempDir
     Path tempDir;

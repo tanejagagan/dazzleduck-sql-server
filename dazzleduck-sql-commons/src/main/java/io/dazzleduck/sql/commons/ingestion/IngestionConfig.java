@@ -14,6 +14,12 @@ import java.util.Locale;
  * (output path, transformation, partition columns) which are provided by
  * {@link IngestionHandler}.
  *
+ * <p>How often that handler re-reads its domain state is the handler's own setting, not one of
+ * these: {@code queue_config_refresh_delay_ms} is read from the
+ * {@code ingestion_task_factory_provider} block by
+ * {@link DuckLakeIngestionTaskFactoryProvider} (the dynamic provider uses
+ * {@code config_load_interval_ms}). This record used to carry a copy of it that nothing read.
+ *
  * @param parquetCompression codec for Parquet files the queue writes; supplied by config
  *                           (defaults to snappy), or {@code null} to leave it to DuckDB.
  *                           Independent of the DuckLake catalog's own
@@ -24,13 +30,11 @@ public record IngestionConfig(long minBucketSize,
                                int  maxBatches,
                                long maxPendingWrite,
                                Duration maxDelay,
-                               Duration configRefreshDelay,
                                String parquetCompression) {
 
     public static final long     DEFAULT_MAX_BUCKET_SIZE   = 100L * 1024 * 1024; // 100 MB
     public static final long     DEFAULT_MAX_PENDING_WRITE = 500L * 1024 * 1024; // 500 MB
     public static final int      DEFAULT_MAX_BATCHES       = Integer.MAX_VALUE;
-    public static final Duration DEFAULT_CONFIG_REFRESH    = Duration.ofMinutes(2);
 
     private static final List<String> PARQUET_CODECS =
             List.of("brotli", "gzip", "lz4", "lz4_raw", "snappy", "uncompressed", "zstd");
@@ -49,8 +53,8 @@ public record IngestionConfig(long minBucketSize,
     }
 
     public IngestionConfig(long minBucketSize, long maxBucketSize, int maxBatches,
-                           long maxPendingWrite, Duration maxDelay, Duration configRefreshDelay) {
-        this(minBucketSize, maxBucketSize, maxBatches, maxPendingWrite, maxDelay, configRefreshDelay, null);
+                           long maxPendingWrite, Duration maxDelay) {
+        this(minBucketSize, maxBucketSize, maxBatches, maxPendingWrite, maxDelay, null);
     }
 
     public static IngestionConfig fromConfig(Config config) {
@@ -63,9 +67,6 @@ public record IngestionConfig(long minBucketSize,
                 config.hasPath(ConfigConstants.MAX_PENDING_WRITE_KEY)
                         ? config.getLong(ConfigConstants.MAX_PENDING_WRITE_KEY) : DEFAULT_MAX_PENDING_WRITE,
                 Duration.ofMillis(config.getLong(ConfigConstants.MAX_DELAY_MS_KEY)),
-                config.hasPath(ConfigConstants.QUEUE_CONFIG_REFRESH_DELAY_MS_KEY)
-                        ? Duration.ofMillis(config.getLong(ConfigConstants.QUEUE_CONFIG_REFRESH_DELAY_MS_KEY))
-                        : DEFAULT_CONFIG_REFRESH,
                 config.getString(ConfigConstants.PARQUET_COMPRESSION_KEY));
     }
 }

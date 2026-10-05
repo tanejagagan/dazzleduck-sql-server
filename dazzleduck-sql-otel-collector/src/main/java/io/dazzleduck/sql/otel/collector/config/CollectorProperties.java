@@ -25,8 +25,7 @@ public class CollectorProperties {
             new NOOPIngestionTaskFactoryProvider("./otel-output").getIngestionHandler();
     private IngestionConfig ingestionConfig = new IngestionConfig(
             1_048_576L, IngestionConfig.DEFAULT_MAX_BUCKET_SIZE, IngestionConfig.DEFAULT_MAX_BATCHES,
-            IngestionConfig.DEFAULT_MAX_PENDING_WRITE, Duration.ofSeconds(5),
-            IngestionConfig.DEFAULT_CONFIG_REFRESH);
+            IngestionConfig.DEFAULT_MAX_PENDING_WRITE, Duration.ofSeconds(5));
     private String startupScript = "INSTALL arrow FROM community; LOAD arrow;";
     private String serviceName = "open-telemetry-collector";
     // "jwt" is the only supported authentication mode.

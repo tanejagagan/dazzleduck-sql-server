@@ -79,7 +79,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
             1024 * 1024 * 1024L,
             2048,
             256 * 1024 * 1024L,
-            Duration.ofSeconds(2), Duration.ofMinutes(2));
+            Duration.ofSeconds(2));
 
     public static AccessMode getAccessMode(com.typesafe.config.Config appConfig) {
         return AccessMode.valueOf(appConfig.getString(ConfigConstants.ACCESS_MODE_KEY).toUpperCase());

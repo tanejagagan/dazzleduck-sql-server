@@ -596,7 +596,6 @@ public class OtelCollectorLoginDelegationTest {
                 io.dazzleduck.sql.commons.ingestion.IngestionConfig.DEFAULT_MAX_BUCKET_SIZE,
                 io.dazzleduck.sql.commons.ingestion.IngestionConfig.DEFAULT_MAX_BATCHES,
                 io.dazzleduck.sql.commons.ingestion.IngestionConfig.DEFAULT_MAX_PENDING_WRITE,
-                java.time.Duration.ofMillis(maxDelayMs),
-                io.dazzleduck.sql.commons.ingestion.IngestionConfig.DEFAULT_CONFIG_REFRESH);
+                java.time.Duration.ofMillis(maxDelayMs));
     }
 }
