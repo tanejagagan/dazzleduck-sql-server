@@ -113,8 +113,20 @@ Kept (uniqueness not provable):
 | `GROUPING SETS` / `ROLLUP` / `CUBE` | serialize as several grouping sets, so one key value can appear in several rows |
 | a group key `ON` does not pin | one left row may match many groups |
 | a key the subquery exposes under no referenceable name | `ON` could not name it |
+| a key whose output name another select-list entry shares | DuckDB disambiguates on the way out (`k`, `k_1`), so `ON g.k = …` pins one of them, not both |
+| `GROUP BY 1`, or `GROUP BY <select alias>` | serialize as a constant or a bare column ref, which match no select-list entry structurally — a missed case, not a wrong one |
 | `DISTINCT ON (...)` | dedups on its targets, which need not be projected |
-| a correlated body | its row count per left row is not what its `GROUP BY` says |
+| a correlated body | **conservative**: not analysed here (see below) |
+
+Excluding a correlated body is a **conservative restriction, not a soundness requirement**: with
+every grouping key pinned, a correlated body still yields at most one row per left row, because the
+grouping happens per evaluation. It is excluded because nothing here analyses what the correlation
+does — so do not relax the other conditions on the assumption that this one guards them.
+
+Correlation is judged per scope. A name bound *inside* a subquery is invisible outside it, so a
+sibling lookup reusing an inner alias (`t2` in several bodies of one view, as the motivating view
+does) is **not** correlated: only the names the enclosing `FROM` binds in its own scope count, while
+the subquery's own side counts names bound at any depth within it.
 
 **`LATERAL` is not recorded in the serialized AST** — `ref_type` stays `REGULAR`
 — so correlation is detected from the references themselves: a body naming

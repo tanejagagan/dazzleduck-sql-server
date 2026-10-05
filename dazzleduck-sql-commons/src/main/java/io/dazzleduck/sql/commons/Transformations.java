@@ -1702,12 +1702,17 @@ public class Transformations {
      *       grouping sets — a row can then appear once per set;</li>
      *   <li>a grouping key the ON condition does not pin, so one left row may match many groups;</li>
      *   <li>a key whose name the subquery does not expose under a name this ON can reference;</li>
-     *   <li>a correlated body (including a {@code LATERAL} one). Note that {@code LATERAL} is
-     *       <b>not</b> recorded in the serialized AST — the ref type stays {@code REGULAR} — so
-     *       correlation is detected from the references themselves: a body naming anything the
-     *       enclosing FROM defines, or naming anything no scope inside it defines, is correlated.
-     *       A {@code LATERAL} body that references nothing outside behaves as a plain subquery and
-     *       is treated as one.</li>
+     *   <li>a correlated body (including a {@code LATERAL} one). This one is a
+     *       <b>conservative</b> restriction rather than a soundness requirement: a correlated body
+     *       whose grouping keys are all pinned still yields at most one row per left row, because
+     *       the grouping happens per evaluation. It is excluded because nothing here verifies what
+     *       the correlation does, not because such a join would be wrong to drop — do not "fix"
+     *       this on the assumption that it is unsound. Note that {@code LATERAL} is <b>not</b>
+     *       recorded in the serialized AST — the ref type stays {@code REGULAR} — so correlation is
+     *       detected from the references themselves: a body naming anything the enclosing FROM
+     *       binds in its own scope, or naming anything no scope inside it binds, is correlated. A
+     *       {@code LATERAL} body that references nothing outside behaves as a plain subquery and is
+     *       treated as one.</li>
      * </ul>
      */
     private static boolean isUniquePerJoinKey(ObjectNode join, JsonNode subqueryRef, JsonNode condition) {
@@ -1724,10 +1729,22 @@ public class Transformations {
         int[] keyIndices = uniqueKeyIndices(body, selectList);
         if (keyIndices == null || keyIndices.length == 0) return false;
 
+        // Every entry's name, not just the keys': DuckDB disambiguates a repeated name on the way
+        // out (a, b -> k, k_1), so a key sharing its name with another entry is not the column the
+        // ON condition pins. Reading both as the same name would prove a uniqueness that is absent.
+        Map<String, Integer> nameCounts = new HashMap<>();
+        for (int i = 0; i < selectList.size(); i++) {
+            String name = outputName(subqueryRef, selectList, i);
+            if (name != null) nameCounts.merge(foldCase(name), 1, Integer::sum);
+        }
+
         Set<String> pinned = pinnedJoinKeys(condition, alias);
         for (int index : keyIndices) {
             String name = outputName(subqueryRef, selectList, index);
-            if (name == null || !pinned.contains(foldCase(name))) return false;
+            if (name == null) return false;
+            String folded = foldCase(name);
+            if (nameCounts.getOrDefault(folded, 0) != 1) return false; // ambiguous: pins one, not both
+            if (!pinned.contains(folded)) return false;
         }
         return true;
     }
@@ -1799,7 +1816,13 @@ public class Transformations {
         return false;
     }
 
-    /** The first select-list position holding an expression equivalent to {@code expression}, or -1. */
+    /**
+     * The first select-list position holding an expression equivalent to {@code expression}, or -1.
+     *
+     * <p>Matching is structural, so {@code GROUP BY 1} (a constant) and {@code GROUP BY <alias>} (a
+     * bare column reference to a select-list name) match nothing here and keep the join. Safe, and
+     * a missed case rather than a wrong one.
+     */
     private static int indexOfEquivalent(JsonNode selectList, JsonNode expression) {
         for (int i = 0; i < selectList.size(); i++) {
             if (isEquivalentExpression(selectList.get(i), expression)) return i;
@@ -1899,8 +1922,11 @@ public class Transformations {
     }
 
     /**
-     * Whether the subquery body depends on a scope outside itself — a correlated or LATERAL body,
-     * whose row count per left row is not what its own GROUP BY says.
+     * Whether the subquery body depends on a scope outside itself — a correlated or LATERAL body.
+     *
+     * <p>Excluding these is conservative, not a correctness need: with every grouping key pinned,
+     * a correlated body still produces at most one row per left row. They are excluded because
+     * this code does not analyse what the correlation does.
      *
      * <p>Two signals, because the serialized AST does not record LATERAL: the body naming something
      * the enclosing FROM defines, and the body naming something no scope inside it defines (a
@@ -1911,7 +1937,7 @@ public class Transformations {
         UsageCounts used = new UsageCounts();
         countUsage(body, used);
         Set<String> enclosing = new HashSet<>();
-        collectDefinedIds(join.get(FIELD_LEFT), enclosing);
+        collectVisibleIds(join.get(FIELD_LEFT), enclosing);
         for (String id : enclosing) {
             if (used.count(id) > 0) return true;
         }
@@ -1924,7 +1950,29 @@ public class Transformations {
         return false;
     }
 
-    /** Case-folded names a FROM tree binds, including those bound inside nested subqueries. */
+    /**
+     * Case-folded names a FROM tree binds <em>in its own scope</em>: leaf relations and subquery
+     * aliases, without descending into a subquery's body. Those inner names are invisible outside
+     * it, so a sibling subquery reusing one is not correlated — treating them as enclosing would
+     * keep a join for a name nothing can actually reach, which is exactly what happens when
+     * several lookups in one view share an inner alias.
+     */
+    private static void collectVisibleIds(JsonNode from, Set<String> out) {
+        if (from == null || from.isNull()) return;
+        if (NODE_TYPE_JOIN.equals(asText(from, FIELD_TYPE))) {
+            collectVisibleIds(from.get(FIELD_LEFT), out);
+            collectVisibleIds(from.get(FIELD_RIGHT), out);
+            return;
+        }
+        String id = effectiveId(from);
+        if (id != null && !id.isEmpty()) out.add(foldCase(id));
+    }
+
+    /**
+     * Case-folded names a FROM tree binds anywhere inside it, nested subquery bodies included. Used
+     * for the subquery's own scope, where a reference may legitimately name a relation of an inner
+     * scope, so anything not in this set reaches outside the subquery altogether.
+     */
     private static void collectDefinedIds(JsonNode from, Set<String> out) {
         if (from == null || from.isNull()) return;
         String type = asText(from, FIELD_TYPE);

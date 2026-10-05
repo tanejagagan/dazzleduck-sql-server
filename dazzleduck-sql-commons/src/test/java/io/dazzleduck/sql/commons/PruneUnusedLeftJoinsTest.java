@@ -91,6 +91,19 @@ public class PruneUnusedLeftJoinsTest {
             "FROM fl t " +
             "LEFT JOIN (SELECT DISTINCT d.rule_id AS k FROM dim_rule d) g ON g.k = t.customer_id";
 
+    /**
+     * Two pre-aggregated lookups whose bodies both use the inner alias {@code t2} — the shape the
+     * real consumer has (four lookups, same inner alias in each). An inner alias is invisible
+     * outside its own subquery, so reusing it must not make the second lookup look correlated.
+     */
+    private static final String TWO_LOOKUP_VIEW_BODY =
+            "SELECT t.f_id, g1.r1 AS rules1, g2.r2 AS rules2 " +
+            "FROM fl t " +
+            "LEFT JOIN (SELECT t2.f_id AS rid, list(t2.customer_id) AS r1 FROM fl t2 GROUP BY t2.f_id) g1 " +
+            "  ON g1.rid = t.f_id " +
+            "LEFT JOIN (SELECT t2.f_id AS rid, list(t2.customer_id) AS r2 FROM fl t2 GROUP BY t2.f_id) g2 " +
+            "  ON g2.rid = t.f_id";
+
     @BeforeAll
     static void setup() throws SQLException {
         conn = ConnectionPool.getConnection();
@@ -121,6 +134,7 @@ public class PruneUnusedLeftJoinsTest {
         conn.createStatement().execute("CREATE VIEW flv AS " + UNIQUE_SUBQUERY_VIEW_BODY);
         conn.createStatement().execute("CREATE VIEW flvr AS " + RENAMED_SUBQUERY_VIEW_BODY);
         conn.createStatement().execute("CREATE VIEW flvd AS " + DISTINCT_SUBQUERY_VIEW_BODY);
+        conn.createStatement().execute("CREATE VIEW flv2 AS " + TWO_LOOKUP_VIEW_BODY);
     }
 
     @AfterAll
@@ -131,6 +145,7 @@ public class PruneUnusedLeftJoinsTest {
         conn.createStatement().execute("DROP VIEW IF EXISTS flv");
         conn.createStatement().execute("DROP VIEW IF EXISTS flvr");
         conn.createStatement().execute("DROP VIEW IF EXISTS flvd");
+        conn.createStatement().execute("DROP VIEW IF EXISTS flv2");
         conn.createStatement().execute("DROP TABLE IF EXISTS f");
         conn.createStatement().execute("DROP TABLE IF EXISTS fs");
         conn.createStatement().execute("DROP TABLE IF EXISTS fd");
@@ -1346,11 +1361,63 @@ public class PruneUnusedLeftJoinsTest {
     }
 
     @Test
+    void duplicateKeyOutputNames_isKept() throws Exception {
+        // DuckDB exposes `SELECT a.k, b.k ... GROUP BY a.k, b.k` as k and k_1, so `ON g.k = t.k`
+        // pins only the first key. Reading both as "k" would prove a uniqueness that is not there
+        // and multiply the fact rows away.
+        String body = "SELECT t.f_id AS f_id, t.customer_id AS unused_col FROM fl t " +
+                "LEFT JOIN (SELECT a.f_id, b.f_id FROM fl a, fl b GROUP BY a.f_id, b.f_id) g " +
+                "  ON g.f_id = t.f_id";
+        JsonNode outer = Transformations.parseToTree(conn, "SELECT f_id FROM flv");
+        JsonNode pruned = Transformations.pruneUnusedLeftJoins(outer, Transformations.parseToTree(conn, body));
+        if (pruned == outer) return;
+        // Two: the LEFT JOIN that must stay, plus the subquery's own `fl a, fl b` cross join.
+        assertEquals(2, countJoins(pruned), "only one of the two keys is pinned, so the join stays");
+    }
+
+    @Test
+    void duplicateOutputNamesUnderDistinct_isKept() throws Exception {
+        // Same ambiguity on the DISTINCT path: the dedup key is both columns, exposed as f_id and
+        // f_id_1, so `ON g.f_id = t.f_id` pins only the first.
+        String body = "SELECT t.f_id AS f_id, t.customer_id AS unused_col FROM fl t " +
+                "LEFT JOIN (SELECT DISTINCT a.f_id, b.f_id FROM fl a, fl b) g ON g.f_id = t.f_id";
+        JsonNode outer = Transformations.parseToTree(conn, "SELECT f_id FROM flv");
+        JsonNode pruned = Transformations.pruneUnusedLeftJoins(outer, Transformations.parseToTree(conn, body));
+        if (pruned == outer) return;
+        assertEquals(2, countJoins(pruned), "the unpinned second dedup column keeps the join");
+    }
+
+    @Test
     void keyPinnedToItself_isKept() throws Exception {
         // g.f_id = g.f_id pins nothing: both sides are inside the subquery.
         assertSubqueryJoinKept(
                 "SELECT t.f_id, g.resolved AS rules FROM fl t " +
                 "LEFT JOIN (SELECT t2.f_id, list(t2.customer_id) AS resolved FROM fl t2 GROUP BY t2.f_id) g " +
                 "  ON g.f_id = g.f_id");
+    }
+
+    // ---- inner aliases of a sibling subquery are not "enclosing" ----
+
+    @Test
+    void secondLookupIsEliminated_thoughItReusesTheFirstsInnerAlias() throws Exception {
+        // Projecting only the first lookup must still drop the second. Both bodies name t2, which
+        // is bound inside each subquery and invisible outside it, so the second is not correlated.
+        JsonNode pruned = prune("SELECT f_id, rules1 FROM flv2", TWO_LOOKUP_VIEW_BODY);
+        assertEquals(1, countJoins(pruned), "only the projected lookup's join should remain");
+        assertEquivalentToView(pruned, "SELECT f_id, rules1 FROM flv2");
+    }
+
+    @Test
+    void neitherLookupProjected_dropsBoth() throws Exception {
+        JsonNode pruned = prune("SELECT f_id FROM flv2", TWO_LOOKUP_VIEW_BODY);
+        assertEquals(0, countJoins(pruned));
+        assertEquivalentToView(pruned, "SELECT f_id FROM flv2");
+    }
+
+    @Test
+    void bothLookupsProjected_keepsBoth() throws Exception {
+        // Every select-list entry is used and neither join is droppable, so there is nothing to
+        // optimize and the input comes back untouched — the view, with both joins, is what runs.
+        assertBailsOut("SELECT f_id, rules1, rules2 FROM flv2", TWO_LOOKUP_VIEW_BODY);
     }
 }
