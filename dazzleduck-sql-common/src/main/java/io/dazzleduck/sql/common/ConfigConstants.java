@@ -54,6 +54,21 @@ public class ConfigConstants {
     public static final String NUM_PARTITIONS_KEY        = "num_partitions";
     public static final String PARTITION_EXPRESSION_KEY  = "partition_expression";
 
+    // Ingestion queue variable keys — DuckDB session variables set on the connection that writes
+    // the queue's batch, so a transformation can read them with getvariable('name').
+    // VARIABLES_KEY: static name/value pairs declared inline in the config file.
+    // VARIABLES_VIEW_KEY: a two-column key/value table or view read at startup and reloaded on
+    // every queue-config refresh, so a value can change without restarting the server.
+    // VARIABLES_KEY_COLUMN_KEY / VARIABLES_VALUE_COLUMN_KEY: that relation's column names. The
+    // relation holds one queue's variables — every row in it is that queue's own.
+    // VARIABLES_EXPIRATION_COLUMN_KEY: optional timestamp column; a row whose expiration has passed
+    // is treated as absent, so the variable is no longer set. Only read when this key is configured.
+    public static final String VARIABLES_KEY                   = "variables";
+    public static final String VARIABLES_VIEW_KEY              = "variables_view";
+    public static final String VARIABLES_KEY_COLUMN_KEY        = "variables_key_column";
+    public static final String VARIABLES_VALUE_COLUMN_KEY      = "variables_value_column";
+    public static final String VARIABLES_EXPIRATION_COLUMN_KEY = "variables_expiration_column";
+
     // Cursor / open-query protection keys
     public static final String CURSOR_TTL_MS_KEY              = "cursor_ttl_ms";
     public static final String MAX_CURSORS_PER_IDENTITY_KEY   = "max_cursors_per_identity";

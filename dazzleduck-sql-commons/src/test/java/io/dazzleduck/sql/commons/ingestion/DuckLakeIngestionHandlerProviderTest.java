@@ -229,4 +229,66 @@ public class DuckLakeIngestionHandlerProviderTest {
         var ex = assertThrows(IllegalArgumentException.class, provider::validate);
         assertTrue(ex.getMessage().contains("metrics"));
     }
+
+    // -------------------------------------------------------------------------
+    // Session variables on a mapping entry
+    // -------------------------------------------------------------------------
+
+    @Test
+    public void testVariablesAreParsedFromTheMappingEntry() {
+        var provider = new DuckLakeIngestionTaskFactoryProvider();
+        provider.setConfig(ConfigFactory.parseString("""
+                ingestion_queue_table_mapping = [{
+                    ingestion_queue = "logs"
+                    catalog = "loglake"
+                    schema  = "main"
+                    table   = "logs"
+                    transformation = "SELECT *, getvariable('env') AS env FROM __this"
+                    variables { env = "prod", tier = "hot" }
+                    variables_view              = "loglake.main.v_logs_vars"
+                    variables_key_column        = "config_key"
+                    variables_expiration_column = "expires_at"
+                }]
+                """));
+        var mapping = provider.loadMappings().get("logs");
+        assertNotNull(mapping);
+        var variables = mapping.variables();
+        assertEquals("prod", variables.staticVariables().get("env"));
+        assertEquals("hot", variables.staticVariables().get("tier"));
+        assertTrue(variables.hasView());
+        assertEquals("loglake.main.v_logs_vars", variables.view().relation());
+        assertEquals("config_key", variables.view().keyColumn());
+        assertEquals("value", variables.view().valueColumn(), "default value column");
+        assertEquals("expires_at", variables.view().expirationColumn());
+    }
+
+    @Test
+    public void testAMappingWithoutVariablesCarriesNone() {
+        var provider = new DuckLakeIngestionTaskFactoryProvider();
+        provider.setConfig(ConfigFactory.parseString("""
+                ingestion_queue_table_mapping = [{
+                    ingestion_queue = "logs"
+                    catalog = "loglake"
+                    schema  = "main"
+                    table   = "logs"
+                }]
+                """));
+        assertEquals(IngestionVariables.NONE, provider.loadMappings().get("logs").variables());
+    }
+
+    @Test
+    public void testAMisconfiguredVariableFailsAtConfigLoad() {
+        var provider = new DuckLakeIngestionTaskFactoryProvider();
+        provider.setConfig(ConfigFactory.parseString("""
+                ingestion_queue_table_mapping = [{
+                    ingestion_queue = "logs"
+                    catalog = "loglake"
+                    schema  = "main"
+                    table   = "logs"
+                    variables { "not a name" = "x" }
+                }]
+                """));
+        var ex = assertThrows(IllegalArgumentException.class, provider::loadMappings);
+        assertTrue(ex.getMessage().contains("ingestion variable name"), ex.getMessage());
+    }
 }

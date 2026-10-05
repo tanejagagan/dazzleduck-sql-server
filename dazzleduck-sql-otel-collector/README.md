@@ -68,7 +68,7 @@ otel_collector {
     # One entry per ingestion queue. Without a provider class, batches are written
     # as plain Parquet under output_path. Per-queue keys: transformation,
     # partition_by, min_bucket_size, max_delay_ms, and (with DuckLake)
-    # catalog / schema / table / additional_parameters.
+    # catalog / schema / table / additional_parameters / variables.
     ingestion_task_factory_provider {
         # How often each queue's state is re-read from the catalog — target path, partition
         # columns, a view-derived transformation, per-queue session variables. Default 2 min.

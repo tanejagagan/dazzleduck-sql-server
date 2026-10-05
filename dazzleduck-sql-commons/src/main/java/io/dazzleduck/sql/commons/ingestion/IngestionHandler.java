@@ -11,6 +11,16 @@ public interface IngestionHandler {
 
     default String getTransformation(String queueId) { return null; }
 
+    /**
+     * DuckDB session variables to set on the connection that writes the queue's batch, so its
+     * transformation can read them with {@code getvariable('name')}. Empty when none are
+     * configured; never null.
+     *
+     * <p>Read on every write, like {@link #getTransformation}, so a handler that reloads them
+     * (see {@link IngestionVariables}) needs no notification to take effect.
+     */
+    default java.util.Map<String, String> getVariables(String queueId) { return java.util.Map.of(); }
+
     String[] getPartitionBy(String queueId);
 
     /**

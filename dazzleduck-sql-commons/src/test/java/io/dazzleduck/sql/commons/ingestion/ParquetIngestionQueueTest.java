@@ -580,6 +580,60 @@ public class ParquetIngestionQueueTest {
     }
 
     @Test
+    public void testTransformationReadsConfiguredVariables() throws Exception {
+        var service = new DeterministicScheduler();
+        var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
+        // The transformation names no literal: both values come from the queue's variables, set on
+        // the write connection as SET VARIABLE before the COPY runs.
+        String transformation =
+                "SELECT id, getvariable('env') AS env, getvariable('retention')::INT AS retention FROM __this";
+        var variables = new java.util.LinkedHashMap<String, String>();
+        variables.put("env", "prod");
+        variables.put("retention", "30");
+        var postTaskFactory = createPostTaskFactory(new AtomicBoolean(), false, transformation, variables);
+
+        try (var queue = new ParquetIngestionQueue(
+                TEST_APP_ID, INPUT_FORMAT, targetPath.toString(), "test-queue",
+                DEFAULT_MIN_BATCH_SIZE, Long.MAX_VALUE, Integer.MAX_VALUE, Long.MAX_VALUE,
+                DEFAULT_MAX_DELAY, postTaskFactory, service, clock)) {
+
+            var future = queue.add(createBatch(sourceFile1.toString(), "producer1", 0, DEFAULT_MIN_BATCH_SIZE + 1));
+            service.tick(1, TimeUnit.MILLISECONDS);
+            var result = future.get(2, SECONDS);
+
+            String outputFile = result.filesCreated().get(0);
+            TestUtils.isEqual(
+                    "SELECT id, 'prod' AS env, 30 AS retention FROM (%s)".formatted(sourceData(100)),
+                    "SELECT * FROM read_parquet('%s')".formatted(outputFile));
+        }
+    }
+
+    @Test
+    public void testVariableValueIsNeverExecutedAsSql() throws Exception {
+        var service = new DeterministicScheduler();
+        var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
+        // A value is data, not SQL: it has to reach the output verbatim, however it is written.
+        String payload = "x'; DROP TABLE orders; --";
+        String transformation = "SELECT id, getvariable('tenant') AS tenant FROM __this";
+        var postTaskFactory = createPostTaskFactory(new AtomicBoolean(), false, transformation,
+                java.util.Map.of("tenant", payload));
+
+        try (var queue = new ParquetIngestionQueue(
+                TEST_APP_ID, INPUT_FORMAT, targetPath.toString(), "test-queue",
+                DEFAULT_MIN_BATCH_SIZE, Long.MAX_VALUE, Integer.MAX_VALUE, Long.MAX_VALUE,
+                DEFAULT_MAX_DELAY, postTaskFactory, service, clock)) {
+
+            var future = queue.add(createBatch(sourceFile1.toString(), "producer1", 0, DEFAULT_MIN_BATCH_SIZE + 1));
+            service.tick(1, TimeUnit.MILLISECONDS);
+            var result = future.get(2, SECONDS);
+
+            assertEquals(payload, ConnectionPool.collectFirst(
+                    "SELECT DISTINCT tenant FROM read_parquet('%s')".formatted(result.filesCreated().get(0)),
+                    String.class));
+        }
+    }
+
+    @Test
     public void testTransformationWithDerivedColumn() throws Exception {
         var service = new DeterministicScheduler();
         var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
@@ -735,6 +789,12 @@ public class ParquetIngestionQueueTest {
 
     private IngestionHandler createPostTaskFactory(AtomicBoolean executed, boolean shouldFail,
                                                    String transformation) {
+        return createPostTaskFactory(executed, shouldFail, transformation, java.util.Map.of());
+    }
+
+    private IngestionHandler createPostTaskFactory(AtomicBoolean executed, boolean shouldFail,
+                                                   String transformation,
+                                                   java.util.Map<String, String> variables) {
         return new IngestionHandler() {
             @Override
             public PostIngestionTask createPostIngestionTask(IngestionResult ingestionResult) {
@@ -757,6 +817,9 @@ public class ParquetIngestionQueueTest {
 
             @Override
             public String getTransformation(String queueId) { return transformation; }
+
+            @Override
+            public java.util.Map<String, String> getVariables(String queueId) { return variables; }
         };
     }
 }

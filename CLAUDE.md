@@ -90,7 +90,7 @@ Core DuckDB abstraction (JDK 21). Key classes:
 - `Transformations.java` (~2300 lines) — SQL ↔ JSON AST via `json_serialize_sql`, filter-CTE injection (RLS), LEFT-JOIN pruning, limit injection, table-reference collection
 - `ExpressionFactory.java` / `ExpressionConstants.java` — build SQL AST nodes / AST string constants
 - `Fingerprint.java` — SHA-256 of normalized query (literals replaced with placeholders; does not work with CTEs)
-- `ingestion/` — `BulkIngestQueue` (batching, backpressure, producer-id dedup, drain), `ParquetIngestionQueue` (COPY-based writes, transformations via `__this` placeholder), `WatermarkSpec` (per-group MIN/MAX timestamp + row count committed in the DuckLake post-ingestion transaction), `DuckLakeIngestionHandler`, `DynamicDuckLakeIngestionTaskFactoryProvider` (SQLite-backed queue registry)
+- `ingestion/` — `BulkIngestQueue` (batching, backpressure, producer-id dedup, drain), `ParquetIngestionQueue` (COPY-based writes, transformations via `__this` placeholder), `IngestionVariables` (per-queue `SET VARIABLE` values read by a transformation via `getvariable`, from the conf file, the SQLite registry, and/or a reloadable key/value relation with optional expiry), `WatermarkSpec` (per-group MIN/MAX timestamp + row count committed in the DuckLake post-ingestion transaction), `DuckLakeIngestionHandler`, `DynamicDuckLakeIngestionTaskFactoryProvider` (SQLite-backed queue registry)
 - `authorization/` — `SqlAuthorizer` with `NOOPAuthorizer`, `SelectOnlyAuthorizer`, `RestrictedDatasourceOnlyAuthorizer`, `RestrictedReadOnlyAuthorizer`, `RedirectAuthorizer` (external `/resolve` endpoint)
 - Partition pruning: `ducklake/DucklakePartitionPruning.java` (DuckLake metadata tables), `hive/HivePartitionPruning.java`, `delta/PartitionPruning.java` (Delta Kernel), `planner/SplitPlanner.java` + `planner/PartitionPrunerV2.java`
 - `TableConfigProvider.java` — config overrides read from a key/value table
@@ -179,6 +179,51 @@ connection headers into the token unfiltered — also a development mode.
 
 `SessionVariables.validate(...)` on the query server is a defence-in-depth hook (allowed names,
 value constraints), not the primary control; it is an unimplemented placeholder today.
+
+**Ingestion variables — per queue, not per request.** The query path's session variables come from
+the caller's token; the ingestion path has no caller at write time, so an ingestion queue declares
+its own in `ingestion_queue_table_mapping`. They are applied as `SET VARIABLE` on the connection
+that writes the queue's batches, so a `transformation` (and a `partition_expression`) reads them
+with `getvariable('name')`:
+
+```hocon
+ingestion_queue_table_mapping = [{
+    ingestion_queue = "log"
+    catalog = "loglake", schema = "main", table = "log"
+    transformation = "SELECT *, getvariable('env') AS env FROM __this"
+
+    variables { env = "prod", retention_days = "30" }   # static, read once at startup
+    variables_view              = "loglake.main.v_log_vars"  # key/value relation, reloaded
+    variables_key_column        = "key"                      # default
+    variables_value_column      = "value"                    # default
+    variables_expiration_column = "expires_at"               # optional
+}]
+```
+
+The relation is read at startup and again on every `queue_config_refresh_delay_ms` — the copy of
+that key inside the `ingestion_task_factory_provider` block, which is what the handler reads
+(default 2 minutes); the dynamic provider uses `config_load_interval_ms` instead. It is the same
+tick that re-derives a view-based transformation, so a value changes without restarting the server.
+Rows are data, not schema, so that reload deliberately does not wait for a DuckLake schema change.
+The relation holds that one queue's variables — every row is applied, and a key that is not a usable
+variable name fails the queue instead of being skipped; to keep several queues' variables in one
+table, give each queue a view selecting its own rows. Where both sources define a name the relation
+wins (the file holds the defaults). All values are
+`VARCHAR`; cast for other types (`getvariable('retention_days')::INT`). With
+`variables_expiration_column` configured, a row whose expiration has passed is treated as absent —
+the variable is no longer set, so the transformation reads the file's value for that name or
+`NULL` — and a `NULL` expiration never expires; the comparison is made by DuckDB against its own
+`now()`, and takes effect on the refresh that follows it. Names and values go through the same
+validation and escaping as the JWT claim (`SqlVariables`, shared with `SessionVariables`).
+
+A dynamic queue gets them the same way, from its SQLite registry row: the `variables_view`,
+`variables_key_column`, `variables_value_column` and `variables_expiration_column` columns name the
+relation (static pairs are config-file only). The registry stores only the relation's
+`catalog.schema.table` path, so changing a value is a write to that relation — no `schema_version`
+bump. The relation may be a table in the registry file itself, which the startup script must
+`ATTACH` on the ingestion connection, since the registry loader's own attachment is private.
+A SQLite column arrives as `VARCHAR`, so an expiration is cast for the comparison; text that will
+not cast is an error, not a row that never expires.
 
 **External access control** (for restricted modes):
 ```sql
