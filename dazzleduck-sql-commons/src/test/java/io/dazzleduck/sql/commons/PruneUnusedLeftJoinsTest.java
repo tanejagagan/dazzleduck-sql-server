@@ -104,6 +104,26 @@ public class PruneUnusedLeftJoinsTest {
             "LEFT JOIN (SELECT t2.f_id AS rid, list(t2.customer_id) AS r2 FROM fl t2 GROUP BY t2.f_id) g2 " +
             "  ON g2.rid = t.f_id";
 
+    /**
+     * A STAR in a grouped subquery. {@code a.*} is expanded in place, so its column takes the name
+     * {@code f_id} and the grouping key {@code b.f_id} is renamed {@code f_id_1} on the way out —
+     * which means {@code ON g.f_id} pins the star's column and leaves {@code b.f_id} unpinned. The
+     * subquery therefore has several rows per fact row (9 against 3), and dropping the join would
+     * collapse them. The star side is a single-column table because {@code a.*} has to bind
+     * against the GROUP BY.
+     */
+    private static final String STAR_SUBQUERY_VIEW_BODY =
+            "SELECT t.f_id AS f_id, t.customer_id AS unused_col FROM fl t " +
+            "LEFT JOIN (SELECT a.*, a.f_id AS af, b.f_id FROM fk a, fl b GROUP BY a.f_id, b.f_id) g " +
+            "  ON g.f_id = t.f_id AND g.af = t.f_id";
+
+    /** Three grouping keys, all pinned — including a derived one, so the keys are not all columns. */
+    private static final String THREE_KEY_VIEW_BODY =
+            "SELECT t.f_id, g.r AS rules FROM fl t " +
+            "LEFT JOIN (SELECT t2.f_id AS a, t2.customer_id AS b, t2.f_id % 2 AS c, list(t2.f_id) AS r " +
+            "           FROM fl t2 GROUP BY t2.f_id, t2.customer_id, t2.f_id % 2) g " +
+            "  ON g.a = t.f_id AND g.b = t.customer_id AND g.c = t.f_id % 2";
+
     @BeforeAll
     static void setup() throws SQLException {
         conn = ConnectionPool.getConnection();
@@ -135,6 +155,10 @@ public class PruneUnusedLeftJoinsTest {
         conn.createStatement().execute("CREATE VIEW flvr AS " + RENAMED_SUBQUERY_VIEW_BODY);
         conn.createStatement().execute("CREATE VIEW flvd AS " + DISTINCT_SUBQUERY_VIEW_BODY);
         conn.createStatement().execute("CREATE VIEW flv2 AS " + TWO_LOOKUP_VIEW_BODY);
+        conn.createStatement().execute("CREATE VIEW flv3 AS " + THREE_KEY_VIEW_BODY);
+        conn.createStatement().execute("CREATE TABLE fk (f_id INT)");
+        conn.createStatement().execute("INSERT INTO fk VALUES (1),(2),(3),(4),(5)");
+        conn.createStatement().execute("CREATE VIEW flvs AS " + STAR_SUBQUERY_VIEW_BODY);
     }
 
     @AfterAll
@@ -146,11 +170,14 @@ public class PruneUnusedLeftJoinsTest {
         conn.createStatement().execute("DROP VIEW IF EXISTS flvr");
         conn.createStatement().execute("DROP VIEW IF EXISTS flvd");
         conn.createStatement().execute("DROP VIEW IF EXISTS flv2");
+        conn.createStatement().execute("DROP VIEW IF EXISTS flv3");
+        conn.createStatement().execute("DROP VIEW IF EXISTS flvs");
         conn.createStatement().execute("DROP TABLE IF EXISTS f");
         conn.createStatement().execute("DROP TABLE IF EXISTS fs");
         conn.createStatement().execute("DROP TABLE IF EXISTS fd");
         conn.createStatement().execute("DROP TABLE IF EXISTS fl");
         conn.createStatement().execute("DROP TABLE IF EXISTS dim_rule");
+        conn.createStatement().execute("DROP TABLE IF EXISTS fk");
         conn.createStatement().execute("DROP TABLE IF EXISTS a");
         conn.createStatement().execute("DROP TABLE IF EXISTS b");
         conn.close();
@@ -1266,12 +1293,26 @@ public class PruneUnusedLeftJoinsTest {
     @Test
     void threeKeyGroupBy_allPinned_isDropped() throws Exception {
         // A single grouping set over three keys serializes as [[0,1,2]]; all three are pinned.
-        String body = "SELECT t.f_id, g.r AS rules FROM fl t " +
-                "LEFT JOIN (SELECT t2.f_id AS a, t2.customer_id AS b, count(*) AS c, list(t2.f_id) AS r " +
-                "           FROM fl t2 GROUP BY t2.f_id, t2.customer_id, count(*)) g " +
-                "  ON g.a = t.f_id AND g.b = t.customer_id AND g.c = t.f_id";
-        JsonNode pruned = prune("SELECT f_id FROM flv", body);
+        // The body is a real view here, so it has to bind as well as parse — an earlier version of
+        // this test grouped by count(*), which DuckDB rejects, so it proved nothing.
+        JsonNode pruned = prune("SELECT f_id FROM flv3", THREE_KEY_VIEW_BODY);
         assertEquals(0, countJoins(pruned));
+        assertEquivalentToView(pruned, "SELECT f_id FROM flv3");
+    }
+
+    @Test
+    void starInAGroupedSubquery_isKept() throws Exception {
+        // The star makes the grouping key's output name unknowable, so the join must stay — and
+        // here it genuinely multiplies: the subquery has one row per (a.f_id, b.f_id) pair while
+        // only a.f_id is pinned. A real view, so the row count is checked and not just the shape.
+        JsonNode pruned = prune("SELECT f_id FROM flvs", STAR_SUBQUERY_VIEW_BODY);
+        assertEquals(2, countJoins(pruned), "the star hides which column g.f_id names, so the join stays");
+        assertEquivalentToView(pruned, "SELECT f_id FROM flvs");
+        // Spelled out: pruning it would have collapsed the multiplication.
+        assertEquals(exec("SELECT f_id FROM flvs").size(),
+                exec(Transformations.parseToSql(conn, pruned)).size());
+        assertTrue(exec("SELECT f_id FROM flvs").size() > exec("SELECT f_id FROM fl").size(),
+                "the fixture must actually multiply rows, or this test proves nothing");
     }
 
     // ---- kept: uniqueness not provable ----

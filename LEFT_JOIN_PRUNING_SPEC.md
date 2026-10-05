@@ -114,6 +114,7 @@ Kept (uniqueness not provable):
 | a group key `ON` does not pin | one left row may match many groups |
 | a key the subquery exposes under no referenceable name | `ON` could not name it |
 | a key whose output name another select-list entry shares | DuckDB disambiguates on the way out (`k`, `k_1`), so `ON g.k = …` pins one of them, not both |
+| a `STAR` anywhere in the select list | it expands in place to columns that cannot be enumerated here, taking their names first — a later explicit key of the same name is renamed, and `ON g.k = …` then pins the star's column instead of the key |
 | `GROUP BY 1`, or `GROUP BY <select alias>` | serialize as a constant or a bare column ref, which match no select-list entry structurally — a missed case, not a wrong one |
 | `DISTINCT ON (...)` | dedups on its targets, which need not be projected |
 | a correlated body | **conservative**: not analysed here (see below) |

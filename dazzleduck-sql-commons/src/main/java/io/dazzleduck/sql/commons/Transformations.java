@@ -1755,6 +1755,13 @@ public class Transformations {
      * projected column under {@code SELECT DISTINCT}.
      */
     private static int[] uniqueKeyIndices(JsonNode body, JsonNode selectList) {
+        // A STAR expands to columns that cannot be enumerated here, and it is expanded *in place*:
+        // its columns take their names first, so a later explicit key with the same name is renamed
+        // on the way out (k -> k_1) and the ON condition's `g.k` names the star's column instead.
+        // Nothing about the key is then provable, whichever path computed it.
+        for (JsonNode entry : selectList) {
+            if (STAR_CLASS.equals(asText(entry, FIELD_CLASS))) return null;
+        }
         JsonNode groupExpressions = body.get(FIELD_GROUP_EXPRESSIONS);
         boolean grouped = groupExpressions != null && groupExpressions.isArray() && !groupExpressions.isEmpty();
         if (grouped) {
@@ -1769,11 +1776,10 @@ public class Transformations {
             return indices;
         }
         // DISTINCT over the whole select list dedups on exactly those columns, so pinning all of
-        // them pins the row. A star hides what those columns are, so it proves nothing.
+        // them pins the row. (A star is already excluded above.)
         if (!hasDistinctModifier(body)) return null;
         int[] indices = new int[selectList.size()];
         for (int i = 0; i < selectList.size(); i++) {
-            if (STAR_CLASS.equals(asText(selectList.get(i), FIELD_CLASS))) return null;
             indices[i] = i;
         }
         return indices;
