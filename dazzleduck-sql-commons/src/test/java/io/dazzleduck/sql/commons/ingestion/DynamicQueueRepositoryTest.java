@@ -15,14 +15,32 @@ class DynamicQueueRepositoryTest {
     @TempDir
     Path tempDir;
 
-    /** Write test data via a short-lived DuckDB write connection. */
+    /**
+     * Write test data via a short-lived DuckDB write connection, retrying while the registry is
+     * locked.
+     *
+     * <p>A handler under test keeps a read connection open on the same file and polls it, so a
+     * write can land while SQLite is serving that read and come back "database is locked" — which
+     * is a busy signal, not a failure. A real writer has to cope with it too, so the test models
+     * that rather than racing the poller and failing when it loses.
+     */
     private void writeToDb(String dbPath, String sql) throws Exception {
         String safePath = dbPath.replace("'", "''");
-        try (Connection conn = java.sql.DriverManager.getConnection("jdbc:duckdb:");
-             Statement st = conn.createStatement()) {
-            st.execute("LOAD sqlite");
-            st.execute("ATTACH '" + safePath + "' AS " + DynamicQueueRepository.ATTACHMENT + " (TYPE sqlite)");
-            st.execute(sql);
+        long deadline = System.nanoTime() + java.time.Duration.ofSeconds(30).toNanos();
+        while (true) {
+            try (Connection conn = java.sql.DriverManager.getConnection("jdbc:duckdb:");
+                 Statement st = conn.createStatement()) {
+                st.execute("LOAD sqlite");
+                st.execute("ATTACH '" + safePath + "' AS " + DynamicQueueRepository.ATTACHMENT + " (TYPE sqlite)");
+                st.execute(sql);
+                return;
+            } catch (java.sql.SQLException e) {
+                boolean locked = e.getMessage() != null && e.getMessage().contains("database is locked");
+                if (!locked || System.nanoTime() > deadline) {
+                    throw e;
+                }
+                Thread.sleep(50);
+            }
         }
     }
 

@@ -48,8 +48,9 @@ public final class SessionVariables {
      *
      * @throws IllegalArgumentException if the claim is not a JSON object of scalar values, a key is
      *                                  not a valid identifier, a value holds a control character,
-     *                                  or the claim exceeds {@link #MAX_VARIABLES} entries or
-     *                                  {@link #MAX_VALUE_LENGTH} characters in a value
+     *                                  or the claim exceeds {@link SqlVariables#MAX_VARIABLES}
+     *                                  entries or {@link SqlVariables#MAX_VALUE_LENGTH} characters
+     *                                  in a value
      */
     public static List<String> toSetStatements(String claimJson) {
         if (claimJson == null || claimJson.isBlank()) {

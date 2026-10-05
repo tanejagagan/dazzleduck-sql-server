@@ -62,11 +62,17 @@ import java.util.Map;
  * {@code TIMESTAMPTZ} are each compared the way that engine defines. The column is cast to
  * {@code TIMESTAMPTZ} for the comparison, which is what lets a SQLite-backed relation work at all:
  * SQLite has no timestamp type, so such a column arrives as {@code VARCHAR}. A value that will not
- * cast is an error naming the variable, not a row that never expires. An expiry takes effect on the refresh that follows it, so a value is
- * live for at most {@code queue_config_refresh_delay_ms} past its expiration.
+ * cast is an error naming the variable, not a row that never expires.
+ *
+ * <p>An expiry takes effect on the refresh that follows it, so a value is live for at most
+ * {@code queue_config_refresh_delay_ms} past its expiration.
  *
  * <p><b>Every value is a VARCHAR</b>, as {@code SET VARIABLE} applies it. A transformation
  * comparing against a number or a timestamp casts: {@code getvariable('retention_days')::INT}.
+ *
+ * @param staticVariables name/value pairs declared in the config file, read once when it is loaded
+ * @param view            the key/value relation to re-read on every refresh, or null when the
+ *                        queue declares none
  */
 public record IngestionVariables(Map<String, String> staticVariables, View view) {
 
