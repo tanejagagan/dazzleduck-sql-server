@@ -104,7 +104,9 @@ Accepted:
 - a plain `SELECT DISTINCT` whose every projected column is pinned by `ON`;
 - a `t(a, b)` column-alias list, which renames the keys positionally.
 
-Kept (uniqueness not provable):
+Kept (uniqueness not provable). The naming rows share one rule: the code does not
+reproduce DuckDB's output naming, so it requires every select-list name to be
+known and distinct, and treats anything else as unprovable.
 
 | Shape | Why |
 |---|---|
@@ -113,7 +115,8 @@ Kept (uniqueness not provable):
 | `GROUPING SETS` / `ROLLUP` / `CUBE` | serialize as several grouping sets, so one key value can appear in several rows |
 | a group key `ON` does not pin | one left row may match many groups |
 | a key the subquery exposes under no referenceable name | `ON` could not name it |
-| a key whose output name another select-list entry shares | DuckDB disambiguates on the way out (`k`, `k_1`), so `ON g.k = …` pins one of them, not both |
+| any two select-list entries sharing an output name — keys or not | DuckDB renames on the way out (`k`, `k_1`), and a generated name can collide with an explicit one and push it along too (`max(a.k) AS k, max(b.k) AS k, a.x AS k_1` exposes the key as `k_1_1`) |
+| any unaliased expression in the select list | DuckDB names it from its text, and an explicit alias equal to that text is renamed. Alias every expression in a lookup subquery to keep it prunable |
 | a `STAR` anywhere in the select list | it expands in place to columns that cannot be enumerated here, taking their names first — a later explicit key of the same name is renamed, and `ON g.k = …` then pins the star's column instead of the key |
 | `GROUP BY 1`, or `GROUP BY <select alias>` | serialize as a constant or a bare column ref, which match no select-list entry structurally — a missed case, not a wrong one |
 | `DISTINCT ON (...)` | dedups on its targets, which need not be projected |

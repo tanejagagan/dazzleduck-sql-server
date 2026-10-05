@@ -1729,22 +1729,27 @@ public class Transformations {
         int[] keyIndices = uniqueKeyIndices(body, selectList);
         if (keyIndices == null || keyIndices.length == 0) return false;
 
-        // Every entry's name, not just the keys': DuckDB disambiguates a repeated name on the way
-        // out (a, b -> k, k_1), so a key sharing its name with another entry is not the column the
-        // ON condition pins. Reading both as the same name would prove a uniqueness that is absent.
-        Map<String, Integer> nameCounts = new HashMap<>();
+        // The names computed here must be the names DuckDB exposes, and they are only guaranteed to
+        // be when no two entries share one (case-insensitively). Once any name repeats — even
+        // between two non-key entries — DuckDB renames on the way out (k, k -> k, k_1), and the
+        // generated name can collide with an explicit one and push it along too: with
+        // `max(a.k) AS k, max(b.k) AS k, a.x AS k_1`, the key a.x is exposed as k_1_1 and `g.k_1`
+        // names max(b.k). So a single repeat anywhere makes every name unreliable, keys included.
+        //
+        // An unaliased expression is just as bad: DuckDB names it from its own text, and an
+        // explicit alias equal to that text is renamed too (`max(b.k), a.x AS "max(b.k)"` exposes
+        // the key as "max(b.k)_1"). This code does not reproduce DuckDB's naming — every bug found
+        // here so far came from trying to — so it requires every name to be known and distinct,
+        // and treats anything else as unprovable. Aliasing the expression restores pruning.
+        Set<String> seen = new HashSet<>();
         for (int i = 0; i < selectList.size(); i++) {
             String name = outputName(subqueryRef, selectList, i);
-            if (name != null) nameCounts.merge(foldCase(name), 1, Integer::sum);
+            if (name == null || !seen.add(foldCase(name))) return false;
         }
 
         Set<String> pinned = pinnedJoinKeys(condition, alias);
         for (int index : keyIndices) {
-            String name = outputName(subqueryRef, selectList, index);
-            if (name == null) return false;
-            String folded = foldCase(name);
-            if (nameCounts.getOrDefault(folded, 0) != 1) return false; // ambiguous: pins one, not both
-            if (!pinned.contains(folded)) return false;
+            if (!pinned.contains(foldCase(outputName(subqueryRef, selectList, index)))) return false;
         }
         return true;
     }

@@ -117,6 +117,27 @@ public class PruneUnusedLeftJoinsTest {
             "LEFT JOIN (SELECT a.*, a.f_id AS af, b.f_id FROM fk a, fl b GROUP BY a.f_id, b.f_id) g " +
             "  ON g.f_id = t.f_id AND g.af = t.f_id";
 
+    /**
+     * A duplicate among <em>non-key</em> names shifts a key's name. DuckDB renames the second
+     * {@code k} to {@code k_1}, which collides with the explicit {@code a.x AS k_1}, so the key is
+     * pushed to {@code k_1_1} and {@code ON g.k_1} pins {@code max(b.k)} instead — the same value
+     * in every group, so one fact row matches all three (3 rows against 1).
+     */
+    private static final String RENAME_SHIFT_VIEW_BODY =
+            "SELECT t.x FROM rs_t t " +
+            "LEFT JOIN (SELECT max(a.k) AS k, max(b.k) AS k, a.x AS k_1 FROM rs_a a, rs_b b GROUP BY a.x) g " +
+            "  ON g.k_1 = t.x";
+
+    /**
+     * An unaliased expression's generated name collides with an explicit alias: DuckDB names
+     * {@code max(b.k)} after its text, renames the key {@code a.x AS "max(b.k)"} to
+     * {@code "max(b.k)_1"}, and {@code ON g."max(b.k)"} pins the aggregate — 5 in every group.
+     */
+    private static final String AUTO_NAME_VIEW_BODY =
+            "SELECT t.x FROM rs_t t " +
+            "LEFT JOIN (SELECT max(b.k), a.x AS \"max(b.k)\" FROM rs_a a, rs_b b GROUP BY a.x) g " +
+            "  ON g.\"max(b.k)\" = t.x";
+
     /** Three grouping keys, all pinned — including a derived one, so the keys are not all columns. */
     private static final String THREE_KEY_VIEW_BODY =
             "SELECT t.f_id, g.r AS rules FROM fl t " +
@@ -159,6 +180,11 @@ public class PruneUnusedLeftJoinsTest {
         conn.createStatement().execute("CREATE TABLE fk (f_id INT)");
         conn.createStatement().execute("INSERT INTO fk VALUES (1),(2),(3),(4),(5)");
         conn.createStatement().execute("CREATE VIEW flvs AS " + STAR_SUBQUERY_VIEW_BODY);
+        conn.createStatement().execute("CREATE TABLE rs_t AS SELECT 5 AS x");
+        conn.createStatement().execute("CREATE TABLE rs_a AS SELECT * FROM (VALUES (1,1),(2,2),(3,3)) v(k, x)");
+        conn.createStatement().execute("CREATE TABLE rs_b AS SELECT 5 AS k");
+        conn.createStatement().execute("CREATE VIEW rsv AS " + RENAME_SHIFT_VIEW_BODY);
+        conn.createStatement().execute("CREATE VIEW rsav AS " + AUTO_NAME_VIEW_BODY);
     }
 
     @AfterAll
@@ -172,12 +198,17 @@ public class PruneUnusedLeftJoinsTest {
         conn.createStatement().execute("DROP VIEW IF EXISTS flv2");
         conn.createStatement().execute("DROP VIEW IF EXISTS flv3");
         conn.createStatement().execute("DROP VIEW IF EXISTS flvs");
+        conn.createStatement().execute("DROP VIEW IF EXISTS rsv");
+        conn.createStatement().execute("DROP VIEW IF EXISTS rsav");
         conn.createStatement().execute("DROP TABLE IF EXISTS f");
         conn.createStatement().execute("DROP TABLE IF EXISTS fs");
         conn.createStatement().execute("DROP TABLE IF EXISTS fd");
         conn.createStatement().execute("DROP TABLE IF EXISTS fl");
         conn.createStatement().execute("DROP TABLE IF EXISTS dim_rule");
         conn.createStatement().execute("DROP TABLE IF EXISTS fk");
+        conn.createStatement().execute("DROP TABLE IF EXISTS rs_t");
+        conn.createStatement().execute("DROP TABLE IF EXISTS rs_a");
+        conn.createStatement().execute("DROP TABLE IF EXISTS rs_b");
         conn.createStatement().execute("DROP TABLE IF EXISTS a");
         conn.createStatement().execute("DROP TABLE IF EXISTS b");
         conn.close();
@@ -266,13 +297,31 @@ public class PruneUnusedLeftJoinsTest {
     }
 
     /**
-     * The pruned output must return the same rows as the original query against the real view.
-     * {@link TestUtils#isEqual} compares the two result sets order-insensitively (bidirectional
-     * EXCEPT) and throws an AssertionError listing any differing rows.
+     * The pruned output must return the same rows as the original query against the real view,
+     * <em>with the same multiplicities</em>.
+     *
+     * <p>{@link TestUtils#isEqual} alone is not enough here: it compares with a bidirectional plain
+     * {@code EXCEPT}, which has set semantics, so duplicate rows are invisible to it. An unsound
+     * LEFT JOIN elimination fails precisely by changing how many times each left row appears — the
+     * rows it loses are duplicates of rows it keeps — so a set comparison passes on exactly the bug
+     * this suite exists to catch. The rows are therefore also compared as multisets.
      */
     private void assertEquivalentToView(JsonNode pruned, String originalOuterSql) throws Exception {
         String prunedSql = Transformations.parseToSql(conn, pruned);
-        TestUtils.isEqual(originalOuterSql, prunedSql);
+        TestUtils.isEqual(originalOuterSql, prunedSql); // a readable diff when the sets differ
+        List<String> expected = sortedRows(originalOuterSql);
+        List<String> actual = sortedRows(prunedSql);
+        assertEquals(expected, actual,
+                "row multiplicities differ (" + expected.size() + " expected, " + actual.size()
+                        + " after pruning) for: " + prunedSql);
+    }
+
+    /** The rows of {@code sql} rendered as strings and sorted, so two results compare as multisets. */
+    private List<String> sortedRows(String sql) throws SQLException {
+        List<String> rows = new ArrayList<>();
+        for (List<Object> row : exec(sql)) rows.add(String.valueOf(row));
+        java.util.Collections.sort(rows);
+        return rows;
     }
 
     // ---- elimination cases ----
@@ -1298,6 +1347,22 @@ public class PruneUnusedLeftJoinsTest {
         JsonNode pruned = prune("SELECT f_id FROM flv3", THREE_KEY_VIEW_BODY);
         assertEquals(0, countJoins(pruned));
         assertEquivalentToView(pruned, "SELECT f_id FROM flv3");
+    }
+
+    @Test
+    void duplicateNonKeyNames_shiftTheKeysName_isKept() throws Exception {
+        // The key's own name is unique, but a duplicate elsewhere in the select list makes DuckDB
+        // rename, and the rename lands on the key's name. Results, not shape: 3 rows, not 1.
+        JsonNode pruned = prune("SELECT x FROM rsv", RENAME_SHIFT_VIEW_BODY);
+        assertEquivalentToView(pruned, "SELECT x FROM rsv");
+        assertEquals(3, exec("SELECT x FROM rsv").size(), "the fixture must multiply rows");
+    }
+
+    @Test
+    void anUnaliasedExpressionsGeneratedName_shiftsTheKeysName_isKept() throws Exception {
+        JsonNode pruned = prune("SELECT x FROM rsav", AUTO_NAME_VIEW_BODY);
+        assertEquivalentToView(pruned, "SELECT x FROM rsav");
+        assertEquals(3, exec("SELECT x FROM rsav").size(), "the fixture must multiply rows");
     }
 
     @Test
