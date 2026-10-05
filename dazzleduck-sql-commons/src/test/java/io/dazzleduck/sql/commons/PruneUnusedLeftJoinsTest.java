@@ -63,6 +63,88 @@ public class PruneUnusedLeftJoinsTest {
             "LEFT JOIN a ON fd.a_id = a.a_id " +
             "LEFT JOIN b ON fd.f_id = b.b_id";
 
+    /**
+     * The shape issue #483 asks for: a lookup pre-aggregated per fact row and LEFT JOINed on that
+     * row's identity, instead of a correlated scalar subquery. Unique by construction — one row per
+     * ({@code rid}, {@code cid}) group — and both group keys are pinned by the ON condition.
+     */
+    private static final String UNIQUE_SUBQUERY_VIEW_BODY =
+            "SELECT t.f_id, t.customer_id, g.resolved AS rules " +
+            "FROM fl t " +
+            "LEFT JOIN (" +
+            "    SELECT u.rid, u.cid, list(d.name) AS resolved " +
+            "    FROM (SELECT t2.f_id AS rid, t2.customer_id AS cid, UNNEST(t2.matched_rules) AS mr FROM fl t2) u " +
+            "    JOIN dim_rule d ON d.rule_id = u.mr " +
+            "    GROUP BY u.rid, u.cid" +
+            ") g ON g.rid = t.f_id AND g.cid = t.customer_id";
+
+    /** Same, with the subquery's columns renamed positionally by a column-alias list. */
+    private static final String RENAMED_SUBQUERY_VIEW_BODY =
+            "SELECT t.f_id, g.v AS rules " +
+            "FROM fl t " +
+            "LEFT JOIN (SELECT t2.f_id, list(t2.customer_id) FROM fl t2 GROUP BY t2.f_id) g(k, v) " +
+            "  ON g.k = t.f_id";
+
+    /** DISTINCT dedups on the whole select list, so pinning all of it pins the row. */
+    private static final String DISTINCT_SUBQUERY_VIEW_BODY =
+            "SELECT t.f_id, g.k AS dim " +
+            "FROM fl t " +
+            "LEFT JOIN (SELECT DISTINCT d.rule_id AS k FROM dim_rule d) g ON g.k = t.customer_id";
+
+    /**
+     * Two pre-aggregated lookups whose bodies both use the inner alias {@code t2} — the shape the
+     * real consumer has (four lookups, same inner alias in each). An inner alias is invisible
+     * outside its own subquery, so reusing it must not make the second lookup look correlated.
+     */
+    private static final String TWO_LOOKUP_VIEW_BODY =
+            "SELECT t.f_id, g1.r1 AS rules1, g2.r2 AS rules2 " +
+            "FROM fl t " +
+            "LEFT JOIN (SELECT t2.f_id AS rid, list(t2.customer_id) AS r1 FROM fl t2 GROUP BY t2.f_id) g1 " +
+            "  ON g1.rid = t.f_id " +
+            "LEFT JOIN (SELECT t2.f_id AS rid, list(t2.customer_id) AS r2 FROM fl t2 GROUP BY t2.f_id) g2 " +
+            "  ON g2.rid = t.f_id";
+
+    /**
+     * A STAR in a grouped subquery. {@code a.*} is expanded in place, so its column takes the name
+     * {@code f_id} and the grouping key {@code b.f_id} is renamed {@code f_id_1} on the way out —
+     * which means {@code ON g.f_id} pins the star's column and leaves {@code b.f_id} unpinned. The
+     * subquery therefore has several rows per fact row (9 against 3), and dropping the join would
+     * collapse them. The star side is a single-column table because {@code a.*} has to bind
+     * against the GROUP BY.
+     */
+    private static final String STAR_SUBQUERY_VIEW_BODY =
+            "SELECT t.f_id AS f_id, t.customer_id AS unused_col FROM fl t " +
+            "LEFT JOIN (SELECT a.*, a.f_id AS af, b.f_id FROM fk a, fl b GROUP BY a.f_id, b.f_id) g " +
+            "  ON g.f_id = t.f_id AND g.af = t.f_id";
+
+    /**
+     * A duplicate among <em>non-key</em> names shifts a key's name. DuckDB renames the second
+     * {@code k} to {@code k_1}, which collides with the explicit {@code a.x AS k_1}, so the key is
+     * pushed to {@code k_1_1} and {@code ON g.k_1} pins {@code max(b.k)} instead — the same value
+     * in every group, so one fact row matches all three (3 rows against 1).
+     */
+    private static final String RENAME_SHIFT_VIEW_BODY =
+            "SELECT t.x FROM rs_t t " +
+            "LEFT JOIN (SELECT max(a.k) AS k, max(b.k) AS k, a.x AS k_1 FROM rs_a a, rs_b b GROUP BY a.x) g " +
+            "  ON g.k_1 = t.x";
+
+    /**
+     * An unaliased expression's generated name collides with an explicit alias: DuckDB names
+     * {@code max(b.k)} after its text, renames the key {@code a.x AS "max(b.k)"} to
+     * {@code "max(b.k)_1"}, and {@code ON g."max(b.k)"} pins the aggregate — 5 in every group.
+     */
+    private static final String AUTO_NAME_VIEW_BODY =
+            "SELECT t.x FROM rs_t t " +
+            "LEFT JOIN (SELECT max(b.k), a.x AS \"max(b.k)\" FROM rs_a a, rs_b b GROUP BY a.x) g " +
+            "  ON g.\"max(b.k)\" = t.x";
+
+    /** Three grouping keys, all pinned — including a derived one, so the keys are not all columns. */
+    private static final String THREE_KEY_VIEW_BODY =
+            "SELECT t.f_id, g.r AS rules FROM fl t " +
+            "LEFT JOIN (SELECT t2.f_id AS a, t2.customer_id AS b, t2.f_id % 2 AS c, list(t2.f_id) AS r " +
+            "           FROM fl t2 GROUP BY t2.f_id, t2.customer_id, t2.f_id % 2) g " +
+            "  ON g.a = t.f_id AND g.b = t.customer_id AND g.c = t.f_id % 2";
+
     @BeforeAll
     static void setup() throws SQLException {
         conn = ConnectionPool.getConnection();
@@ -82,6 +164,27 @@ public class PruneUnusedLeftJoinsTest {
         conn.createStatement().execute("CREATE TABLE fd (f_id INT, a_id INT, f_col INT)");
         conn.createStatement().execute("INSERT INTO fd VALUES (1,10,5),(2,20,5),(3,10,15)");
         conn.createStatement().execute("CREATE VIEW fvd AS " + DISTINCT_VIEW_BODY);
+        // Unique-subquery fixture (issue #483). Row 2 has an empty list, row 3 a NULL list, and
+        // row 5 an id that resolves to nothing — each produces no group, so the LEFT JOIN is what
+        // keeps the fact row. Row 4 repeats an id, so the group holds a duplicate.
+        conn.createStatement().execute("CREATE TABLE fl (f_id INT, customer_id INT, matched_rules INT[])");
+        conn.createStatement().execute(
+                "INSERT INTO fl VALUES (1,7,[10,20]),(2,7,[]),(3,8,NULL),(4,9,[10,10]),(5,9,[999])");
+        conn.createStatement().execute("CREATE TABLE dim_rule (rule_id INT, name VARCHAR)");
+        conn.createStatement().execute("INSERT INTO dim_rule VALUES (10,'r10'),(20,'r20')");
+        conn.createStatement().execute("CREATE VIEW flv AS " + UNIQUE_SUBQUERY_VIEW_BODY);
+        conn.createStatement().execute("CREATE VIEW flvr AS " + RENAMED_SUBQUERY_VIEW_BODY);
+        conn.createStatement().execute("CREATE VIEW flvd AS " + DISTINCT_SUBQUERY_VIEW_BODY);
+        conn.createStatement().execute("CREATE VIEW flv2 AS " + TWO_LOOKUP_VIEW_BODY);
+        conn.createStatement().execute("CREATE VIEW flv3 AS " + THREE_KEY_VIEW_BODY);
+        conn.createStatement().execute("CREATE TABLE fk (f_id INT)");
+        conn.createStatement().execute("INSERT INTO fk VALUES (1),(2),(3),(4),(5)");
+        conn.createStatement().execute("CREATE VIEW flvs AS " + STAR_SUBQUERY_VIEW_BODY);
+        conn.createStatement().execute("CREATE TABLE rs_t AS SELECT 5 AS x");
+        conn.createStatement().execute("CREATE TABLE rs_a AS SELECT * FROM (VALUES (1,1),(2,2),(3,3)) v(k, x)");
+        conn.createStatement().execute("CREATE TABLE rs_b AS SELECT 5 AS k");
+        conn.createStatement().execute("CREATE VIEW rsv AS " + RENAME_SHIFT_VIEW_BODY);
+        conn.createStatement().execute("CREATE VIEW rsav AS " + AUTO_NAME_VIEW_BODY);
     }
 
     @AfterAll
@@ -89,9 +192,23 @@ public class PruneUnusedLeftJoinsTest {
         conn.createStatement().execute("DROP VIEW IF EXISTS fv");
         conn.createStatement().execute("DROP VIEW IF EXISTS fvs");
         conn.createStatement().execute("DROP VIEW IF EXISTS fvd");
+        conn.createStatement().execute("DROP VIEW IF EXISTS flv");
+        conn.createStatement().execute("DROP VIEW IF EXISTS flvr");
+        conn.createStatement().execute("DROP VIEW IF EXISTS flvd");
+        conn.createStatement().execute("DROP VIEW IF EXISTS flv2");
+        conn.createStatement().execute("DROP VIEW IF EXISTS flv3");
+        conn.createStatement().execute("DROP VIEW IF EXISTS flvs");
+        conn.createStatement().execute("DROP VIEW IF EXISTS rsv");
+        conn.createStatement().execute("DROP VIEW IF EXISTS rsav");
         conn.createStatement().execute("DROP TABLE IF EXISTS f");
         conn.createStatement().execute("DROP TABLE IF EXISTS fs");
         conn.createStatement().execute("DROP TABLE IF EXISTS fd");
+        conn.createStatement().execute("DROP TABLE IF EXISTS fl");
+        conn.createStatement().execute("DROP TABLE IF EXISTS dim_rule");
+        conn.createStatement().execute("DROP TABLE IF EXISTS fk");
+        conn.createStatement().execute("DROP TABLE IF EXISTS rs_t");
+        conn.createStatement().execute("DROP TABLE IF EXISTS rs_a");
+        conn.createStatement().execute("DROP TABLE IF EXISTS rs_b");
         conn.createStatement().execute("DROP TABLE IF EXISTS a");
         conn.createStatement().execute("DROP TABLE IF EXISTS b");
         conn.close();
@@ -154,6 +271,18 @@ public class PruneUnusedLeftJoinsTest {
         return count;
     }
 
+    /** The optimized plan for {@code sql}, as one string. */
+    private String explain(String sql) throws SQLException {
+        StringBuilder plan = new StringBuilder();
+        try (Statement s = conn.createStatement();
+             ResultSet rs = s.executeQuery("EXPLAIN " + sql)) {
+            while (rs.next()) {
+                plan.append(rs.getString(rs.getMetaData().getColumnCount())).append('\n');
+            }
+        }
+        return plan.toString();
+    }
+
     private List<List<Object>> exec(String sql) throws SQLException {
         Statement s = conn.createStatement();
         ResultSet rs = s.executeQuery(sql);
@@ -168,13 +297,31 @@ public class PruneUnusedLeftJoinsTest {
     }
 
     /**
-     * The pruned output must return the same rows as the original query against the real view.
-     * {@link TestUtils#isEqual} compares the two result sets order-insensitively (bidirectional
-     * EXCEPT) and throws an AssertionError listing any differing rows.
+     * The pruned output must return the same rows as the original query against the real view,
+     * <em>with the same multiplicities</em>.
+     *
+     * <p>{@link TestUtils#isEqual} alone is not enough here: it compares with a bidirectional plain
+     * {@code EXCEPT}, which has set semantics, so duplicate rows are invisible to it. An unsound
+     * LEFT JOIN elimination fails precisely by changing how many times each left row appears — the
+     * rows it loses are duplicates of rows it keeps — so a set comparison passes on exactly the bug
+     * this suite exists to catch. The rows are therefore also compared as multisets.
      */
     private void assertEquivalentToView(JsonNode pruned, String originalOuterSql) throws Exception {
         String prunedSql = Transformations.parseToSql(conn, pruned);
-        TestUtils.isEqual(originalOuterSql, prunedSql);
+        TestUtils.isEqual(originalOuterSql, prunedSql); // a readable diff when the sets differ
+        List<String> expected = sortedRows(originalOuterSql);
+        List<String> actual = sortedRows(prunedSql);
+        assertEquals(expected, actual,
+                "row multiplicities differ (" + expected.size() + " expected, " + actual.size()
+                        + " after pruning) for: " + prunedSql);
+    }
+
+    /** The rows of {@code sql} rendered as strings and sorted, so two results compare as multisets. */
+    private List<String> sortedRows(String sql) throws SQLException {
+        List<String> rows = new ArrayList<>();
+        for (List<Object> row : exec(sql)) rows.add(String.valueOf(row));
+        java.util.Collections.sort(rows);
+        return rows;
     }
 
     // ---- elimination cases ----
@@ -1122,5 +1269,298 @@ public class PruneUnusedLeftJoinsTest {
             conn.createStatement().execute("DROP VIEW IF EXISTS fverr");
             conn.createStatement().execute("DROP TABLE IF EXISTS dup");
         }
+    }
+
+    // ---- LEFT JOIN to a subquery that is provably unique on the join key (issue #483) ----
+
+    @Test
+    void uniqueSubquery_notProjected_isDropped() throws Exception {
+        // Both grouping keys are pinned by the ON condition, so a fact row matches at most one
+        // group: dropping the join cannot change the row count. The subquery's own inner JOIN goes
+        // with it, which is the point — a fact-only read stops scanning dim_rule.
+        JsonNode pruned = prune("SELECT f_id, customer_id FROM flv", UNIQUE_SUBQUERY_VIEW_BODY);
+        assertEquals(0, countJoins(pruned), "the subquery join and its inner join must both go");
+        assertEquivalentToView(pruned, "SELECT f_id, customer_id FROM flv");
+    }
+
+    @Test
+    void uniqueSubquery_notProjected_planStopsScanningTheDimension() throws Exception {
+        // The acceptance criterion from the issue: with no column from the lookup, the optimized
+        // plan reads the fact table only. DuckDB does not drop the join itself, which is why the
+        // rewrite has to.
+        JsonNode pruned = prune("SELECT f_id, customer_id FROM flv", UNIQUE_SUBQUERY_VIEW_BODY);
+        String prunedPlan = explain(Transformations.parseToSql(conn, pruned));
+        assertFalse(prunedPlan.contains("dim_rule"), "pruned plan still scans dim_rule:\n" + prunedPlan);
+        // The same query against the real view does scan it, so the assertion above has teeth.
+        assertTrue(explain("SELECT f_id, customer_id FROM flv").contains("dim_rule"),
+                "expected the unpruned view to scan dim_rule");
+    }
+
+    @Test
+    void uniqueSubquery_projected_isKept() throws Exception {
+        // The lookup is used, so the join stays and the results are unchanged.
+        JsonNode pruned = prune("SELECT f_id, rules FROM flv", UNIQUE_SUBQUERY_VIEW_BODY);
+        assertEquals(2, countJoins(pruned), "LEFT JOIN to the subquery plus its inner JOIN");
+        assertEquivalentToView(pruned, "SELECT f_id, rules FROM flv");
+    }
+
+    @Test
+    void uniqueSubquery_unmatchedFactRows_arePreserved() throws Exception {
+        // Empty list, NULL list and an id that resolves to nothing each produce no group. If the
+        // elimination were INNER-like, these rows would vanish.
+        JsonNode pruned = prune("SELECT f_id FROM flv", UNIQUE_SUBQUERY_VIEW_BODY);
+        assertEquals(0, countJoins(pruned));
+        assertEquals(5, exec(Transformations.parseToSql(conn, pruned)).size(), "every fact row survives");
+    }
+
+    @Test
+    void renamedSubqueryColumns_arePinnedByTheirNewNames() throws Exception {
+        // g(k, v) renames positionally, so the ON condition names the key as k.
+        JsonNode pruned = prune("SELECT f_id FROM flvr", RENAMED_SUBQUERY_VIEW_BODY);
+        assertEquals(0, countJoins(pruned));
+        assertEquivalentToView(pruned, "SELECT f_id FROM flvr");
+    }
+
+    @Test
+    void distinctSubquery_wholeSelectListPinned_isDropped() throws Exception {
+        JsonNode pruned = prune("SELECT f_id FROM flvd", DISTINCT_SUBQUERY_VIEW_BODY);
+        assertEquals(0, countJoins(pruned));
+        assertEquivalentToView(pruned, "SELECT f_id FROM flvd");
+    }
+
+    @Test
+    void reversedEqualityOrder_stillPinsTheKey() throws Exception {
+        // ON t.f_id = g.rid rather than g.rid = t.f_id: the subquery column sits on the right of
+        // the equality, which says nothing about whether it is pinned.
+        String body = "SELECT t.f_id, g.r AS rules FROM fl t " +
+                "LEFT JOIN (SELECT t2.f_id AS rid, list(t2.customer_id) AS r FROM fl t2 GROUP BY t2.f_id) g " +
+                "  ON t.f_id = g.rid";
+        JsonNode pruned = prune("SELECT f_id FROM flv", body);
+        assertEquals(0, countJoins(pruned), "the key is pinned whichever side of = it is on");
+    }
+
+    @Test
+    void threeKeyGroupBy_allPinned_isDropped() throws Exception {
+        // A single grouping set over three keys serializes as [[0,1,2]]; all three are pinned.
+        // The body is a real view here, so it has to bind as well as parse — an earlier version of
+        // this test grouped by count(*), which DuckDB rejects, so it proved nothing.
+        JsonNode pruned = prune("SELECT f_id FROM flv3", THREE_KEY_VIEW_BODY);
+        assertEquals(0, countJoins(pruned));
+        assertEquivalentToView(pruned, "SELECT f_id FROM flv3");
+    }
+
+    @Test
+    void duplicateNonKeyNames_shiftTheKeysName_isKept() throws Exception {
+        // The key's own name is unique, but a duplicate elsewhere in the select list makes DuckDB
+        // rename, and the rename lands on the key's name. Results, not shape: 3 rows, not 1.
+        JsonNode pruned = prune("SELECT x FROM rsv", RENAME_SHIFT_VIEW_BODY);
+        assertEquivalentToView(pruned, "SELECT x FROM rsv");
+        assertEquals(3, exec("SELECT x FROM rsv").size(), "the fixture must multiply rows");
+    }
+
+    @Test
+    void anUnaliasedExpressionsGeneratedName_shiftsTheKeysName_isKept() throws Exception {
+        JsonNode pruned = prune("SELECT x FROM rsav", AUTO_NAME_VIEW_BODY);
+        assertEquivalentToView(pruned, "SELECT x FROM rsav");
+        assertEquals(3, exec("SELECT x FROM rsav").size(), "the fixture must multiply rows");
+    }
+
+    @Test
+    void starInAGroupedSubquery_isKept() throws Exception {
+        // The star makes the grouping key's output name unknowable, so the join must stay — and
+        // here it genuinely multiplies: the subquery has one row per (a.f_id, b.f_id) pair while
+        // only a.f_id is pinned. A real view, so the row count is checked and not just the shape.
+        JsonNode pruned = prune("SELECT f_id FROM flvs", STAR_SUBQUERY_VIEW_BODY);
+        assertEquals(2, countJoins(pruned), "the star hides which column g.f_id names, so the join stays");
+        assertEquivalentToView(pruned, "SELECT f_id FROM flvs");
+        // Spelled out: pruning it would have collapsed the multiplication.
+        assertEquals(exec("SELECT f_id FROM flvs").size(),
+                exec(Transformations.parseToSql(conn, pruned)).size());
+        assertTrue(exec("SELECT f_id FROM flvs").size() > exec("SELECT f_id FROM fl").size(),
+                "the fixture must actually multiply rows, or this test proves nothing");
+    }
+
+    // ---- kept: uniqueness not provable ----
+
+    /**
+     * Prunes with a one-off body and asserts the LEFT JOIN to the subquery survived.
+     *
+     * <p>Two ways it can survive. Usually the body's unused select-list entry is pruned, the body
+     * is inlined, and the join has to still be there. But when nothing at all was optimizable the
+     * method returns its input untouched, and then the view body — join included — is what still
+     * runs; there is no inlined tree to count joins in.
+     */
+    private void assertSubqueryJoinKept(String viewBody) throws Exception {
+        JsonNode outer = Transformations.parseToTree(conn, "SELECT f_id FROM flv");
+        JsonNode body = Transformations.parseToTree(conn, viewBody);
+        JsonNode pruned = Transformations.pruneUnusedLeftJoins(outer, body);
+        if (pruned == outer) return; // bailed out: the body, and its join, are untouched
+        assertTrue(countJoins(pruned) >= 1,
+                "expected the join to be kept for body: " + viewBody);
+    }
+
+    @Test
+    void groupByAll_isKept() throws Exception {
+        // GROUP BY ALL serializes with no group expressions, so there is nothing to pin.
+        assertSubqueryJoinKept(
+                "SELECT t.f_id, g.resolved AS rules FROM fl t " +
+                "LEFT JOIN (SELECT t2.f_id, list(t2.customer_id) AS resolved FROM fl t2 GROUP BY ALL) g " +
+                "  ON g.f_id = t.f_id");
+    }
+
+    @Test
+    void groupingSets_isKept() throws Exception {
+        // Several grouping sets: one key value can appear in more than one output row.
+        assertSubqueryJoinKept(
+                "SELECT t.f_id, g.resolved AS rules FROM fl t " +
+                "LEFT JOIN (SELECT t2.f_id, t2.customer_id, list(t2.f_id) AS resolved FROM fl t2 " +
+                "           GROUP BY GROUPING SETS ((t2.f_id), (t2.customer_id))) g ON g.f_id = t.f_id");
+    }
+
+    @Test
+    void rollup_isKept() throws Exception {
+        assertSubqueryJoinKept(
+                "SELECT t.f_id, g.resolved AS rules FROM fl t " +
+                "LEFT JOIN (SELECT t2.f_id, t2.customer_id, list(t2.f_id) AS resolved FROM fl t2 " +
+                "           GROUP BY ROLLUP (t2.f_id, t2.customer_id)) g ON g.f_id = t.f_id");
+    }
+
+    @Test
+    void unpinnedGroupKey_isKept() throws Exception {
+        // Grouped by (f_id, customer_id) but joined on f_id alone, so one fact row can match
+        // several groups and dropping the join would change the row count.
+        assertSubqueryJoinKept(
+                "SELECT t.f_id, g.resolved AS rules FROM fl t " +
+                "LEFT JOIN (SELECT t2.f_id, t2.customer_id, list(t2.f_id) AS resolved FROM fl t2 " +
+                "           GROUP BY t2.f_id, t2.customer_id) g ON g.f_id = t.f_id");
+    }
+
+    @Test
+    void setOperationSubquery_isKept() throws Exception {
+        // A UNION at the top is not a SELECT_NODE, so no grouping can be read off it.
+        assertSubqueryJoinKept(
+                "SELECT t.f_id, g.k AS rules FROM fl t " +
+                "LEFT JOIN (SELECT d.rule_id AS k FROM dim_rule d UNION SELECT t2.f_id FROM fl t2) g " +
+                "  ON g.k = t.f_id");
+    }
+
+    @Test
+    void correlatedLateralSubquery_isKept() throws Exception {
+        // LATERAL is absent from the serialized AST — the ref type stays REGULAR — so what rejects
+        // this is the body naming t, an alias the enclosing FROM defines.
+        assertSubqueryJoinKept(
+                "SELECT t.f_id, g.resolved AS rules FROM fl t " +
+                "LEFT JOIN LATERAL (SELECT t2.f_id, list(t2.customer_id) AS resolved FROM fl t2 " +
+                "                   WHERE t2.customer_id = t.customer_id GROUP BY t2.f_id) g " +
+                "  ON g.f_id = t.f_id");
+    }
+
+    @Test
+    void distinctOnSubquery_isKept() throws Exception {
+        // DISTINCT ON dedups on its targets, not on the select list, so pinning the list proves
+        // nothing about them.
+        assertSubqueryJoinKept(
+                "SELECT t.f_id, g.k AS rules FROM fl t " +
+                "LEFT JOIN (SELECT DISTINCT ON (d.name) d.rule_id AS k FROM dim_rule d) g " +
+                "  ON g.k = t.customer_id");
+    }
+
+    @Test
+    void nonEquiJoinToUniqueSubquery_isKept() throws Exception {
+        assertSubqueryJoinKept(
+                "SELECT t.f_id, g.resolved AS rules FROM fl t " +
+                "LEFT JOIN (SELECT t2.f_id, list(t2.customer_id) AS resolved FROM fl t2 GROUP BY t2.f_id) g " +
+                "  ON g.f_id > t.f_id");
+    }
+
+    @Test
+    void subqueryAliasReferencedOutsideItsOwnOn_isKept() throws Exception {
+        // The body's WHERE still reads the subquery, so it is not unused however provably unique it
+        // is. The body carries an unused select-list entry as well, so projection pruning fires and
+        // the body really is inlined — otherwise this would pass on the bail-out path without ever
+        // reaching the decision under test.
+        String body = "SELECT t.f_id, t.customer_id AS unused_col FROM fl t " +
+                "LEFT JOIN (SELECT t2.f_id, list(t2.customer_id) AS resolved FROM fl t2 GROUP BY t2.f_id) g " +
+                "  ON g.f_id = t.f_id WHERE g.resolved IS NOT NULL";
+        JsonNode outer = Transformations.parseToTree(conn, "SELECT f_id FROM flv");
+        JsonNode pruned = Transformations.pruneUnusedLeftJoins(outer, Transformations.parseToTree(conn, body));
+        assertNotSame(outer, pruned, "the unused select-list entry should have been pruned");
+        assertEquals(1, countJoins(pruned), "the join is read by the body's WHERE, so it stays");
+    }
+
+    @Test
+    void duplicateKeyOutputNames_isKept() throws Exception {
+        // DuckDB exposes `SELECT a.k, b.k ... GROUP BY a.k, b.k` as k and k_1, so `ON g.k = t.k`
+        // pins only the first key. Reading both as "k" would prove a uniqueness that is not there
+        // and multiply the fact rows away.
+        String body = "SELECT t.f_id AS f_id, t.customer_id AS unused_col FROM fl t " +
+                "LEFT JOIN (SELECT a.f_id, b.f_id FROM fl a, fl b GROUP BY a.f_id, b.f_id) g " +
+                "  ON g.f_id = t.f_id";
+        JsonNode outer = Transformations.parseToTree(conn, "SELECT f_id FROM flv");
+        JsonNode pruned = Transformations.pruneUnusedLeftJoins(outer, Transformations.parseToTree(conn, body));
+        if (pruned == outer) return;
+        // Two: the LEFT JOIN that must stay, plus the subquery's own `fl a, fl b` cross join.
+        assertEquals(2, countJoins(pruned), "only one of the two keys is pinned, so the join stays");
+    }
+
+    @Test
+    void duplicateOutputNamesUnderDistinct_isKept() throws Exception {
+        // Same ambiguity on the DISTINCT path: the dedup key is both columns, exposed as f_id and
+        // f_id_1, so `ON g.f_id = t.f_id` pins only the first.
+        String body = "SELECT t.f_id AS f_id, t.customer_id AS unused_col FROM fl t " +
+                "LEFT JOIN (SELECT DISTINCT a.f_id, b.f_id FROM fl a, fl b) g ON g.f_id = t.f_id";
+        JsonNode outer = Transformations.parseToTree(conn, "SELECT f_id FROM flv");
+        JsonNode pruned = Transformations.pruneUnusedLeftJoins(outer, Transformations.parseToTree(conn, body));
+        if (pruned == outer) return;
+        assertEquals(2, countJoins(pruned), "the unpinned second dedup column keeps the join");
+    }
+
+    @Test
+    void innerAliasShadowingAnEnclosingOne_isKept() throws Exception {
+        // The subquery's own alias is t, which the enclosing FROM also uses. SQL scoping means the
+        // inner one wins inside the body, so this join would in fact be safe to drop — it is kept
+        // because the enclosing-scope check cannot tell a shadowing alias from a correlation. A
+        // documented over-conservatism: choosing a distinct inner alias prunes.
+        String body = "SELECT t.f_id, g.r AS rules FROM fl t " +
+                "LEFT JOIN (SELECT t.f_id AS rid, list(t.customer_id) AS r FROM fl t GROUP BY t.f_id) g " +
+                "  ON g.rid = t.f_id";
+        JsonNode outer = Transformations.parseToTree(conn, "SELECT f_id FROM flv");
+        JsonNode pruned = Transformations.pruneUnusedLeftJoins(outer, Transformations.parseToTree(conn, body));
+        if (pruned == outer) return;
+        assertEquals(1, countJoins(pruned));
+    }
+
+    @Test
+    void keyPinnedToItself_isKept() throws Exception {
+        // g.f_id = g.f_id pins nothing: both sides are inside the subquery.
+        assertSubqueryJoinKept(
+                "SELECT t.f_id, g.resolved AS rules FROM fl t " +
+                "LEFT JOIN (SELECT t2.f_id, list(t2.customer_id) AS resolved FROM fl t2 GROUP BY t2.f_id) g " +
+                "  ON g.f_id = g.f_id");
+    }
+
+    // ---- inner aliases of a sibling subquery are not "enclosing" ----
+
+    @Test
+    void secondLookupIsEliminated_thoughItReusesTheFirstsInnerAlias() throws Exception {
+        // Projecting only the first lookup must still drop the second. Both bodies name t2, which
+        // is bound inside each subquery and invisible outside it, so the second is not correlated.
+        JsonNode pruned = prune("SELECT f_id, rules1 FROM flv2", TWO_LOOKUP_VIEW_BODY);
+        assertEquals(1, countJoins(pruned), "only the projected lookup's join should remain");
+        assertEquivalentToView(pruned, "SELECT f_id, rules1 FROM flv2");
+    }
+
+    @Test
+    void neitherLookupProjected_dropsBoth() throws Exception {
+        JsonNode pruned = prune("SELECT f_id FROM flv2", TWO_LOOKUP_VIEW_BODY);
+        assertEquals(0, countJoins(pruned));
+        assertEquivalentToView(pruned, "SELECT f_id FROM flv2");
+    }
+
+    @Test
+    void bothLookupsProjected_keepsBoth() throws Exception {
+        // Every select-list entry is used and neither join is droppable, so there is nothing to
+        // optimize and the input comes back untouched — the view, with both joins, is what runs.
+        assertBailsOut("SELECT f_id, rules1, rules2 FROM flv2", TWO_LOOKUP_VIEW_BODY);
     }
 }
