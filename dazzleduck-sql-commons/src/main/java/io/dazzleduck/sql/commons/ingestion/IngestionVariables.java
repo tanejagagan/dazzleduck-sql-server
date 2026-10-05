@@ -49,13 +49,20 @@ import java.util.Map;
  * <p>When both sources define a name, the relation wins: the file holds the deployment's defaults
  * and the relation is what an operator changes at runtime.
  *
+ * <p>The relation can live anywhere the ingestion connection can read: a DuckLake table or view,
+ * a plain table, or — named by its full {@code catalog.schema.table} path — a SQLite table reached
+ * through {@code ATTACH} (the attach itself belongs in the startup script, which runs before any
+ * queue is served).
+ *
  * <p><b>Expiry.</b> When {@code variables_expiration_column} names a timestamp column, a row whose
  * expiration has passed is treated as absent: the variable is not set, so the transformation reads
  * the config file's value for that name if it declares one, and otherwise {@code NULL}. A row with
  * no expiration ({@code NULL}) never expires. The comparison is made by DuckDB against its own
  * {@code now()}, in the same query that reads the rows, so a stored {@code TIMESTAMP} and a
- * {@code TIMESTAMPTZ} are each compared the way that engine defines — this code never reinterprets
- * a timestamp in another zone. An expiry takes effect on the refresh that follows it, so a value is
+ * {@code TIMESTAMPTZ} are each compared the way that engine defines. The column is cast to
+ * {@code TIMESTAMPTZ} for the comparison, which is what lets a SQLite-backed relation work at all:
+ * SQLite has no timestamp type, so such a column arrives as {@code VARCHAR}. A value that will not
+ * cast is an error naming the variable, not a row that never expires. An expiry takes effect on the refresh that follows it, so a value is
  * live for at most {@code queue_config_refresh_delay_ms} past its expiration.
  *
  * <p><b>Every value is a VARCHAR</b>, as {@code SET VARIABLE} applies it. A transformation
@@ -139,15 +146,23 @@ public record IngestionVariables(Map<String, String> staticVariables, View view)
     }
 
     private Map<String, String> readView(String queueId) {
-        // DuckDB decides whether a row has expired, in the same query that reads it: comparing its
-        // own column against its own now() is the one comparison that cannot disagree with how the
-        // value was stored. A relation with no expiration column selects a constant instead, so
+        // DuckDB decides whether a row has expired, in the same query that reads it: comparing
+        // against its own now() is the one comparison that cannot disagree with how the value was
+        // stored. The cast is what lets the relation live anywhere — a SQLite table reached through
+        // ATTACH presents the column as VARCHAR (SQLite has no timestamp type), and comparing that
+        // to now() is a binder error without it; for a native TIMESTAMP or TIMESTAMPTZ column the
+        // cast changes nothing. TRY_CAST so an unparseable value is reported as such rather than
+        // failing the whole read, and a relation with no expiration column selects constants, so
         // there is a single row-reading path.
-        String expired = view.hasExpiration()
-                ? "(%1$s IS NOT NULL AND %1$s <= now())".formatted(view.expirationColumn())
-                : "false";
-        String sql = "SELECT %s, %s, %s FROM %s"
-                .formatted(view.keyColumn(), view.valueColumn(), expired, view.relation());
+        String cast = view.hasExpiration()
+                ? "TRY_CAST(%s AS TIMESTAMPTZ)".formatted(view.expirationColumn())
+                : null;
+        String badExpiry = cast == null ? "false"
+                : "(%s IS NOT NULL AND %s IS NULL)".formatted(view.expirationColumn(), cast);
+        String expired = cast == null ? "false"
+                : "(%1$s IS NOT NULL AND %1$s <= now())".formatted(cast);
+        String sql = "SELECT %s, %s, %s, %s FROM %s"
+                .formatted(view.keyColumn(), view.valueColumn(), badExpiry, expired, view.relation());
         Map<String, String> rows = new LinkedHashMap<>();
         List<String> expiredNames = new ArrayList<>();
         try (Connection connection = ConnectionPool.getConnection();
@@ -170,6 +185,13 @@ public record IngestionVariables(Map<String, String> staticVariables, View view)
                                     .formatted(queueId, name, NOUN, view.relation()));
                 }
                 if (rs.getBoolean(3)) {
+                    // An expiration that is set but unreadable: silently treating it as "never
+                    // expires" would keep a value alive forever on a typo.
+                    throw new IllegalArgumentException(
+                            "Queue '%s': %s '%s' in %s has an expiration that is not a timestamp"
+                                    .formatted(queueId, NOUN, name, view.relation()));
+                }
+                if (rs.getBoolean(4)) {
                     // Expired: the variable is not set at all, so the file's value for this name
                     // applies if it declares one, and otherwise getvariable() reads NULL.
                     expiredNames.add(name);

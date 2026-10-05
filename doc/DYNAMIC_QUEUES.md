@@ -63,7 +63,14 @@ CREATE TABLE ingestion_queues (
                                        --   used only by manage_tables (see below)
     partition_by     TEXT,             -- reserved; not yet applied at runtime
     min_bucket_size  INTEGER,          -- flush threshold in bytes (overrides global setting)
-    max_delay_ms     INTEGER           -- flush interval in ms (overrides global setting)
+    max_delay_ms     INTEGER,          -- flush interval in ms (overrides global setting)
+    num_partitions       INTEGER,      -- split into N hash-routed sub-queues (NULL/1 = off)
+    partition_expression TEXT,         -- required when num_partitions > 1
+    variables_view       TEXT,         -- full catalog.schema.table path of a key/value relation
+                                       --   holding this queue's session variables (see below)
+    variables_key_column TEXT,         -- name column in that relation (default: key)
+    variables_value_column TEXT,       -- value column in that relation (default: value)
+    variables_expiration_column TEXT   -- optional timestamp column; an expired row stops applying
 );
 
 -- Single-row counter the collector polls for change detection. Writers bump it (in the same
@@ -76,6 +83,39 @@ CREATE TABLE schema_version (
 
 > The write location and partition columns are **not** stored in the registry — they are derived
 > from the DuckLake table's own metadata (the table's `data_path` and partition spec).
+
+### Session variables
+
+A queue's transformation can read values with `getvariable('name')` instead of carrying them as
+literals. The registry does not store the values, only the `catalog.schema.table` path of a
+key/value relation holding them, so changing a value is a write to that relation and takes effect
+on the next refresh — no `schema_version` bump, no restart.
+
+That relation can live in this same SQLite file. The registry's own attachment is private to the
+loader, so the ingestion connection needs its own, from the startup script:
+
+```sql
+-- startup script, on the ingestion connection
+INSTALL sqlite; LOAD sqlite;
+ATTACH '/var/data/ingestion-queues.db' AS reg (TYPE sqlite);
+```
+
+```sql
+-- in the registry file
+CREATE TABLE queue_vars(key TEXT, value TEXT, expires_at TEXT);
+INSERT INTO queue_vars VALUES ('env', 'prod', NULL);
+
+BEGIN;
+UPDATE ingestion_queues
+   SET variables_view = 'reg.main.queue_vars', variables_expiration_column = 'expires_at'
+ WHERE ingestion_queue = 'logs';
+UPDATE schema_version SET version = version + 1 WHERE id = 1;
+COMMIT;
+```
+
+SQLite has no timestamp type, so an expiration is ISO text; it is cast for the comparison, and text
+that will not cast is reported as an error rather than read as "never expires". A row whose
+expiration has passed stops being applied, so the transformation reads `NULL` for that name.
 
 ## Target Table and Output Location
 

@@ -90,7 +90,7 @@ Core DuckDB abstraction (JDK 21). Key classes:
 - `Transformations.java` (~2300 lines) — SQL ↔ JSON AST via `json_serialize_sql`, filter-CTE injection (RLS), LEFT-JOIN pruning, limit injection, table-reference collection
 - `ExpressionFactory.java` / `ExpressionConstants.java` — build SQL AST nodes / AST string constants
 - `Fingerprint.java` — SHA-256 of normalized query (literals replaced with placeholders; does not work with CTEs)
-- `ingestion/` — `BulkIngestQueue` (batching, backpressure, producer-id dedup, drain), `ParquetIngestionQueue` (COPY-based writes, transformations via `__this` placeholder), `IngestionVariables` (per-queue `SET VARIABLE` values read by a transformation via `getvariable`, from the conf file and/or a reloadable key/value relation with optional expiry), `WatermarkSpec` (per-group MIN/MAX timestamp + row count committed in the DuckLake post-ingestion transaction), `DuckLakeIngestionHandler`, `DynamicDuckLakeIngestionTaskFactoryProvider` (SQLite-backed queue registry)
+- `ingestion/` — `BulkIngestQueue` (batching, backpressure, producer-id dedup, drain), `ParquetIngestionQueue` (COPY-based writes, transformations via `__this` placeholder), `IngestionVariables` (per-queue `SET VARIABLE` values read by a transformation via `getvariable`, from the conf file, the SQLite registry, and/or a reloadable key/value relation with optional expiry), `WatermarkSpec` (per-group MIN/MAX timestamp + row count committed in the DuckLake post-ingestion transaction), `DuckLakeIngestionHandler`, `DynamicDuckLakeIngestionTaskFactoryProvider` (SQLite-backed queue registry)
 - `authorization/` — `SqlAuthorizer` with `NOOPAuthorizer`, `SelectOnlyAuthorizer`, `RestrictedDatasourceOnlyAuthorizer`, `RestrictedReadOnlyAuthorizer`, `RedirectAuthorizer` (external `/resolve` endpoint)
 - Partition pruning: `ducklake/DucklakePartitionPruning.java` (DuckLake metadata tables), `hive/HivePartitionPruning.java`, `delta/PartitionPruning.java` (Delta Kernel), `planner/SplitPlanner.java` + `planner/PartitionPrunerV2.java`
 - `TableConfigProvider.java` — config overrides read from a key/value table
@@ -216,8 +216,14 @@ the variable is no longer set, so the transformation reads the file's value for 
 `now()`, and takes effect on the refresh that follows it. Names and values go through the same
 validation and escaping as the JWT claim (`SqlVariables`, shared with `SessionVariables`).
 
-Not yet wired into the SQLite registry used by `DynamicDuckLakeIngestionTaskFactoryProvider` — a
-dynamic queue carries no variables.
+A dynamic queue gets them the same way, from its SQLite registry row: the `variables_view`,
+`variables_key_column`, `variables_value_column` and `variables_expiration_column` columns name the
+relation (static pairs are config-file only). The registry stores only the relation's
+`catalog.schema.table` path, so changing a value is a write to that relation — no `schema_version`
+bump. The relation may be a table in the registry file itself, which the startup script must
+`ATTACH` on the ingestion connection, since the registry loader's own attachment is private.
+A SQLite column arrives as `VARCHAR`, so an expiration is cast for the comparison; text that will
+not cast is an error, not a row that never expires.
 
 **External access control** (for restricted modes):
 ```sql

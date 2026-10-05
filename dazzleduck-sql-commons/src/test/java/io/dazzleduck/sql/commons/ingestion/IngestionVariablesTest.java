@@ -5,6 +5,9 @@ import io.dazzleduck.sql.commons.ConnectionPool;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.file.Path;
 
 import java.util.Map;
 
@@ -269,6 +272,59 @@ class IngestionVariablesTest {
     @AfterEach
     void dropExpiringRelation() throws Exception {
         ConnectionPool.execute("DROP TABLE IF EXISTS " + EXPIRING);
+    }
+
+    // -----------------------------------------------------------------------
+    // The relation can be a SQLite table, named by its full path
+    // -----------------------------------------------------------------------
+
+    @Test
+    void variablesLoadFromAnAttachedSqliteTableByItsFullPath(@TempDir Path tempDir) throws Exception {
+        // The same place the dynamic queue registry lives. SQLite has no timestamp type, so
+        // expires_at arrives as VARCHAR — comparing it to now() is a binder error without the cast
+        // the loader applies, which is what this covers.
+        String dbPath = tempDir.resolve("vars.db").toString();
+        ConnectionPool.executeBatch(new String[]{"INSTALL sqlite", "LOAD sqlite"});
+        try (var conn = ConnectionPool.getConnection()) {
+            ConnectionPool.executeBatch(conn, new String[]{
+                    "ATTACH '%s' AS vars_db (TYPE sqlite)".formatted(dbPath),
+                    "CREATE TABLE vars_db.main.queue_vars(key VARCHAR, value VARCHAR, expires_at TIMESTAMP)",
+                    "INSERT INTO vars_db.main.queue_vars VALUES ('env', 'prod', NULL)",
+                    "INSERT INTO vars_db.main.queue_vars VALUES "
+                            + "('promo', 'summer', now()::TIMESTAMP - INTERVAL 1 DAY)",
+                    "INSERT INTO vars_db.main.queue_vars VALUES "
+                            + "('tier', 'hot', now()::TIMESTAMP + INTERVAL 1 DAY)"
+            });
+        }
+        try {
+            var variables = fromConfig("""
+                    variables_view              = "vars_db.main.queue_vars"
+                    variables_expiration_column = "expires_at"
+                    """);
+            // 'promo' expired; 'env' never expires; 'tier' is still live.
+            assertEquals(Map.of("env", "prod", "tier", "hot"), variables.resolve(QUEUE));
+        } finally {
+            ConnectionPool.execute("DETACH vars_db");
+        }
+    }
+
+    @Test
+    void anExpirationThatIsNotATimestampIsAnError() throws Exception {
+        // Text that will not cast must not read as "never expires" — that would keep a value alive
+        // forever on a typo. Most likely on a SQLite relation, where the column is free-form text.
+        createExpiringRelation("VARCHAR", "'token', 'live', 'not-a-date'");
+        var ex = assertThrows(IllegalArgumentException.class, () -> expiringConfig().resolve(QUEUE));
+        assertTrue(ex.getMessage().contains("not a timestamp"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("token"), ex.getMessage());
+    }
+
+    @Test
+    void aTextExpirationThatParsesIsHonoured() throws Exception {
+        // The VARCHAR case that works: ISO text, as a SQLite column holds it.
+        createExpiringRelation("VARCHAR",
+                "'gone', 'x', strftime(now() - INTERVAL 1 DAY, '%Y-%m-%d %H:%M:%S')",
+                "'live', 'y', strftime(now() + INTERVAL 1 DAY, '%Y-%m-%d %H:%M:%S')");
+        assertEquals(Map.of("live", "y"), expiringConfig().resolve(QUEUE));
     }
 
     // -----------------------------------------------------------------------

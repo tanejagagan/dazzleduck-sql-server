@@ -164,4 +164,84 @@ class DynamicQueueRepositoryTest {
             handler.closeQueues();
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Session variables
+    // -----------------------------------------------------------------------
+
+    @Test
+    void loadsTheVariablesRelationNamedByARow() throws Exception {
+        String dbPath = tempDir.resolve("vars.db").toString();
+        try (DynamicQueueRepository repo = new DynamicQueueRepository(dbPath)) {
+            repo.init();
+            writeToDb(dbPath, "INSERT INTO " + DynamicQueueRepository.ATTACHMENT + ".ingestion_queues "
+                    + "(ingestion_queue, catalog, schema_name, table_name, variables_view,"
+                    + " variables_key_column, variables_expiration_column) VALUES "
+                    + "('logs', 'lake', 'main', 'logs', 'vars_db.main.logs_vars', 'k', 'expires_at')");
+            try (Connection conn = repo.openReadOnlyConnection()) {
+                var variables = DynamicQueueRepository.loadAll(conn).get("logs").variables();
+                assertTrue(variables.hasView());
+                // Named by its full path, so it can be a table in this same SQLite file.
+                assertEquals("vars_db.main.logs_vars", variables.view().relation());
+                assertEquals("k", variables.view().keyColumn());
+                assertEquals("value", variables.view().valueColumn(), "unset column falls back");
+                assertEquals("expires_at", variables.view().expirationColumn());
+            }
+        }
+    }
+
+    @Test
+    void aRowNamingNoRelationCarriesNoVariables() throws Exception {
+        String dbPath = tempDir.resolve("novars.db").toString();
+        try (DynamicQueueRepository repo = new DynamicQueueRepository(dbPath)) {
+            repo.init();
+            writeToDb(dbPath, "INSERT INTO " + DynamicQueueRepository.ATTACHMENT + ".ingestion_queues "
+                    + "(ingestion_queue, catalog, schema_name, table_name) VALUES "
+                    + "('logs', 'lake', 'main', 'logs')");
+            try (Connection conn = repo.openReadOnlyConnection()) {
+                assertEquals(IngestionVariables.NONE,
+                        DynamicQueueRepository.loadAll(conn).get("logs").variables());
+            }
+        }
+    }
+
+    @Test
+    void anUnusableRelationNameCostsOnlyThatQueuesVariables() throws Exception {
+        // The reload runs for every queue at once; one bad row must not stop the others.
+        String dbPath = tempDir.resolve("badvars.db").toString();
+        try (DynamicQueueRepository repo = new DynamicQueueRepository(dbPath)) {
+            repo.init();
+            writeToDb(dbPath, "INSERT INTO " + DynamicQueueRepository.ATTACHMENT + ".ingestion_queues "
+                    + "(ingestion_queue, catalog, schema_name, table_name, variables_view) VALUES "
+                    + "('logs', 'lake', 'main', 'logs', 'vars; DROP TABLE orders')");
+            try (Connection conn = repo.openReadOnlyConnection()) {
+                var all = DynamicQueueRepository.loadAll(conn);
+                assertEquals(IngestionVariables.NONE, all.get("logs").variables());
+                assertEquals("logs", all.get("logs").table(), "the rest of the row still loads");
+            }
+        }
+    }
+
+    @Test
+    void aRegistryPredatingTheVariablesColumnsGainsThem() throws Exception {
+        // A registry created by an older build has no variables_* columns; init() must add them
+        // rather than fail, the same way it does for the partitioning columns.
+        String dbPath = tempDir.resolve("legacy.db").toString();
+        // The schema exactly as the previous build created it: everything but the variables columns.
+        writeToDb(dbPath, "CREATE TABLE " + DynamicQueueRepository.ATTACHMENT + ".ingestion_queues ("
+                + "ingestion_queue TEXT PRIMARY KEY, catalog TEXT NOT NULL, schema_name TEXT NOT NULL,"
+                + " table_name TEXT NOT NULL, transformation TEXT, view_name TEXT, input_table TEXT,"
+                + " input_schema TEXT, partition_by TEXT, num_partitions INTEGER,"
+                + " partition_expression TEXT, min_bucket_size INTEGER, max_delay_ms INTEGER)");
+        writeToDb(dbPath, "INSERT INTO " + DynamicQueueRepository.ATTACHMENT + ".ingestion_queues "
+                + "(ingestion_queue, catalog, schema_name, table_name) VALUES ('logs', 'lake', 'main', 'logs')");
+        try (DynamicQueueRepository repo = new DynamicQueueRepository(dbPath)) {
+            repo.init();
+            try (Connection conn = repo.openReadOnlyConnection()) {
+                var mapping = DynamicQueueRepository.loadAll(conn).get("logs");
+                assertEquals(IngestionVariables.NONE, mapping.variables());
+                assertEquals("logs", mapping.table());
+            }
+        }
+    }
 }

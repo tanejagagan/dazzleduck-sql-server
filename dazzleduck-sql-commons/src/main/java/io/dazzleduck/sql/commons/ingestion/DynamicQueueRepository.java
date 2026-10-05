@@ -71,7 +71,11 @@ public class DynamicQueueRepository implements AutoCloseable {
                     num_partitions       INTEGER,
                     partition_expression TEXT,
                     min_bucket_size      INTEGER,
-                    max_delay_ms         INTEGER
+                    max_delay_ms         INTEGER,
+                    variables_view       TEXT,
+                    variables_key_column TEXT,
+                    variables_value_column TEXT,
+                    variables_expiration_column TEXT
                 )""".formatted(ATTACHMENT));
             // Migrate registries created before the partitioning columns existed. SQLite's
             // ADD COLUMN has no IF NOT EXISTS, so probe the existing columns first and only add
@@ -82,6 +86,11 @@ public class DynamicQueueRepository implements AutoCloseable {
             }
             if (!existing.contains("partition_expression")) {
                 st.execute("ALTER TABLE " + ATTACHMENT + ".ingestion_queues ADD COLUMN partition_expression TEXT");
+            }
+            for (String column : VARIABLES_COLUMNS) {
+                if (!existing.contains(column)) {
+                    st.execute("ALTER TABLE " + ATTACHMENT + ".ingestion_queues ADD COLUMN " + column + " TEXT");
+                }
             }
             st.execute("""
                 CREATE TABLE IF NOT EXISTS %s.schema_version (
@@ -95,6 +104,15 @@ public class DynamicQueueRepository implements AutoCloseable {
         }
         logger.debug("SQLite ingestion repository initialised at {}", dbPath);
     }
+
+    /**
+     * Columns naming a queue's session-variable relation, added to registries created before they
+     * existed. All TEXT: a relation path and the column names inside it (see
+     * {@link IngestionVariables}).
+     */
+    private static final java.util.List<String> VARIABLES_COLUMNS = java.util.List.of(
+            "variables_view", "variables_key_column", "variables_value_column",
+            "variables_expiration_column");
 
     /** Lower-cased column names currently on {@code ingestion_queues}, via its own statement. */
     private static java.util.Set<String> existingColumns(Connection conn) throws SQLException {
@@ -211,7 +229,8 @@ public class DynamicQueueRepository implements AutoCloseable {
      * {@code input_schema}, the latter used only by {@code manageTables} to derive the table columns);
      * the {@code partition_by} column is reserved for future use and not read here. The
      * {@code num_partitions}/{@code partition_expression} columns split a queue into hash-routed
-     * sub-queues (see {@link PartitionedIngestionQueue}).
+     * sub-queues (see {@link PartitionedIngestionQueue}). The {@code variables_*} columns name a
+     * key/value relation holding the queue's session variables (see {@link IngestionVariables}).
      */
     public static Map<String, QueueIdToTableMapping> loadAll(Connection conn) throws SQLException {
         Map<String, QueueIdToTableMapping> result = new LinkedHashMap<>();
@@ -219,7 +238,9 @@ public class DynamicQueueRepository implements AutoCloseable {
              ResultSet rs = st.executeQuery(
                      "SELECT ingestion_queue, catalog, schema_name, table_name," +
                      " transformation, view_name, input_table, input_schema," +
-                     " num_partitions, partition_expression FROM " + ATTACHMENT + ".ingestion_queues")) {
+                     " num_partitions, partition_expression, variables_view," +
+                     " variables_key_column, variables_value_column, variables_expiration_column" +
+                     " FROM " + ATTACHMENT + ".ingestion_queues")) {
             while (rs.next()) {
                 String queueId     = rs.getString("ingestion_queue");
                 String catalog     = rs.getString("catalog");
@@ -238,10 +259,48 @@ public class DynamicQueueRepository implements AutoCloseable {
                 result.put(queueId, new QueueIdToTableMapping(
                         queueId, catalog, schema, table, Map.of(), transform, view, inputTable)
                         .withInputSchema(inputSchema)
-                        .withPartitioning(numPartitions, partitionExpr));
+                        .withPartitioning(numPartitions, partitionExpr)
+                        .withVariables(variablesOf(queueId, rs)));
             }
         }
         return result;
+    }
+
+    /**
+     * The queue's session variables as the registry describes them: a relation to read them from,
+     * or {@link IngestionVariables#NONE} when the row names none. Static pairs are not stored here
+     * — a registry-driven deployment changes values by writing to that relation, which is the point
+     * of running this provider.
+     *
+     * <p>The relation is named by its full path, so it can be a table in this very SQLite file
+     * (attached again on the ingestion connection by the startup script), a DuckLake view, or
+     * anything else that connection can read.
+     */
+    private static IngestionVariables variablesOf(String queueId, ResultSet rs) throws SQLException {
+        String relation = rs.getString("variables_view");
+        if (relation == null || relation.isBlank()) {
+            return IngestionVariables.NONE;
+        }
+        String keyColumn = columnOr(rs, "variables_key_column", "key");
+        String valueColumn = columnOr(rs, "variables_value_column", "value");
+        String expiration = rs.getString("variables_expiration_column");
+        try {
+            return new IngestionVariables(Map.of(), new IngestionVariables.View(
+                    relation.trim(), keyColumn, valueColumn,
+                    expiration == null || expiration.isBlank() ? null : expiration.trim()));
+        } catch (IllegalArgumentException e) {
+            // One bad row must not take the whole registry down with it: the reload would fail and
+            // every other queue would keep running on stale mappings, with nothing saying why.
+            logger.warn("Queue '{}': ignoring its variables, the registry row is not usable: {}",
+                    queueId, e.getMessage());
+            return IngestionVariables.NONE;
+        }
+    }
+
+    /** A column's trimmed value, or {@code fallback} when the row leaves it unset. */
+    private static String columnOr(ResultSet rs, String column, String fallback) throws SQLException {
+        String value = rs.getString(column);
+        return value == null || value.isBlank() ? fallback : value.trim();
     }
 
     @Override
