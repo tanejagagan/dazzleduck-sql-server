@@ -114,6 +114,9 @@ public class ExpressionConstants {
     public static final String FIELD_QUALIFY = "qualify";
     public static final String FIELD_HAVING = "having";
     public static final String FIELD_AGGREGATE_HANDLING = "aggregate_handling";
+    /** A result modifier's type: SELECT DISTINCT (DISTINCT ON carries its targets with it). */
+    public static final String DISTINCT_MODIFIER_TYPE = "DISTINCT_MODIFIER";
+    public static final String FIELD_DISTINCT_ON_TARGETS = "distinct_on_targets";
     public static final String AGGREGATE_HANDLING_STANDARD = "STANDARD_HANDLING";
 
     // Type ID constants for data types

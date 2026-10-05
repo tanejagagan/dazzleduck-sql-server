@@ -77,8 +77,9 @@ A `JOIN` node is eliminable only when **all** of these hold:
 
 1. `join_type == "LEFT"` and the candidate table is the **`right`** arm (the
    null-supplying side). The preserved `left` / fact side is never dropped.
-2. The `right` arm is a **`BASE_TABLE`**. (v1 restriction; subquery / nested-join
-   right arms are out of scope.)
+2. The `right` arm is a **`BASE_TABLE`**, or a **`SUBQUERY` whose uniqueness per
+   left row is provable from its SQL** (see "Unique derived tables" below).
+   Nested-join right arms remain out of scope.
 3. **No column of the right arm is referenced** anywhere in the *retained* tree —
    the view's (pruned) `select_list`, `where_clause`, `group_expressions`,
    `having`, `qualify`, modifiers (ORDER BY / etc.), **and the `ON` conditions of
@@ -87,10 +88,46 @@ A `JOIN` node is eliminable only when **all** of these hold:
    `CONJUNCTION_AND` of them (`ref_type == REGULAR`, `using_columns` empty). This
    is a *shape* guard only.
 
+### Unique derived tables
+
+A `SUBQUERY` right arm carries no uniqueness guarantee of its own, so it is
+eliminable only when the SQL itself proves at most one row matches each left row:
+the body groups (or dedups) on a set of keys and **every one of those keys is
+equated by this join's `ON` condition to an expression outside the subquery**. A
+left row then selects a single group. Unlike the base-table case below, this
+relies on no trusted assumption.
+
+Accepted:
+
+- a `SELECT_NODE` with a non-empty, single-set `GROUP BY`, each key projected and
+  pinned by `ON`;
+- a plain `SELECT DISTINCT` whose every projected column is pinned by `ON`;
+- a `t(a, b)` column-alias list, which renames the keys positionally.
+
+Kept (uniqueness not provable):
+
+| Shape | Why |
+|---|---|
+| `UNION` etc. at the top | not a `SELECT_NODE`; no grouping to read |
+| `GROUP BY ALL` | serializes with **no** group expressions |
+| `GROUPING SETS` / `ROLLUP` / `CUBE` | serialize as several grouping sets, so one key value can appear in several rows |
+| a group key `ON` does not pin | one left row may match many groups |
+| a key the subquery exposes under no referenceable name | `ON` could not name it |
+| `DISTINCT ON (...)` | dedups on its targets, which need not be projected |
+| a correlated body | its row count per left row is not what its `GROUP BY` says |
+
+**`LATERAL` is not recorded in the serialized AST** — `ref_type` stays `REGULAR`
+— so correlation is detected from the references themselves: a body naming
+anything the enclosing `FROM` defines, or naming anything no scope inside it
+defines, is correlated. A `LATERAL` body referencing nothing outside behaves as a
+plain subquery and is treated as one. (Its usual `ON true` also fails the
+equi-join guard.)
+
 ### Trusted assumption (stated loudly)
 
-Per the design decision, v1 **trusts** that each dimension table is unique on its
-join key and performs **no** row-multiplication check. If a dimension is *not*
+For a **base table** right arm, v1 **trusts** that the dimension is unique on its
+join key and performs **no** row-multiplication check. (The derived-table case
+above does not need this trust — its uniqueness is proven.) If a dimension is *not*
 unique on the join key, a `LEFT JOIN` multiplies fact rows, and eliminating it
 changes row count / aggregate results even though no dimension column is selected.
 **This is the single biggest correctness caveat** and is documented on the API.
@@ -99,7 +136,7 @@ Scope decisions locked for v1:
 
 | Decision | Choice |
 |---|---|
-| Row-multiplication safety | Trust join-key uniqueness (no verification) |
+| Row-multiplication safety | Base table: trust join-key uniqueness. Derived table: prove it from `GROUP BY` / `DISTINCT` |
 | Join types handled | `LEFT` only |
 | Input / output | Outer query over a view; inline the view and prune |
 
@@ -159,7 +196,8 @@ no-op by reference identity. Explicit bail-outs:
   `v.*`): both expand to view columns that cannot be enumerated at the AST level.
 - **Unqualified** column reference that cannot be attributed to a single arm.
 - `USING(...)` join (null `condition`, populated `using_columns`).
-- `right` arm not a base table; non-equi `ON` condition.
+- `right` arm neither a base table nor a provably-unique subquery; non-equi `ON`
+  condition.
 - More than one `BASE_TABLE` in the outer `FROM`.
 - **Outer `FROM` resolves to a WITH-declared CTE** — a local CTE shadows any
   catalog view of the same name (`WITH fv AS (…) SELECT … FROM fv`), so the
