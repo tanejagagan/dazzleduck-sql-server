@@ -7,7 +7,8 @@ indexes are worth adding, why partitioning is the wrong tool here, and what chan
 DuckDB file as the catalog instead.
 
 Everything below was measured rather than reasoned about. See [Method](#method) for the setup and
-its limits before trusting a specific number.
+its limits before trusting a specific number — and note that one recommendation has since been
+corrected by production, which is called out where it applies.
 
 ## What to do
 
@@ -15,18 +16,21 @@ its limits before trusting a specific number.
 CREATE INDEX CONCURRENTLY ON ducklake_data_file          (table_id, begin_snapshot);
 CREATE INDEX CONCURRENTLY ON ducklake_delete_file        (table_id, begin_snapshot);
 CREATE INDEX CONCURRENTLY ON ducklake_file_column_stats  (table_id, column_id);
-CREATE INDEX CONCURRENTLY ON ducklake_file_column_stats  USING brin (data_file_id);
+CREATE INDEX CONCURRENTLY ON ducklake_file_column_stats  (data_file_id);
 ```
 
 All four are zero-downtime, need no schema migration, and leave every primary key untouched. Do not
 partition these tables — see [Why not partitioning](#why-not-partitioning).
 
-If you run the compaction service, also summarise the BRIN index at the start of each housekeeping
-pass, before `ducklake_merge_adjacent_files`:
+> **Changed from an earlier revision.** The fourth index was `USING brin (data_file_id)`, on the
+> strength of a measured heap correlation of 0.9999642 — measured on an insert-only table, with no
+> compaction running. **It did not hold in production**: once compaction deletes stats rows and new
+> ids are written into the freed space, the planner stops using the BRIN index and runs a sequential
+> scan, so the compaction delete gets no benefit at all. It is now a plain btree. See
+> [Why a btree on `data_file_id`](#why-a-btree-on-data_file_id).
 
-```sql
-SELECT brin_summarize_new_values('<brin index name>');
-```
+A btree needs no summarisation, so the compaction service no longer has anything to run before
+`ducklake_merge_adjacent_files`.
 
 ## What the catalog actually looks like
 
@@ -107,7 +111,7 @@ The covering `INCLUDE` variant is another 5x but costs 264 MB against 25 MB, and
 depend on a current visibility map, so on a table this write-heavy they decay toward heap fetches
 between vacuums. Start without it.
 
-### Why BRIN for `data_file_id`
+### Why a btree on `data_file_id`
 
 Compaction deletes stats by file, with no `table_id`:
 
@@ -122,47 +126,55 @@ is unusable. You need a second, `data_file_id`-leading index whatever you choose
 |---|---|---|
 | `(table_id, column_id)` only | 139.99 ms | Seq Scan |
 | `(table_id, column_id, data_file_id)` only | 138.96 ms | **Seq Scan** |
-| `(data_file_id)` btree | 1.20 ms | Index Scan |
+| **`(data_file_id)` btree** | **1.20 ms** | **Index Scan** |
 | `(data_file_id)` BRIN | 4.10 ms | Bitmap Heap Scan |
 
-BRIN is viable because `data_file_id` comes from the monotonic `next_file_id` counter and all rows
-for a file are written together, so the heap is already in `data_file_id` order:
+The btree is both the fastest option measured and the one that survives contact with production.
+Take it.
 
-```
-correlation of data_file_id = 0.9999642
-```
+#### Why this used to say BRIN, and what went wrong
 
-BRIN is preferable because of the write asymmetry. A BRIN insert creates no index tuple at all — it
-only widens the current range summary, which for an ascending column usually means extending the
-max. No per-row entry, no page splits:
+BRIN looked viable in the lab: `data_file_id` comes from the monotonic `next_file_id` counter and all
+rows for a file are written together, so the synthetic heap was almost perfectly ordered
+(correlation 0.9999642), and BRIN was only 2.9 ms behind the btree on the batch delete while costing
+a 900x smaller index and far less on insert:
 
 | Insert 60k stats rows | Time | WAL | Index size |
 |---|---|---|---|
 | no indexes | 57 ms | 7.8 MB | — |
 | `btree(data_file_id)` only | 85 ms | 11.9 MB | 29 MB |
 | `btree(table_id, column_id)` only | 72 ms | 12.0 MB | 33 MB |
-| both btree | 116 ms | 16.1 MB | 54 MB |
-| **BRIN + `btree(table_id, column_id)`** | **86 ms** | **12.0 MB** | **33 MB + 32 kB** |
+| **both btree** (recommended) | **116 ms** | **16.1 MB** | **54 MB** |
+| BRIN + `btree(table_id, column_id)` | 86 ms | 12.0 MB | 33 MB + 32 kB |
 
-Note that `btree(data_file_id)` is the *more* expensive of the two on insert despite being on an
-ascending column — it has one entry per row and no duplicates to deduplicate. Swapping it for BRIN
-is a 900x smaller index for 2.9 ms on a batch delete.
+**In production the planner did not use the BRIN index at all** — the compaction delete ran as a
+sequential scan, so none of that write saving bought anything on the read side. The lab result was
+not reproduced by the real catalog.
 
-### BRIN summarisation, and why the compactor cares
+What the measurement left out explains it: **the benchmark only ever inserted**. No compaction ran
+and no stats rows were ever deleted, so the heap grew strictly append-only and the 0.9999642
+correlation held by construction. That ordering is the one thing BRIN depends on, and it is exactly
+what a live catalog does not provide.
 
-BRIN cannot prune ranges it has not summarised, and compaction targets *recently written* files —
-exactly the unsummarised tail:
+The mechanism is ordinary Postgres behaviour rather than anything measured here: compaction deletes
+stats rows by file, those dead tuples free space inside old low-`data_file_id` blocks, and once
+vacuum reclaims it the next inserts — carrying the *highest* ids — are placed there. New ids land
+behind old ones, each block range widens toward the whole id space, every range matches any
+predicate, and a BRIN bitmap scan degenerates into reading everything. The planner costs that
+correctly and picks the sequential scan. Compaction, the workload this index exists to serve, is
+what destroys the ordering the index needed.
 
-```
-DELETE on just-inserted ids, BRIN default        9.68 ms  [7107 buffers]
-DELETE on just-inserted ids, autosummarize = on  8.63 ms  [7139 buffers]
-after brin_summarize_new_values()                  —      [1107 buffers]
-```
+What was observed in production is the outcome — no index usage, a sequential scan. The
+`pg_stats.correlation` value at that point was not captured; if you hit this, it is the number worth
+recording alongside the plan.
 
-`autosummarize = on` does not help promptly, because it piggybacks on autovacuum. Since the bundled
-minor-compaction tier runs every minute against freshly written files, the unsummarised case is the
-*normal* case here — which is still only ~10 ms per pass, so it does not change the recommendation,
-but an explicit `brin_summarize_new_values()` at the top of the housekeeping pass makes it ~1 ms.
+A btree has none of this fragility: one entry per row, ordered by key regardless of heap layout, and
+no summarisation step for a background job to remember. It costs 30 ms more per 60k inserted stats
+rows (116 ms versus 86 ms) and about 29 MB. That is the price of the delete actually being indexed.
+
+If you are diagnosing this on your own catalog, the two things worth looking at are `correlation`
+for the column in `pg_stats` and whether `EXPLAIN (ANALYZE, BUFFERS)` on the compaction `DELETE`
+reports an index scan at all.
 
 ### Leave `deduplicate_items` alone
 
@@ -301,9 +313,11 @@ which are automatic.
 
 ## Write amplification, and the one structural lever
 
-The indexes above cost roughly 3x on inserts into `ducklake_file_column_stats` (57 ms -> 86 ms per
-60k rows with BRIN, versus 116 ms with two btrees). That is worth 8x on reads and 115x on the
-compaction delete, but it has to be budgeted.
+The indexes above cost roughly 2x on inserts into `ducklake_file_column_stats` (57 ms -> 116 ms per
+60k rows with the two btrees). That is worth 8x on reads and 115x on the compaction delete, but it
+has to be budgeted. The BRIN variant was cheaper on insert (86 ms) and is the obvious thing to reach
+for to claw that back — it did not work in production; see
+[Why a btree on `data_file_id`](#why-a-btree-on-data_file_id).
 
 The structural fix is to write fewer stats rows, and since the table is `files x columns`, file count
 is the only dial. There is no DuckLake setting to skip stats for uninteresting columns — the
@@ -331,15 +345,21 @@ catalogs. A different DuckLake version may emit different SQL, so re-capture bef
 predicate table.
 
 Index benchmarks are **synthetic**: catalog tables generated to match DuckLake's real DDL, column
-types and insertion order, then populated to the stated scale. They are best-of-N statement
+types and insertion order, then populated to the stated scale. They were run on
+**insert-only tables — no compaction, no file deletion, no vacuum churn** — which is what made the
+BRIN result unreachable in production, and is worth remembering before trusting any other
+ordering-dependent number here. They are best-of-N statement
 execution times with a warm cache and a single client, excluding commit fsync. Treat them as
 relative comparisons between index choices, not as absolute latency predictions. In particular:
 
 - No concurrency was tested. If many clients hit the catalog at once, fsync and lock contention may
   dominate, and the parallelism advice above becomes more important than the index choice.
-- Heap correlation drives several conclusions. The BRIN recommendation depends on
-  `data_file_id` correlation staying near 1.0; if the stats table is ever rewritten or re-clustered
-  such that it breaks, BRIN degrades toward a full scan and a btree becomes the right choice again.
+- Heap correlation drove the original BRIN recommendation, and **this caveat came true against it**:
+  the benchmark never deleted a row, so correlation stayed near 1.0 artificially. A production
+  catalog running compaction reuses freed space in old blocks for new ids, the planner stopped using
+  the BRIN index, and the compaction delete fell back to a sequential scan. The recommendation is
+  now a btree. Treat any conclusion here that rests on physical ordering as provisional until it has
+  run against a catalog that is being compacted.
 - The `ducklake_data_file` partitioning conclusion was tested at 300k and 3M rows, with both
   contiguous and interleaved physical layouts. Partitioning did win in one case — 100 tables with a
   scattered layout, 2.25 ms vs 1.42 ms — and lost once table count grew to 1000.
