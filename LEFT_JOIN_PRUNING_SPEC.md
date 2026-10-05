@@ -117,6 +117,7 @@ Kept (uniqueness not provable):
 | `GROUP BY 1`, or `GROUP BY <select alias>` | serialize as a constant or a bare column ref, which match no select-list entry structurally — a missed case, not a wrong one |
 | `DISTINCT ON (...)` | dedups on its targets, which need not be projected |
 | a correlated body | **conservative**: not analysed here (see below) |
+| a body whose own alias shadows one in the enclosing `FROM` | **conservative**: indistinguishable from a correlation here, though SQL scoping makes it safe. A distinct inner alias prunes |
 
 Excluding a correlated body is a **conservative restriction, not a soundness requirement**: with
 every grouping key pinned, a correlated body still yields at most one row per left row, because the

@@ -1929,9 +1929,16 @@ public class Transformations {
      * this code does not analyse what the correlation does.
      *
      * <p>Two signals, because the serialized AST does not record LATERAL: the body naming something
-     * the enclosing FROM defines, and the body naming something no scope inside it defines (a
-     * reference reaching further out). Aliases defined in nested scopes count as defined, so an
-     * inner subquery's own tables are not mistaken for outer references.
+     * the enclosing FROM binds in its own scope, and the body naming something no scope inside it
+     * binds (a reference reaching further out). Aliases bound in nested scopes count as bound, so
+     * an inner subquery's own tables are not mistaken for outer references.
+     *
+     * <p>The second signal is the general one: a reference to the enclosing scope names something
+     * the body does not bind, so it is caught there anyway. The first adds exactly one case — a body
+     * whose own alias <em>shadows</em> an enclosing one. SQL scoping gives the inner binding, so
+     * such a join would in fact be safe to drop; it is kept because nothing here distinguishes
+     * shadowing from correlation. Deliberately conservative: the cost is a kept join, and a
+     * distinct inner alias prunes.
      */
     private static boolean isCorrelatedBody(ObjectNode join, JsonNode body) {
         UsageCounts used = new UsageCounts();

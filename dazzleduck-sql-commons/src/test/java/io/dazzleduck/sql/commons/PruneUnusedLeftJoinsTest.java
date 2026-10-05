@@ -1252,6 +1252,28 @@ public class PruneUnusedLeftJoinsTest {
         assertEquivalentToView(pruned, "SELECT f_id FROM flvd");
     }
 
+    @Test
+    void reversedEqualityOrder_stillPinsTheKey() throws Exception {
+        // ON t.f_id = g.rid rather than g.rid = t.f_id: the subquery column sits on the right of
+        // the equality, which says nothing about whether it is pinned.
+        String body = "SELECT t.f_id, g.r AS rules FROM fl t " +
+                "LEFT JOIN (SELECT t2.f_id AS rid, list(t2.customer_id) AS r FROM fl t2 GROUP BY t2.f_id) g " +
+                "  ON t.f_id = g.rid";
+        JsonNode pruned = prune("SELECT f_id FROM flv", body);
+        assertEquals(0, countJoins(pruned), "the key is pinned whichever side of = it is on");
+    }
+
+    @Test
+    void threeKeyGroupBy_allPinned_isDropped() throws Exception {
+        // A single grouping set over three keys serializes as [[0,1,2]]; all three are pinned.
+        String body = "SELECT t.f_id, g.r AS rules FROM fl t " +
+                "LEFT JOIN (SELECT t2.f_id AS a, t2.customer_id AS b, count(*) AS c, list(t2.f_id) AS r " +
+                "           FROM fl t2 GROUP BY t2.f_id, t2.customer_id, count(*)) g " +
+                "  ON g.a = t.f_id AND g.b = t.customer_id AND g.c = t.f_id";
+        JsonNode pruned = prune("SELECT f_id FROM flv", body);
+        assertEquals(0, countJoins(pruned));
+    }
+
     // ---- kept: uniqueness not provable ----
 
     /**
@@ -1385,6 +1407,21 @@ public class PruneUnusedLeftJoinsTest {
         JsonNode pruned = Transformations.pruneUnusedLeftJoins(outer, Transformations.parseToTree(conn, body));
         if (pruned == outer) return;
         assertEquals(2, countJoins(pruned), "the unpinned second dedup column keeps the join");
+    }
+
+    @Test
+    void innerAliasShadowingAnEnclosingOne_isKept() throws Exception {
+        // The subquery's own alias is t, which the enclosing FROM also uses. SQL scoping means the
+        // inner one wins inside the body, so this join would in fact be safe to drop — it is kept
+        // because the enclosing-scope check cannot tell a shadowing alias from a correlation. A
+        // documented over-conservatism: choosing a distinct inner alias prunes.
+        String body = "SELECT t.f_id, g.r AS rules FROM fl t " +
+                "LEFT JOIN (SELECT t.f_id AS rid, list(t.customer_id) AS r FROM fl t GROUP BY t.f_id) g " +
+                "  ON g.rid = t.f_id";
+        JsonNode outer = Transformations.parseToTree(conn, "SELECT f_id FROM flv");
+        JsonNode pruned = Transformations.pruneUnusedLeftJoins(outer, Transformations.parseToTree(conn, body));
+        if (pruned == outer) return;
+        assertEquals(1, countJoins(pruned));
     }
 
     @Test
