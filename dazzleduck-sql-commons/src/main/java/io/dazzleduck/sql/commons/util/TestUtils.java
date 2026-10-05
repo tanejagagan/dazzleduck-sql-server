@@ -19,12 +19,21 @@ import java.util.function.Consumer;
 
 public class TestUtils {
 
+    /**
+     * Order-insensitive equality of two queries' results <em>as multisets</em>: each row must appear
+     * the same number of times on both sides.
+     *
+     * <p>{@code EXCEPT ALL} rather than {@code EXCEPT}: plain {@code EXCEPT} has set semantics, so
+     * it ignores duplicates, and a result with a row repeated (or a repeat missing) compared equal.
+     * That hid exactly the bugs that change row counts — a join elimination that collapses
+     * multiplied rows, a dedup that should not happen, a batch ingested twice. {@code UNION ALL} in
+     * the report, so every surplus copy is listed rather than one per distinct row.
+     */
     private static final String IS_EQUAL = "WITH E AS (%s), " +
             " R AS (%s)," +
-            " C AS (SELECT * FROM E EXCEPT SELECT * FROM R), " +
-            " D AS (SELECT * FROM R EXCEPT SELECT * FROM E) " +
-            " SELECT * FROM (SELECT 'L->' as s, * FROM C UNION SELECT 'R->' as s, * FROM D) ORDER BY s";
-    ;
+            " C AS (SELECT * FROM E EXCEPT ALL SELECT * FROM R), " +
+            " D AS (SELECT * FROM R EXCEPT ALL SELECT * FROM E) " +
+            " SELECT * FROM (SELECT 'L->' as s, * FROM C UNION ALL SELECT 'R->' as s, * FROM D) ORDER BY s";
 
     public static void isEqual(String expected, String result) throws SQLException, IOException {
         try (DuckDBConnection connection = ConnectionPool.getConnection();
