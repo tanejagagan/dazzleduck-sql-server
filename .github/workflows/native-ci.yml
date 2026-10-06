@@ -50,12 +50,16 @@ jobs:
             runner: ubuntu-24.04-arm
           - name: compactor
             dockerfile: dazzleduck-sql-ducklake-compactor/Dockerfile.native
-            startup: 'publishing metrics'
+            # Logged only after the startup script passed below has run on DuckDB; the old
+            # 'publishing metrics' line comes from telemetry setup, before DuckDB loads.
+            startup: 'Health server listening'
             arch: amd64
             runner: ubuntu-latest
           - name: compactor
             dockerfile: dazzleduck-sql-ducklake-compactor/Dockerfile.native
-            startup: 'publishing metrics'
+            # Logged only after the startup script passed below has run on DuckDB; the old
+            # 'publishing metrics' line comes from telemetry setup, before DuckDB loads.
+            startup: 'Health server listening'
             arch: arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
@@ -75,7 +79,14 @@ jobs:
       - name: Smoke — container starts
         run: |
           set -uo pipefail
-          docker run -d --name smoke "$TAG"
+          # The compactor touches DuckDB at startup only when given a startup script, so give it
+          # one: the ready line then proves the image's DuckDB JNI library loads. A -D argument is
+          # read as a system property by the native executable, through the image's entrypoint.
+          args=()
+          if [ "${{ matrix.name }}" = compactor ]; then
+            args+=("-Ddazzleduck_sql_compaction.startup_script_provider.content=SELECT 42")
+          fi
+          docker run -d --name smoke "$TAG" ${args[@]+"${args[@]}"}
           ok=no
           for i in $(seq 1 30); do
             if docker logs smoke 2>&1 | grep -qF "${{ matrix.startup }}"; then ok=yes; break; fi

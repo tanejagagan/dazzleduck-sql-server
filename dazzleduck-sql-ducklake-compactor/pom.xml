@@ -352,7 +352,11 @@
                                 <!-- Bundle only the target platform's DuckDB lib (the jar ships all of them).
                                      Kept out of resource-config so one metadata set serves every platform. -->
                                 <buildArg>-H:+UnlockExperimentalVMOptions</buildArg>
-                                <buildArg>-H:IncludeResources=libduckdb_java\.so_${duckdb.native.lib}</buildArg>
+                                <!-- [.] rather than \. for the literal dot. With \. the Windows binaries embedded no DuckDB
+                                     library at all (macOS and Linux did): on Windows the arguments reach native-image
+                                     through an argument file, and the backslash is the one character in this pattern
+                                     that file handling can rewrite. [.] needs no escaping anywhere. -->
+                                <buildArg>-H:IncludeResources=libduckdb_java[.]so_${duckdb.native.lib}</buildArg>
                             </buildArgs>
                         </configuration>
                     </plugin>
