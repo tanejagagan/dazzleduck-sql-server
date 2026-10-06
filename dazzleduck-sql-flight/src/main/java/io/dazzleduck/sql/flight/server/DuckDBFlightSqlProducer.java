@@ -46,6 +46,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
@@ -276,6 +277,16 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
 
     private final IngestionHandler ingestionHandler;
 
+    /**
+     * This producer's private scratch directory, created under the configured
+     * {@code temp_write_location} — never that location itself. Incoming ingestion batches are
+     * staged here before the Parquet COPY, and {@link #close()} deletes it.
+     *
+     * <p>The location is shared: it defaults to {@code ${java.io.tmpdir}/dazzleduck-writes}, the
+     * same default the OTel collector uses, so any number of servers and collectors on a host stage
+     * into it. Deleting the location on close — which this used to do — removed every other
+     * process's in-flight batches with it, failing their ingests with "No files found".
+     */
     private final Path tempDir;
 
     private final ScheduledExecutorService scheduledExecutorService;
@@ -304,6 +315,9 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
 
     public static Path newTempDir() {
         var dir = Path.of(System.getProperty("java.io.tmpdir"), UUID.randomUUID().toString());
+        // A producer deletes only its own scratch directory inside this one, never the location
+        // itself, so remove the location at exit — deleteOnExit only removes an empty directory.
+        dir.toFile().deleteOnExit();
         if (!Files.exists(dir)) {
             try {
                 Files.createDirectories(dir);
@@ -390,7 +404,7 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         this.allocator = allocator;
         this.secretKey = secretKey;
         this.accessMode = accessMode;
-        this.tempDir = tempDir;
+        this.tempDir = createScratchDir(tempDir);
         this.scheduledExecutorService = scheduledExecutorService;
         this.defaultQueryTimeout = defaultQueryTimeout;
         this.maxQueryTimeout = maxQueryTimeout;
@@ -1462,10 +1476,31 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
         runQuietly("ingestion flush scheduler", bulkIngestFlushScheduler::shutdownNow);
         runQuietly("allocator", allocator::close);
 
+        // Only this producer's own scratch directory: the location above it is shared.
         try (var stream = Files.walk(tempDir)) {
             stream.sorted(Comparator.reverseOrder())
                   .forEach(p -> { try { Files.deleteIfExists(p); } catch (IOException ignored) {} });
         } catch (IOException ignored) {}
+    }
+
+    /**
+     * A uniquely named directory under {@code location}, which is created first if absent. The OTel
+     * collector does the same for each of its signal services ({@code OtelCollectorServer
+     * #createScratchDir}), so the two never share a directory to clean up.
+     */
+    private static Path createScratchDir(Path location) {
+        try {
+            Files.createDirectories(location);
+            return Files.createTempDirectory(location, "flight-");
+        } catch (IOException e) {
+            throw new UncheckedIOException(
+                    "Cannot create a scratch directory under temp_write_location " + location, e);
+        }
+    }
+
+    /** This producer's own scratch directory; package-private for tests. */
+    Path scratchDir() {
+        return tempDir;
     }
 
     /** How long close() lets running queries finish before cancelling them; shortened by tests. */
