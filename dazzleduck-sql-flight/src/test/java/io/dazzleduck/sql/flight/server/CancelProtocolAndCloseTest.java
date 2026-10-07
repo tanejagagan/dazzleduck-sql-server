@@ -178,9 +178,31 @@ class CancelProtocolAndCloseTest {
     void closeReleasesIdlePreparedStatements() throws Exception {
         var prepared = client.prepare("SELECT 1");
         var ctx = producer.preparedStatementLoadingCache.asMap().values().iterator().next();
+        Path scratch = producer.scratchDir();
         producer.close();
         assertTrue(ctx.getStatement().isClosed(), "close() left a prepared statement and its connection open");
-        assertFalse(Files.exists(tempDir));
+        assertFalse(Files.exists(scratch), "close() left its scratch directory behind");
+        // The location is shared with other servers and collectors; it must outlive this producer.
+        assertTrue(Files.exists(tempDir), "close() deleted the shared temp_write_location");
+    }
+
+    @Test
+    void closeLeavesOtherProcessesStagedFilesAlone() throws Exception {
+        // What another server, or an OTel collector, staging into the same temp_write_location has
+        // in flight when this one shuts down. Deleting it fails their ingest with "No files found".
+        Path otherServersBatch = Files.writeString(tempDir.resolve("ingestion_other-server.arrow"), "x");
+        Path collectorScratch = Files.createDirectory(tempDir.resolve("otel-logs-4711"));
+        Path collectorsBatch = Files.writeString(collectorScratch.resolve("batch.arrow"), "y");
+
+        Path scratch = producer.scratchDir();
+        assertTrue(scratch.startsWith(tempDir) && !scratch.equals(tempDir),
+                "the producer must stage in a private child of the location, not the location itself");
+
+        producer.close();
+
+        assertFalse(Files.exists(scratch), "close() left its scratch directory behind");
+        assertTrue(Files.exists(otherServersBatch), "close() deleted another server's staged batch");
+        assertTrue(Files.exists(collectorsBatch), "close() deleted an OTel collector's staged batch");
     }
 
     @Test
@@ -193,7 +215,8 @@ class CancelProtocolAndCloseTest {
             assertTrue(Duration.ofNanos(System.nanoTime() - started).compareTo(Duration.ofSeconds(15)) < 0,
                     "close() did not stop the running query");
             await(() -> ctx.getStatement() != null && isClosed(ctx), "running statement to be closed");
-            assertFalse(Files.exists(tempDir), "temp dir was not cleaned up");
+            assertFalse(Files.exists(producer.scratchDir()), "scratch dir was not cleaned up");
+            assertTrue(Files.exists(tempDir), "close() deleted the shared temp_write_location");
         } finally {
             closeQuietly(stream);
         }
