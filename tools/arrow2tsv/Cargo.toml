@@ -1,0 +1,19 @@
+[package]
+name = "arrow2tsv"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+arrow-array = { version = "60.0.0", features = ["chrono-tz"] }
+arrow-cast = "60.0.0"
+arrow-ipc = { version = "60.0.0", features = ["zstd", "lz4"] }
+arrow-schema = "60.0.0"
+ureq = "3.4.2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+[dev-dependencies]
+arrow-buffer = "60"
