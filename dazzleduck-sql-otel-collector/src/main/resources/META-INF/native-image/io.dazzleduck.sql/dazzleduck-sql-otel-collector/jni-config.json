@@ -101,7 +101,8 @@
   "name":"java.lang.OutOfMemoryError"
 },
 {
-  "name":"java.lang.RuntimeException"
+  "name":"java.lang.RuntimeException",
+  "methods":[{"name":"<init>","parameterTypes":["java.lang.String"] }]
 },
 {
   "name":"java.lang.Short",
@@ -167,7 +168,8 @@
   "methods":[{"name":"<init>","parameterTypes":["java.lang.String"] }]
 },
 {
-  "name":"java.sql.SQLTimeoutException"
+  "name":"java.sql.SQLTimeoutException",
+  "methods":[{"name":"<init>","parameterTypes":["java.lang.String"] }]
 },
 {
   "name":"java.sql.Struct",

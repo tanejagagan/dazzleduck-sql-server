@@ -41,6 +41,10 @@
   "methods":[{"name":"toString","parameterTypes":[] }]
 },
 {
+  "name":"java.lang.RuntimeException",
+  "methods":[{"name":"<init>","parameterTypes":["java.lang.String"] }]
+},
+{
   "name":"java.lang.Short",
   "methods":[{"name":"shortValue","parameterTypes":[] }]
 },
@@ -81,10 +85,12 @@
   "methods":[{"name":"getArray","parameterTypes":[] }, {"name":"getBaseTypeName","parameterTypes":[] }]
 },
 {
-  "name":"java.sql.SQLException"
+  "name":"java.sql.SQLException",
+  "methods":[{"name":"<init>","parameterTypes":["java.lang.String"] }]
 },
 {
-  "name":"java.sql.SQLTimeoutException"
+  "name":"java.sql.SQLTimeoutException",
+  "methods":[{"name":"<init>","parameterTypes":["java.lang.String"] }]
 },
 {
   "name":"java.sql.Struct",
