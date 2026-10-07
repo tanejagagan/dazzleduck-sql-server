@@ -24,6 +24,19 @@ name: Native binaries (macOS, Windows)
 on:
   push:
     tags: ['v*']
+  # Also on pull requests that change how these binaries are built, so a change is proven on real
+  # macOS and Windows runners before a release depends on it. Nothing is attached to a release then.
+  pull_request:
+    paths:
+      - '.github/workflows/native-binaries.yml'
+      - 'dazzleduck-sql-otel-collector/pom.xml'
+      - 'dazzleduck-sql-otel-collector/src/main/resources/META-INF/native-image/**'
+      - 'dazzleduck-sql-ducklake-compactor/pom.xml'
+      - 'dazzleduck-sql-ducklake-compactor/src/main/resources/META-INF/native-image/**'
+      - 'dazzleduck-sql-otel-collector/src/main/native-duckdb/**'
+      - 'dazzleduck-sql-ducklake-compactor/src/main/native-duckdb/**'
+      # The root pom sets duckdb.version: a DuckDB upgrade can change the JNI libraries embedded.
+      - 'pom.xml'
 
 concurrency:
   group: native-binaries-${{ github.ref }}
@@ -56,7 +69,10 @@ jobs:
           - module: dazzleduck-sql-ducklake-compactor
             binary: compactor
             name: ducklake-compactor
-            startup: 'publishing metrics'
+            # Logged only after the startup script below has run on DuckDB. 'publishing metrics',
+            # used before, is logged by telemetry setup before DuckDB is ever touched, so it passed
+            # for binaries that could not load DuckDB at all.
+            startup: 'Health server listening'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     defaults:
@@ -87,7 +103,15 @@ jobs:
         run: |
           set -uo pipefail
           bin="${{ matrix.module }}/target/${{ matrix.binary }}${{ matrix.exe }}"
-          "$bin" > smoke.log 2>&1 &
+          # The ready line must prove DuckDB loads, since the JNI library is what a packaging
+          # mistake drops. The collector opens DuckDB before it starts serving; the compactor only
+          # does when it has a startup script, so give it one. ${args[@]+...} because macOS
+          # runners may use bash 3.2, where an empty array under set -u is an error.
+          args=()
+          if [ "${{ matrix.binary }}" = compactor ]; then
+            args+=("-Ddazzleduck_sql_compaction.startup_script_provider.content=SELECT 42")
+          fi
+          "$bin" ${args[@]+"${args[@]}"} > smoke.log 2>&1 &
           pid=$!
           ok=no
           for i in $(seq 1 60); do
@@ -103,7 +127,8 @@ jobs:
         id: package
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          # A tag names the version; a pull-request run has no version, so name it by commit.
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then version="${GITHUB_REF_NAME#v}"; else version="pr-${GITHUB_SHA::8}"; fi
           base="${{ matrix.name }}-${version}-${{ matrix.platform }}"
           mkdir -p dist
           cp "${{ matrix.module }}/target/${{ matrix.binary }}${{ matrix.exe }}" dist/
@@ -123,6 +148,7 @@ jobs:
 
       # --clobber replaces the asset when a tag is re-pushed.
       - name: Attach to the GitHub release, if it exists
+        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

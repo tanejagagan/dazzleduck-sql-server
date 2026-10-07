@@ -317,6 +317,33 @@
             <id>native</id>
             <build>
                 <plugins>
+                    <!-- Bundle only the target platform's DuckDB lib (the duckdb_jdbc jar ships all of them).
+                         src/main/native-duckdb holds a resource glob for libduckdb_java.so_${duckdb.native.lib};
+                         copied with filtering into target/classes, it is read by native-image like any other
+                         reachability metadata, while the checked-in metadata stays the same for every platform.
+                         A glob, unlike the deprecated -H:IncludeResources regex, has no escaping to lose: the
+                         Windows binaries once embedded no DuckDB library because of a backslash in that regex. -->
+                    <plugin>
+                        <artifactId>maven-resources-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>duckdb-native-library</id>
+                                <phase>process-resources</phase>
+                                <goals>
+                                    <goal>copy-resources</goal>
+                                </goals>
+                                <configuration>
+                                    <outputDirectory>${project.build.outputDirectory}</outputDirectory>
+                                    <resources>
+                                        <resource>
+                                            <directory>src/main/native-duckdb</directory>
+                                            <filtering>true</filtering>
+                                        </resource>
+                                    </resources>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
                     <plugin>
                         <groupId>org.graalvm.buildtools</groupId>
                         <artifactId>native-maven-plugin</artifactId>
@@ -349,10 +376,9 @@
                                 <!-- Logback/SLF4J must be initialized at build time or the build aborts. -->
                                 <buildArg>--initialize-at-build-time=org.slf4j,ch.qos.logback</buildArg>
                                 <buildArg>--initialize-at-run-time=io.netty</buildArg>
-                                <!-- Bundle only the target platform's DuckDB lib (the jar ships all of them).
-                                     Kept out of resource-config so one metadata set serves every platform. -->
-                                <buildArg>-H:+UnlockExperimentalVMOptions</buildArg>
-                                <buildArg>-H:IncludeResources=libduckdb_java\.so_${duckdb.native.lib}</buildArg>
+                                <!-- DuckDB loads its JNI library with System.load, a restricted method on JDK 25:
+                                     without this every start prints a "restricted method" warning. -->
+                                <buildArg>--enable-native-access=ALL-UNNAMED</buildArg>
                             </buildArgs>
                         </configuration>
                     </plugin>
