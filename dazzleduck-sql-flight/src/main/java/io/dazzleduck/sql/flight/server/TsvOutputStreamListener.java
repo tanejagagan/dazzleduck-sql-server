@@ -46,6 +46,8 @@ public class TsvOutputStreamListener implements FlightProducer.ServerStreamListe
     private OutputStream outputStream;
     private Writer writer;
     private VectorSchemaRoot root;
+    // Resolves dictionary-encoded columns (e.g. DuckDB ENUM); from start().
+    private DictionaryProvider dictionaries;
     private boolean headerWritten = false;
 
     public TsvOutputStreamListener(Supplier<OutputStream> outputStreamSupplier, CompletableFuture<Void> future) {
@@ -77,6 +79,7 @@ public class TsvOutputStreamListener implements FlightProducer.ServerStreamListe
     public synchronized void start(VectorSchemaRoot root, DictionaryProvider dictionaries, IpcOption option) {
         try {
             this.root = root;
+            this.dictionaries = dictionaries;
             this.outputStream = outputStreamSupplier.get();
             this.writer = new OutputStreamWriter(outputStream, StandardCharsets.UTF_8);
             logger.debug("TsvOutputStreamListener started with schema: {}", root.getSchema());
@@ -148,7 +151,7 @@ public class TsvOutputStreamListener implements FlightProducer.ServerStreamListe
     }
 
     private void writeRows() throws IOException {
-        ResultStreams.writeTsvRows(root, writer);
+        ResultStreams.writeTsvRows(root, dictionaries, writer);
     }
 
     /**
@@ -169,7 +172,8 @@ public class TsvOutputStreamListener implements FlightProducer.ServerStreamListe
                     VectorSchemaRoot root = reader.getVectorSchemaRoot();
                     TsvOutputStreamListener listener =
                             new TsvOutputStreamListener(outputStreamSupplier, tsvFuture);
-                    listener.start(root, new DictionaryProvider.MapDictionaryProvider(), IpcOption.DEFAULT);
+                    // The reader holds the stream's dictionaries (dictionary-encoded columns, e.g. ENUM).
+                    listener.start(root, reader, IpcOption.DEFAULT);
                     // Stop once the response is over (e.g. the client went away and a write failed).
                     // Draining the pipe regardless would keep the Arrow side, and the query, running.
                     while (!listener.isCancelled() && reader.loadNextBatch()) listener.putNext();
@@ -195,7 +199,11 @@ public class TsvOutputStreamListener implements FlightProducer.ServerStreamListe
         return tsvFuture;
     }
 
-    /** @deprecated use {@link ResultStreams#writeTsvRows(VectorSchemaRoot, Writer)}. */
+    /**
+     * @deprecated use {@link ResultStreams#writeTsvRows(VectorSchemaRoot, DictionaryProvider, Writer)}.
+     * Without the stream's dictionaries this fails on a dictionary-encoded column (e.g. a DuckDB ENUM)
+     * rather than print its dictionary indices.
+     */
     @Deprecated
     public static void writeRootToWriter(VectorSchemaRoot root, Writer writer) throws IOException {
         ResultStreams.writeTsvRows(root, writer);

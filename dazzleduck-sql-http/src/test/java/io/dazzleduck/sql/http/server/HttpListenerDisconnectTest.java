@@ -196,6 +196,14 @@ class HttpListenerDisconnectTest {
         var bug = new IllegalStateException("Stream is already closed."); // not thrown by Helidon's HTTP/2 stream
         assertSame(bug, assertThrows(IllegalStateException.class, () -> throwing(bug).write(1)));
         var other = new IllegalArgumentException("bug");
-        assertSame(other, assertThrows(IllegalArgumentException.class, () -> throwing(other).flush()));
+        // A flush reaches the stream once a byte opened it; with nothing written it is a no-op.
+        var flushFails = new ResponseBodies.ClientGoneAsIOException(new OutputStream() {
+            @Override public void write(int b) { }
+            @Override public void flush() { throw other; }
+        });
+        assertSame(other, assertThrows(IllegalArgumentException.class, () -> {
+            flushFails.write(1);
+            flushFails.flush();
+        }));
     }
 }

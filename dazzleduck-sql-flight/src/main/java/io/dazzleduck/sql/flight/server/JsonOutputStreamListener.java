@@ -60,6 +60,8 @@ public class JsonOutputStreamListener implements FlightProducer.ServerStreamList
     private OutputStream outputStream;
     private JsonGenerator generator;
     private VectorSchemaRoot root;
+    // Resolves dictionary-encoded columns (e.g. DuckDB ENUM); from start().
+    private DictionaryProvider dictionaries;
     private boolean firstRowWritten = false;
 
     public JsonOutputStreamListener(Supplier<OutputStream> outputStreamSupplier, CompletableFuture<Void> future) {
@@ -100,6 +102,7 @@ public class JsonOutputStreamListener implements FlightProducer.ServerStreamList
     @Override
     public synchronized void start(VectorSchemaRoot root, DictionaryProvider dictionaries, IpcOption option) {
         this.root = root;
+        this.dictionaries = dictionaries;
         try {
             // ARRAY and JSONL commit the response eagerly so an empty result still
             // produces a valid body ("[]" / empty stream). SINGLE_OBJECT defers until
@@ -193,7 +196,7 @@ public class JsonOutputStreamListener implements FlightProducer.ServerStreamList
             if (format == Format.SINGLE_OBJECT && firstRowWritten) {
                 break; // Only write the first row in single-object mode
             }
-            ResultStreams.writeJsonRow(root, row, generator);
+            ResultStreams.writeJsonRow(root, dictionaries, row, generator);
             if (format == Format.JSONL) {
                 generator.writeRaw('\n'); // newline-delimit each row object
             }

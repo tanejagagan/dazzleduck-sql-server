@@ -1,6 +1,7 @@
 package io.dazzleduck.sql.flight.server;
 
 import io.dazzleduck.sql.commons.authorization.AccessMode;
+import io.dazzleduck.sql.commons.io.ResultStreams;
 import io.dazzleduck.sql.flight.FlightRecorder;
 import org.apache.arrow.flight.CallStatus;
 import org.apache.arrow.flight.FlightProducer;
@@ -151,6 +152,22 @@ public class ResultSetStreamUtil {
         });
     }
 
+    /**
+     * Starts {@code listener} on {@code batches}, which is also the stream's DictionaryProvider: a
+     * dictionary-encoded column (DuckDB sends ENUM that way) cannot be written without it. Flight
+     * sends the dictionaries once, from start(), and DuckDB fills them in while loading a batch, so
+     * with such a column the first batch is loaded before starting. Other results start right away.
+     *
+     * @return whether a batch is already loaded, to be sent before loading the next
+     */
+    private static boolean start(FlightProducer.ServerStreamListener listener, ArrowReader batches,
+                                 StreamExecutors executors) throws Exception {
+        VectorSchemaRoot root = batches.getVectorSchemaRoot();
+        boolean loaded = ResultStreams.hasDictionary(root.getSchema()) && executors.fetch(batches::loadNextBatch);
+        listener.start(root, batches);
+        return loaded;
+    }
+
     static void streamResultSet(StreamExecutors executors,
                                 ResultSetSupplier supplier,
                                 BufferAllocator allocator,
@@ -173,8 +190,9 @@ public class ResultSetStreamUtil {
                     final DuckDBResultSet rs = resultSet;
                     reader = executors.fetch(() -> (ArrowReader) rs.arrowExportStream(streamAllocator, batchSize));
                     final ArrowReader batches = reader;
-                    listener.start(batches.getVectorSchemaRoot());
-                    while (!listener.isCancelled() && executors.fetch(batches::loadNextBatch)) {
+                    boolean loaded = start(listener, batches, executors);
+                    while (!listener.isCancelled() && (loaded || executors.fetch(batches::loadNextBatch))) {
+                        loaded = false;
                         if (!readiness.awaitReady(listener)) {
                             break;
                         }
@@ -262,8 +280,9 @@ public class ResultSetStreamUtil {
                         final DuckDBResultSet rs = resultSet;
                         reader = executors.fetch(() -> (ArrowReader) rs.arrowExportStream(streamAllocator, batchSize));
                         final ArrowReader batches = reader;
-                        listener.start(batches.getVectorSchemaRoot());
-                        while (!listener.isCancelled() && executors.fetch(batches::loadNextBatch)) {
+                        boolean loaded = start(listener, batches, executors);
+                        while (!listener.isCancelled() && (loaded || executors.fetch(batches::loadNextBatch))) {
+                            loaded = false;
                             if (!readiness.awaitReady(listener)) {
                                 break;
                             }

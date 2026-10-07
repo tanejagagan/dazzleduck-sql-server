@@ -6,6 +6,7 @@ import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.util.AutoCloseables;
 import org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.arrow.vector.dictionary.Dictionary;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.Schema;
@@ -15,6 +16,7 @@ import org.duckdb.DuckDBResultSet;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.io.InputStream;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.RecordComponent;
@@ -22,7 +24,9 @@ import java.sql.*;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 import java.util.UUID;
 
 public enum ConnectionPool {
@@ -402,6 +406,31 @@ public enum ConnectionPool {
                 @Override
                 public VectorSchemaRoot getVectorSchemaRoot() throws IOException {
                     return internal.getVectorSchemaRoot();
+                }
+
+                // The batches are internal's, so are their dictionaries (dictionary-encoded columns,
+                // e.g. ENUM): this reader never initializes its own. DuckDB's reader fills them in
+                // while loading a batch, so they are empty until the first one.
+                @Override
+                public Dictionary lookup(long id) {
+                    return internal.lookup(id);
+                }
+
+                @Override
+                public Set<Long> getDictionaryIds() {
+                    // Not overridden by DuckDB's reader: Arrow's version reads the ids from the
+                    // schema and throws until the reader is initialized, which the root does.
+                    try {
+                        internal.getVectorSchemaRoot();
+                    } catch (IOException e) {
+                        throw new UncheckedIOException(e);
+                    }
+                    return internal.getDictionaryIds();
+                }
+
+                @Override
+                public Map<Long, Dictionary> getDictionaryVectors() throws IOException {
+                    return internal.getDictionaryVectors();
                 }
             };
         } catch (SQLException e) {

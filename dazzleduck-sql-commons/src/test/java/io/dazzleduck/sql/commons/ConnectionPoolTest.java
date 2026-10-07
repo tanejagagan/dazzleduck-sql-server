@@ -3,6 +3,7 @@ package io.dazzleduck.sql.commons;
 import io.dazzleduck.sql.commons.util.TestUtils;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
+import org.apache.arrow.vector.BaseIntVector;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.duckdb.DuckDBConnection;
 import org.junit.jupiter.api.Assertions;
@@ -12,7 +13,15 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.SQLException;
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 public class ConnectionPoolTest {
 
@@ -149,5 +158,112 @@ public class ConnectionPoolTest {
         Assertions.assertEquals("ATTACH", ConnectionPool.leadingKeyword("  attach 'ducklake:postgres:password=x' AS lake"));
         Assertions.assertEquals("CREATE", ConnectionPool.leadingKeyword("CREATE SECRET s (SECRET 'x')"));
         Assertions.assertEquals("?", ConnectionPool.leadingKeyword("'x'"));
+    }
+
+    /**
+     * ENUM is dictionary-encoded. getReader's reader must resolve it with DuckDB's own reader's
+     * dictionaries, on a pooled (duplicated) connection, for a type defined through the pool, and
+     * across batches.
+     */
+    @Test
+    public void getReaderResolvesEnumDictionariesOnAPooledConnection() throws Exception {
+        ConnectionPool.execute("CREATE TYPE cp_test_mood AS ENUM ('sad', 'ok', 'happy')");
+        ConnectionPool.execute("CREATE TABLE cp_test_moods AS "
+                + "SELECT i, (['sad', 'ok', 'happy'])[i % 3 + 1]::cp_test_mood AS m FROM range(25) t(i)");
+        try (DuckDBConnection connection = ConnectionPool.getConnection();
+             BufferAllocator allocator = new RootAllocator();
+             ArrowReader reader = ConnectionPool.getReader(connection, allocator,
+                     "SELECT i, m FROM cp_test_moods ORDER BY i", 10)) {
+            // Works before the root or any batch was asked for.
+            Assertions.assertEquals(Set.of(0L), reader.getDictionaryIds());
+
+            var root = reader.getVectorSchemaRoot();
+            long id = root.getSchema().findField("m").getDictionary().getId();
+            Assertions.assertEquals(Set.of(id), reader.getDictionaryIds());
+
+            List<String> decoded = new ArrayList<>();
+            int batches = 0;
+            while (reader.loadNextBatch()) {
+                batches++;
+                var dictionary = reader.lookup(id);
+                Assertions.assertNotNull(dictionary, "batch " + batches);
+                Assertions.assertEquals(3, dictionary.getVector().getValueCount(), "the whole ENUM, every batch");
+                var indices = (BaseIntVector) root.getVector("m");
+                for (int row = 0; row < root.getRowCount(); row++) {
+                    decoded.add(dictionary.getVector().getObject((int) indices.getValueAsLong(row)).toString());
+                }
+            }
+            Assertions.assertEquals(3, batches);
+            List<String> expected = new ArrayList<>();
+            for (int i = 0; i < 25; i++) {
+                expected.add(List.of("sad", "ok", "happy").get(i % 3));
+            }
+            Assertions.assertEquals(expected, decoded);
+        } finally {
+            ConnectionPool.execute("DROP TABLE IF EXISTS cp_test_moods");
+            ConnectionPool.execute("DROP TYPE IF EXISTS cp_test_mood");
+        }
+        // The RootAllocator closing above without an exception means nothing leaked.
+    }
+
+    /** A query's TSV through getReader on a pooled connection, using a child of {@code root}. */
+    private static String tsvOnPooledConnection(BufferAllocator root, String sql, int batchSize) throws Exception {
+        var out = new ByteArrayOutputStream();
+        try (DuckDBConnection connection = ConnectionPool.getConnection();
+             BufferAllocator allocator = root.newChildAllocator("test", 0, Long.MAX_VALUE);
+             ArrowReader reader = ConnectionPool.getReader(connection, allocator, sql, batchSize)) {
+            io.dazzleduck.sql.commons.io.ResultStreams.writeTsv(reader, out);
+        }
+        return out.toString(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Readers on many threads at once, each on its own pooled connection, each resolving ENUM with
+     * its own reader's dictionaries. The two types hold the same labels in opposite order, so an
+     * index decoded with the other reader's dictionary gives a wrong label. The tables are large
+     * enough for many batches and for DuckDB to run each query on several threads.
+     */
+    @Test
+    public void getReaderResolvesEnumDictionariesOnManyThreadsAtOnce() throws Exception {
+        ConnectionPool.execute("CREATE TYPE cp_test_up AS ENUM ('sad', 'ok', 'happy')");
+        ConnectionPool.execute("CREATE TYPE cp_test_down AS ENUM ('happy', 'ok', 'sad')");
+        ConnectionPool.execute("CREATE TABLE cp_test_up_t AS "
+                + "SELECT i, (['sad', 'ok', 'happy'])[i % 3 + 1]::cp_test_up AS m FROM range(50000) t(i)");
+        ConnectionPool.execute("CREATE TABLE cp_test_down_t AS "
+                + "SELECT i, (['sad', 'ok', 'happy'])[i % 3 + 1]::cp_test_down AS m FROM range(50000) t(i)");
+        String[] queries = {
+                "SELECT i, m, [m] AS l FROM cp_test_up_t ORDER BY i",
+                "SELECT i, m, [m] AS l FROM cp_test_down_t ORDER BY i",
+                "SELECT i, m FROM cp_test_down_t WHERE m <> 'ok' ORDER BY i"
+        };
+        ExecutorService pool = Executors.newFixedThreadPool(8);
+        try (BufferAllocator root = new RootAllocator()) {
+            String[] expected = new String[queries.length];
+            for (int q = 0; q < queries.length; q++) {
+                expected[q] = tsvOnPooledConnection(root, queries[q].replace(" m,", " m::VARCHAR AS m,")
+                        .replace("[m] AS l", "[m::VARCHAR] AS l").replace("SELECT i, m FROM", "SELECT i, m::VARCHAR AS m FROM"), 1000);
+            }
+            CountDownLatch go = new CountDownLatch(1);
+            List<Future<String>> results = new ArrayList<>();
+            int tasks = 48;
+            for (int t = 0; t < tasks; t++) {
+                String sql = queries[t % queries.length];
+                results.add(pool.submit(() -> {
+                    go.await();
+                    return tsvOnPooledConnection(root, sql, 1000);
+                }));
+            }
+            go.countDown();
+            for (int t = 0; t < tasks; t++) {
+                Assertions.assertEquals(expected[t % queries.length], results.get(t).get(), "task " + t);
+            }
+            Assertions.assertTrue(expected[0].lines().count() > 10_000, "large enough for many batches");
+        } finally {
+            pool.shutdownNow();
+            ConnectionPool.execute("DROP TABLE IF EXISTS cp_test_up_t");
+            ConnectionPool.execute("DROP TABLE IF EXISTS cp_test_down_t");
+            ConnectionPool.execute("DROP TYPE IF EXISTS cp_test_up");
+            ConnectionPool.execute("DROP TYPE IF EXISTS cp_test_down");
+        }
     }
 }
