@@ -48,16 +48,19 @@ jobs:
         include:
           - name: otel-collector
             dockerfile: dazzleduck-sql-otel-collector/Dockerfile.native
+            config_prefix: otel_collector
             startup: 'gRPC server started on port 4317'
             arch: amd64
             runner: ubuntu-latest
           - name: otel-collector
             dockerfile: dazzleduck-sql-otel-collector/Dockerfile.native
+            config_prefix: otel_collector
             startup: 'gRPC server started on port 4317'
             arch: arm64
             runner: ubuntu-24.04-arm
           - name: compactor
             dockerfile: dazzleduck-sql-ducklake-compactor/Dockerfile.native
+            config_prefix: dazzleduck_sql_compaction
             # Logged only after the startup script passed below has run on DuckDB; the old
             # 'publishing metrics' line comes from telemetry setup, before DuckDB loads.
             startup: 'Health server listening'
@@ -65,6 +68,7 @@ jobs:
             runner: ubuntu-latest
           - name: compactor
             dockerfile: dazzleduck-sql-ducklake-compactor/Dockerfile.native
+            config_prefix: dazzleduck_sql_compaction
             # Logged only after the startup script passed below has run on DuckDB; the old
             # 'publishing metrics' line comes from telemetry setup, before DuckDB loads.
             startup: 'Health server listening'
@@ -104,3 +108,21 @@ jobs:
           echo "--- container logs ---"; docker logs smoke 2>&1 | tail -30
           docker rm -f smoke >/dev/null 2>&1 || true
           [ "$ok" = yes ] || { echo "::error::${{ matrix.name }} (${{ matrix.arch }}) did not reach '${{ matrix.startup }}'"; exit 1; }
+
+      # A DuckDB error must reach Java as an exception. DuckDB's JNI code raises it with ThrowNew,
+      # which needs the exception's (String) constructor registered in jni-config.json; without it
+      # the binary dies with a NoSuchMethodError instead, on any bad SQL or failed COPY. A startup
+      # script reading a missing table makes DuckDB fail before anything else runs.
+      - name: Smoke — a DuckDB error is an exception
+        run: |
+          set -uo pipefail
+          timeout 120 docker run --name smoke-error "$TAG" \
+            "-D${{ matrix.config_prefix }}.startup_script_provider.content=SELECT * FROM dd_smoke_missing_table" \
+            > error.log 2>&1 || true
+          docker rm -f smoke-error >/dev/null 2>&1 || true
+          echo "--- container output ---"; tail -40 error.log
+          if grep -q "NoSuchMethodError" error.log; then
+            echo "::error::${{ matrix.name }} (${{ matrix.arch }}): a DuckDB error crashed with NoSuchMethodError instead of reaching Java as an exception (see jni-config.json)"; exit 1
+          fi
+          grep -qF "Table with name dd_smoke_missing_table does not exist" error.log || {
+            echo "::error::${{ matrix.name }} (${{ matrix.arch }}) did not report DuckDB's error"; exit 1; }
