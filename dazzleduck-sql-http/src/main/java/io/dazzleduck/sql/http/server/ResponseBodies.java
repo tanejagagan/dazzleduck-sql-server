@@ -33,7 +33,7 @@ import java.util.function.Supplier;
  * completed by closing the output stream, do not call send()"), even if nothing was written yet. Opened
  * lazily, a query that fails before its first byte (e.g. while a listener sets up its writer, or
  * formats its first batch) can still be answered with an error status and its real message, which
- * {@link #canSendError} tells. Flushing or closing a body with nothing written does not open it — a
+ * {@link #claimForError} decides. Flushing or closing a body with nothing written does not open it — a
  * listener's {@code error()} closes it — so a service ends a successful response with
  * {@link #finish}, which sends it empty if nothing was written.
  */
@@ -46,8 +46,8 @@ final class ResponseBodies {
     static OutputStream of(ServerResponse response) {
         return new ClientGoneAsIOException(() -> {
             if (response.isSent()) {
-                // The service already answered (e.g. 504 on a timeout) while the query kept going:
-                // nobody is listening for this body any more, the same as a client that went away.
+                // Answered some other way while the query kept going: nobody is listening for this
+                // body any more, the same as a client that went away.
                 throw new UncheckedIOException(new IOException("The response was already sent"));
             }
             return response.outputStream();
@@ -55,11 +55,17 @@ final class ResponseBodies {
     }
 
     /**
-     * Whether an error status and message can still be sent: nothing was written to {@code body}
-     * (from {@link #of}) and the response was not sent otherwise.
+     * Claims the response for an error status and message, returning whether the caller may send
+     * one: nothing was written to {@code body} (from {@link #of}) and the response was not sent
+     * otherwise. Once claimed the body can no longer be opened, so a listener still running (e.g.
+     * after a timeout) gets an IOException, as for a client that went away. Opening and claiming
+     * exclude each other: exactly one of them wins.
      */
-    static boolean canSendError(ServerResponse response, OutputStream body) {
-        return !response.isSent() && !(body instanceof ClientGoneAsIOException b && b.opened());
+    static boolean claimForError(ServerResponse response, OutputStream body) {
+        if (response.isSent()) {
+            return false;
+        }
+        return !(body instanceof ClientGoneAsIOException b) || b.claimForError();
     }
 
     /**
@@ -67,8 +73,8 @@ final class ResponseBodies {
      * with nothing written (e.g. an empty result) is sent now, empty.
      */
     static void finish(OutputStream body) throws IOException {
-        if (body instanceof ClientGoneAsIOException b && !b.opened()) {
-            b.openAndClose();
+        if (body instanceof ClientGoneAsIOException b) {
+            b.finish();
         }
     }
 
@@ -89,7 +95,9 @@ final class ResponseBodies {
 
     static final class ClientGoneAsIOException extends OutputStream {
         private final Supplier<OutputStream> open;
-        private OutputStream body;
+        // Written under the lock; volatile so the listener's writes skip it once opened.
+        private volatile OutputStream body;
+        private boolean claimedForError; // guarded by this
 
         ClientGoneAsIOException(OutputStream body) {
             this(() -> body);
@@ -100,18 +108,37 @@ final class ResponseBodies {
             this.open = open;
         }
 
+        // Opening (a listener writing) and claiming for an error (the service, possibly on another
+        // thread after a timeout) both take this lock, so exactly one of them wins.
         private OutputStream body() {
-            if (body == null) {
-                body = open.get();
+            OutputStream opened = body;
+            if (opened != null) {
+                return opened;
             }
-            return body;
+            synchronized (this) {
+                if (body == null) {
+                    if (claimedForError) {
+                        throw new UncheckedIOException(new IOException("The response was answered with an error"));
+                    }
+                    body = open.get();
+                }
+                return body;
+            }
         }
 
-        boolean opened() {
-            return body != null;
+        synchronized boolean claimForError() {
+            if (body != null) {
+                return false;
+            }
+            claimedForError = true;
+            return true;
         }
 
-        void openAndClose() throws IOException {
+        /** Sends a body nothing was written to, empty; one with bytes was completed by close(). */
+        void finish() throws IOException {
+            if (body != null) {
+                return;
+            }
             try {
                 body().close();
             } catch (RuntimeException e) {

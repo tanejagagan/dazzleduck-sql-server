@@ -82,32 +82,32 @@ public class QueryService extends AbstractQueryBasedService {
 
         } catch (IllegalArgumentException e) {
             logger.error("Invalid Arrow compression header value", e);
-            if (ResponseBodies.canSendError(response, body)) {
+            if (ResponseBodies.claimForError(response, body)) {
                 response.status(Status.BAD_REQUEST_400);
                 response.send(e.getMessage());
             }
         } catch (TimeoutException e) {
             logger.error("Query execution timeout after {}ms", httpConfig.getQueryTimeoutMs());
-            if (ResponseBodies.canSendError(response, body)) {
+            if (ResponseBodies.claimForError(response, body)) {
                 response.status(Status.GATEWAY_TIMEOUT_504);
                 response.send("Query execution timeout");
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             logger.error("Query execution interrupted", e);
-            if (ResponseBodies.canSendError(response, body)) {
+            if (ResponseBodies.claimForError(response, body)) {
                 response.status(Status.INTERNAL_SERVER_ERROR_500);
                 response.send("Query execution interrupted");
             }
         } catch (ExecutionException e) {
             Throwable cause = e.getCause() != null ? e.getCause() : e;
             logger.error("Error executing query", cause);
-            if (ResponseBodies.canSendError(response, body)) {
+            if (ResponseBodies.claimForError(response, body)) {
                 ControllerService.sendFlightError(response, cause);
             }
         } catch (Exception e) {
             logger.error("Error sending query result", e);
-            if (ResponseBodies.canSendError(response, body)) {
+            if (ResponseBodies.claimForError(response, body)) {
                 ControllerService.sendFlightError(response, e);
             }
         }

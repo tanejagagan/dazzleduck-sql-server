@@ -152,17 +152,17 @@ public class NamedQueryService implements HttpService, ControllerService {
             ResponseBodies.finish(body);
         } catch (TimeoutException e) {
             logger.error("Named query timed out after {}ms", timeoutMillis);
-            if (ResponseBodies.canSendError(response, body)) response.status(Status.GATEWAY_TIMEOUT_504).send("Query execution timeout");
+            if (ResponseBodies.claimForError(response, body)) response.status(Status.GATEWAY_TIMEOUT_504).send("Query execution timeout");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             logger.error("Named query execution interrupted", e);
-            if (ResponseBodies.canSendError(response, body)) response.status(Status.INTERNAL_SERVER_ERROR_500).send("Query execution interrupted");
+            if (ResponseBodies.claimForError(response, body)) response.status(Status.INTERNAL_SERVER_ERROR_500).send("Query execution interrupted");
         } catch (ExecutionException e) {
             Throwable cause = e.getCause() != null ? e.getCause() : e;
-            if (ResponseBodies.canSendError(response, body)) onExecutionError.accept(cause, response);
+            if (ResponseBodies.claimForError(response, body)) onExecutionError.accept(cause, response);
         } catch (Exception e) {
             logger.error("Named query execution error", e);
-            if (ResponseBodies.canSendError(response, body)) ControllerService.sendFlightError(response, e);
+            if (ResponseBodies.claimForError(response, body)) ControllerService.sendFlightError(response, e);
         }
     }
 }

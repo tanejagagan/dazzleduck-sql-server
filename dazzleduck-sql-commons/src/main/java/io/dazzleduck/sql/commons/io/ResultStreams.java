@@ -18,6 +18,7 @@ import org.apache.arrow.vector.UInt4Vector;
 import org.apache.arrow.vector.UInt8Vector;
 import org.apache.arrow.vector.ValueVector;
 import org.apache.arrow.vector.complex.FixedSizeListVector;
+import org.apache.arrow.vector.complex.LargeListVector;
 import org.apache.arrow.vector.complex.ListVector;
 import org.apache.arrow.vector.complex.MapVector;
 import org.apache.arrow.vector.complex.StructVector;
@@ -88,8 +89,9 @@ import static java.time.format.DateTimeFormatter.ISO_LOCAL_TIME;
  * primitives take it as a parameter; their overloads without it are for results known to have no
  * dictionary-encoded column, and fail on one rather than print its dictionary indices. Whether a
  * column needs its dictionaries is decided once per column from the schema, so columns without one
- * cost nothing extra. A dictionary-encoded value can be resolved inside lists, maps, fixed-size
- * lists and structs; inside any other type (e.g. a union) the column fails before a row is written.
+ * cost nothing extra. A dictionary-encoded value can be resolved inside lists (large ones too),
+ * maps, fixed-size lists and structs; inside any other type (e.g. a union, or a list view) the
+ * column fails before a row is written.
  */
 public final class ResultStreams {
 
@@ -279,6 +281,15 @@ public final class ResultStreams {
                 generator.writeStartArray();
                 for (int i = list.getElementStartIndex(index); i < list.getElementEndIndex(index); i++) {
                     writeJsonValue(elements, i, generator, dictionaries);
+                }
+                generator.writeEndArray();
+            }
+            case LARGELIST -> {
+                LargeListVector list = (LargeListVector) vector;
+                ValueVector elements = list.getDataVector();
+                generator.writeStartArray();
+                for (long i = list.getElementStartIndex(index); i < list.getElementEndIndex(index); i++) {
+                    writeJsonValue(elements, Math.toIntExact(i), generator, dictionaries);
                 }
                 generator.writeEndArray();
             }
@@ -516,8 +527,11 @@ public final class ResultStreams {
             return;
         }
         ArrowType.ArrowTypeID type = field.getType().getTypeID();
-        if (type != ArrowType.ArrowTypeID.List && type != ArrowType.ArrowTypeID.Map
-                && type != ArrowType.ArrowTypeID.FixedSizeList && type != ArrowType.ArrowTypeID.Struct) {
+        // List views (DuckDB's arrow_output_list_view) are left out: they would need their own
+        // offset-and-size walk, in TSV and JSON alike, and DuckDB does not produce them by default.
+        if (type != ArrowType.ArrowTypeID.List && type != ArrowType.ArrowTypeID.LargeList
+                && type != ArrowType.ArrowTypeID.Map && type != ArrowType.ArrowTypeID.FixedSizeList
+                && type != ArrowType.ArrowTypeID.Struct) {
             throw new IllegalStateException("Column '" + column + "' has a dictionary-encoded value inside "
                     + type + ", which is not supported");
         }
@@ -549,6 +563,14 @@ public final class ResultStreams {
                 JsonStringArrayList<Object> values = new JsonStringArrayList<>();
                 for (int i = list.getElementStartIndex(index); i < list.getElementEndIndex(index); i++) {
                     values.add(decodedObject(list.getDataVector(), i, dictionaries));
+                }
+                return values;
+            }
+            case LARGELIST -> {
+                LargeListVector list = (LargeListVector) vector;
+                JsonStringArrayList<Object> values = new JsonStringArrayList<>();
+                for (long i = list.getElementStartIndex(index); i < list.getElementEndIndex(index); i++) {
+                    values.add(decodedObject(list.getDataVector(), Math.toIntExact(i), dictionaries));
                 }
                 return values;
             }

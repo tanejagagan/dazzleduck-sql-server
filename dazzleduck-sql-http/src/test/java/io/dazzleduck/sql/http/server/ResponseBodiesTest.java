@@ -43,7 +43,7 @@ class ResponseBodiesTest {
                             OutputStream body = ResponseBodies.of(res);
                             body.flush();
                             body.close();
-                            if (ResponseBodies.canSendError(res, body)) {
+                            if (ResponseBodies.claimForError(res, body)) {
                                 ControllerService.sendFlightError(res, new IllegalStateException("the real cause"));
                             }
                         })
@@ -138,5 +138,50 @@ class ResponseBodiesTest {
         ResponseBodies.finish(written);
         assertEquals(2, opened.get(), "a write opens it once; finish leaves it alone");
         assertEquals("a", target.toString(StandardCharsets.UTF_8));
+    }
+
+    private static ResponseBodies.ClientGoneAsIOException unopened() {
+        return new ResponseBodies.ClientGoneAsIOException(ByteArrayOutputStream::new);
+    }
+
+    @Test
+    void anErrorClaimShutsTheBodyAndAWriteShutsTheClaim() throws Exception {
+        var claimed = unopened();
+        assertEquals(true, claimed.claimForError());
+        // The listener still running (e.g. after a timeout) sees a gone client, not a server error.
+        assertInstanceOf(IOException.class, org.junit.jupiter.api.Assertions.assertThrows(IOException.class,
+                () -> claimed.write(1)));
+
+        var written = unopened();
+        written.write(1);
+        assertEquals(false, written.claimForError(), "bytes went out: too late for an error status");
+    }
+
+    @Test
+    void openingAndClaimingRaceWithExactlyOneWinner() throws Exception {
+        var pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            for (int round = 0; round < 2000; round++) {
+                var body = unopened();
+                var start = new java.util.concurrent.CountDownLatch(1);
+                var wrote = pool.submit(() -> {
+                    start.await();
+                    try {
+                        body.write(1);
+                        return true;
+                    } catch (IOException e) {
+                        return false;
+                    }
+                });
+                var claimed = pool.submit(() -> {
+                    start.await();
+                    return body.claimForError();
+                });
+                start.countDown();
+                assertEquals(true, wrote.get() ^ claimed.get(), "round " + round + ": exactly one wins");
+            }
+        } finally {
+            pool.shutdownNow();
+        }
     }
 }

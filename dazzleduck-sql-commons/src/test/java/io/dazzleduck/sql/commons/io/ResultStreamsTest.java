@@ -7,6 +7,11 @@ import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.compression.CompressionUtil;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.arrow.vector.ipc.ArrowStreamReader;
+import org.apache.arrow.vector.ipc.ReadChannel;
+import org.apache.arrow.vector.ipc.message.MessageChannelReader;
+import org.apache.arrow.vector.ipc.message.MessageResult;
+import org.apache.arrow.flatbuf.MessageHeader;
+import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.duckdb.DuckDBConnection;
 import org.junit.jupiter.api.Test;
 
@@ -14,6 +19,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.StringWriter;
+import java.nio.channels.Channels;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
 
@@ -233,14 +239,38 @@ class ResultStreamsTest {
     }
 
     private static String write(String sql, Writes writes) throws Exception {
+        try (DuckDBConnection conn = ConnectionPool.getConnection()) {
+            return write(conn, sql, writes);
+        }
+    }
+
+    private static String write(DuckDBConnection conn, String sql, Writes writes) throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        try (DuckDBConnection conn = ConnectionPool.getConnection();
-             BufferAllocator allocator = new RootAllocator();
+        try (BufferAllocator allocator = new RootAllocator();
              ArrowReader reader = ConnectionPool.getReader(conn, allocator, sql, 1024)) {
             writes.to(reader, out);
         }
         return out.toString(StandardCharsets.UTF_8);
     }
+
+    /**
+     * As {@link #write(String, Writes)}, on a fresh in-memory database with {@code setting} run on it
+     * first: for a GLOBAL setting, which on the pool's database would leak into every other test.
+     */
+    private static String writeIsolated(String setting, String sql, Writes writes) throws Exception {
+        try (DuckDBConnection conn = (DuckDBConnection) java.sql.DriverManager.getConnection("jdbc:duckdb:");
+             var st = conn.createStatement()) {
+            st.execute(setting);
+            return write(conn, sql, writes);
+        }
+    }
+
+    // Many batches (5000 rows read 1024 at a time): the dictionaries must hold across them.
+    private static final String ENUM_MANY_SQL = """
+            SELECT i, (['sad', 'ok', 'happy'])[i %% 3 + 1]::%1$s AS m,
+                   [(['sad', 'ok', 'happy'])[i %% 3 + 1]::%1$s] AS l
+            FROM range(5000) t(i) ORDER BY i
+            """;
 
     @Test
     void enumWritesItsValuesAsTsvAndJsonl() throws Exception {
@@ -279,5 +309,73 @@ class ResultStreamsTest {
                     ResultStreams.writeTsvRows(reader.getVectorSchemaRoot(), new StringWriter());
                 }));
         assertTrue(failure.getMessage().contains("'top' is dictionary-encoded"), failure.getMessage());
+    }
+
+    @Test
+    void enumAcrossManyBatchesInEveryFormat() throws Exception {
+        Writes tsv = ResultStreams::writeTsv;
+        Writes jsonl = ResultStreams::writeJsonl;
+        Writes arrowThenTsv = (reader, out) -> {
+            ByteArrayOutputStream arrow = new ByteArrayOutputStream();
+            ResultStreams.writeArrow(reader, arrow, CompressionUtil.CodecType.ZSTD, CommonsCompressionFactory.INSTANCE);
+            try (BufferAllocator allocator = new RootAllocator();
+                 ArrowReader back = new ArrowStreamReader(new ByteArrayInputStream(arrow.toByteArray()),
+                         allocator, CommonsCompressionFactory.INSTANCE)) {
+                ResultStreams.writeTsv(back, out);
+            }
+        };
+        String varchar = ENUM_MANY_SQL.formatted("VARCHAR");
+        String asEnum = ENUM_MANY_SQL.formatted(ENUM_TYPE);
+        assertEquals(write(varchar, tsv), write(asEnum, tsv));
+        assertEquals(write(varchar, jsonl), write(asEnum, jsonl));
+        assertEquals(write(varchar, tsv), write(asEnum, arrowThenTsv));
+    }
+
+    @Test
+    void writeArrowSendsEachDictionaryOnceBeforeTheFirstBatch() throws Exception {
+        // ArrowStreamWriter writes the dictionaries with the first batch, once it is loaded, and
+        // again only if they change; DuckDB's ENUM dictionary does not change between batches.
+        int[] counts = new int[3]; // dictionary batches, record batches, dictionaries after a record batch
+        write(ENUM_MANY_SQL.formatted(ENUM_TYPE), (reader, out) -> {
+            ByteArrayOutputStream arrow = new ByteArrayOutputStream();
+            ResultStreams.writeArrow(reader, arrow, CompressionUtil.CodecType.NO_COMPRESSION, null);
+            try (BufferAllocator allocator = new RootAllocator();
+                 var messages = new MessageChannelReader(new ReadChannel(
+                         Channels.newChannel(new ByteArrayInputStream(arrow.toByteArray()))), allocator)) {
+                MessageResult message;
+                while ((message = messages.readNext()) != null) {
+                    if (message.getMessage().headerType() == MessageHeader.DictionaryBatch) {
+                        counts[0]++;
+                        if (counts[1] > 0) {
+                            counts[2]++;
+                        }
+                    } else if (message.getMessage().headerType() == MessageHeader.RecordBatch) {
+                        counts[1]++;
+                    }
+                    if (message.getBodyBuffer() != null) {
+                        message.getBodyBuffer().close();
+                    }
+                }
+            }
+        });
+        assertTrue(counts[1] > 1, "several record batches: " + counts[1]);
+        assertEquals(2, counts[0], "one dictionary per ENUM column (m and l's elements), written once");
+        assertEquals(0, counts[2], "no dictionary written after the first record batch");
+    }
+
+    @Test
+    void enumInsideALargeList() throws Exception {
+        // arrow_large_buffer_size makes DuckDB send LargeList (and LargeUtf8) instead. It is a
+        // GLOBAL setting, hence a database of its own.
+        String large = "SET arrow_large_buffer_size = true";
+        String sql = "SELECT ['ok'::%1$s, NULL] AS l, 'sad'::%1$s AS m FROM range(3)";
+        writeIsolated(large, sql.formatted(ENUM_TYPE), (reader, out) -> assertEquals(ArrowType.ArrowTypeID.LargeList,
+                reader.getVectorSchemaRoot().getSchema().findField("l").getType().getTypeID()));
+        Writes tsv = ResultStreams::writeTsv;
+        Writes jsonl = ResultStreams::writeJsonl;
+        assertEquals(writeIsolated(large, sql.formatted("VARCHAR"), tsv), writeIsolated(large, sql.formatted(ENUM_TYPE), tsv));
+        assertEquals(writeIsolated(large, sql.formatted("VARCHAR"), jsonl), writeIsolated(large, sql.formatted(ENUM_TYPE), jsonl));
+        String enumJsonl = writeIsolated(large, sql.formatted(ENUM_TYPE), jsonl);
+        assertTrue(enumJsonl.startsWith("{\"l\":[\"ok\",null],\"m\":\"sad\"}\n"), enumJsonl);
     }
 }

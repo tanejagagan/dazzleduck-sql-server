@@ -199,7 +199,11 @@ public class TsvOutputStreamListener implements FlightProducer.ServerStreamListe
         return tsvFuture;
     }
 
-    /** @deprecated use {@link ResultStreams#writeTsvRows(VectorSchemaRoot, Writer)}. */
+    /**
+     * @deprecated use {@link ResultStreams#writeTsvRows(VectorSchemaRoot, DictionaryProvider, Writer)}.
+     * Without the stream's dictionaries this fails on a dictionary-encoded column (e.g. a DuckDB ENUM)
+     * rather than print its dictionary indices.
+     */
     @Deprecated
     public static void writeRootToWriter(VectorSchemaRoot root, Writer writer) throws IOException {
         ResultStreams.writeTsvRows(root, writer);

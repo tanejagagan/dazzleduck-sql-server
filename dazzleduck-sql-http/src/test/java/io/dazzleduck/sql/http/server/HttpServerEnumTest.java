@@ -54,10 +54,18 @@ public class HttpServerEnumTest extends HttpServerTestBase {
     }
 
     private HttpResponse<byte[]> query(String sql, String accept) throws Exception {
+        return query(sql, accept, null);
+    }
+
+    /** {@code fetchSize}, when not null, is the rows per Arrow batch ({@code x-dd-fetch-size}). */
+    private HttpResponse<byte[]> query(String sql, String accept, Integer fetchSize) throws Exception {
         var uri = URI.create(baseUrl + "/v1/query?q=" + URLEncoder.encode(sql, StandardCharsets.UTF_8));
         var builder = authenticatedRequestBuilder(uri).GET();
         if (accept != null) {
             builder.header("Accept", accept);
+        }
+        if (fetchSize != null) {
+            builder.header("x-dd-fetch-size", fetchSize.toString());
         }
         var response = client.send(builder.build(), HttpResponse.BodyHandlers.ofByteArray());
         assertEquals(200, response.statusCode(), () -> new String(response.body(), StandardCharsets.UTF_8));
@@ -97,6 +105,34 @@ public class HttpServerEnumTest extends HttpServerTestBase {
     public void enumMatchesVarcharAsJsonl() throws Exception {
         assertEquals(text(QUERY.formatted("VARCHAR"), ContentTypes.APPLICATION_JSONL),
                 text(QUERY.formatted(ENUM), ContentTypes.APPLICATION_JSONL));
+    }
+
+    @Test
+    @Timeout(value = 60, unit = TimeUnit.SECONDS)
+    public void enumAcrossManyBatchesInEveryFormat() throws Exception {
+        // 5000 rows in batches of 1024: Arrow and Flight send the dictionaries once, at the start,
+        // which holds only while DuckDB's dictionary is the same in every batch.
+        String sql = "SELECT i, (['sad', 'ok', 'happy'])[i %% 3 + 1]::%s AS m FROM range(5000) t(i) ORDER BY i";
+        String varchar = sql.formatted("VARCHAR");
+        String asEnum = sql.formatted(ENUM);
+        for (String accept : new String[]{ContentTypes.TEXT_TSV, ContentTypes.APPLICATION_JSONL}) {
+            assertEquals(new String(query(varchar, accept, 1024).body(), StandardCharsets.UTF_8),
+                    new String(query(asEnum, accept, 1024).body(), StandardCharsets.UTF_8), accept);
+        }
+        int batches = 0;
+        var out = new ByteArrayOutputStream();
+        try (var allocator = new RootAllocator();
+             var reader = new ArrowStreamReader(new java.io.ByteArrayInputStream(query(asEnum, null, 1024).body()),
+                     allocator, CommonsCompressionFactory.INSTANCE);
+             var writer = new java.io.OutputStreamWriter(out, StandardCharsets.UTF_8)) {
+            while (reader.loadNextBatch()) {
+                batches++;
+                ResultStreams.writeTsvRows(reader.getVectorSchemaRoot(), reader, writer);
+            }
+        }
+        assertTrue(batches > 1, "several Arrow batches: " + batches);
+        String tsv = new String(query(varchar, ContentTypes.TEXT_TSV, 1024).body(), StandardCharsets.UTF_8);
+        assertEquals(tsv.substring(tsv.indexOf('\n') + 1), out.toString(StandardCharsets.UTF_8), "Arrow rows");
     }
 
     @Test
