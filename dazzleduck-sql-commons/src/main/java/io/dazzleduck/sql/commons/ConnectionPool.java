@@ -16,6 +16,7 @@ import org.duckdb.DuckDBResultSet;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.io.InputStream;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.RecordComponent;
@@ -408,7 +409,8 @@ public enum ConnectionPool {
                 }
 
                 // The batches are internal's, so are their dictionaries (dictionary-encoded columns,
-                // e.g. ENUM): this reader never initializes its own.
+                // e.g. ENUM): this reader never initializes its own. DuckDB's reader fills them in
+                // while loading a batch, so they are empty until the first one.
                 @Override
                 public Dictionary lookup(long id) {
                     return internal.lookup(id);
@@ -416,6 +418,13 @@ public enum ConnectionPool {
 
                 @Override
                 public Set<Long> getDictionaryIds() {
+                    // Not overridden by DuckDB's reader: Arrow's version reads the ids from the
+                    // schema and throws until the reader is initialized, which the root does.
+                    try {
+                        internal.getVectorSchemaRoot();
+                    } catch (IOException e) {
+                        throw new UncheckedIOException(e);
+                    }
                     return internal.getDictionaryIds();
                 }
 
