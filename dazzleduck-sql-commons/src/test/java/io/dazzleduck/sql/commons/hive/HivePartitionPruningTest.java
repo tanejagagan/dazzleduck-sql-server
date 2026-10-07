@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 public class HivePartitionPruningTest {
 
@@ -128,6 +129,37 @@ public class HivePartitionPruningTest {
     public void testWriter() {
 
     }
+
+    /**
+     * DuckDB's arrow_large_buffer_size (a GLOBAL setting) sends LargeList and LargeUtf8 instead of
+     * List and Utf8. Pruning must return the same files either way.
+     */
+    @Test
+    public void pruningIsTheSameWithLargeArrowBuffers() throws Exception {
+        String[] filters = {"true", "p = 'a b'", "dt = '2025-01-01'", "dt = '2023-01-01'",
+                "CAST(\"dt\" as DATE) IS NOT NULL AND CAST(\"dt\" as DATE) = '2025-01-01'"};
+        String unpartitioned = basePath + "/dt=2024-01-01/p=x";
+        List<List<FileStatus>> expected = new java.util.ArrayList<>();
+        for (String filter : filters) {
+            expected.add(HivePartitionPruning.pruneFiles(basePath, filter, partition));
+        }
+        List<FileStatus> expectedUnpartitioned = HivePartitionPruning.pruneFiles(unpartitioned, "true", new String[0][0]);
+        assertFalse(expected.get(0).isEmpty(), "sanity: there are files to prune");
+
+        ConnectionPool.execute("SET GLOBAL arrow_large_buffer_size = true");
+        try {
+            try (DuckDBConnection connection = ConnectionPool.getConnection();
+                 BufferAllocator allocator = new RootAllocator();
+                 ArrowReader reader = ConnectionPool.getReader(connection, allocator, "SELECT 'x' AS s", 10)) {
+                assertEquals("LargeUtf8", reader.getVectorSchemaRoot().getSchema().findField("s").getType().getTypeID().name(),
+                        "the setting is in effect");
+            }
+            for (int f = 0; f < filters.length; f++) {
+                assertEquals(expected.get(f), HivePartitionPruning.pruneFiles(basePath, filters[f], partition), filters[f]);
+            }
+            assertEquals(expectedUnpartitioned, HivePartitionPruning.pruneFiles(unpartitioned, "true", new String[0][0]));
+        } finally {
+            ConnectionPool.execute("SET GLOBAL arrow_large_buffer_size = false");
+        }
+    }
 }
-
-

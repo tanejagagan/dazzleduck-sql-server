@@ -7,12 +7,10 @@ import io.dazzleduck.sql.commons.*;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.BigIntVector;
-import org.apache.arrow.vector.VarCharVector;
+import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.complex.ListVector;
-import org.apache.arrow.vector.complex.impl.UnionListReader;
 import org.apache.arrow.vector.complex.impl.UnionListWriter;
-import org.apache.arrow.vector.complex.reader.VarCharReader;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
@@ -40,24 +38,30 @@ public class HivePartitionPruning extends PartitionPruning {
             new Field("unescaped_partitions", FieldType.notNullable(new ArrowType.List()),
                     List.of(new Field("children", FieldType.notNullable(new ArrowType.Utf8()), null)));
 
+    /**
+     * Unescapes each partition value. The source is read through {@code getObject}, so it can be a
+     * List of Utf8 or, when DuckDB's {@code arrow_large_buffer_size} is on, a LargeList of LargeUtf8.
+     */
     public static final MappedReader.Function UNESCAPE_FN = (sources, target) -> {
         ListVector resultVector = (ListVector) target;
-        ListVector f = (ListVector) sources.get(0);
-        UnionListReader reader = f.getReader();
+        FieldVector partitions = sources.get(0);
         UnionListWriter writer = resultVector.getWriter();
-        for (int i = 0; i < f.getValueCount(); i++) {
-            reader.setPosition(i);
-            writer.startList();
+        for (int i = 0; i < partitions.getValueCount(); i++) {
             writer.setPosition(i);
-            while (reader.next()) {
-                VarCharReader reader1 = reader.reader();
-                Text text = reader1.readText();
-                String res = HivePartitionPruning.unescapePathName(text.toString());
-                writer.writeVarChar(new Text(res));
+            writer.startList();
+            if (partitions.getObject(i) instanceof List<?> values) { // a null list stays empty, as before
+                for (Object value : values) {
+                    writer.writeVarChar(new Text(HivePartitionPruning.unescapePathName(value.toString())));
+                }
             }
             writer.endList();
         }
     };
+
+    /** A VARCHAR column's value: Utf8, or LargeUtf8 when DuckDB's {@code arrow_large_buffer_size} is on. */
+    private static String text(FieldVector vector, int row) {
+        return vector.getObject(row).toString();
+    }
 
     public static String getPartitionSql(String[][] dataTypes,
                                             String tempTableName,
@@ -151,11 +155,11 @@ public class HivePartitionPruning extends PartitionPruning {
                  ArrowReader reader2 = ConnectionPool.getReader(writeConnection, allocator, transformed, 100)) {
                 while (reader2.loadNextBatch()) {
                     VectorSchemaRoot root = reader2.getVectorSchemaRoot();
-                    VarCharVector filename = (VarCharVector) root.getVector("filename");
+                    FieldVector filename = root.getVector("filename");
                     BigIntVector size = (BigIntVector) root.getVector("size");
                     BigIntVector lastModifier = (BigIntVector) root.getVector("last_modified");
                     for (int i = 0; i < root.getRowCount(); i++) {
-                        result.add(new FileStatus(new String(filename.get(i)), size.get(i), lastModifier.get(i)));
+                        result.add(new FileStatus(text(filename, i), size.get(i), lastModifier.get(i)));
                     }
                 }
             }
@@ -198,11 +202,11 @@ public class HivePartitionPruning extends PartitionPruning {
             ArrowReader reader = ConnectionPool.getReader(connection, allocator, sql, 1000)){
             while (reader.loadNextBatch()) {
                 VectorSchemaRoot root = reader.getVectorSchemaRoot();
-                VarCharVector filename = (VarCharVector) root.getVector("filename");
+                FieldVector filename = root.getVector("filename");
                 BigIntVector size = (BigIntVector) root.getVector("size");
                 BigIntVector lastModifier = (BigIntVector) root.getVector("last_modified");
                 for (int i = 0; i < root.getRowCount(); i++) {
-                    result.add(new FileStatus(new String(filename.get(i)), size.get(i), lastModifier.get(i)));
+                    result.add(new FileStatus(text(filename, i), size.get(i), lastModifier.get(i)));
                 }
             }
         }
