@@ -4,7 +4,7 @@ import io.dazzleduck.sql.commons.ConnectionPool;
 import io.dazzleduck.sql.commons.MappedReader;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.FieldVector;
-import org.apache.arrow.vector.VarCharVector;
+import org.apache.arrow.vector.VariableWidthFieldVector;
 import org.apache.arrow.vector.complex.ListVector;
 import org.apache.arrow.vector.complex.StructVector;
 import org.apache.arrow.vector.ipc.ArrowReader;
@@ -16,6 +16,7 @@ import org.duckdb.DuckDBConnection;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -34,14 +35,15 @@ public interface Indexer {
             for (var entry : tokenizationFunctions.entrySet()) {
                 var tokenizationFunction = entry.getValue();
                 var column = entry.getKey();
-                var inputVector = (VarCharVector) sourceMap.get(column);
+                // Utf8, or LargeUtf8 when DuckDB's arrow_large_buffer_size is on.
+                var inputVector = (VariableWidthFieldVector) sourceMap.get(column);
                 var listVector = resultVector.getChild(column, ListVector.class);
                 var listWriter = listVector.getWriter();
                 listWriter.allocate();
                 int valueCount = 0;
                 for (int row = 0; row < inputVector.getValueCount(); row++) {
                     var text = inputVector.get(row);
-                    var tokens = tokenizationFunction.apply(new String(text));
+                    var tokens = tokenizationFunction.apply(new String(text, StandardCharsets.UTF_8));
                     listWriter.startList();
                     for (var t : tokens) {
                         listWriter.varChar().writeVarChar(new Text(t));
