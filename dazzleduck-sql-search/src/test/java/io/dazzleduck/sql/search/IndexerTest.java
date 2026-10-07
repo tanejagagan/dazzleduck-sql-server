@@ -59,6 +59,28 @@ public class IndexerTest {
         });
     }
 
+    /**
+     * With DuckDB's arrow_large_buffer_size on, the source columns arrive as LargeUtf8. The setting
+     * is GLOBAL (the shared pool's every connection), so it is restored afterwards; this relies on
+     * the module's tests running one at a time.
+     */
+    @Test
+    public void testIndexCreationWithLargeArrowBuffers() throws Exception {
+        String previous;
+        try (var connection = ConnectionPool.getConnection();
+             var st = connection.createStatement();
+             var rs = st.executeQuery("SELECT current_setting('arrow_large_buffer_size')::VARCHAR")) {
+            rs.next();
+            previous = rs.getString(1);
+        }
+        ConnectionPool.execute("SET GLOBAL arrow_large_buffer_size = true");
+        try {
+            testIndexCreation();
+        } finally {
+            ConnectionPool.execute("SET GLOBAL arrow_large_buffer_size = " + previous);
+        }
+    }
+
     private void createFile(Map<String, String> input, String prefix, String target) {
         var selectCols = input.entrySet().stream().map(e -> "'%s' AS %s".formatted(e.getValue(), e.getKey())).collect(Collectors.joining(","));
         var t = "%s/%s".formatted(prefix, target);
