@@ -1,0 +1,7 @@
+{
+  "resources": [
+    {
+      "glob": "libduckdb_java.so_${duckdb.native.lib}"
+    }
+  ]
+}

@@ -33,6 +33,10 @@ on:
       - 'dazzleduck-sql-otel-collector/src/main/resources/META-INF/native-image/**'
       - 'dazzleduck-sql-ducklake-compactor/pom.xml'
       - 'dazzleduck-sql-ducklake-compactor/src/main/resources/META-INF/native-image/**'
+      - 'dazzleduck-sql-otel-collector/src/main/native-duckdb/**'
+      - 'dazzleduck-sql-ducklake-compactor/src/main/native-duckdb/**'
+      # The root pom sets duckdb.version: a DuckDB upgrade can change the JNI libraries embedded.
+      - 'pom.xml'
 
 concurrency:
   group: native-binaries-${{ github.ref }}

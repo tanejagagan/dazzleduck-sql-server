@@ -12,6 +12,10 @@ on:
       - 'dazzleduck-sql-ducklake-compactor/Dockerfile.native'
       - 'dazzleduck-sql-ducklake-compactor/pom.xml'
       - 'dazzleduck-sql-ducklake-compactor/src/main/resources/META-INF/native-image/**'
+      - 'dazzleduck-sql-otel-collector/src/main/native-duckdb/**'
+      - 'dazzleduck-sql-ducklake-compactor/src/main/native-duckdb/**'
+      # The root pom sets duckdb.version: a DuckDB upgrade can change the JNI library embedded.
+      - 'pom.xml'
       - '.github/workflows/native-ci.yml'
   push:
     branches: [main]
@@ -22,6 +26,10 @@ on:
       - 'dazzleduck-sql-ducklake-compactor/Dockerfile.native'
       - 'dazzleduck-sql-ducklake-compactor/pom.xml'
       - 'dazzleduck-sql-ducklake-compactor/src/main/resources/META-INF/native-image/**'
+      - 'dazzleduck-sql-otel-collector/src/main/native-duckdb/**'
+      - 'dazzleduck-sql-ducklake-compactor/src/main/native-duckdb/**'
+      # The root pom sets duckdb.version: a DuckDB upgrade can change the JNI library embedded.
+      - 'pom.xml'
       - '.github/workflows/native-ci.yml'
 
 concurrency:
