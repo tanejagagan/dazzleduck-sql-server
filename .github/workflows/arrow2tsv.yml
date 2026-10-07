@@ -141,7 +141,8 @@ jobs:
           ls -la "$BIN"
           "$BIN" --help | head -1
           if [ "$RUNNER_OS" = Linux ]; then
-            file "$BIN" | tee /dev/stderr | grep -q 'statically linked'
+            # 'static-pie linked' on x86_64, 'statically linked' on aarch64.
+            file "$BIN" | tee /dev/stderr | grep -qE 'statically linked|static-pie linked'
           fi
 
       - name: Set up JDK 25
