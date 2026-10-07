@@ -123,16 +123,24 @@ gh release create vX.Y.Z --repo dazzleduck-web/dazzleduck-sql-server \
   --title "vX.Y.Z" --notes-file notes.md --latest
 ```
 
-Then attach the macOS and Windows native binaries. Pushing the tag starts
-`.github/workflows/native-binaries.yml`, which builds `collector` and `compactor` for `macos-arm64`
-and `windows-amd64` and attaches them to the release if it already exists. A release created after
-that run finished doesn't have them yet, so attach them from the run's artifacts:
+Then attach the binaries. Pushing the tag starts two workflows that attach their binaries to the
+release if it already exists:
+
+- `.github/workflows/native-binaries.yml` builds `collector` and `compactor` for `macos-arm64` and
+  `windows-amd64`
+- `.github/workflows/arrow2tsv.yml` builds `arrow2tsv` for Linux, macOS and Windows on amd64 and
+  arm64
+
+A release created after those runs finished doesn't have them yet, so attach them from the runs'
+artifacts (wait for both runs to finish; workflow artifacts expire):
 
 ```bash
-run=$(gh run list --repo dazzleduck-web/dazzleduck-sql-server --workflow native-binaries.yml \
-  --branch vX.Y.Z -L 1 --json databaseId -q '.[0].databaseId')
-gh run download "$run" --repo dazzleduck-web/dazzleduck-sql-server -D bins
-gh release upload vX.Y.Z bins/*/* --repo dazzleduck-web/dazzleduck-sql-server --clobber
+for workflow in native-binaries.yml arrow2tsv.yml; do
+  run=$(gh run list --repo dazzleduck-web/dazzleduck-sql-server --workflow "$workflow" \
+    --branch vX.Y.Z -L 1 --json databaseId -q '.[0].databaseId')
+  gh run download "$run" --repo dazzleduck-web/dazzleduck-sql-server -D "bins/$workflow"
+done
+gh release upload vX.Y.Z bins/*/*/* --repo dazzleduck-web/dazzleduck-sql-server --clobber
 ```
 
 Include in the notes:

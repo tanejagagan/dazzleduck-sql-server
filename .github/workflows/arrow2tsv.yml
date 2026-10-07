@@ -1,0 +1,208 @@
+name: arrow2tsv
+
+# Builds and tests the arrow2tsv tool (tools/arrow2tsv) for Linux, macOS and Windows on both amd64
+# and arm64. Every target builds on a runner of its own OS and architecture, so the test suite runs
+# against each shipped binary, not just a host build:
+#
+#   linux   — static musl binaries (no glibc version requirement)
+#   macos   — native Mach-O for Apple Silicon and Intel
+#   windows — MSVC with the C runtime linked statically (no VC++ redistributable needed)
+#
+# On Linux and macOS (except Intel macOS, see skip_e2e) the binary is also checked end to end
+# (e2e.sh): the DazzleDuck server is built from the same commit and started, and arrow2tsv's output
+# for each query must match the server's own TSV. (Not on Windows: e2e.sh launches the server with a
+# bash script and a Unix classpath.) A change to the server alone runs only that end-to-end check, on
+# Linux, in arrow2tsv-server.yml.
+#
+# The version is the tag's on a v* tag (pr-<sha> / <branch>-<sha> otherwise). It is compiled in, so
+# `arrow2tsv --version` reports it, and names the archives. The binaries are uploaded as workflow
+# artifacts and, on a v* tag, attached to that tag's GitHub release when it already exists; when the
+# release is created later, RELEASE.md step 6 attaches them.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths: &paths
+      - 'tools/arrow2tsv/**'
+      - '.github/workflows/arrow2tsv.yml'
+  pull_request:
+    paths: *paths
+  workflow_dispatch:
+
+concurrency:
+  group: arrow2tsv-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write # attach the binaries to the release
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    shell: bash
+    working-directory: tools/arrow2tsv
+
+jobs:
+  lint:
+    name: Format and clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal -c rustfmt,clippy && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tools/arrow2tsv
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+
+  build:
+    name: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-amd64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - platform: linux-arm64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - platform: macos-amd64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            # The server cannot start here: DuckDB's community arrow extension for v1.5.5 osx_amd64
+            # is an arm64 binary (same file as osx_arm64), so the startup script's LOAD arrow fails.
+            # Drop this once that extension is fixed.
+            skip_e2e: true
+          - platform: macos-arm64
+            os: macos-14
+            target: aarch64-apple-darwin
+          - platform: windows-amd64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            exe: .exe
+            # Static C runtime: no VC++ redistributable needed.
+            rustflags: -C target-feature=+crt-static
+          - platform: windows-arm64
+            os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            exe: .exe
+            # Static C runtime: no VC++ redistributable needed.
+            rustflags: -C target-feature=+crt-static
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      RUSTFLAGS: ${{ matrix.rustflags }}
+      BIN: target/${{ matrix.target }}/release/arrow2tsv${{ matrix.exe }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        run: |
+          case "$GITHUB_REF_TYPE/$GITHUB_EVENT_NAME" in
+            tag/*) version="${GITHUB_REF_NAME#v}" ;;
+            */pull_request) version="pr-${GITHUB_SHA::8}" ;;
+            *) version="${GITHUB_REF_NAME//\//-}-${GITHUB_SHA::8}" ;;
+          esac
+          # Read by the build (option_env!), so --version reports it.
+          echo "ARROW2TSV_VERSION=$version" >> "$GITHUB_ENV"
+
+      # Not every runner image ships rustup (windows-11-arm is a partner image).
+      - name: Install Rust
+        run: |
+          set -euo pipefail
+          if ! command -v rustup > /dev/null; then
+            if [ "$RUNNER_OS" = Windows ]; then
+              curl -sSfL -o rustup-init.exe "https://static.rust-lang.org/rustup/dist/${{ matrix.target }}/rustup-init.exe"
+              ./rustup-init.exe -y --profile minimal --default-toolchain none
+              rm rustup-init.exe
+            else
+              curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+            fi
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup toolchain install stable --profile minimal --target ${{ matrix.target }}
+          rustup default stable
+
+      - name: Install musl tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+
+      # ring (rustls' crypto, for https:// URLs) needs clang to build for Windows on ARM.
+      - name: Install clang
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        run: |
+          if ! command -v clang > /dev/null; then
+            choco install llvm -y --no-progress
+          fi
+          echo "C:/Program Files/LLVM/bin" >> "$GITHUB_PATH"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tools/arrow2tsv
+          key: ${{ matrix.target }}
+
+      - name: Test
+        run: cargo test --locked --release --target ${{ matrix.target }}
+
+      - name: Build
+        run: |
+          cargo build --locked --release --target ${{ matrix.target }}
+          ls -la "$BIN"
+          "$BIN" --help | head -1
+          [ "$("$BIN" --version)" = "arrow2tsv $ARROW2TSV_VERSION" ]
+          if [ "$RUNNER_OS" = Linux ]; then
+            # 'static-pie linked' on x86_64, 'statically linked' on aarch64.
+            file "$BIN" | tee /dev/stderr | grep -qE 'statically linked|static-pie linked'
+          fi
+
+      - name: Set up JDK 25
+        if: runner.os != 'Windows' && !matrix.skip_e2e
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      # Builds the server from this commit, starts it (HTTP only, non-UTC timezone, temporary
+      # warehouse), runs the checks and stops it; prints the server log if it fails to start.
+      - name: End-to-end test against the server
+        if: runner.os != 'Windows' && !matrix.skip_e2e
+        run: ./e2e.sh "$BIN"
+
+      - name: Package
+        id: package
+        run: |
+          set -euo pipefail
+          base="arrow2tsv-${ARROW2TSV_VERSION}-${{ matrix.platform }}"
+          mkdir -p dist
+          cp "$BIN" dist/
+          if [ "$RUNNER_OS" = Windows ]; then
+            pwsh -NoProfile -Command "Compress-Archive -Path dist/arrow2tsv.exe -DestinationPath ${base}.zip"
+            echo "file=${base}.zip" >> "$GITHUB_OUTPUT"
+          else
+            tar -czf "${base}.tar.gz" -C dist arrow2tsv
+            echo "file=${base}.tar.gz" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arrow2tsv-${{ matrix.platform }}
+          path: tools/arrow2tsv/${{ steps.package.outputs.file }}
+          if-no-files-found: error
+
+      # --clobber replaces the asset when a tag is re-pushed.
+      - name: Attach to the GitHub release, if it exists
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${{ steps.package.outputs.file }}" --clobber
+          else
+            echo "::notice::No release for $GITHUB_REF_NAME yet; the binary is in this run's artifacts."
+          fi
