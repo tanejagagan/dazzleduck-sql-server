@@ -346,9 +346,16 @@ public class PartitionedIngestionQueueTest {
     // -----------------------------------------------------------------------
 
     /** Counts how often routing asked the handler for the queue's variables. */
+    /**
+     * A handler that counts the variable lookups made on the calling (test) thread, which is the one
+     * add() routes on. A write also reads the variables, on the queue's own writer thread and at a
+     * time of its choosing (a batch over the minimum is written right away), so counting those too
+     * made the count depend on that thread's timing.
+     */
     private IngestionHandler countingHandler(java.util.Map<String, String> variables,
                                              java.util.concurrent.atomic.AtomicInteger lookups,
                                              String expression) {
+        Thread routingThread = Thread.currentThread();
         return new IngestionHandler() {
             @Override public PostIngestionTask createPostIngestionTask(IngestionResult r) { return PostIngestionTask.NOOP; }
             @Override public String getTargetPath(String queueId) { return targetPath.toString(); }
@@ -356,7 +363,9 @@ public class PartitionedIngestionQueueTest {
             @Override public int getNumPartitions(String queueId) { return NUM_PARTITIONS; }
             @Override public String getPartitionExpression(String queueId) { return expression; }
             @Override public java.util.Map<String, String> getVariables(String queueId) {
-                lookups.incrementAndGet();
+                if (Thread.currentThread() == routingThread) {
+                    lookups.incrementAndGet();
+                }
                 return variables;
             }
         };
