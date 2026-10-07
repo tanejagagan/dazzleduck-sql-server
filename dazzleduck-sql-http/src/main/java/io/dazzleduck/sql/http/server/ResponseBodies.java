@@ -28,20 +28,48 @@ import java.util.function.Supplier;
  * This stream reports each of those as an IOException, so the listeners need no knowledge of
  * Helidon. Any other exception passes through unchanged and still counts as a server error.
  *
- * <p>It also asks Helidon for the body stream only on the first write, flush or close. Once Helidon
- * has handed it out, {@code response.send(...)} is refused ("When output stream is used, response is
+ * <p>It also asks Helidon for the body stream only when the first byte is written. Once Helidon has
+ * handed it out, {@code response.send(...)} is refused ("When output stream is used, response is
  * completed by closing the output stream, do not call send()"), even if nothing was written yet. Opened
- * lazily, a query that fails before its first byte (e.g. while a listener sets up its writer) can
- * still be answered with an error status and its real message.
+ * lazily, a query that fails before its first byte (e.g. while a listener sets up its writer, or
+ * formats its first batch) can still be answered with an error status and its real message, which
+ * {@link #canSendError} tells. Flushing or closing a body with nothing written does not open it — a
+ * listener's {@code error()} closes it — so a service ends a successful response with
+ * {@link #finish}, which sends it empty if nothing was written.
  */
 final class ResponseBodies {
 
     private ResponseBodies() {
     }
 
-    /** The response's body stream, opened on first use, reporting a gone client as an IOException. */
+    /** The response's body stream, opened on the first byte, reporting a gone client as an IOException. */
     static OutputStream of(ServerResponse response) {
-        return new ClientGoneAsIOException(response::outputStream);
+        return new ClientGoneAsIOException(() -> {
+            if (response.isSent()) {
+                // The service already answered (e.g. 504 on a timeout) while the query kept going:
+                // nobody is listening for this body any more, the same as a client that went away.
+                throw new UncheckedIOException(new IOException("The response was already sent"));
+            }
+            return response.outputStream();
+        });
+    }
+
+    /**
+     * Whether an error status and message can still be sent: nothing was written to {@code body}
+     * (from {@link #of}) and the response was not sent otherwise.
+     */
+    static boolean canSendError(ServerResponse response, OutputStream body) {
+        return !response.isSent() && !(body instanceof ClientGoneAsIOException b && b.opened());
+    }
+
+    /**
+     * Ends a successful response. A body that had bytes written was completed by its own close; one
+     * with nothing written (e.g. an empty result) is sent now, empty.
+     */
+    static void finish(OutputStream body) throws IOException {
+        if (body instanceof ClientGoneAsIOException b && !b.opened()) {
+            b.openAndClose();
+        }
     }
 
     /** Whether Helidon threw {@code failure} because the client went away. */
@@ -67,7 +95,7 @@ final class ResponseBodies {
             this(() -> body);
         }
 
-        /** {@code open} is called once, on the first write, flush or close. */
+        /** {@code open} is called once, on the first write (or by {@link ResponseBodies#finish}). */
         ClientGoneAsIOException(Supplier<OutputStream> open) {
             this.open = open;
         }
@@ -77,6 +105,18 @@ final class ResponseBodies {
                 body = open.get();
             }
             return body;
+        }
+
+        boolean opened() {
+            return body != null;
+        }
+
+        void openAndClose() throws IOException {
+            try {
+                body().close();
+            } catch (RuntimeException e) {
+                throw translate(e);
+            }
         }
 
         @Override
@@ -99,8 +139,11 @@ final class ResponseBodies {
 
         @Override
         public void flush() throws IOException {
+            if (body == null) {
+                return; // nothing written, nothing to flush
+            }
             try {
-                body().flush();
+                body.flush();
             } catch (RuntimeException e) {
                 throw translate(e);
             }
@@ -108,8 +151,11 @@ final class ResponseBodies {
 
         @Override
         public void close() throws IOException {
+            if (body == null) {
+                return; // nothing written: left unopened, so an error can still be sent (see finish)
+            }
             try {
-                body().close();
+                body.close();
             } catch (RuntimeException e) {
                 throw translate(e);
             }

@@ -44,6 +44,8 @@ public class QueryService extends AbstractQueryBasedService {
                                   ServerResponse response,
                                   QueryRequest query) {
         var context = ControllerService.createContext(request);
+        // Opened on the first byte, so an error before it can still be sent (see ResponseBodies).
+        OutputStream body = ResponseBodies.of(response);
         try {
             var id = query.id() == null ? StatementHandle.nextStatementId() : query.id();
             var statementHandle = StatementHandle.newStatementHandle(id, query.query(), producerId, -1);
@@ -59,52 +61,53 @@ public class QueryService extends AbstractQueryBasedService {
             if (wantsTsv) {
                 logger.debug("TSV output requested for query: {}", query.query());
                 response.header("Content-Type", ContentTypes.TEXT_TSV_UTF8);
-                future = httpFlightAdaptor.streamTsv(ticket, context, () -> ResponseBodies.of(response));
+                future = httpFlightAdaptor.streamTsv(ticket, context, () -> body);
             } else if (wantsJsonl) {
                 logger.debug("JSONL output requested for query: {}", query.query());
                 response.header("Content-Type", ContentTypes.APPLICATION_JSONL_UTF8);
-                future = httpFlightAdaptor.streamJsonl(ticket, context, () -> ResponseBodies.of(response));
+                future = httpFlightAdaptor.streamJsonl(ticket, context, () -> body);
             } else {
                 // Get Arrow compression codec from header (defaults to ZSTD)
                 CompressionUtil.CodecType compressionCodec = ParameterUtils.getArrowCompression(request);
                 logger.debug("Using Arrow compression codec: {}", compressionCodec);
                 logger.debug("Calling getStreamStatementDirect for query: {}", query.query());
                 response.header("Content-Type", ContentTypes.APPLICATION_ARROW);
-                future = httpFlightAdaptor.getStreamStatementDirect(ticket, context, () -> ResponseBodies.of(response), compressionCodec);
+                future = httpFlightAdaptor.getStreamStatementDirect(ticket, context, () -> body, compressionCodec);
             }
 
             logger.debug("Waiting for future.get() with timeout {}ms", httpConfig.getQueryTimeoutMs());
             future.get(httpConfig.getQueryTimeoutMs(), TimeUnit.MILLISECONDS);
+            ResponseBodies.finish(body);
             logger.debug("future.get() completed successfully");
 
         } catch (IllegalArgumentException e) {
             logger.error("Invalid Arrow compression header value", e);
-            if (!response.isSent()) {
+            if (ResponseBodies.canSendError(response, body)) {
                 response.status(Status.BAD_REQUEST_400);
                 response.send(e.getMessage());
             }
         } catch (TimeoutException e) {
             logger.error("Query execution timeout after {}ms", httpConfig.getQueryTimeoutMs());
-            if (!response.isSent()) {
+            if (ResponseBodies.canSendError(response, body)) {
                 response.status(Status.GATEWAY_TIMEOUT_504);
                 response.send("Query execution timeout");
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             logger.error("Query execution interrupted", e);
-            if (!response.isSent()) {
+            if (ResponseBodies.canSendError(response, body)) {
                 response.status(Status.INTERNAL_SERVER_ERROR_500);
                 response.send("Query execution interrupted");
             }
         } catch (ExecutionException e) {
             Throwable cause = e.getCause() != null ? e.getCause() : e;
             logger.error("Error executing query", cause);
-            if (!response.isSent()) {
+            if (ResponseBodies.canSendError(response, body)) {
                 ControllerService.sendFlightError(response, cause);
             }
         } catch (Exception e) {
             logger.error("Error sending query result", e);
-            if (!response.isSent()) {
+            if (ResponseBodies.canSendError(response, body)) {
                 ControllerService.sendFlightError(response, e);
             }
         }

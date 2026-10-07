@@ -44,8 +44,10 @@ import org.apache.arrow.vector.dictionary.DictionaryProvider;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.arrow.vector.ipc.ArrowStreamWriter;
 import org.apache.arrow.vector.ipc.message.IpcOption;
+import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.DictionaryEncoding;
 import org.apache.arrow.vector.types.pojo.Field;
+import org.apache.arrow.vector.types.pojo.Schema;
 import org.apache.arrow.vector.util.JsonStringArrayList;
 import org.apache.arrow.vector.util.JsonStringHashMap;
 
@@ -84,12 +86,18 @@ import static java.time.format.DateTimeFormatter.ISO_LOCAL_TIME;
  * <p>Dictionary-encoded columns (DuckDB sends {@code ENUM} this way, also inside lists and structs)
  * need the stream's {@link DictionaryProvider}: an {@link ArrowReader} is one. The per-batch
  * primitives take it as a parameter; their overloads without it are for results known to have no
- * dictionary-encoded column, and fail on one rather than print its dictionary indices.
+ * dictionary-encoded column, and fail on one rather than print its dictionary indices. Whether a
+ * column needs its dictionaries is decided once per column from the schema, so columns without one
+ * cost nothing extra. A dictionary-encoded value can be resolved inside lists, maps, fixed-size
+ * lists and structs; inside any other type (e.g. a union) the column fails before a row is written.
  */
 public final class ResultStreams {
 
     private static final char TAB = '\t';
     private static final char NEWLINE = '\n';
+
+    /** Passed down for a column with no dictionary-encoded value anywhere inside: no lookups. */
+    private static final DictionaryProvider NO_DICTIONARIES = new DictionaryProvider.MapDictionaryProvider();
 
     private static final JsonFactory JSON_FACTORY = new JsonFactory();
     // JavaTimeModule + ISO output so java.time values (e.g. non-TZ TIMESTAMP -> LocalDateTime),
@@ -206,10 +214,13 @@ public final class ResultStreams {
      */
     public static void writeJsonRow(VectorSchemaRoot root, DictionaryProvider dictionaries, int row,
                                     JsonGenerator generator) throws IOException {
+        List<FieldVector> vectors = root.getFieldVectors();
+        List<Field> fields = root.getSchema().getFields();
         generator.writeStartObject();
-        for (FieldVector vector : root.getFieldVectors()) {
+        for (int col = 0; col < vectors.size(); col++) {
+            FieldVector vector = vectors.get(col);
             generator.writeFieldName(vector.getName());
-            writeJsonValue(vector, row, generator, dictionaries);
+            writeJsonValue(vector, row, generator, forColumn(fields.get(col), dictionaries));
         }
         generator.writeEndObject();
     }
@@ -224,7 +235,7 @@ public final class ResultStreams {
             generator.writeNull();
             return;
         }
-        Dictionary dictionary = dictionaryOf(vector, dictionaries);
+        Dictionary dictionary = dictionaries == NO_DICTIONARIES ? null : dictionaryOf(vector, dictionaries);
         if (dictionary != null) {
             writeJsonValue(dictionary.getVector(), dictionaryIndex(vector, index), generator, dictionaries);
             return;
@@ -248,7 +259,7 @@ public final class ResultStreams {
             case DATEDAY, DATEMILLI, TIMESEC, TIMEMILLI, TIMEMICRO, TIMENANO,
                  TIMESTAMPSEC, TIMESTAMPMILLI, TIMESTAMPMICRO, TIMESTAMPNANO,
                  TIMESTAMPSECTZ, TIMESTAMPMILLITZ, TIMESTAMPMICROTZ, TIMESTAMPNANOTZ ->
-                    generator.writeString(formatValue((FieldVector) vector, index));
+                    generator.writeString(format((FieldVector) vector, index, NO_DICTIONARIES));
             case MAP -> {
                 // MapVector is a ListVector of {key, value} structs; render it as a JSON object.
                 MapVector map = (MapVector) vector;
@@ -257,7 +268,7 @@ public final class ResultStreams {
                 ValueVector values = entries.getChildrenFromFields().get(1);
                 generator.writeStartObject();
                 for (int i = map.getElementStartIndex(index); i < map.getElementEndIndex(index); i++) {
-                    generator.writeFieldName(formatValue(keys, i, dictionaries));
+                    generator.writeFieldName(format(keys, i, dictionaries));
                     writeJsonValue(values, i, generator, dictionaries);
                 }
                 generator.writeEndObject();
@@ -345,13 +356,18 @@ public final class ResultStreams {
     public static void writeTsvRows(VectorSchemaRoot root, DictionaryProvider dictionaries, Writer writer)
             throws IOException {
         List<FieldVector> vectors = root.getFieldVectors();
+        List<Field> fields = root.getSchema().getFields();
+        DictionaryProvider[] columnDictionaries = new DictionaryProvider[vectors.size()];
+        for (int col = 0; col < vectors.size(); col++) {
+            columnDictionaries[col] = forColumn(fields.get(col), dictionaries);
+        }
         int rowCount = root.getRowCount();
         for (int row = 0; row < rowCount; row++) {
             for (int col = 0; col < vectors.size(); col++) {
                 if (col > 0) {
                     writer.write(TAB);
                 }
-                String value = formatValue(vectors.get(col), row, dictionaries);
+                String value = format(vectors.get(col), row, columnDictionaries[col]);
                 if (value != null) {
                     writer.write(value);
                 }
@@ -377,12 +393,17 @@ public final class ResultStreams {
      * entries in place of the indices.
      */
     public static String formatValue(FieldVector vector, int row, DictionaryProvider dictionaries) {
+        return format(vector, row, forColumn(vector.getField(), dictionaries));
+    }
+
+    /** {@link #formatValue}, with {@code dictionaries} already decided for the column by {@link #forColumn}. */
+    private static String format(FieldVector vector, int row, DictionaryProvider dictionaries) {
         if (vector.isNull(row)) {
             return null;
         }
-        Dictionary dictionary = dictionaryOf(vector, dictionaries);
+        Dictionary dictionary = dictionaries == NO_DICTIONARIES ? null : dictionaryOf(vector, dictionaries);
         if (dictionary != null) {
-            return formatValue(dictionary.getVector(), dictionaryIndex(vector, row), dictionaries);
+            return format(dictionary.getVector(), dictionaryIndex(vector, row), dictionaries);
         }
         return switch (vector.getMinorType()) {
             case DATEDAY ->
@@ -419,7 +440,7 @@ public final class ResultStreams {
                         Math.floorMod(nanos, 1_000_000_000L)).toString();
             }
             default -> {
-                Object value = hasDictionaryInside(vector.getField())
+                Object value = dictionaries != NO_DICTIONARIES && hasDictionaryInside(vector.getField())
                         ? decodedObject(vector, row, dictionaries)
                         : vector.getObject(row);
                 yield value != null ? value.toString() : null;
@@ -450,14 +471,59 @@ public final class ResultStreams {
         return Math.toIntExact(((BaseIntVector) indices).getValueAsLong(row));
     }
 
-    /** Whether a dictionary-encoded field is nested anywhere inside {@code field}. */
-    private static boolean hasDictionaryInside(Field field) {
-        for (Field child : field.getChildren()) {
-            if (child.getDictionary() != null || hasDictionaryInside(child)) {
+    /** Whether any column of {@code schema} is, or has inside it, a dictionary-encoded field. */
+    public static boolean hasDictionary(Schema schema) {
+        for (Field field : schema.getFields()) {
+            if (hasDictionary(field)) {
                 return true;
             }
         }
         return false;
+    }
+
+    private static boolean hasDictionary(Field field) {
+        return field.getDictionary() != null || hasDictionaryInside(field);
+    }
+
+    /** Whether a dictionary-encoded field is nested anywhere inside {@code field}. */
+    private static boolean hasDictionaryInside(Field field) {
+        for (Field child : field.getChildren()) {
+            if (hasDictionary(child)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The dictionaries to format the column {@code field} with: {@link #NO_DICTIONARIES} when it has
+     * no dictionary-encoded value anywhere, so formatting skips every lookup; otherwise
+     * {@code dictionaries}, after checking each such value can be resolved.
+     *
+     * @throws IllegalStateException when a dictionary-encoded value sits inside a type other than a
+     *                               list, map, fixed-size list or struct
+     */
+    private static DictionaryProvider forColumn(Field field, DictionaryProvider dictionaries) {
+        if (!hasDictionary(field)) {
+            return NO_DICTIONARIES;
+        }
+        checkResolvable(field, field.getName());
+        return dictionaries;
+    }
+
+    private static void checkResolvable(Field field, String column) {
+        if (!hasDictionaryInside(field)) {
+            return;
+        }
+        ArrowType.ArrowTypeID type = field.getType().getTypeID();
+        if (type != ArrowType.ArrowTypeID.List && type != ArrowType.ArrowTypeID.Map
+                && type != ArrowType.ArrowTypeID.FixedSizeList && type != ArrowType.ArrowTypeID.Struct) {
+            throw new IllegalStateException("Column '" + column + "' has a dictionary-encoded value inside "
+                    + type + ", which is not supported");
+        }
+        for (Field child : field.getChildren()) {
+            checkResolvable(child, column);
+        }
     }
 
     /**
@@ -470,7 +536,7 @@ public final class ResultStreams {
         if (vector.isNull(index)) {
             return null;
         }
-        Dictionary dictionary = dictionaryOf(vector, dictionaries);
+        Dictionary dictionary = dictionaryOf(vector, dictionaries); // only reached for such a column
         if (dictionary != null) {
             return decodedObject(dictionary.getVector(), dictionaryIndex(vector, index), dictionaries);
         }
@@ -505,6 +571,7 @@ public final class ResultStreams {
                 }
                 return values;
             }
+            // forColumn rejects a dictionary under any other type before a row is written.
             default -> throw new IllegalStateException("Column '" + vector.getName() + "' of type "
                     + vector.getMinorType() + " has a dictionary-encoded value inside, which is not supported");
         }

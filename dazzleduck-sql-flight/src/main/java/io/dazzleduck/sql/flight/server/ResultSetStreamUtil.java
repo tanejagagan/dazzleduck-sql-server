@@ -1,13 +1,13 @@
 package io.dazzleduck.sql.flight.server;
 
 import io.dazzleduck.sql.commons.authorization.AccessMode;
+import io.dazzleduck.sql.commons.io.ResultStreams;
 import io.dazzleduck.sql.flight.FlightRecorder;
 import org.apache.arrow.flight.CallStatus;
 import org.apache.arrow.flight.FlightProducer;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.ipc.ArrowReader;
-import org.apache.arrow.vector.types.pojo.Field;
 import org.duckdb.DuckDBConnection;
 import org.duckdb.DuckDBResultSet;
 import org.slf4j.Logger;
@@ -163,18 +163,9 @@ public class ResultSetStreamUtil {
     private static boolean start(FlightProducer.ServerStreamListener listener, ArrowReader batches,
                                  StreamExecutors executors) throws Exception {
         VectorSchemaRoot root = batches.getVectorSchemaRoot();
-        boolean loaded = hasDictionary(root.getSchema().getFields()) && executors.fetch(batches::loadNextBatch);
+        boolean loaded = ResultStreams.hasDictionary(root.getSchema()) && executors.fetch(batches::loadNextBatch);
         listener.start(root, batches);
         return loaded;
-    }
-
-    private static boolean hasDictionary(List<Field> fields) {
-        for (Field field : fields) {
-            if (field.getDictionary() != null || hasDictionary(field.getChildren())) {
-                return true;
-            }
-        }
-        return false;
     }
 
     static void streamResultSet(StreamExecutors executors,

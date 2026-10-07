@@ -15,6 +15,7 @@ import io.helidon.webserver.http.ServerResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.OutputStream;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -56,9 +57,10 @@ public class NamedQueryService implements HttpService, ControllerService {
 
         var callContext = ControllerService.createContext(request);
         response.headers().set(HeaderNames.CONTENT_TYPE, ContentTypes.APPLICATION_JSON);
-        var future = adaptor.listItemsDirect(offset, limit, callContext, () -> ResponseBodies.of(response));
+        OutputStream body = ResponseBodies.of(response);
+        var future = adaptor.listItemsDirect(offset, limit, callContext, () -> body);
 
-        await(future, response, (cause, res) -> {
+        await(future, response, body, (cause, res) -> {
             logger.error("Error listing named queries", cause);
             ControllerService.sendFlightError(res, cause);
         });
@@ -71,8 +73,9 @@ public class NamedQueryService implements HttpService, ControllerService {
 
         var callContext = ControllerService.createContext(request);
         response.headers().set(HeaderNames.CONTENT_TYPE, ContentTypes.APPLICATION_JSON);
-        var future = adaptor.getNamedQueryDirect(name, callContext, () -> ResponseBodies.of(response));
-        await(future, response, (cause, res) -> {
+        OutputStream body = ResponseBodies.of(response);
+        var future = adaptor.getNamedQueryDirect(name, callContext, () -> body);
+        await(future, response, body, (cause, res) -> {
             if (cause instanceof NamedQueryServiceAdaptor.TemplateNotFoundException) {
                 logger.warn("Named query not found: {}", name);
                 res.status(Status.NOT_FOUND_404).send(cause.getMessage());
@@ -105,24 +108,25 @@ public class NamedQueryService implements HttpService, ControllerService {
         boolean wantsJsonl = accept.contains(ContentTypes.APPLICATION_JSONL)
                 || accept.contains(ContentTypes.APPLICATION_X_NDJSON);
 
+        OutputStream body = ResponseBodies.of(response);
         CompletableFuture<Void> future;
         if (wantsTsv) {
             response.headers().set(HeaderNames.CONTENT_TYPE, ContentTypes.TEXT_TSV_UTF8);
             future = new CompletableFuture<>();
-            var listener = new TsvOutputStreamListener(() -> ResponseBodies.of(response), future);
+            var listener = new TsvOutputStreamListener(() -> body, future);
             adaptor.getStreamNamedQuery(namedQuery.name(), namedQuery.parameters(), callContext, listener);
         } else if (wantsJsonl) {
             response.headers().set(HeaderNames.CONTENT_TYPE, ContentTypes.APPLICATION_JSONL_UTF8);
             future = adaptor.streamJsonlNamedQuery(namedQuery.name(), namedQuery.parameters(),
-                    callContext, () -> ResponseBodies.of(response));
+                    callContext, () -> body);
         } else {
             response.headers().set(HeaderNames.CONTENT_TYPE, ContentTypes.APPLICATION_ARROW);
             var compressionCodec = ParameterUtils.getArrowCompression(request);
             future = adaptor.getStreamNamedQueryDirect(namedQuery.name(), namedQuery.parameters(),
-                    callContext, () -> ResponseBodies.of(response), compressionCodec);
+                    callContext, () -> body, compressionCodec);
         }
 
-        await(future, response, (cause, res) -> {
+        await(future, response, body, (cause, res) -> {
             if (cause instanceof ParameterValidationException) {
                 logger.warn("Parameter validation failed for named query: {}", cause.getMessage());
                 res.status(Status.BAD_REQUEST_400).send(cause.getMessage());
@@ -141,23 +145,24 @@ public class NamedQueryService implements HttpService, ControllerService {
      * The {@code onExecutionError} callback handles only the unwrapped cause from
      * {@link ExecutionException} — the per-handler varying part.
      */
-    private void await(CompletableFuture<Void> future, ServerResponse response,
+    private void await(CompletableFuture<Void> future, ServerResponse response, OutputStream body,
                        BiConsumer<Throwable, ServerResponse> onExecutionError) {
         try {
             future.get(timeoutMillis, TimeUnit.MILLISECONDS);
+            ResponseBodies.finish(body);
         } catch (TimeoutException e) {
             logger.error("Named query timed out after {}ms", timeoutMillis);
-            if (!response.isSent()) response.status(Status.GATEWAY_TIMEOUT_504).send("Query execution timeout");
+            if (ResponseBodies.canSendError(response, body)) response.status(Status.GATEWAY_TIMEOUT_504).send("Query execution timeout");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             logger.error("Named query execution interrupted", e);
-            if (!response.isSent()) response.status(Status.INTERNAL_SERVER_ERROR_500).send("Query execution interrupted");
+            if (ResponseBodies.canSendError(response, body)) response.status(Status.INTERNAL_SERVER_ERROR_500).send("Query execution interrupted");
         } catch (ExecutionException e) {
             Throwable cause = e.getCause() != null ? e.getCause() : e;
-            if (!response.isSent()) onExecutionError.accept(cause, response);
+            if (ResponseBodies.canSendError(response, body)) onExecutionError.accept(cause, response);
         } catch (Exception e) {
             logger.error("Named query execution error", e);
-            if (!response.isSent()) ControllerService.sendFlightError(response, e);
+            if (ResponseBodies.canSendError(response, body)) ControllerService.sendFlightError(response, e);
         }
     }
 }

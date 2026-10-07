@@ -101,6 +101,22 @@ public class HttpServerEnumTest extends HttpServerTestBase {
 
     @Test
     @Timeout(value = 60, unit = TimeUnit.SECONDS)
+    public void enumInsideAUnionIsReportedAsAnErrorInTsvAndJsonl() throws Exception {
+        // Not resolvable there: both formats must fail with the reason, before any row is written,
+        // rather than print dictionary indices or an empty 200.
+        var uri = URI.create(baseUrl + "/v1/query?q=" + URLEncoder.encode(
+                "SELECT union_value(e := 'ok'::" + ENUM + ") AS u FROM range(3)", StandardCharsets.UTF_8));
+        for (String accept : new String[]{ContentTypes.TEXT_TSV, ContentTypes.APPLICATION_JSONL}) {
+            var response = client.send(authenticatedRequestBuilder(uri).GET().header("Accept", accept).build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(500, response.statusCode(), accept + ": " + response.body());
+            assertTrue(response.body().contains("Column 'u' has a dictionary-encoded value inside Union"),
+                    accept + ": " + response.body());
+        }
+    }
+
+    @Test
+    @Timeout(value = 60, unit = TimeUnit.SECONDS)
     public void enumPrintsItsValues() throws Exception {
         // Guards the comparisons above against both sides being wrong the same way.
         String jsonl = text(QUERY.formatted(ENUM), ContentTypes.APPLICATION_JSONL).lines().findFirst().orElseThrow();
