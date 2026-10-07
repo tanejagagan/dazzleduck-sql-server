@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow_array::builder::{Int32Builder, MapBuilder, StringBuilder};
+use arrow_array::builder::{Int32Builder, ListBuilder, MapBuilder, StringBuilder};
 use arrow_array::types::{Float64Type, Int32Type};
 use arrow_array::{
     ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array, FixedSizeListArray,
@@ -41,6 +41,11 @@ fn tsv_with(bytes: &[u8], header_row: bool, escape: bool) -> String {
 
 fn tsv(batch: RecordBatch) -> String {
     tsv_with(&ipc(&[batch], None), true, true)
+}
+
+/// Unescaped (`--raw`), for tests about the JSON itself.
+fn tsv_raw(batch: RecordBatch) -> String {
+    tsv_with(&ipc(&[batch], None), true, false)
 }
 
 fn batch(columns: Vec<(&str, ArrayRef)>) -> RecordBatch {
@@ -111,6 +116,48 @@ fn escapes_framing_characters_unless_raw() {
         "a\\tb\tn\nx\\ty\\nz\\r\\\\\t7\n"
     );
     assert_eq!(tsv_with(&bytes, true, false), "a\tb\tn\nx\ty\nz\r\\\t7\n");
+}
+
+#[test]
+fn nested_cells_follow_the_same_escaping_rule() {
+    // The same value in a scalar column and inside a list, with a backslash and a tab in it.
+    let value = "a\\b\tc";
+    let mut list = ListBuilder::new(StringBuilder::new());
+    list.values().append_value(value);
+    list.append(true);
+    let b = batch(vec![
+        ("s", Arc::new(StringArray::from(vec![value])) as ArrayRef),
+        ("l", Arc::new(list.finish())),
+    ]);
+    let bytes = ipc(&[b], None);
+
+    let escaped = tsv_with(&bytes, false, true);
+    assert_eq!(escaped, "a\\\\b\\tc\t[\"a\\\\\\\\b\\\\tc\"]\n");
+    // Undoing the TSV escaping on every cell gives the value back, and the JSON the server sends.
+    let unescape = |cell: &str| {
+        let mut out = String::new();
+        let mut chars = cell.chars();
+        while let Some(c) = chars.next() {
+            if c != '\\' {
+                out.push(c);
+                continue;
+            }
+            out.push(match chars.next() {
+                Some('t') => '\t',
+                Some('n') => '\n',
+                Some('r') => '\r',
+                Some(c) => c,
+                None => '\\',
+            });
+        }
+        out
+    };
+    let cells: Vec<String> = escaped.trim_end().split('\t').map(unescape).collect();
+    assert_eq!(cells, [value, "[\"a\\\\b\\tc\"]"]);
+    assert_eq!(
+        tsv_with(&bytes, false, false),
+        format!("{value}\t{}\n", cells[1])
+    );
 }
 
 #[test]
@@ -220,7 +267,7 @@ fn string_and_number_arrays() {
         ("li", Arc::new(large_ints.finish())),
     ]);
     assert_eq!(
-        tsv(b),
+        tsv_raw(b),
         "s\tsv\tls\ti64\tu8\tf64\tdec\tli\n\
          [\"a\",null,\"\",\"q\\\"t\\tz\\\\\",\"é漢\"]\t[\"a string longer than twelve bytes\",\"b\"]\t[\"x\"]\t\
          [-9223372036854775808,0,9223372036854775807]\t[255]\t[-0.5,1e300,2.0]\t[-3.14,null,0.00]\t[7]\n\
@@ -310,7 +357,7 @@ fn sample_struct() -> StructArray {
 fn structs_render_as_json_objects() {
     let b = batch(vec![("st", Arc::new(sample_struct()) as ArrayRef)]);
     assert_eq!(
-        tsv(b),
+        tsv_raw(b),
         "st\n\
          {\"x\":1,\"s\":\"q\\\"t\\t\\u0001\",\"d\":\"2024-01-01\",\"b\":false}\n\
          \n\
@@ -455,7 +502,7 @@ fn trims_fractional_seconds() {
     ];
     for (input, expected) in cases {
         let mut s = format!("x{input}");
-        json::trim_fraction(&mut s, 1);
+        scalar::trim_fraction(&mut s, 1);
         assert_eq!(s, format!("x{expected}"), "{input}");
     }
 }
@@ -513,5 +560,157 @@ fn zoned_timestamps_print_as_utc_at_any_depth() {
         tsv(b),
         "top\tl\tst\n\
          2024-01-01T00:00:01.500Z\t[\"2024-01-01T00:00:01.500Z\"]\t{\"t\":\"2024-01-01T00:00:01.500Z\"}\n"
+    );
+}
+
+fn args(argv: &[&str]) -> Result<Command, String> {
+    parse_args(argv.iter().map(|s| s.to_string()), None)
+}
+
+#[test]
+fn parses_options() {
+    let Ok(Command::Run(a)) = parse_args(
+        [
+            "http://h/v1/query",
+            "-q",
+            "select 1",
+            "-H",
+            "X-A: b:c",
+            "--timeout",
+            "1.5",
+            "--raw",
+            "--no-header",
+        ]
+        .map(String::from),
+        Some("env-token".into()),
+    ) else {
+        panic!("expected Run");
+    };
+    assert_eq!(
+        a,
+        Args {
+            url: Some("http://h/v1/query".into()),
+            query: Some("select 1".into()),
+            token: Some("env-token".into()),
+            headers: vec![("X-A".into(), "b:c".into())],
+            timeout: Some(Duration::from_millis(1500)),
+            no_header_row: true,
+            raw: true,
+        }
+    );
+    // -t overrides $DD_TOKEN; an empty $DD_TOKEN counts as unset.
+    let token = |argv: &[&str], env: Option<&str>| match parse_args(
+        argv.iter().map(|s| s.to_string()),
+        env.map(String::from),
+    ) {
+        Ok(Command::Run(a)) => a.token,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(token(&["-t", "flag"], Some("env")), Some("flag".into()));
+    assert_eq!(token(&[], Some("")), None);
+    assert_eq!(args(&["-V"]), Ok(Command::Version));
+    assert_eq!(args(&["--help", "--bogus"]), Ok(Command::Help));
+    assert!(matches!(args(&["-"]), Ok(Command::Run(Args { url: Some(u), .. })) if u == "-"));
+}
+
+#[test]
+fn rejects_bad_options() {
+    for (argv, message) in [
+        (&["-H", ": v"][..], "bad header ': v'"),
+        (&["-H", "no-colon"], "bad header 'no-colon'"),
+        (&["--timeout", "0"], "bad --timeout '0'"),
+        (&["--timeout", "soon"], "bad --timeout 'soon'"),
+        (&["-q", "select 1"], "--query needs a URL"),
+        (&["-", "-q", "select 1"], "--query needs a URL"),
+        (&["-t"], "-t needs a value"),
+        (&["--bogus"], "unknown option --bogus"),
+        (&["a", "b"], "unexpected argument b"),
+    ] {
+        let err = args(argv).unwrap_err();
+        assert!(err.starts_with(message), "{argv:?}: {err}");
+    }
+}
+
+#[test]
+fn intervals_render_like_the_server() {
+    use arrow_array::IntervalMonthDayNanoArray;
+    use arrow_array::types::IntervalMonthDayNano;
+
+    let values = || {
+        IntervalMonthDayNanoArray::from(vec![
+            Some(IntervalMonthDayNano::new(0, 1, 7_200_000_000_000)),
+            Some(IntervalMonthDayNano::new(0, 0, -5_400_000_000_000)),
+            None,
+        ])
+    };
+    let list = ListArray::new(
+        Arc::new(Field::new("item", values().data_type().clone(), true)),
+        arrow_buffer::OffsetBuffer::from_lengths([3, 0, 0]),
+        Arc::new(values()),
+        None,
+    );
+    let b = batch(vec![
+        ("i", Arc::new(values()) as ArrayRef),
+        ("l", Arc::new(list)),
+    ]);
+    assert_eq!(
+        tsv(b),
+        "i\tl\nP1D PT2H\t[\"P1D PT2H\",\"P0D PT-1H-30M\",null]\nP0D PT-1H-30M\t[]\n\t[]\n"
+    );
+}
+
+#[test]
+fn timeout_stops_a_stalled_request() {
+    // A server that accepts the connection and then never answers.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/v1/query", listener.local_addr().unwrap());
+    let stall = std::thread::spawn(move || {
+        let (_conn, _) = listener.accept().unwrap();
+        std::thread::sleep(Duration::from_secs(10));
+    });
+    let a = Args {
+        url: Some(url),
+        timeout: Some(Duration::from_millis(500)),
+        ..Args::default()
+    };
+    let started = std::time::Instant::now();
+    let err = open_input(&a).err().expect("a stalled request must fail");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "took {:?}",
+        started.elapsed()
+    );
+    assert!(err.to_string().contains("timeout"), "{err}");
+    drop(stall);
+}
+
+#[test]
+fn timeout_also_covers_a_stalled_body() {
+    use std::io::Write as _;
+    // Headers arrive, then the body never does.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/v1/query", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        let (mut conn, _) = listener.accept().unwrap();
+        let mut request = [0u8; 4096];
+        let _ = std::io::Read::read(&mut conn, &mut request);
+        let _ = conn.write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/vnd.apache.arrow.stream\r\n\
+              Transfer-Encoding: chunked\r\n\r\n",
+        );
+        std::thread::sleep(Duration::from_secs(10));
+    });
+    let a = Args {
+        url: Some(url),
+        timeout: Some(Duration::from_millis(500)),
+        ..Args::default()
+    };
+    let started = std::time::Instant::now();
+    let input = open_input(&a).expect("headers arrive");
+    assert!(convert(input, Vec::new(), true, true).is_err());
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "took {:?}",
+        started.elapsed()
     );
 }

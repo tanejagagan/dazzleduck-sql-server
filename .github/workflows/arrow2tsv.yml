@@ -8,23 +8,23 @@ name: arrow2tsv
 #   macos   — native Mach-O for Apple Silicon and Intel
 #   windows — MSVC with the C runtime linked statically (no VC++ redistributable needed)
 #
-# On Linux and macOS (except Intel macOS, see skip_e2e) the binary is also checked end to end (e2e.sh): the DazzleDuck server is built
-# from the same commit and started, and arrow2tsv's output for each query must match the server's own
-# TSV. (Not on Windows: e2e.sh launches the server with a bash script and a Unix classpath.)
+# On Linux and macOS (except Intel macOS, see skip_e2e) the binary is also checked end to end
+# (e2e.sh): the DazzleDuck server is built from the same commit and started, and arrow2tsv's output
+# for each query must match the server's own TSV. (Not on Windows: e2e.sh launches the server with a
+# bash script and a Unix classpath.) A change to the server alone runs only that end-to-end check, on
+# Linux, in arrow2tsv-server.yml.
 #
-# The binaries are uploaded as workflow artifacts and, on a v* tag, attached to that tag's GitHub
-# release when it already exists. When the release is created later (see RELEASE.md), attach them with
-#   gh run download <run-id> -p 'arrow2tsv-*' -D bins && gh release upload <tag> bins/*/*
+# The version is the tag's on a v* tag (pr-<sha> / <branch>-<sha> otherwise). It is compiled in, so
+# `arrow2tsv --version` reports it, and names the archives. The binaries are uploaded as workflow
+# artifacts and, on a v* tag, attached to that tag's GitHub release when it already exists; when the
+# release is created later, RELEASE.md step 6 attaches them.
 on:
   push:
     branches: [main]
     tags: ['v*']
-    # Server changes too: the end-to-end test compares against the server's own TSV output.
     paths: &paths
       - 'tools/arrow2tsv/**'
       - '.github/workflows/arrow2tsv.yml'
-      - 'dazzleduck-sql-*/src/main/**'
-      - '**/pom.xml'
   pull_request:
     paths: *paths
   workflow_dispatch:
@@ -100,6 +100,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Version
+        run: |
+          case "$GITHUB_REF_TYPE/$GITHUB_EVENT_NAME" in
+            tag/*) version="${GITHUB_REF_NAME#v}" ;;
+            */pull_request) version="pr-${GITHUB_SHA::8}" ;;
+            *) version="${GITHUB_REF_NAME//\//-}-${GITHUB_SHA::8}" ;;
+          esac
+          # Read by the build (option_env!), so --version reports it.
+          echo "ARROW2TSV_VERSION=$version" >> "$GITHUB_ENV"
+
       # Not every runner image ships rustup (windows-11-arm is a partner image).
       - name: Install Rust
         run: |
@@ -144,6 +154,7 @@ jobs:
           cargo build --locked --release --target ${{ matrix.target }}
           ls -la "$BIN"
           "$BIN" --help | head -1
+          [ "$("$BIN" --version)" = "arrow2tsv $ARROW2TSV_VERSION" ]
           if [ "$RUNNER_OS" = Linux ]; then
             # 'static-pie linked' on x86_64, 'statically linked' on aarch64.
             file "$BIN" | tee /dev/stderr | grep -qE 'statically linked|static-pie linked'
@@ -167,12 +178,7 @@ jobs:
         id: package
         run: |
           set -euo pipefail
-          case "$GITHUB_REF_TYPE/$GITHUB_EVENT_NAME" in
-            tag/*) version="${GITHUB_REF_NAME#v}" ;;
-            */pull_request) version="pr-${GITHUB_SHA::8}" ;;
-            *) version="${GITHUB_REF_NAME//\//-}-${GITHUB_SHA::8}" ;;
-          esac
-          base="arrow2tsv-${version}-${{ matrix.platform }}"
+          base="arrow2tsv-${ARROW2TSV_VERSION}-${{ matrix.platform }}"
           mkdir -p dist
           cp "$BIN" dist/
           if [ "$RUNNER_OS" = Windows ]; then

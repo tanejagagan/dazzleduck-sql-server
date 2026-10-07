@@ -1,16 +1,23 @@
 //! JSON rendering of nested (list / struct / map) columns, matching the server's TSV output:
 //! lists are arrays, structs are objects, maps are arrays of `{"key":..,"value":..}` entries.
 //! Numbers and booleans are bare, nulls are `null`, everything else (strings, temporals,
-//! binaries as hex) is a JSON string in its display form.
+//! binaries as hex, intervals) is a JSON string in its `scalar` form.
 
 use std::fmt::Write;
 
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, OffsetSizeTrait};
-use arrow_cast::display::{ArrayFormatter, FormatOptions};
+use arrow_cast::display::FormatOptions;
 use arrow_schema::{ArrowError, DataType};
 
+use crate::scalar::Scalar;
+
 /// True for the types rendered as JSON rather than as a plain display string.
+///
+/// `ListView`, `LargeListView` and a `Dictionary` whose values are nested are deliberately not
+/// handled: DuckDB does not produce them by default (a list view only with its
+/// `arrow_output_list_view` setting). They fall through to Arrow's display form, which is not JSON,
+/// and `utc_type` does not look inside them either.
 pub fn is_nested(dt: &DataType) -> bool {
     matches!(
         dt,
@@ -22,36 +29,12 @@ pub fn is_nested(dt: &DataType) -> bool {
     )
 }
 
-/// True for the types whose fractional seconds the server prints with only as many digits as
-/// needed (`00:00:01.5`): times and timezone-less timestamps. Timestamps with a timezone keep
-/// groups of three (`00:00:01.500Z`), which is also Arrow's default.
-pub fn trims_fraction(dt: &DataType) -> bool {
-    matches!(
-        dt,
-        DataType::Time32(_) | DataType::Time64(_) | DataType::Timestamp(_, None)
-    )
-}
-
-/// Drops trailing zeros from the fractional seconds in `s[start..]`, and the `.` if none remain.
-pub fn trim_fraction(s: &mut String, start: usize) {
-    let Some(dot) = s[start..].find('.').map(|d| start + d) else {
-        return;
-    };
-    let digits_end = s[dot + 1..]
-        .find(|c: char| !c.is_ascii_digit())
-        .map_or(s.len(), |e| dot + 1 + e);
-    let kept = s[dot + 1..digits_end].trim_end_matches('0').len();
-    let cut_from = if kept == 0 { dot } else { dot + 1 + kept };
-    s.replace_range(cut_from..digits_end, "");
-}
-
 /// A per-batch encoder for one array; child encoders index their own (child) arrays.
 pub enum Encoder<'a> {
     Leaf {
         array: &'a dyn Array,
-        fmt: ArrayFormatter<'a>,
+        scalar: Scalar<'a>,
         bare: bool,
-        trim: bool,
     },
     List {
         array: &'a dyn Array,
@@ -117,9 +100,8 @@ impl<'a> Encoder<'a> {
             }
             dt => Encoder::Leaf {
                 array,
-                fmt: ArrayFormatter::try_new(array, options)?,
+                scalar: Scalar::try_new(array, options)?,
                 bare: dt.is_numeric() || *dt == DataType::Boolean,
-                trim: trims_fraction(dt),
             },
         })
     }
@@ -138,15 +120,9 @@ impl<'a> Encoder<'a> {
             return Ok(());
         }
         match self {
-            Encoder::Leaf {
-                fmt, bare, trim, ..
-            } => {
+            Encoder::Leaf { scalar, bare, .. } => {
                 let start = out.len();
-                write!(out, "{}", fmt.value(i))
-                    .map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
-                if *trim {
-                    trim_fraction(out, start);
-                }
+                scalar.write(i, out)?;
                 // NaN / inf are not JSON numbers; quote them like any other string.
                 let text = &out[start..];
                 let keep_bare = *bare

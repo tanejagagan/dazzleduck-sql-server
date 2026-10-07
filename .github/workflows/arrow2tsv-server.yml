@@ -1,0 +1,51 @@
+name: arrow2tsv (server changes)
+
+# arrow2tsv's end-to-end check (tools/arrow2tsv/e2e.sh) compares its output with the server's own
+# TSV, so a server change can break it without touching the tool. This runs only that check, on one
+# Linux runner, for server changes; the full six-platform build in arrow2tsv.yml runs for changes to
+# the tool itself, on tags and on dispatch.
+on:
+  push:
+    branches: [main]
+    paths: &paths
+      - 'dazzleduck-sql-*/src/main/**'
+      - '**/pom.xml'
+      - '.github/workflows/arrow2tsv-server.yml'
+  pull_request:
+    paths: *paths
+
+concurrency:
+  group: arrow2tsv-server-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: arrow2tsv end-to-end (linux-amd64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: tools/arrow2tsv
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tools/arrow2tsv
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - run: cargo build --locked --release
+
+      # Builds the server from this commit, starts it, and compares arrow2tsv's output with it.
+      - run: ./e2e.sh target/release/arrow2tsv

@@ -10,84 +10,120 @@
 
 use std::io::{self, BufWriter, Read, Write};
 use std::process::ExitCode;
-
 use std::sync::Arc;
+use std::time::Duration;
 
 use arrow_array::{Array, RecordBatch};
-use arrow_cast::display::{ArrayFormatter, FormatOptions};
+use arrow_cast::display::FormatOptions;
 use arrow_ipc::reader::StreamReader;
 use arrow_schema::{ArrowError, DataType, Field, Schema};
 
 mod json;
+mod scalar;
+
+/// The release version, injected by CI (`ARROW2TSV_VERSION`); a local build reports Cargo's.
+const VERSION: &str = match option_env!("ARROW2TSV_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
+/// How long to wait for the TCP/TLS connection. There is no overall limit unless `--timeout` is
+/// given: a long-running query is legitimate.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How one column's cells are rendered.
 enum Column<'a> {
-    /// The formatter, and whether to trim zeros off fractional seconds (see `json::trims_fraction`).
-    Scalar(ArrayFormatter<'a>, bool),
-    /// List / struct / map as JSON; JSON escaping already rules out raw tabs and newlines.
+    Scalar(scalar::Scalar<'a>),
+    /// List / struct / map as JSON.
     Nested(json::Encoder<'a>),
 }
 
 const USAGE: &str = "\
-Usage: arrow2tsv [URL] [options]
+Usage: arrow2tsv [URL | -] [options]
 
-Reads an Arrow IPC stream from URL (HTTP GET) or, without URL, from stdin, and writes TSV to stdout.
+Reads an Arrow IPC stream from URL (HTTP GET) or, without URL or with '-', from stdin, and writes
+TSV to stdout: a header row, then one line per row. Lists, structs and maps are JSON.
 
 Options:
   -q, --query SQL       append ?q=SQL (URL-encoded) to URL
-  -t, --token TOKEN     send 'Authorization: Bearer TOKEN' (default: $DD_TOKEN)
+  -t, --token TOKEN     send 'Authorization: Bearer TOKEN'; prefer $DD_TOKEN, the default,
+                        since a token on the command line is visible to other users in ps
   -H, --header 'K: V'   extra request header (repeatable)
+      --timeout SECS    give up if the whole request takes longer (default: no limit;
+                        connecting is always limited to 30 seconds)
       --no-header       do not print the column-name row
-      --raw             do not escape tab, newline, CR and backslash in values
-  -h, --help            show this help";
+      --raw             do not escape values (see below)
+  -V, --version         print the version
+  -h, --help            show this help
 
+Escaping: in every cell, JSON ones included, tab, newline, carriage return and backslash are
+written as \\t, \\n, \\r and \\\\, so undoing that on each cell restores the value (and valid
+JSON). --raw writes values as they are, like the server's own TSV output.";
+
+#[derive(Debug, Default, PartialEq)]
 struct Args {
     url: Option<String>,
     query: Option<String>,
     token: Option<String>,
     headers: Vec<(String, String)>,
-    header_row: bool,
-    escape: bool,
+    timeout: Option<Duration>,
+    no_header_row: bool,
+    raw: bool,
 }
 
-fn parse_args() -> Result<Args, String> {
+#[derive(Debug, PartialEq)]
+enum Command {
+    Run(Args),
+    Help,
+    Version,
+}
+
+/// Parses the arguments after the program name; `env_token` is `$DD_TOKEN`.
+fn parse_args(
+    argv: impl IntoIterator<Item = String>,
+    env_token: Option<String>,
+) -> Result<Command, String> {
     let mut args = Args {
-        url: None,
-        query: None,
-        token: std::env::var("DD_TOKEN").ok().filter(|t| !t.is_empty()),
-        headers: Vec::new(),
-        header_row: true,
-        escape: true,
+        token: env_token.filter(|t| !t.is_empty()),
+        ..Args::default()
     };
-    let mut it = std::env::args().skip(1);
+    let mut it = argv.into_iter();
     while let Some(arg) = it.next() {
         let mut value = |name: &str| it.next().ok_or_else(|| format!("{name} needs a value"));
         match arg.as_str() {
-            "-h" | "--help" => {
-                println!("{USAGE}");
-                std::process::exit(0);
-            }
+            "-h" | "--help" => return Ok(Command::Help),
+            "-V" | "--version" => return Ok(Command::Version),
             "-q" | "--query" => args.query = Some(value(&arg)?),
             "-t" | "--token" => args.token = Some(value(&arg)?),
             "-H" | "--header" => {
                 let h = value(&arg)?;
                 let (k, v) = h
                     .split_once(':')
+                    .map(|(k, v)| (k.trim(), v.trim()))
+                    .filter(|(k, _)| !k.is_empty())
                     .ok_or_else(|| format!("bad header '{h}', expected 'Name: value'"))?;
-                args.headers
-                    .push((k.trim().to_string(), v.trim().to_string()));
+                args.headers.push((k.to_string(), v.to_string()));
             }
-            "--no-header" => args.header_row = false,
-            "--raw" => args.escape = false,
+            "--timeout" => {
+                let v = value(&arg)?;
+                let secs = v
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|s| s.is_finite() && *s > 0.0)
+                    .ok_or_else(|| format!("bad --timeout '{v}', expected a number of seconds"))?;
+                args.timeout = Some(Duration::from_secs_f64(secs));
+            }
+            "--no-header" => args.no_header_row = true,
+            "--raw" => args.raw = true,
             s if s.starts_with('-') && s != "-" => return Err(format!("unknown option {s}")),
             s if args.url.is_none() => args.url = Some(s.to_string()),
             s => return Err(format!("unexpected argument {s}")),
         }
     }
-    if args.query.is_some() && args.url.is_none() {
+    if args.query.is_some() && args.url.as_deref().is_none_or(|u| u == "-") {
         return Err("--query needs a URL".into());
     }
-    Ok(args)
+    Ok(Command::Run(args))
 }
 
 fn percent_encode(s: &str) -> String {
@@ -116,6 +152,8 @@ fn open_input(args: &Args) -> Result<Box<dyn Read>, Box<dyn std::error::Error>> 
     };
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .http_status_as_error(false)
+        .timeout_connect(Some(CONNECT_TIMEOUT))
+        .timeout_global(args.timeout)
         .build()
         .into();
     let mut req = agent
@@ -161,7 +199,7 @@ fn write_cell(out: &mut impl Write, s: &str, escape: bool) -> io::Result<()> {
 fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let input = open_input(&args)?;
     let out = BufWriter::with_capacity(1 << 16, io::stdout().lock());
-    convert(input, out, args.header_row, args.escape)
+    convert(input, out, !args.no_header_row, !args.raw)
 }
 
 /// Converts the Arrow IPC stream in `input` to TSV on `out`, flushing after each batch.
@@ -194,10 +232,7 @@ fn convert(
                 Ok(if json::is_nested(c.data_type()) {
                     Column::Nested(json::Encoder::try_new(c.as_ref(), &options)?)
                 } else {
-                    Column::Scalar(
-                        ArrayFormatter::try_new(c.as_ref(), &options)?,
-                        json::trims_fraction(c.data_type()),
-                    )
+                    Column::Scalar(scalar::Scalar::try_new(c.as_ref(), &options)?)
                 })
             })
             .collect::<Result<Vec<_>, arrow_schema::ArrowError>>()?;
@@ -208,22 +243,13 @@ fn convert(
                 }
                 cell.clear();
                 match column {
-                    Column::Scalar(f, trim) => {
-                        use std::fmt::Write as _;
-                        write!(cell, "{}", f.value(row))?;
-                        if *trim {
-                            json::trim_fraction(&mut cell, 0);
-                        }
-                        write_cell(&mut out, &cell, escape)?;
-                    }
-                    Column::Nested(enc) => {
-                        // A null nested value is an empty cell, like any other null.
-                        if !batch.column(i).is_null(row) {
-                            enc.encode(row, &mut cell)?;
-                        }
-                        out.write_all(cell.as_bytes())?;
-                    }
+                    Column::Scalar(f) => f.write(row, &mut cell)?,
+                    // A null nested value is an empty cell, like any other null.
+                    Column::Nested(enc) if batch.column(i).is_null(row) => {}
+                    Column::Nested(enc) => enc.encode(row, &mut cell)?,
                 }
+                // One rule for every cell, JSON included, so a reader can unescape uniformly.
+                write_cell(&mut out, &cell, escape)?;
             }
             out.write_all(b"\n")?;
         }
@@ -274,8 +300,16 @@ fn utc_timestamps(batch: RecordBatch) -> Result<RecordBatch, ArrowError> {
 }
 
 fn main() -> ExitCode {
-    let args = match parse_args() {
-        Ok(a) => a,
+    let args = match parse_args(std::env::args().skip(1), std::env::var("DD_TOKEN").ok()) {
+        Ok(Command::Run(a)) => a,
+        Ok(Command::Help) => {
+            println!("{USAGE}");
+            return ExitCode::SUCCESS;
+        }
+        Ok(Command::Version) => {
+            println!("arrow2tsv {VERSION}");
+            return ExitCode::SUCCESS;
+        }
         Err(e) => {
             eprintln!("arrow2tsv: {e}\n\n{USAGE}");
             return ExitCode::from(2);

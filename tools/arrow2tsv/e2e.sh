@@ -84,35 +84,58 @@ check() { # name, expected, actual
   fi
 }
 
+# The token goes through $DD_TOKEN rather than -t, which would show it in ps.
+export DD_TOKEN=$token
+
+a2t() { # query, extra options...
+  "$bin" "$base/v1/query" -q "$1" "${@:2}"
+}
+
+# The server's TSV never escapes, so compare against arrow2tsv's --raw output.
 same_as_server() { # name, query
-  check "$1" "$(server_tsv "$2")" "$("$bin" "$base/v1/query" -q "$2" -t "$token")"
+  check "$1" "$(server_tsv "$2")" "$(a2t "$2" --raw)"
 }
 
 same_as_server scalars "select 1 as i, -2::bigint b, 'text' s, NULL::int n, true t, 3.14::decimal(5,2) dc,
   1.5::double f, DATE '2024-01-01' d, TIMESTAMP '2024-01-01 00:00:01.5' ts,
   TIMESTAMPTZ '2024-01-01 00:00:00+00' tz, TIMESTAMPTZ '2024-01-01 00:00:01.5+00' tzf,
   TIME '12:00:00' tm, TIME '12:00:00.25' tmf, 'é漢' u"
-same_as_server nested "select [1, NULL, 3] l, ['a', NULL, '', 'q\"t'] sl, []::int[] e, NULL::int[] nl,
+same_as_server wide_numbers "select 170141183460469231731687303715884105727::hugeint h,
+  (-170141183460469231731687303715884105727)::hugeint hn, 12345678901234567890.123456789::decimal(38,9) d,
+  [1::hugeint] lh, 1::tinyint ti"
+same_as_server other_types "select '6ba7b810-9dad-11d1-80b4-00c04fd430c8'::uuid u,
+  ['6ba7b810-9dad-11d1-80b4-00c04fd430c8'::uuid] lu, {'a': 'x'}::json j, TIMETZ '12:00:00+05:30' tt"
+same_as_server intervals "select INTERVAL '1 day 2 hours' a,
+  INTERVAL '1 year 2 months 3 days 4 hours 5 minutes 6.5 seconds' b, INTERVAL '-90 minutes' c,
+  INTERVAL '0 seconds' z, INTERVAL '-0.5 seconds' h"
+same_as_server nested "select [1, NULL, 3] l, ['a', NULL, '', 'q\"t\\b'] sl, []::int[] e, NULL::int[] nl,
   {'x': 1, 'y': 'z', 'n': {'i': [1.5::double, 'nan'::double, 'inf'::double]}} st,
   MAP {'k': [1, 2]} m, [{'a': true}] ls"
 same_as_server multi_row "select i, i::varchar s, [i, i + 1] l from range(5) t(i)"
 same_as_server empty "select 1 as a where false"
 
-check escaping $'s\na\\tb\\\\c' "$("$bin" "$base/v1/query" -q "select 'a'||chr(9)||'b\\c' s" -t "$token")"
-check nested_temporal $'d\n["2024-01-01",null]' \
-  "$("$bin" "$base/v1/query" -q "select [DATE '2024-01-01', NULL] d" -t "$token")"
-check utinyint $'u\n255' "$("$bin" "$base/v1/query" -q "select 255::utinyint u" -t "$token")"
+# Escaping applies to every cell, JSON included: undoing it gives the value and valid JSON back.
+check escaping $'s\tl\na\\tb\\\\c\t["a\\\\tb\\\\\\\\c"]' \
+  "$(a2t "select 'a'||chr(9)||'b\\c' s, ['a'||chr(9)||'b\\c'] l")"
 
-# A large result streams through stdin too, and stops cleanly when the reader goes away.
+# Where the server's TSV is wrong, arrow2tsv is pinned to the correct value instead.
+check nested_temporal $'d\tt\n["2024-01-01",null]\t["12:00:00.25"]' \
+  "$(a2t "select [DATE '2024-01-01', NULL] d, [TIME '12:00:00.25'] t")"
+check nested_interval $'i\n["P0D PT3M",null]' "$(a2t "select [INTERVAL 3 MINUTE, NULL] i")"
+check unsigned $'ut\tus\tui\tub\n255\t300\t4000000000\t18446744073709551615' \
+  "$(a2t "select 255::utinyint ut, 300::usmallint us, 4000000000::uinteger ui, 18446744073709551615::ubigint ub")"
+check bit_as_hex $'b\tlb\n04fa\t["04fa"]' "$(a2t "select '1010'::bit b, ['1010'::bit] lb")"
+
+# A large result streams through stdin too ('-' or no URL), and stops cleanly when the reader goes away.
 check stdin_large 1000001 "$(curl -sf -H "Authorization: Bearer $token" \
-  "$base/v1/query?q=select%20*%20from%20range(1000000)" | "$bin" | wc -l | tr -d ' ')"
-check closed_pipe $'range\n0' "$("$bin" "$base/v1/query" -q "select * from range(10000000)" -t "$token" | head -2)"
+  "$base/v1/query?q=select%20*%20from%20range(1000000)" | "$bin" - | wc -l | tr -d ' ')"
+check closed_pipe $'range\n0' "$(a2t "select * from range(10000000)" | head -2)"
 
 # Errors are reported with the server's message and a non-zero exit.
-if err=$("$bin" "$base/v1/query" -q "select bogus" -t "$token" 2>&1); then
+if err=$(a2t "select bogus" 2>&1); then
   check http_error "non-zero exit" "exit 0"
 else
-  check http_error yes "$(grep -q 'Referenced column "bogus" not found\|bogus' <<<"$err" && echo yes || echo "$err")"
+  check http_error yes "$(grep -q 'bogus' <<<"$err" && echo yes || echo "$err")"
 fi
 
 [ "$failures" -eq 0 ] || { echo "$failures check(s) failed"; exit 1; }
