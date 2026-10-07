@@ -8,7 +8,7 @@ name: arrow2tsv
 #   macos   — native Mach-O for Apple Silicon and Intel
 #   windows — MSVC with the C runtime linked statically (no VC++ redistributable needed)
 #
-# On Linux and macOS the binary is also checked end to end (e2e.sh): the DazzleDuck server is built
+# On Linux and macOS (except Intel macOS, see skip_e2e) the binary is also checked end to end (e2e.sh): the DazzleDuck server is built
 # from the same commit and started, and arrow2tsv's output for each query must match the server's own
 # TSV. (Not on Windows: e2e.sh launches the server with a bash script and a Unix classpath.)
 #
@@ -73,6 +73,10 @@ jobs:
           - platform: macos-amd64
             os: macos-15-intel
             target: x86_64-apple-darwin
+            # The server cannot start here: DuckDB's community arrow extension for v1.5.5 osx_amd64
+            # is an arm64 binary (same file as osx_arm64), so the startup script's LOAD arrow fails.
+            # Drop this once that extension is fixed.
+            skip_e2e: true
           - platform: macos-arm64
             os: macos-14
             target: aarch64-apple-darwin
@@ -146,7 +150,7 @@ jobs:
           fi
 
       - name: Set up JDK 25
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && !matrix.skip_e2e
         uses: actions/setup-java@v4
         with:
           java-version: '25'
@@ -156,7 +160,7 @@ jobs:
       # Builds the server from this commit, starts it (HTTP only, non-UTC timezone, temporary
       # warehouse), runs the checks and stops it; prints the server log if it fails to start.
       - name: End-to-end test against the server
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && !matrix.skip_e2e
         run: ./e2e.sh "$BIN"
 
       - name: Package
