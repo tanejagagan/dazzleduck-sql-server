@@ -106,8 +106,9 @@ public class DirectOutputStreamListener implements FlightProducer.ServerStreamLi
     public synchronized void start(VectorSchemaRoot root, DictionaryProvider dictionaries, IpcOption option) {
         logger.debug("start() called with schema: {} and compression codec: {}", root.getSchema(), compressionCodec);
         try {
-            // Lazily get the outputStream - this commits the HTTP response (status 200)
-            // Only do this when we're ready to write data
+            // Get the outputStream only once ready to write data. The HTTP response (status 200) is
+            // committed by the first bytes written, so a failure before then (e.g. creating the
+            // writer below) can still be reported with an error status.
             this.outputStream = outputStreamSupplier.get();
 
             this.writer = ResultStreams.newArrowStreamWriter(

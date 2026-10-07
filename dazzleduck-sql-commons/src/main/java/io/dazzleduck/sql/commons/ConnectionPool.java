@@ -6,6 +6,7 @@ import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.util.AutoCloseables;
 import org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.arrow.vector.dictionary.Dictionary;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.Schema;
@@ -22,7 +23,9 @@ import java.sql.*;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 import java.util.UUID;
 
 public enum ConnectionPool {
@@ -402,6 +405,23 @@ public enum ConnectionPool {
                 @Override
                 public VectorSchemaRoot getVectorSchemaRoot() throws IOException {
                     return internal.getVectorSchemaRoot();
+                }
+
+                // The batches are internal's, so are their dictionaries (dictionary-encoded columns,
+                // e.g. ENUM): this reader never initializes its own.
+                @Override
+                public Dictionary lookup(long id) {
+                    return internal.lookup(id);
+                }
+
+                @Override
+                public Set<Long> getDictionaryIds() {
+                    return internal.getDictionaryIds();
+                }
+
+                @Override
+                public Map<Long, Dictionary> getDictionaryVectors() throws IOException {
+                    return internal.getDictionaryVectors();
                 }
             };
         } catch (SQLException e) {

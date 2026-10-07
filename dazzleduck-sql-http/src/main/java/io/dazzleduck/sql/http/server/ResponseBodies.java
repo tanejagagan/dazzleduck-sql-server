@@ -8,6 +8,7 @@ import io.helidon.webserver.http2.Http2Config;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.UncheckedIOException;
+import java.util.function.Supplier;
 
 /**
  * The body of a streamed query response, as handed to the result-stream listeners.
@@ -26,15 +27,21 @@ import java.io.UncheckedIOException;
  * </ul>
  * This stream reports each of those as an IOException, so the listeners need no knowledge of
  * Helidon. Any other exception passes through unchanged and still counts as a server error.
+ *
+ * <p>It also asks Helidon for the body stream only on the first write, flush or close. Once Helidon
+ * has handed it out, {@code response.send(...)} is refused ("When output stream is used, response is
+ * completed by closing the output stream, do not call send()"), even if nothing was written yet. Opened
+ * lazily, a query that fails before its first byte (e.g. while a listener sets up its writer) can
+ * still be answered with an error status and its real message.
  */
 final class ResponseBodies {
 
     private ResponseBodies() {
     }
 
-    /** The response's body stream, reporting a gone client as an IOException. */
+    /** The response's body stream, opened on first use, reporting a gone client as an IOException. */
     static OutputStream of(ServerResponse response) {
-        return new ClientGoneAsIOException(response.outputStream());
+        return new ClientGoneAsIOException(response::outputStream);
     }
 
     /** Whether Helidon threw {@code failure} because the client went away. */
@@ -53,16 +60,29 @@ final class ResponseBodies {
     }
 
     static final class ClientGoneAsIOException extends OutputStream {
-        private final OutputStream body;
+        private final Supplier<OutputStream> open;
+        private OutputStream body;
 
         ClientGoneAsIOException(OutputStream body) {
-            this.body = body;
+            this(() -> body);
+        }
+
+        /** {@code open} is called once, on the first write, flush or close. */
+        ClientGoneAsIOException(Supplier<OutputStream> open) {
+            this.open = open;
+        }
+
+        private OutputStream body() {
+            if (body == null) {
+                body = open.get();
+            }
+            return body;
         }
 
         @Override
         public void write(int b) throws IOException {
             try {
-                body.write(b);
+                body().write(b);
             } catch (RuntimeException e) {
                 throw translate(e);
             }
@@ -71,7 +91,7 @@ final class ResponseBodies {
         @Override
         public void write(byte[] b, int off, int len) throws IOException {
             try {
-                body.write(b, off, len);
+                body().write(b, off, len);
             } catch (RuntimeException e) {
                 throw translate(e);
             }
@@ -80,7 +100,7 @@ final class ResponseBodies {
         @Override
         public void flush() throws IOException {
             try {
-                body.flush();
+                body().flush();
             } catch (RuntimeException e) {
                 throw translate(e);
             }
@@ -89,7 +109,7 @@ final class ResponseBodies {
         @Override
         public void close() throws IOException {
             try {
-                body.close();
+                body().close();
             } catch (RuntimeException e) {
                 throw translate(e);
             }

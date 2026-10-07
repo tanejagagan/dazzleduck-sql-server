@@ -320,6 +320,29 @@ public class DuckDBFlightSqlProducerTest {
         }, "Bad query should throw FlightRuntimeException");
     }
 
+    /** A Flight SQL query's rows as TSV, resolving dictionary-encoded columns with the stream's dictionaries. */
+    private static String flightSqlAsTsv(String query) throws Exception {
+        var out = new java.io.StringWriter();
+        final FlightInfo flightInfo = sqlClient.execute(query);
+        try (final FlightStream stream = sqlClient.getStream(flightInfo.getEndpoints().get(0).getTicket())) {
+            while (stream.next()) {
+                io.dazzleduck.sql.commons.io.ResultStreams.writeTsvRows(
+                        stream.getRoot(), stream.getDictionaryProvider(), out);
+            }
+        }
+        return out.toString();
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void enumColumnsStreamWithTheirDictionaries() throws Exception {
+        // DuckDB sends ENUM dictionary-encoded; the stream must carry the dictionaries.
+        String query = "select 'ok'::%1$s e, NULL::%1$s n, ['sad'::%1$s] l, {'m': 'ok'::%1$s} s from range(3)";
+        String enumType = "ENUM('sad', 'ok')";
+        assertEquals(flightSqlAsTsv(query.formatted("VARCHAR")), flightSqlAsTsv(query.formatted(enumType)));
+        assertTrue(flightSqlAsTsv(query.formatted(enumType)).startsWith("ok\t\t[\"sad\"]\t{\"m\":\"ok\"}\n"));
+    }
+
     @Test
     @Timeout(value = 30, unit = TimeUnit.SECONDS)
     public void testStatementNoOutput() throws Exception {
