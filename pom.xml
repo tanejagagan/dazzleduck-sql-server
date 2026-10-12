@@ -55,7 +55,14 @@
         <duckdb.version>1.5.5.1</duckdb.version>
         <typesafe-config.version>1.4.4</typesafe-config.version>
         <calcite.version>1.25.0</calcite.version>
-        <helidon.version>4.5.5</helidon.version>
+        <!-- 4.4.1, not 4.5.x. 4.4.1 has the NioSocket write fix (4.4.0 dropped response bytes on a
+             partial socket write, #496). 4.5.x answers a client RST_STREAM on a stream it has just
+             finished with a connection-level GO_AWAY (PROTOCOL, "Stream N was never created and has
+             lower ID than last"), killing every other request on the HTTP/2 connection; with
+             last-stream-id 0, clients resend them all. 4.4.x does it too, but about four times less
+             often (DuckLakePostgresLoadTest: about 8% of runs against 35%). Revisit once Helidon
+             fixes it. -->
+        <helidon.version>4.4.1</helidon.version>
         <!-- JVM flags Arrow/Netty need on JDK 25: opens for Arrow's direct-buffer access, native
              access for Netty's Java 24+ cleaner, and sun.misc.Unsafe memory access, which JDK 24+
              disables by default. One definition, used by every surefire argLine; the same flags are
