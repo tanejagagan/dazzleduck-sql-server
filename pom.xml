@@ -61,7 +61,7 @@
              lower ID than last"), killing every other request on the HTTP/2 connection; with
              last-stream-id 0, clients resend them all. 4.4.x does it too, but about four times less
              often (DuckLakePostgresLoadTest: about 8% of runs against 35%). Revisit once Helidon
-             fixes it. -->
+             fixes it: https://github.com/helidon-io/helidon/issues/12771 -->
         <helidon.version>4.4.1</helidon.version>
         <!-- JVM flags Arrow/Netty need on JDK 25: opens for Arrow's direct-buffer access, native
              access for Netty's Java 24+ cleaner, and sun.misc.Unsafe memory access, which JDK 24+
