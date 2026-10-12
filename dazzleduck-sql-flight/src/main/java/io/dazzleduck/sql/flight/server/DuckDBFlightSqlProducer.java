@@ -1124,8 +1124,16 @@ public class DuckDBFlightSqlProducer implements FlightSqlHttpProducer, SqlProduc
                 recorder.recordIngestReceived(fileSize);
                 var batch = ingestionParameters.constructBatch(fileSize, tempFile.toAbsolutePath().toString());
                 var result = ingestionQueue.add(batch);
+                // add() either rejects the batch (it throws, or returns an already-failed future)
+                // or accepts it, and an accepted batch's file belongs to the queue: it deletes it
+                // once the batch's bucket is written or abandoned. So a wait that fails from here -
+                // this thread interrupted because the client went away, or a timeout - must not
+                // delete it: the queue may still read it, in a bucket with other clients' batches,
+                // whose writes would then all fail with "No files found".
+                if (!result.isCompletedExceptionally()) {
+                    tempFile = null;
+                }
                 result.get(10L, TimeUnit.MINUTES);
-                tempFile = null; // queue owns cleanup from this point
                 ackStream.onNext(PutResult.empty());
                 ackStream.onCompleted();
             } catch (Throwable throwable) {
