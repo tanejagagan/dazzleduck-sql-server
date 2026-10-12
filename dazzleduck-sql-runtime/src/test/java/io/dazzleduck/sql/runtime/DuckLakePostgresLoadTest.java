@@ -26,6 +26,7 @@ import org.apache.arrow.vector.ipc.ArrowStreamReader;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URI;
@@ -372,12 +373,20 @@ public class DuckLakePostgresLoadTest {
         var response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
         try (InputStream body = response.body();
              ArrowStreamReader reader = new ArrowStreamReader(body, allocator)) {
+            long count = 0L;
             if (reader.loadNextBatch()) {
-                BigIntVector vec = (BigIntVector) reader.getVectorSchemaRoot().getVector(0);
-                return vec.get(0);
+                count = ((BigIntVector) reader.getVectorSchemaRoot().getVector(0)).get(0);
             }
+            // Read the response to its end before closing it. Closing with the end-of-stream marker
+            // unread makes the JDK client cancel the HTTP/2 stream (RST_STREAM); when that crosses the
+            // server's END_STREAM, Helidon 4.5.x answers with GO_AWAY for the whole connection and
+            // aborts the ingest requests sharing it (https://github.com/helidon-io/helidon/issues/12771).
+            while (reader.loadNextBatch()) {
+                // the remaining batches, up to the end-of-stream marker
+            }
+            body.transferTo(OutputStream.nullOutputStream());
+            return count;
         }
-        return 0L;
     }
 
     /** POST Arrow IPC bytes to the ingest endpoint. Retries once on 429. */
