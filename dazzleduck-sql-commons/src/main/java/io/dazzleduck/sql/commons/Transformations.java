@@ -680,18 +680,23 @@ public class Transformations {
         if (statement == null || statement instanceof NullNode) return;
         String type = statement.get(FIELD_TYPE).asText();
         if (NODE_TYPE_SELECT_NODE.equals(type)) {
-            // Build the set of CTE names visible in this SELECT scope
+            // Build the set of CTE names visible in this SELECT scope. A CTE body sees the enclosing
+            // scope and the CTEs declared before it, but NOT itself: in
+            // `WITH t AS (SELECT * FROM t)` the inner `t` is the real table t (DuckDB binds it so),
+            // and treating it as a CTE reference would hide that table from authorization. A WITH
+            // RECURSIVE self-reference is the exception; its body is a RECURSIVE_CTE_NODE, which
+            // adds its own name below.
             Set<String> localCteNames = new HashSet<>(visibleCteNames);
             JsonNode cteMap = statement.get("cte_map");
             if (cteMap != null) {
                 JsonNode map = cteMap.get("map");
                 if (map != null && map.isArray()) {
                     for (JsonNode entry : map) {
-                        localCteNames.add(entry.get("key").asText());
                         // Walk each CTE body so hidden tables inside them are captured
                         collectAllTableRefsFromStatement(
                                 entry.get("value").get("query").get("node"),
-                                catalogName, schemaName, collector, localCteNames);
+                                catalogName, schemaName, collector, new HashSet<>(localCteNames));
+                        localCteNames.add(entry.get("key").asText());
                     }
                 }
             }
