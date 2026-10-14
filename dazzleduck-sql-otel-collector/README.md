@@ -54,6 +54,10 @@ otel_collector {
     # point, so off by default; the column is then NULL)
     metrics { write_description = false }
 
+    # Also write non-string attribute values, as text, to the string `attributes` maps (see
+    # "Typed attributes"); on by default
+    attributes { string_copy = true }
+
     # Startup SQL run before any queue is created (load extensions, ATTACH DuckLake catalogs)
     startup_script_provider {
         content = "INSTALL arrow FROM community; LOAD arrow;"
@@ -265,6 +269,8 @@ All schemas flatten the OTLP 3-level hierarchy (Resource → Scope → Record). 
 | `resource_attributes` | Map(Utf8, Utf8) | resource attributes |
 | `scope_name` | Utf8 | |
 | `scope_version` | Utf8 | |
+| `attributes_int` … `attributes_json` | typed maps | see [Typed attributes](#typed-attributes) |
+| `resource_attributes_int` … `resource_attributes_json` | typed maps | |
 
 ### Traces
 
@@ -284,8 +290,10 @@ All schemas flatten the OTLP 3-level hierarchy (Resource → Scope → Record). 
 | `resource_attributes` | Map(Utf8, Utf8) | |
 | `scope_name` | Utf8 | |
 | `scope_version` | Utf8 | |
-| `events` | List(Struct(name, time_ms, attributes)) | |
-| `links` | List(Struct(trace_id, span_id, attributes)) | |
+| `events` | List(Struct(name, time_ms, attributes, attributes_int … attributes_json)) | |
+| `links` | List(Struct(trace_id, span_id, attributes, attributes_int … attributes_json)) | |
+| `attributes_int` … `attributes_json` | typed maps | see [Typed attributes](#typed-attributes) |
+| `resource_attributes_int` … `resource_attributes_json` | typed maps | |
 
 ### Metrics
 
@@ -312,6 +320,49 @@ Wide-table design — all metric types (GAUGE, SUM, HISTOGRAM, EXPONENTIAL_HISTO
 | `quantile_values` | List(Struct(quantile, value)) | SUMMARY |
 | `is_monotonic` | Bool | SUM |
 | `aggregation_temporality` | Utf8 | DELTA / CUMULATIVE |
+| `attributes_int` … `attributes_json` | typed maps | see [Typed attributes](#typed-attributes) |
+| `resource_attributes_int` … `resource_attributes_json` | typed maps | |
+
+### Typed attributes
+
+Every attribute set (`attributes`, `resource_attributes`, and the `attributes` of span events and
+links) is written to six maps, one per OTLP value type. The typed maps are appended after the
+columns above, so existing column positions are unchanged.
+
+| Column | Type | Holds |
+|--------|------|-------|
+| `attributes` | `MAP(VARCHAR, VARCHAR)` | string values; with `string_copy`, every value as text |
+| `attributes_int` | `MAP(VARCHAR, BIGINT)` | int values |
+| `attributes_double` | `MAP(VARCHAR, DOUBLE)` | double values |
+| `attributes_bool` | `MAP(VARCHAR, BOOLEAN)` | bool values |
+| `attributes_bytes` | `MAP(VARCHAR, BLOB)` | bytes values |
+| `attributes_json` | `MAP(VARCHAR, JSON)` | arrays and key/value lists, as typed JSON |
+
+The JSON keeps types: numbers and booleans are bare, bytes are base64, and a non-finite double is
+the string `"NaN"`, `"Infinity"` or `"-Infinity"`. Every row has all six maps, empty when it has no
+attribute of that type; a span event or link with no attributes has all six null.
+
+`otel_collector.attributes.string_copy` (default `true`) also writes each non-string value, as text,
+to the string map: ints and doubles in decimal, bools as `true` / `false`, bytes as lowercase hex,
+arrays and key/value lists as the same JSON. One lookup then finds any key whatever its type, and
+queries written for the string-only schema keep working, at the cost of storing those values
+twice. With it `false` the string map holds only string values (and attributes with no value set,
+as an empty string).
+
+```sql
+SELECT * FROM logs WHERE attributes_int['http.status_code'] >= 500;
+SELECT attributes_json['tags'] ->> '$[0]' FROM spans;
+```
+
+`attributes_json` reaches DuckDB as `JSON`: the Arrow value field carries the `arrow.json` extension
+name, which DuckDB's Arrow reader maps to its `JSON` type and keeps in the Parquet it writes.
+
+A DuckLake table created for the earlier schema needs the new columns added before typed
+attributes are stored in it, e.g.:
+
+```sql
+ALTER TABLE logs ADD COLUMN attributes_int MAP(VARCHAR, BIGINT);
+```
 
 ## Micrometer Metrics
 

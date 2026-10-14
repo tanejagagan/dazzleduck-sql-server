@@ -15,7 +15,6 @@ import org.apache.arrow.vector.TimeStampMilliVector;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.complex.ListVector;
-import org.apache.arrow.vector.complex.MapVector;
 import org.apache.arrow.vector.complex.writer.BaseWriter;
 
 import java.nio.charset.StandardCharsets;
@@ -33,6 +32,16 @@ public class MetricBatchWriter {
      *                         every row, since the description would otherwise repeat per data point
      */
     public static void write(List<MetricEntry> entries, VectorSchemaRoot root, boolean writeDescription) {
+        write(entries, root, writeDescription, true);
+    }
+
+    /**
+     * @param writeDescription see {@link #write(List, VectorSchemaRoot, boolean)}
+     * @param stringCopy       also write every non-string attribute value, as text, to the
+     *                         {@code attributes} / {@code resource_attributes} string maps
+     */
+    public static void write(List<MetricEntry> entries, VectorSchemaRoot root, boolean writeDescription,
+                             boolean stringCopy) {
         root.allocateNew();
 
         VarCharVector nameVec           = (VarCharVector)        root.getVector(OtelMetricSchema.COL_NAME);
@@ -41,8 +50,6 @@ public class MetricBatchWriter {
         VarCharVector typeVec           = (VarCharVector)        root.getVector(OtelMetricSchema.COL_METRIC_TYPE);
         TimeStampMilliVector startVec   = (TimeStampMilliVector) root.getVector(OtelMetricSchema.COL_START_TIME_MS);
         TimeStampMilliVector timeVec    = (TimeStampMilliVector) root.getVector(OtelMetricSchema.COL_TIME_MS);
-        MapVector attributesVec         = (MapVector)            root.getVector(OtelMetricSchema.COL_ATTRIBUTES);
-        MapVector resourceAttributesVec = (MapVector)            root.getVector(OtelMetricSchema.COL_RESOURCE_ATTRIBUTES);
         VarCharVector scopeNameVec      = (VarCharVector)        root.getVector(OtelMetricSchema.COL_SCOPE_NAME);
         VarCharVector scopeVersionVec   = (VarCharVector)        root.getVector(OtelMetricSchema.COL_SCOPE_VERSION);
         Float8Vector valueDoubleVec     = (Float8Vector)         root.getVector(OtelMetricSchema.COL_VALUE_DOUBLE);
@@ -55,8 +62,10 @@ public class MetricBatchWriter {
         BitVector isMonotonicVec        = (BitVector)            root.getVector(OtelMetricSchema.COL_IS_MONOTONIC);
         VarCharVector aggTempVec        = (VarCharVector)        root.getVector(OtelMetricSchema.COL_AGGREGATION_TEMPORALITY);
 
-        MapColumnWriter attrWriter    = MapColumnWriter.of(attributesVec);
-        MapColumnWriter resAttrWriter = MapColumnWriter.of(resourceAttributesVec);
+        AttributeMapsWriter attrWriter = AttributeMapsWriter.of(root,
+                OtelMetricSchema.COL_ATTRIBUTES, OtelMetricSchema.COL_TYPED_ATTRIBUTES, stringCopy);
+        AttributeMapsWriter resAttrWriter = AttributeMapsWriter.of(root,
+                OtelMetricSchema.COL_RESOURCE_ATTRIBUTES, OtelMetricSchema.COL_TYPED_RESOURCE_ATTRIBUTES, stringCopy);
 
         int row = 0;
         for (MetricEntry entry : entries) {
@@ -157,6 +166,8 @@ public class MetricBatchWriter {
             }
         }
 
+        attrWriter.finish(row);
+        resAttrWriter.finish(row);
         root.setRowCount(row);
     }
 
@@ -165,7 +176,7 @@ public class MetricBatchWriter {
                                   List<KeyValue> attributes,
                                   VarCharVector nameVec, VarCharVector descVec, VarCharVector unitVec,
                                   VarCharVector typeVec, TimeStampMilliVector startVec, TimeStampMilliVector timeVec,
-                                  MapColumnWriter attrWriter, MapColumnWriter resAttrWriter,
+                                  AttributeMapsWriter attrWriter, AttributeMapsWriter resAttrWriter,
                                   VarCharVector scopeNameVec, VarCharVector scopeVersionVec) {
         writeVarChar(nameVec, row, metric.getName());
         if (writeDescription) {

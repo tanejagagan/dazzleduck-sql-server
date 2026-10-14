@@ -86,8 +86,35 @@ class MapColumnWriterTest {
         }
     }
 
-    /** Renders one row's map as {@code k=v,k=v}, so assertions do not depend on Arrow's toString. */
+    /**
+     * The typed maps stay row-aligned with the string map, which they share no offsets with. Only
+     * row 4 has typed values, so every other row must be an empty — not null, not shifted — map.
+     */
+    @Test
+    void typedMapsStayRowAligned() {
+        try (BufferAllocator allocator = new RootAllocator();
+             VectorSchemaRoot root = VectorSchemaRoot.create(OtelLogSchema.SCHEMA, allocator)) {
+
+            LogRecordBatchWriter.write(fixture(), root, false);
+            MapVector attrs = (MapVector) root.getVector(OtelLogSchema.COL_ATTRIBUTES);
+            MapVector ints = (MapVector) root.getVector(OtelLogSchema.COL_TYPED_ATTRIBUTES);
+            MapVector bools = (MapVector) root.getVector(OtelLogSchema.COL_TYPED_ATTRIBUTES + 2);
+
+            String[] expectedStrings = {"", "a=1", "a=2,b=y,c=z", "", "", "a=3", ""};
+            for (int row = 0; row < expectedStrings.length; row++) {
+                assertEquals(expectedStrings[row], render(attrs, row), "strings, row " + row);
+                assertEquals(row == 4 ? "n=42" : "", render(ints, row), "ints, row " + row);
+                assertEquals(row == 4 ? "f=true" : "", render(bools, row), "bools, row " + row);
+            }
+        }
+    }
+
+    /**
+     * Renders one row's map as {@code k=v,k=v}, so assertions do not depend on Arrow's toString;
+     * null for a null map.
+     */
     private static String render(MapVector vector, int row) {
+        if (vector.isNull(row)) return null;
         StringBuilder sb = new StringBuilder();
         for (Object o : (List<?>) vector.getObject(row)) {
             java.util.Map<?, ?> entry = (java.util.Map<?, ?>) o;

@@ -28,8 +28,12 @@ public class OtelLogSchema {
     public static final int COL_RESOURCE_ATTRIBUTES = 10;
     public static final int COL_SCOPE_NAME = 11;
     public static final int COL_SCOPE_VERSION = 12;
+    /** First of the five typed {@code attributes_*} maps, in {@link AttributeType#TYPED} order. */
+    public static final int COL_TYPED_ATTRIBUTES = 13;
+    /** First of the five typed {@code resource_attributes_*} maps. */
+    public static final int COL_TYPED_RESOURCE_ATTRIBUTES = 18;
 
-    public static final Schema SCHEMA = new Schema(List.of(
+    public static final Schema SCHEMA = new Schema(OtelSchemaFields.withTypedAttributes(List.of(
             // LogRecord fields
             new Field("timestamp",
                     FieldType.nullable(new ArrowType.Timestamp(TimeUnit.MILLISECOND, null)), null),
@@ -50,7 +54,7 @@ public class OtelLogSchema {
             new Field("event_name",
                     FieldType.nullable(new ArrowType.Utf8()), null),
 
-            // LogRecord.attributes: Map<String, String>
+            // LogRecord.attributes: Map<String, String>; typed companions are appended at the end
             OtelSchemaFields.mapField("attributes"),
 
             // Resource.attributes: Map<String, String>
@@ -61,6 +65,6 @@ public class OtelLogSchema {
                     FieldType.nullable(new ArrowType.Utf8()), null),
             new Field("scope_version",
                     FieldType.nullable(new ArrowType.Utf8()), null)
-    ));
+    ), "attributes", "resource_attributes"));
 
 }

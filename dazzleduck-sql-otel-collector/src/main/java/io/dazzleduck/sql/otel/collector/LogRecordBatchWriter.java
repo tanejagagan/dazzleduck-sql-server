@@ -7,7 +7,6 @@ import org.apache.arrow.vector.IntVector;
 import org.apache.arrow.vector.TimeStampMilliVector;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
-import org.apache.arrow.vector.complex.MapVector;
 
 import java.nio.charset.StandardCharsets;
 import java.util.HexFormat;
@@ -22,6 +21,14 @@ public class LogRecordBatchWriter {
     private static final HexFormat HEX = HexFormat.of();
 
     public static void write(List<LogEntry> entries, VectorSchemaRoot root) {
+        write(entries, root, true);
+    }
+
+    /**
+     * @param stringCopy also write every non-string attribute value, as text, to the
+     *                   {@code attributes} / {@code resource_attributes} string maps
+     */
+    public static void write(List<LogEntry> entries, VectorSchemaRoot root, boolean stringCopy) {
         root.allocateNew();
 
         TimeStampMilliVector tsVec      = (TimeStampMilliVector) root.getVector(OtelLogSchema.COL_TIMESTAMP);
@@ -33,13 +40,13 @@ public class LogRecordBatchWriter {
         VarCharVector spanIdVec         = (VarCharVector)        root.getVector(OtelLogSchema.COL_SPAN_ID);
         IntVector flagsVec              = (IntVector)            root.getVector(OtelLogSchema.COL_FLAGS);
         VarCharVector eventNameVec      = (VarCharVector)        root.getVector(OtelLogSchema.COL_EVENT_NAME);
-        MapVector attributesVec         = (MapVector)            root.getVector(OtelLogSchema.COL_ATTRIBUTES);
-        MapVector resourceAttributesVec = (MapVector)            root.getVector(OtelLogSchema.COL_RESOURCE_ATTRIBUTES);
         VarCharVector scopeNameVec      = (VarCharVector)        root.getVector(OtelLogSchema.COL_SCOPE_NAME);
         VarCharVector scopeVersionVec   = (VarCharVector)        root.getVector(OtelLogSchema.COL_SCOPE_VERSION);
 
-        MapColumnWriter attrWriter    = MapColumnWriter.of(attributesVec);
-        MapColumnWriter resAttrWriter = MapColumnWriter.of(resourceAttributesVec);
+        AttributeMapsWriter attrWriter = AttributeMapsWriter.of(root,
+                OtelLogSchema.COL_ATTRIBUTES, OtelLogSchema.COL_TYPED_ATTRIBUTES, stringCopy);
+        AttributeMapsWriter resAttrWriter = AttributeMapsWriter.of(root,
+                OtelLogSchema.COL_RESOURCE_ATTRIBUTES, OtelLogSchema.COL_TYPED_RESOURCE_ATTRIBUTES, stringCopy);
 
         for (int i = 0; i < entries.size(); i++) {
             LogEntry entry = entries.get(i);
@@ -83,6 +90,8 @@ public class LogRecordBatchWriter {
             }
         }
 
+        attrWriter.finish(entries.size());
+        resAttrWriter.finish(entries.size());
         root.setRowCount(entries.size());
     }
 

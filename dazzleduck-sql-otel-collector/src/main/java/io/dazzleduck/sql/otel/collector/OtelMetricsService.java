@@ -34,6 +34,7 @@ public class OtelMetricsService extends MetricsServiceGrpc.MetricsServiceImplBas
     private final OtelCollectorMetrics metrics;
     private final OtelServiceBase base;
     private final boolean writeDescription;
+    private final boolean attributesStringCopy;
 
     public OtelMetricsService(Path scratchDir, IngestionHandler handler, IngestionConfig ingestionConfig,
                               ScheduledExecutorService flushScheduler, OtelCollectorMetrics metrics) {
@@ -44,8 +45,16 @@ public class OtelMetricsService extends MetricsServiceGrpc.MetricsServiceImplBas
     public OtelMetricsService(Path scratchDir, IngestionHandler handler, IngestionConfig ingestionConfig,
                               ScheduledExecutorService flushScheduler, OtelCollectorMetrics metrics,
                               boolean writeDescription) {
+        this(scratchDir, handler, ingestionConfig, flushScheduler, metrics, writeDescription, true);
+    }
+
+    /** @param attributesStringCopy see {@code attributes.string_copy} in reference.conf */
+    public OtelMetricsService(Path scratchDir, IngestionHandler handler, IngestionConfig ingestionConfig,
+                              ScheduledExecutorService flushScheduler, OtelCollectorMetrics metrics,
+                              boolean writeDescription, boolean attributesStringCopy) {
         this.metrics = metrics;
         this.writeDescription = writeDescription;
+        this.attributesStringCopy = attributesStringCopy;
         this.base = new OtelServiceBase(scratchDir, handler, ingestionConfig, flushScheduler, metrics);
     }
 
@@ -72,7 +81,7 @@ public class OtelMetricsService extends MetricsServiceGrpc.MetricsServiceImplBas
 
         try {
             Path arrowFile = base.writeArrowFile(queueId, entries, OtelMetricSchema.SCHEMA,
-                    (batch, root) -> MetricBatchWriter.write(batch, root, writeDescription));
+                    (batch, root) -> MetricBatchWriter.write(batch, root, writeDescription, attributesStringCopy));
             base.addBatch(queue, arrowFile).whenComplete(
                     OtelServiceBase.batchCompleteHandler(arrowFile, metricCount, queueId,
                             sample, metrics,

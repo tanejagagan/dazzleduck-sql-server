@@ -51,6 +51,18 @@ public class CollectorProperties {
         this.metricsWriteDescription = metricsWriteDescription;
     }
 
+    // Whether the string attribute maps also carry every non-string value as text; see
+    // attributes.string_copy in reference.conf.
+    private boolean attributesStringCopy = true;
+
+    public boolean isAttributesStringCopy() {
+        return attributesStringCopy;
+    }
+
+    public void setAttributesStringCopy(boolean attributesStringCopy) {
+        this.attributesStringCopy = attributesStringCopy;
+    }
+
     private CompactionSettings compactionSettings =
             CompactionSettings.disabled();
 
