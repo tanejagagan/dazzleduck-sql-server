@@ -44,9 +44,9 @@ public class LogRecordBatchWriter {
         VarCharVector scopeVersionVec   = (VarCharVector)        root.getVector(OtelLogSchema.COL_SCOPE_VERSION);
 
         AttributeMapsWriter attrWriter = AttributeMapsWriter.of(root,
-                OtelLogSchema.COL_ATTRIBUTES, OtelLogSchema.COL_TYPED_ATTRIBUTES, stringCopy);
+                OtelLogSchema.COL_ATTRIBUTES, OtelLogSchema.COL_TYPED_ATTRIBUTES, stringCopy, entries.size());
         AttributeMapsWriter resAttrWriter = AttributeMapsWriter.of(root,
-                OtelLogSchema.COL_RESOURCE_ATTRIBUTES, OtelLogSchema.COL_TYPED_RESOURCE_ATTRIBUTES, stringCopy);
+                OtelLogSchema.COL_RESOURCE_ATTRIBUTES, OtelLogSchema.COL_TYPED_RESOURCE_ATTRIBUTES, stringCopy, entries.size());
 
         for (int i = 0; i < entries.size(); i++) {
             LogEntry entry = entries.get(i);

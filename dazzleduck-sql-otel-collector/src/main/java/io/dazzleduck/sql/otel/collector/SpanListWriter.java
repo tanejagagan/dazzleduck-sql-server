@@ -82,10 +82,8 @@ abstract sealed class SpanListWriter<T> permits SpanListWriter.Events, SpanListW
         if (rowCount != rows) {
             throw new IllegalStateException("wrote " + rows + " spans' " + list.getName() + ", batch has " + rowCount);
         }
-        BufferAllocator allocator = list.getAllocator();
-        ArrowColumns.load(list, rows, listValidity.nullCount(),
-                listValidity.validity(allocator), listOffsets.buffer(allocator));
-        ArrowColumns.load(struct, elements, 0, allocator.getEmpty());
+        ArrowColumns.load(list, rows, listValidity.nullCount(), listValidity::validity, listOffsets::buffer);
+        ArrowColumns.load(struct, elements, 0, BufferAllocator::getEmpty);
         loadFields(struct);
         attributes.finish(elements);
     }

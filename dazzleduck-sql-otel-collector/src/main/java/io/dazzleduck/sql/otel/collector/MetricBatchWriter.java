@@ -62,10 +62,11 @@ public class MetricBatchWriter {
         BitVector isMonotonicVec        = (BitVector)            root.getVector(OtelMetricSchema.COL_IS_MONOTONIC);
         VarCharVector aggTempVec        = (VarCharVector)        root.getVector(OtelMetricSchema.COL_AGGREGATION_TEMPORALITY);
 
+        int rows = dataPointCount(entries);
         AttributeMapsWriter attrWriter = AttributeMapsWriter.of(root,
-                OtelMetricSchema.COL_ATTRIBUTES, OtelMetricSchema.COL_TYPED_ATTRIBUTES, stringCopy);
+                OtelMetricSchema.COL_ATTRIBUTES, OtelMetricSchema.COL_TYPED_ATTRIBUTES, stringCopy, rows);
         AttributeMapsWriter resAttrWriter = AttributeMapsWriter.of(root,
-                OtelMetricSchema.COL_RESOURCE_ATTRIBUTES, OtelMetricSchema.COL_TYPED_RESOURCE_ATTRIBUTES, stringCopy);
+                OtelMetricSchema.COL_RESOURCE_ATTRIBUTES, OtelMetricSchema.COL_TYPED_RESOURCE_ATTRIBUTES, stringCopy, rows);
 
         int row = 0;
         for (MetricEntry entry : entries) {
@@ -169,6 +170,23 @@ public class MetricBatchWriter {
         attrWriter.finish(row);
         resAttrWriter.finish(row);
         root.setRowCount(row);
+    }
+
+    /** Rows the batch will have: one per data point. */
+    private static int dataPointCount(List<MetricEntry> entries) {
+        int count = 0;
+        for (MetricEntry entry : entries) {
+            Metric metric = entry.metric();
+            count += switch (metric.getDataCase()) {
+                case GAUGE -> metric.getGauge().getDataPointsCount();
+                case SUM -> metric.getSum().getDataPointsCount();
+                case HISTOGRAM -> metric.getHistogram().getDataPointsCount();
+                case EXPONENTIAL_HISTOGRAM -> metric.getExponentialHistogram().getDataPointsCount();
+                case SUMMARY -> metric.getSummary().getDataPointsCount();
+                default -> 0;
+            };
+        }
+        return count;
     }
 
     private static void writeBase(int row, boolean writeDescription, Metric metric, Resource resource, InstrumentationScope scope,

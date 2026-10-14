@@ -46,9 +46,9 @@ public class SpanBatchWriter {
         VarCharVector scopeVersionVec   = (VarCharVector)        root.getVector(OtelTraceSchema.COL_SCOPE_VERSION);
 
         AttributeMapsWriter attrWriter = AttributeMapsWriter.of(root,
-                OtelTraceSchema.COL_ATTRIBUTES, OtelTraceSchema.COL_TYPED_ATTRIBUTES, stringCopy);
+                OtelTraceSchema.COL_ATTRIBUTES, OtelTraceSchema.COL_TYPED_ATTRIBUTES, stringCopy, entries.size());
         AttributeMapsWriter resAttrWriter = AttributeMapsWriter.of(root,
-                OtelTraceSchema.COL_RESOURCE_ATTRIBUTES, OtelTraceSchema.COL_TYPED_RESOURCE_ATTRIBUTES, stringCopy);
+                OtelTraceSchema.COL_RESOURCE_ATTRIBUTES, OtelTraceSchema.COL_TYPED_RESOURCE_ATTRIBUTES, stringCopy, entries.size());
         SpanListWriter<Span.Event> eventsWriter = SpanListWriter.events(root, stringCopy);
         SpanListWriter<Span.Link> linksWriter = SpanListWriter.links(root, stringCopy);
 

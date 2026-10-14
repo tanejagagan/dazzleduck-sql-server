@@ -59,14 +59,22 @@ final class AttributeMapsWriter {
     private final MapBuilder json;
     private int rows;
 
-    private AttributeMapsWriter(MapVector strings, List<MapVector> typed, boolean stringCopy) {
+    private static final byte[] TRUE = {'t', 'r', 'u', 'e'};
+    private static final byte[] FALSE = {'f', 'a', 'l', 's', 'e'};
+
+    /**
+     * @param stringBytes starting size of the string map's key and value buffers, which hold most
+     *                    of a batch (see {@link ArrowColumns#initialBytes}); the typed maps hold
+     *                    little and start at {@link ArrowColumns#DEFAULT_BYTES}
+     */
+    private AttributeMapsWriter(MapVector strings, List<MapVector> typed, boolean stringCopy, int stringBytes) {
         this.stringCopy = stringCopy;
-        this.strings = new MapBuilder(AttributeType.STRING, strings);
-        this.ints    = new MapBuilder(AttributeType.INT,    typed.get(0));
-        this.doubles = new MapBuilder(AttributeType.DOUBLE, typed.get(1));
-        this.bools   = new MapBuilder(AttributeType.BOOL,   typed.get(2));
-        this.bytes   = new MapBuilder(AttributeType.BYTES,  typed.get(3));
-        this.json    = new MapBuilder(AttributeType.JSON,   typed.get(4));
+        this.strings = new MapBuilder(AttributeType.STRING, strings, stringBytes);
+        this.ints    = new MapBuilder(AttributeType.INT,    typed.get(0), ArrowColumns.DEFAULT_BYTES);
+        this.doubles = new MapBuilder(AttributeType.DOUBLE, typed.get(1), ArrowColumns.DEFAULT_BYTES);
+        this.bools   = new MapBuilder(AttributeType.BOOL,   typed.get(2), ArrowColumns.DEFAULT_BYTES);
+        this.bytes   = new MapBuilder(AttributeType.BYTES,  typed.get(3), ArrowColumns.DEFAULT_BYTES);
+        this.json    = new MapBuilder(AttributeType.JSON,   typed.get(4), ArrowColumns.DEFAULT_BYTES);
     }
 
     /**
@@ -75,8 +83,10 @@ final class AttributeMapsWriter {
      * @param stringColumn index of the string map
      * @param typedStart   index of the first of the five typed maps, in {@link AttributeType#TYPED} order
      * @param stringCopy   also write every non-string value, as text, to the string map
+     * @param expectedRows the batch's row count, to size the buffers (see {@link ArrowColumns#initialBytes})
      */
-    static AttributeMapsWriter of(VectorSchemaRoot root, int stringColumn, int typedStart, boolean stringCopy) {
+    static AttributeMapsWriter of(VectorSchemaRoot root, int stringColumn, int typedStart, boolean stringCopy,
+                                  int expectedRows) {
         return new AttributeMapsWriter(
                 (MapVector) root.getVector(stringColumn),
                 List.of((MapVector) root.getVector(typedStart),
@@ -84,7 +94,7 @@ final class AttributeMapsWriter {
                         (MapVector) root.getVector(typedStart + 2),
                         (MapVector) root.getVector(typedStart + 3),
                         (MapVector) root.getVector(typedStart + 4)),
-                stringCopy);
+                stringCopy, ArrowColumns.initialBytes(expectedRows));
     }
 
     /** The {@code attributes} set of a struct — a span event or link — one row per struct value. */
@@ -94,7 +104,7 @@ final class AttributeMapsWriter {
                 AttributeType.TYPED.stream()
                         .map(type -> struct.getChild("attributes" + type.suffix(), MapVector.class))
                         .toList(),
-                stringCopy);
+                stringCopy, ArrowColumns.DEFAULT_BYTES);
     }
 
     /** Buffers row {@code row}'s attributes; rows must arrive in order from 0 with no gaps. */
@@ -174,8 +184,20 @@ final class AttributeMapsWriter {
         rows++;
     }
 
+    /**
+     * The string copy of a non-string value: the text {@link LogRecordConverter#anyValueToString}
+     * gives, written straight into the buffer — no intermediate String and no UTF-8 encode, which
+     * together were ~6% of collector Java CPU with the copy on.
+     */
     private void copy(byte[] key, AnyValue value) {
-        if (stringCopy) strings.putVar(key, utf8(LogRecordConverter.anyValueToString(value)));
+        if (!stringCopy) return;
+        switch (value.getValueCase()) {
+            case INT_VALUE -> strings.putDecimal(key, value.getIntValue());
+            case DOUBLE_VALUE -> strings.putAscii(key, Double.toString(value.getDoubleValue()));
+            case BOOL_VALUE -> strings.putVar(key, value.getBoolValue() ? TRUE : FALSE);
+            case BYTES_VALUE -> strings.putHex(key, value.getBytesValue().toByteArray());
+            default -> strings.putVar(key, utf8(LogRecordConverter.anyValueToString(value)));
+        }
     }
 
     /** One map column's batch: row validity and offsets, keys, and values of the map's type. */
@@ -187,20 +209,23 @@ final class AttributeMapsWriter {
         private final Bits rowValidity = new Bits();
         private final Offsets rowOffsets = new Offsets();
         private int entries;
-        private final Offsets keyOffsets = new Offsets();
-        private final Bytes keyData = new Bytes();
+        private final Offsets keyOffsets;
+        private final Bytes keyData;
         // String, bytes and json values: offsets + data. Int and double: longs. Bool: bits.
         private final Offsets valueOffsets;
         private final Bytes valueData;
         private final Longs longs;
         private final Bits booleans;
 
-        MapBuilder(AttributeType type, MapVector vector) {
+        MapBuilder(AttributeType type, MapVector vector, int initialBytes) {
             this.type = type;
             this.vector = vector;
+            int initialEntries = Math.max(ArrowColumns.DEFAULT_ENTRIES, initialBytes / ArrowColumns.BYTES_PER_ENTRY);
+            this.keyOffsets = new Offsets(initialEntries);
+            this.keyData = new Bytes(initialBytes);
             boolean variableWidth = type == AttributeType.STRING || type == AttributeType.BYTES || type == AttributeType.JSON;
-            this.valueOffsets = variableWidth ? new Offsets() : null;
-            this.valueData = variableWidth ? new Bytes() : null;
+            this.valueOffsets = variableWidth ? new Offsets(initialEntries) : null;
+            this.valueData = variableWidth ? new Bytes(initialBytes) : null;
             this.longs = type == AttributeType.INT || type == AttributeType.DOUBLE ? new Longs() : null;
             this.booleans = type == AttributeType.BOOL ? new Bits() : null;
         }
@@ -208,6 +233,24 @@ final class AttributeMapsWriter {
         void putVar(byte[] key, byte[] value) {
             putKey(key);
             valueData.add(value);
+            valueOffsets.add(valueData.size());
+        }
+
+        void putDecimal(byte[] key, long value) {
+            putKey(key);
+            valueData.addDecimal(value);
+            valueOffsets.add(valueData.size());
+        }
+
+        void putAscii(byte[] key, String value) {
+            putKey(key);
+            valueData.addAscii(value);
+            valueOffsets.add(valueData.size());
+        }
+
+        void putHex(byte[] key, byte[] value) {
+            putKey(key);
+            valueData.addHex(value);
             valueOffsets.add(valueData.size());
         }
 
@@ -234,23 +277,19 @@ final class AttributeMapsWriter {
 
         /** Hands every buffer to its vector: the map, its entry struct, the key and the value. */
         void load() {
-            BufferAllocator allocator = vector.getAllocator();
             StructVector struct = (StructVector) vector.getDataVector();
             FieldVector keyVector = (FieldVector) struct.getChild(MapVector.KEY_NAME);
             FieldVector valueVector = (FieldVector) struct.getChild(MapVector.VALUE_NAME);
 
             ArrowColumns.load(vector, rowValidity.count(), rowValidity.nullCount(),
-                    rowValidity.validity(allocator), rowOffsets.buffer(allocator));
-            ArrowColumns.load(struct, entries, 0, allocator.getEmpty());
-            ArrowColumns.load(keyVector, entries, 0,
-                    allocator.getEmpty(), keyOffsets.buffer(allocator), keyData.buffer(allocator));
+                    rowValidity::validity, rowOffsets::buffer);
+            ArrowColumns.load(struct, entries, 0, BufferAllocator::getEmpty);
+            ArrowColumns.load(keyVector, entries, 0, BufferAllocator::getEmpty, keyOffsets::buffer, keyData::buffer);
             switch (type) {
-                case INT, DOUBLE -> ArrowColumns.load(valueVector, entries, 0,
-                        allocator.getEmpty(), longs.buffer(allocator));
-                case BOOL -> ArrowColumns.load(valueVector, entries, 0,
-                        allocator.getEmpty(), booleans.values(allocator));
+                case INT, DOUBLE -> ArrowColumns.load(valueVector, entries, 0, BufferAllocator::getEmpty, longs::buffer);
+                case BOOL -> ArrowColumns.load(valueVector, entries, 0, BufferAllocator::getEmpty, booleans::values);
                 default -> ArrowColumns.load(valueVector, entries, 0,
-                        allocator.getEmpty(), valueOffsets.buffer(allocator), valueData.buffer(allocator));
+                        BufferAllocator::getEmpty, valueOffsets::buffer, valueData::buffer);
             }
         }
     }
