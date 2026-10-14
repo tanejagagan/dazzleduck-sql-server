@@ -38,6 +38,7 @@ def dur_ms(v):
 CATEGORIES = [
     ('batch writers (Log/Span/MetricBatchWriter.write)', r'collector/(Log|Span|Metric)\w*BatchWriter\.write$'),
     ('  attribute maps', r'collector/(AttributeMapsWriter[.$]|MapColumnWriter\.write$)'),
+    ('  span events + links', r'collector/(SpanListWriter[.$]|SpanBatchWriter\.(writeEvents|writeLinks)$)'),
     ('Arrow vector ops (any caller)', r'^org/apache/arrow/vector/(?!ipc)'),
     ('UTF-8 encode (String.getBytes)', r'^java/lang/String\.(getBytes|encode)'),
     ('protobuf decode (control)', r'(^com/google/protobuf/CodedInputStream|parseFrom|MessageMarshaller\.parse)'),

@@ -12,6 +12,11 @@ import io.grpc.stub.StreamObserver;
 import io.opentelemetry.proto.collector.logs.v1.ExportLogsServiceRequest;
 import io.opentelemetry.proto.collector.logs.v1.ExportLogsServiceResponse;
 import io.opentelemetry.proto.collector.logs.v1.LogsServiceGrpc;
+import io.opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest;
+import io.opentelemetry.proto.collector.trace.v1.TraceServiceGrpc;
+import io.opentelemetry.proto.trace.v1.ResourceSpans;
+import io.opentelemetry.proto.trace.v1.ScopeSpans;
+import io.opentelemetry.proto.trace.v1.Span;
 import io.opentelemetry.proto.common.v1.AnyValue;
 import io.opentelemetry.proto.common.v1.KeyValue;
 import io.opentelemetry.proto.logs.v1.LogRecord;
@@ -55,6 +60,7 @@ import java.util.stream.Collectors;
  *   -Dbenchmark.clients=32        concurrent requests; must cover rate x request latency
  *   -Dbenchmark.attributes=realistic
  *   -Dbenchmark.string_copy=false  otel_collector.attributes.string_copy (default true)
+ *   -Dbenchmark.signal=traces      steady mode only: send spans instead of log records
  * </pre>
  * {@code benchmark.attributes=realistic} gives each record 40 attributes of every OTLP value type
  * (25 string, 6 int, 4 double, 3 bool, 1 bytes, 1 array) and its resource 17, in the 30-60 range
@@ -76,6 +82,8 @@ public class OtelCollectorBenchmark {
     private static final int   STEADY_SEC    = Integer.getInteger("benchmark.duration", 120);
     private static final int   STEADY_BATCH  = Integer.getInteger("benchmark.batch", 500);
     private static final int   STEADY_WARMUP_SEC = 20;
+    /** Steady mode only: "logs" (default) or "traces" — spans with 3 events and 1 link each. */
+    private static final boolean STEADY_TRACES = "traces".equals(System.getProperty("benchmark.signal", "logs"));
     private static final boolean REALISTIC_ATTRIBUTES =
             "realistic".equals(System.getProperty("benchmark.attributes", "minimal"));
     private static final int   WARMUP_SEC    = 3;
@@ -166,7 +174,7 @@ public class OtelCollectorBenchmark {
         }
 
         if (STEADY_RATE > 0) {
-            runSteady(stubs);
+            runSteady(channels);
         } else {
             runSweep(stubs, logsDir);
         }
@@ -206,36 +214,68 @@ public class OtelCollectorBenchmark {
     // Steady mode — fixed offered rate, for CPU comparisons between builds
     // -------------------------------------------------------------------------
 
-    private void runSteady(List<LogsServiceGrpc.LogsServiceStub> stubs) throws InterruptedException {
+    private void runSteady(List<ManagedChannel> channels) throws InterruptedException {
         // Built once and reused, so the load generator spends no CPU building messages while the
         // collector is being measured; 64 distinct batches keep the content from being uniform.
-        List<ExportLogsServiceRequest> pool = new ArrayList<>(64);
-        for (int i = 0; i < 64; i++) pool.add(buildRequest(STEADY_BATCH));
+        SteadySender sender;
+        int requestBytes;
+        if (STEADY_TRACES) {
+            List<TraceServiceGrpc.TraceServiceStub> stubs = new ArrayList<>();
+            for (ManagedChannel ch : channels) {
+                stubs.add(TraceServiceGrpc.newStub(ch).withInterceptors(
+                        MetadataUtils.newAttachHeadersInterceptor(bearer(generateToken("traces")))));
+            }
+            List<ExportTraceServiceRequest> pool = new ArrayList<>(64);
+            for (int i = 0; i < 64; i++) pool.add(buildTraceRequest(STEADY_BATCH));
+            requestBytes = pool.get(0).getSerializedSize();
+            sender = (client, index, done) -> stubs.get(client).export(pool.get(index % pool.size()), observer(done));
+        } else {
+            List<LogsServiceGrpc.LogsServiceStub> stubs = new ArrayList<>();
+            for (ManagedChannel ch : channels) {
+                stubs.add(LogsServiceGrpc.newStub(ch).withInterceptors(
+                        MetadataUtils.newAttachHeadersInterceptor(bearer(generateToken("logs")))));
+            }
+            List<ExportLogsServiceRequest> pool = new ArrayList<>(64);
+            for (int i = 0; i < 64; i++) pool.add(buildRequest(STEADY_BATCH));
+            requestBytes = pool.get(0).getSerializedSize();
+            sender = (client, index, done) -> stubs.get(client).export(pool.get(index % pool.size()), observer(done));
+        }
 
         System.out.println();
-        System.out.println("=== OtelCollector Steady-Rate Benchmark (LOGS) ===");
+        System.out.printf("=== OtelCollector Steady-Rate Benchmark (%s) ===%n", STEADY_TRACES ? "TRACES" : "LOGS");
         System.out.printf("  rate %,d rec/s, batch %d, clients %d, attributes %s, %d B/request%n",
-                STEADY_RATE, STEADY_BATCH, stubs.size(), REALISTIC_ATTRIBUTES ? "realistic" : "minimal",
-                pool.get(0).getSerializedSize());
+                STEADY_RATE, STEADY_BATCH, channels.size(), REALISTIC_ATTRIBUTES ? "realistic" : "minimal",
+                requestBytes);
         System.out.printf("  [warmup] %ds%n", STEADY_WARMUP_SEC);
-        steadyLoop(stubs, pool, Duration.ofSeconds(STEADY_WARMUP_SEC));
+        steadyLoop(sender, channels.size(), Duration.ofSeconds(STEADY_WARMUP_SEC));
         System.out.printf("  [measure] %ds%n", STEADY_SEC);
         // Epoch-ms markers bound the measured window, so a JFR summary can drop the warmup.
         System.out.println("STEADY-START " + System.currentTimeMillis());
         long t0 = System.nanoTime();
-        long[] result = steadyLoop(stubs, pool, Duration.ofSeconds(STEADY_SEC));
+        long[] result = steadyLoop(sender, channels.size(), Duration.ofSeconds(STEADY_SEC));
         double seconds = (System.nanoTime() - t0) / 1e9;
         System.out.println("STEADY-END " + System.currentTimeMillis());
         System.out.printf("  sent %,d records in %.1fs = %,.0f rec/s; errors %d; requests behind schedule %d%n",
                 result[0], seconds, result[0] / seconds, result[1], result[2]);
     }
 
+    /** Sends pooled request {@code index} on client {@code client}; {@code done} gets success. */
+    private interface SteadySender {
+        void send(int client, int index, java.util.function.Consumer<Boolean> done);
+    }
+
+    private static <T> StreamObserver<T> observer(java.util.function.Consumer<Boolean> done) {
+        return new StreamObserver<>() {
+            @Override public void onNext(T v) {}
+            @Override public void onError(Throwable t) { done.accept(false); }
+            @Override public void onCompleted() { done.accept(true); }
+        };
+    }
+
     /** Returns {records acknowledged, errors, requests that could not be sent on schedule}. */
-    private static long[] steadyLoop(List<LogsServiceGrpc.LogsServiceStub> stubs,
-                                     List<ExportLogsServiceRequest> pool,
-                                     Duration duration) throws InterruptedException {
+    private static long[] steadyLoop(SteadySender sender, int clients, Duration duration) throws InterruptedException {
         long intervalNs = (long) (1e9 * STEADY_BATCH / STEADY_RATE);
-        Semaphore inFlight = new Semaphore(stubs.size());
+        Semaphore inFlight = new Semaphore(clients);
         AtomicInteger acked = new AtomicInteger();
         AtomicInteger errors = new AtomicInteger();
         long late = 0;
@@ -252,15 +292,63 @@ public class OtelCollectorBenchmark {
                 late++;                       // every client busy: the collector is not keeping up
                 inFlight.acquireUninterruptibly();
             }
-            stubs.get((int) (i % stubs.size())).export(pool.get((int) (i % pool.size())), new StreamObserver<>() {
-                @Override public void onNext(ExportLogsServiceResponse v) {}
-                @Override public void onError(Throwable t) { errors.incrementAndGet(); inFlight.release(); }
-                @Override public void onCompleted() { acked.addAndGet(STEADY_BATCH); inFlight.release(); }
+            sender.send((int) (i % clients), (int) (i % 64), ok -> {
+                if (ok) acked.addAndGet(STEADY_BATCH); else errors.incrementAndGet();
+                inFlight.release();
             });
         }
-        inFlight.acquireUninterruptibly(stubs.size());
-        inFlight.release(stubs.size());
+        inFlight.acquireUninterruptibly(clients);
+        inFlight.release(clients);
         return new long[]{acked.get(), errors.get(), late};
+    }
+
+    /**
+     * Spans with the record attributes of {@link #buildRequest} (realistic or minimal), the same
+     * resource, and 3 events (5 attributes each) plus 1 link (3 attributes) per span.
+     */
+    private ExportTraceServiceRequest buildTraceRequest(int spanCount) {
+        ScopeSpans.Builder scopeSpans = ScopeSpans.newBuilder();
+        for (int i = 0; i < spanCount; i++) {
+            long start = System.nanoTime();
+            Span.Builder span = Span.newBuilder()
+                    .setTraceId(uuidToBytes16(UUID.randomUUID()))
+                    .setSpanId(uuidToBytes8(UUID.randomUUID()))
+                    .setName("GET /api/" + SERVICES[RNG.nextInt(SERVICES.length)])
+                    .setKind(Span.SpanKind.SPAN_KIND_SERVER)
+                    .setStartTimeUnixNano(start)
+                    .setEndTimeUnixNano(start + RNG.nextInt(50_000_000))
+                    .addAttributes(attr("service.name", AnyValue.newBuilder().setStringValue(SERVICES[RNG.nextInt(SERVICES.length)])))
+                    .addAllAttributes(REALISTIC_ATTRIBUTES ? realisticAttributes(i) : List.of());
+            for (int e = 0; e < 3; e++) {
+                span.addEvents(Span.Event.newBuilder()
+                        .setName("event-" + e)
+                        .setTimeUnixNano(start + e * 1_000_000L)
+                        .addAttributes(attr("event.string", AnyValue.newBuilder().setStringValue("v-" + RNG.nextInt(100))))
+                        .addAttributes(attr("event.int", AnyValue.newBuilder().setIntValue(RNG.nextInt(1000))))
+                        .addAttributes(attr("event.double", AnyValue.newBuilder().setDoubleValue(RNG.nextDouble())))
+                        .addAttributes(attr("event.bool", AnyValue.newBuilder().setBoolValue(RNG.nextBoolean())))
+                        .addAttributes(attr("event.tag", AnyValue.newBuilder().setStringValue(ENVS[RNG.nextInt(ENVS.length)]))));
+            }
+            span.addLinks(Span.Link.newBuilder()
+                    .setTraceId(uuidToBytes16(UUID.randomUUID()))
+                    .setSpanId(uuidToBytes8(UUID.randomUUID()))
+                    .addAttributes(attr("link.kind", AnyValue.newBuilder().setStringValue("follows_from")))
+                    .addAttributes(attr("link.index", AnyValue.newBuilder().setIntValue(i)))
+                    .addAttributes(attr("link.sampled", AnyValue.newBuilder().setBoolValue(true))));
+            scopeSpans.addSpans(span);
+        }
+        ResourceSpans.Builder resourceSpans = ResourceSpans.newBuilder().addScopeSpans(scopeSpans.build());
+        if (REALISTIC_ATTRIBUTES) {
+            resourceSpans.setResource(io.opentelemetry.proto.resource.v1.Resource.newBuilder()
+                    .addAllAttributes(realisticResourceAttributes()));
+        }
+        return ExportTraceServiceRequest.newBuilder().addResourceSpans(resourceSpans.build()).build();
+    }
+
+    private static Metadata bearer(String token) {
+        Metadata metadata = new Metadata();
+        metadata.put(AUTHORIZATION_KEY, "Bearer " + token);
+        return metadata;
     }
 
     // -------------------------------------------------------------------------
@@ -508,13 +596,17 @@ public class OtelCollectorBenchmark {
     }
 
     private static String generateToken() {
+        return generateToken("logs");
+    }
+
+    private static String generateToken(String queue) {
         SecretKey key = Validator.fromBase64String(SECRET_KEY_BASE64);
         Calendar exp = Calendar.getInstance();
         exp.add(Calendar.HOUR, 1);
         return Jwts.builder().subject("admin")
                 // Queue resolution requires this claim since the services were unified behind
                 // OtelServiceBase.resolveQueue; without it every export is INVALID_ARGUMENT.
-                .claim(io.dazzleduck.sql.common.Headers.CLAIM_INGESTION_QUEUE, "logs")
+                .claim(io.dazzleduck.sql.common.Headers.CLAIM_INGESTION_QUEUE, queue)
                 .expiration(exp.getTime()).signWith(key).compact();
     }
 
