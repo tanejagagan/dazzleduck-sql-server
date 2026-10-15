@@ -2826,9 +2826,34 @@ public class Transformations {
      *
      * @param tablesToWrap      ordered map of generated CTE name → the original BASE_TABLE node
      *                          (its schema/catalog are preserved for the CTE body)
-     * @param reservedCteNames  CTE names this pass must not generate
+     * @param cteKeyByTable     the CTE name already generated for a table, keyed by the table
+     *                          itself: {@code [catalog, schema, table]} as the reference writes
+     *                          them. Two references to one table share its CTE; two DIFFERENT
+     *                          tables must not, which is why the identity is the parts and not
+     *                          the name built from them — {@link #buildCteKey} joins with
+     *                          underscores, so schema {@code a_b} + table {@code c} and schema
+     *                          {@code a} + table {@code b_c} both come out {@code ___a_b_c}, and
+     *                          sharing on that name would read one table in place of the other.
+     * @param reservedCteNames  CTE names this pass must not generate: those the query already
+     *                          declares, plus every name generated so far
      */
-    private record CteInjection(Map<String, ObjectNode> tablesToWrap, Set<String> reservedCteNames) {}
+    private record CteInjection(Map<String, ObjectNode> tablesToWrap,
+                                Map<List<String>, String> cteKeyByTable,
+                                Set<String> reservedCteNames) {
+
+        /** The CTE name for {@code table}, generating and registering one on first sight. */
+        String cteKeyFor(List<String> table, ObjectNode reference) {
+            String existing = cteKeyByTable.get(table);
+            if (existing != null) {
+                return existing;
+            }
+            String cteKey = freshCteKey(buildCteKey(table.get(2), table.get(1), table.get(0)), reservedCteNames);
+            reservedCteNames.add(cteKey);
+            cteKeyByTable.put(table, cteKey);
+            tablesToWrap.put(cteKey, (ObjectNode) reference.deepCopy());
+            return cteKey;
+        }
+    }
 
     /** Every CTE name declared anywhere under {@code node}, at any nesting depth. */
     private static void collectDeclaredCteNames(JsonNode node, Set<String> into) {
@@ -2865,7 +2890,7 @@ public class Transformations {
         // CTE enclosing it and reference itself. Collected once, up front.
         Set<String> reservedCteNames = new HashSet<>();
         collectDeclaredCteNames(statementNode, reservedCteNames);
-        var injection = new CteInjection(new LinkedHashMap<>(), reservedCteNames);
+        var injection = new CteInjection(new LinkedHashMap<>(), new LinkedHashMap<>(), reservedCteNames);
         renameBaseTablesInStatementNode(statementNode, new HashSet<>(), injection);
 
         Map<String, ObjectNode> tablesToWrap = injection.tablesToWrap();
@@ -3060,10 +3085,7 @@ public class Transformations {
                 if (userCteNames.contains(tableName)) return; // CTE reference — skip
                 String schema = fromNode.has(FIELD_SCHEMA_NAME) ? fromNode.get(FIELD_SCHEMA_NAME).asText() : "";
                 String catalog = fromNode.has(FIELD_CATALOG_NAME) ? fromNode.get(FIELD_CATALOG_NAME).asText() : "";
-                String cteKey = freshCteKey(buildCteKey(tableName, schema, catalog), injection.reservedCteNames());
-                if (!injection.tablesToWrap().containsKey(cteKey)) {
-                    injection.tablesToWrap().put(cteKey, (ObjectNode) fromNode.deepCopy());
-                }
+                String cteKey = injection.cteKeyFor(List.of(catalog, schema, tableName), (ObjectNode) fromNode);
                 ObjectNode mutable = (ObjectNode) fromNode;
                 String existingAlias = mutable.has(FIELD_ALIAS) ? mutable.get(FIELD_ALIAS).asText() : "";
                 if (existingAlias.isEmpty()) {
@@ -3122,10 +3144,11 @@ public class Transformations {
 
     /**
      * {@code base}, or {@code base_1}, {@code base_2}, ... — the first name not in {@code reserved},
-     * which holds every CTE name the query already declares. Reusing one would make the filter
-     * CTE's body reference that CTE instead of the table, which is what happens when a query that
-     * already carries filter CTEs is authorized again (the Flight server authorizes a query once
-     * for its info and once for its stream).
+     * which holds every CTE name the query already declares and every name this pass has already
+     * generated. Reusing a declared one would make the filter CTE's body reference that CTE instead
+     * of the table, which is what happens when a query that already carries filter CTEs is
+     * authorized again (the Flight server authorizes a query once for its info and once for its
+     * stream); reusing a generated one would point two different tables at one CTE.
      */
     private static String freshCteKey(String base, Set<String> reserved) {
         if (reserved == null || !reserved.contains(base)) {

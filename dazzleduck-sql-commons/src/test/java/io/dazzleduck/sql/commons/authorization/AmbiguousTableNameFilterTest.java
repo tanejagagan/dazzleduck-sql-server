@@ -134,6 +134,54 @@ public class AmbiguousTableNameFilterTest {
         assertEquals("null", firstValue(Transformations.parseToSql(conn, authorized)));
     }
 
+    /**
+     * The generated CTE names join catalog, schema and table with underscores, so schema
+     * {@code a_b} + table {@code c} and schema {@code a} + table {@code b_c} both read
+     * {@code ___a_b_c}. Sharing one CTE between them would read one table in place of the other:
+     * every row below carries the name of the table it came from, so a substitution is visible.
+     */
+    @Test
+    void twoTablesWhoseGeneratedCteNamesWouldCollideStayDifferentTables() throws Exception {
+        var statement = conn.createStatement();
+        statement.execute("CREATE SCHEMA IF NOT EXISTS a_b");
+        statement.execute("CREATE SCHEMA IF NOT EXISTS a");
+        statement.execute("CREATE TABLE a_b.c (v INT, origin VARCHAR)");
+        statement.execute("INSERT INTO a_b.c VALUES (1,'a_b.c')");
+        statement.execute("CREATE TABLE a.b_c (v INT, origin VARCHAR)");
+        statement.execute("INSERT INTO a.b_c VALUES (1,'a.b_c')");
+        try {
+            String sql = "SELECT (SELECT origin FROM a_b.c) || '/' || (SELECT origin FROM a.b_c) AS origins";
+            Map<String, JsonNode> both = new LinkedHashMap<>();
+            both.put("memory.a_b.c", SqlAuthorizer.compileFilterString("v=1"));
+            both.put("memory.a.b_c", SqlAuthorizer.compileFilterString("v=1"));
+            JsonNode tree = Transformations.parseToTree(conn, sql);
+            JsonNode authorized = SqlAuthorizer.addFilterToEveryRead(
+                    SqlAuthorizer.withUpdatedDatabaseSchema(tree, DB, SCHEMA), both, DB, SCHEMA);
+            assertEquals("a_b.c/a.b_c", firstValue(Transformations.parseToSql(conn, authorized)));
+
+            String access = "[[\"table\",\"a_b.c\",\"*\",\"v=1\"],[\"table\",\"a.b_c\",\"*\",\"v=1\"]]";
+            JsonNode asClaim = SqlAuthorizer.RESTRICT_READ_ONLY_AUTHORIZER.authorize(
+                    "user", DB, SCHEMA, Transformations.parseToTree(conn, sql),
+                    Map.of(Headers.HEADER_ACCESS, access));
+            assertEquals("a_b.c/a.b_c", firstValue(Transformations.parseToSql(conn, asClaim)));
+        } finally {
+            statement.execute("DROP TABLE IF EXISTS a_b.c");
+            statement.execute("DROP TABLE IF EXISTS a.b_c");
+        }
+    }
+
+    /** Two references to ONE table still share its CTE, rather than getting one filter CTE each. */
+    @Test
+    void twoReferencesToOneTableShareItsCte() throws Exception {
+        JsonNode tree = Transformations.parseToTree(conn,
+                "SELECT (SELECT sum(amount) FROM orders) + (SELECT sum(amount) FROM orders) AS twice");
+        JsonNode authorized = SqlAuthorizer.addFilterToEveryRead(
+                SqlAuthorizer.withUpdatedDatabaseSchema(tree, DB, SCHEMA), grants(false), DB, SCHEMA);
+        JsonNode cteMap = Transformations.getFirstStatementNode(authorized).get("cte_map").get("map");
+        assertEquals(1, cteMap.size(), "one filter CTE, referenced twice: " + cteMap);
+        assertEquals("800", firstValue(Transformations.parseToSql(conn, authorized)));
+    }
+
     /** Two keys naming one table with different filters is a contradictory grant, not a race. */
     @Test
     void grantsThatResolveToOneTableWithDifferentFiltersAreRejected() throws Exception {
