@@ -324,7 +324,7 @@ public class TransformationsInjectFilterTest {
 
         String sql = "SELECT id FROM orders";
         JsonNode tree = Transformations.parseToTree(conn, sql);
-        JsonNode result = Transformations.injectFilterCtes(tree, filters);
+        JsonNode result = Transformations.injectFilterCtes(tree, filters, "memory", "main");
         String out = Transformations.parseToSql(conn, result);
 
         List<Object> ids = execFirstColumn(out);
@@ -339,7 +339,7 @@ public class TransformationsInjectFilterTest {
 
         String sql = "SELECT id FROM main.orders";
         JsonNode tree = Transformations.parseToTree(conn, sql);
-        JsonNode result = Transformations.injectFilterCtes(tree, filters);
+        JsonNode result = Transformations.injectFilterCtes(tree, filters, "memory", "main");
         String out = Transformations.parseToSql(conn, result);
 
         List<Object> ids = execFirstColumn(out);
@@ -355,7 +355,7 @@ public class TransformationsInjectFilterTest {
 
         String sql = "SELECT id FROM other_schema.orders";
         JsonNode tree = Transformations.parseToTree(conn, sql);
-        JsonNode result = Transformations.injectFilterCtes(tree, filters);
+        JsonNode result = Transformations.injectFilterCtes(tree, filters, "memory", "main");
         String out = Transformations.parseToSql(conn, result);
 
         List<Object> ids = execFirstColumn(out);
@@ -371,7 +371,7 @@ public class TransformationsInjectFilterTest {
 
         String sql = "SELECT o.id FROM orders o JOIN items i ON o.id = i.order_id";
         JsonNode tree = Transformations.parseToTree(conn, sql);
-        JsonNode result = Transformations.injectFilterCtes(tree, filters);
+        JsonNode result = Transformations.injectFilterCtes(tree, filters, "memory", "main");
         String out = Transformations.parseToSql(conn, result);
 
         List<Object> ids = execFirstColumn(out);
@@ -388,7 +388,7 @@ public class TransformationsInjectFilterTest {
 
         String sql = "SELECT id FROM orders WHERE id IN (SELECT order_id FROM items)";
         JsonNode tree = Transformations.parseToTree(conn, sql);
-        JsonNode result = Transformations.injectFilterCtes(tree, filters);
+        JsonNode result = Transformations.injectFilterCtes(tree, filters, "memory", "main");
         String out = Transformations.parseToSql(conn, result);
 
         List<Object> ids = execFirstColumn(out);
@@ -407,7 +407,7 @@ public class TransformationsInjectFilterTest {
 
         String sql = "WITH orders AS (SELECT * FROM orders) SELECT id FROM orders";
         JsonNode tree = Transformations.parseToTree(conn, sql);
-        JsonNode result = Transformations.injectFilterCtes(tree, filters);
+        JsonNode result = Transformations.injectFilterCtes(tree, filters, "memory", "main");
         String out = Transformations.parseToSql(conn, result);
 
         List<Object> ids = execFirstColumn(out);

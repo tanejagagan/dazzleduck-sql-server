@@ -35,8 +35,14 @@ public interface SqlAuthorizer {
         return Transformations.injectFilterCtes(query, filter);
     }
 
-    static JsonNode addFilterViaCtes(JsonNode query, java.util.Map<String, JsonNode> tableFilters) {
-        return Transformations.injectFilterCtes(query, tableFilters);
+    /**
+     * @param database the connection's catalog, and {@code schema} its schema: the defaults every
+     *                 key and every table reference is resolved against
+     *                 ({@link Transformations#injectFilterCtes(JsonNode, Map, String, String)})
+     */
+    static JsonNode addFilterViaCtes(JsonNode query, Map<String, JsonNode> tableFilters,
+                                     String database, String schema) {
+        return Transformations.injectFilterCtes(query, tableFilters, database, schema);
     }
 
     /**
@@ -53,19 +59,23 @@ public interface SqlAuthorizer {
      * the filter's columns and scan every partition. That copy is only added where it is valid —
      * see {@link #pruningHintFilter}.
      */
-    static JsonNode addFilterToEveryRead(JsonNode query, String qualifiedTable, JsonNode filter) {
-        return addFilterToEveryRead(query, Map.of(qualifiedTable, filter));
+    static JsonNode addFilterToEveryRead(JsonNode query, String qualifiedTable, JsonNode filter,
+                                         String database, String schema) {
+        return addFilterToEveryRead(query, Map.of(qualifiedTable, filter), database, schema);
     }
 
     /**
-     * Per-table variant of {@link #addFilterToEveryRead(JsonNode, String, JsonNode)}: every read of
-     * each table in {@code tableFilters} is rewritten to go through that table's own filtered CTE.
-     * A table the query reads but the map does not list is given a {@code false} filter, so the
-     * caller must have authorized — and listed — every table the query touches.
+     * Per-table variant of the above: every read of each table in {@code tableFilters} is rewritten
+     * to go through that table's own filtered CTE. A table the query reads but the map does not
+     * list is given a {@code false} filter, so the caller must have authorized — and listed — every
+     * table the query touches. Keys and references are resolved against {@code database} /
+     * {@code schema} before matching, so a bare name means one table and not every table that
+     * shares it.
      */
-    static JsonNode addFilterToEveryRead(JsonNode query, Map<String, JsonNode> tableFilters) {
-        JsonNode filtered = addFilterViaCtes(query, tableFilters);
-        JsonNode pruningHint = pruningHintFilter(query, tableFilters);
+    static JsonNode addFilterToEveryRead(JsonNode query, Map<String, JsonNode> tableFilters,
+                                         String database, String schema) {
+        JsonNode filtered = addFilterViaCtes(query, tableFilters, database, schema);
+        JsonNode pruningHint = pruningHintFilter(query, tableFilters, database, schema);
         if (pruningHint == null) {
             return filtered;
         }
@@ -88,13 +98,15 @@ public interface SqlAuthorizer {
      * <p>Evaluated against the query as it was BEFORE CTE injection, which renames base tables but
      * leaves the shape — and so which SELECT {@link #addFilterToBaseTable} targets — unchanged.
      */
-    private static JsonNode pruningHintFilter(JsonNode query, Map<String, JsonNode> tableFilters) {
+    private static JsonNode pruningHintFilter(JsonNode query, Map<String, JsonNode> tableFilters,
+                                              String database, String schema) {
         JsonNode baseTable = baseTableOfOutermostRead(
                 Transformations.getFirstStatementNode(query), Set.of());
         if (baseTable == null) {
             return null;
         }
-        JsonNode filter = filterForQualifiedName(qualifiedNameOf(baseTable), tableFilters);
+        JsonNode filter = filterForQualifiedName(
+                qualifiedNameOf(baseTable, database, schema), tableFilters, database, schema);
         // A table granted without a row restriction carries a `true` filter: nothing to prune on.
         if (filter == null || filter.equals(ExpressionFactory.trueExpression())) {
             return null;
@@ -150,28 +162,32 @@ public interface SqlAuthorizer {
         }
     }
 
-    /** {@code "catalog.schema.table"} of a BASE_TABLE node, omitting the parts it does not carry. */
-    private static String qualifiedNameOf(JsonNode baseTable) {
-        var name = new StringBuilder();
-        for (String field : new String[]{ExpressionConstants.FIELD_CATALOG_NAME, ExpressionConstants.FIELD_SCHEMA_NAME}) {
-            JsonNode part = baseTable.get(field);
-            if (part != null && !part.isNull() && !part.asText().isEmpty()) {
-                name.append(part.asText()).append('.');
-            }
-        }
-        return name.append(baseTable.get(ExpressionConstants.FIELD_TABLE_NAME).asText()).toString();
+    /**
+     * {@code "catalog.schema.table"} of a BASE_TABLE node, taking each part the query omits from
+     * the connection's {@code database} / {@code schema}, as the filter-CTE lookup does.
+     */
+    private static String qualifiedNameOf(JsonNode baseTable, String database, String schema) {
+        String catalog = textOrEmpty(baseTable, ExpressionConstants.FIELD_CATALOG_NAME);
+        String tableSchema = textOrEmpty(baseTable, ExpressionConstants.FIELD_SCHEMA_NAME);
+        return (catalog.isEmpty() ? database : catalog) + "."
+                + (tableSchema.isEmpty() ? schema : tableSchema) + "."
+                + baseTable.get(ExpressionConstants.FIELD_TABLE_NAME).asText();
+    }
+
+    private static String textOrEmpty(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        return value == null || value.isNull() ? "" : value.asText();
     }
 
     /**
-     * The filter granted for {@code qualifiedName}, matching the map's fully-qualified keys against
-     * a reference that may name fewer parts ({@code orders} matching {@code memory.main.orders}) —
-     * the same suffix rule {@link Transformations#injectFilterCtes(JsonNode, Map)} applies.
+     * The filter granted for {@code qualifiedName}, resolving each key the same way
+     * {@link Transformations#injectFilterCtes(JsonNode, Map, String, String)} does so that this
+     * lookup and the CTE it is a hint for cannot disagree about which table a name means.
      */
-    private static JsonNode filterForQualifiedName(String qualifiedName, Map<String, JsonNode> tableFilters) {
-        String name = qualifiedName.toLowerCase(Locale.ROOT);
+    private static JsonNode filterForQualifiedName(String qualifiedName, Map<String, JsonNode> tableFilters,
+                                                   String database, String schema) {
         for (Map.Entry<String, JsonNode> grant : tableFilters.entrySet()) {
-            String granted = grant.getKey().toLowerCase(Locale.ROOT);
-            if (granted.equals(name) || granted.endsWith("." + name)) {
+            if (Transformations.qualifiedTableName(grant.getKey(), database, schema).equals(qualifiedName)) {
                 return grant.getValue();
             }
         }
@@ -353,8 +369,7 @@ public interface SqlAuthorizer {
      * Used by callers (e.g. {@link RestrictedReadOnlyAuthorizer}) that need a string key.
      */
     static String qualifyTableName(String name, String database, String schema) {
-        var t = resolveAuthorizedTable(name, database, schema);
-        return t.catalog() + "." + t.schema() + "." + t.tableOrPath();
+        return Transformations.qualifiedTableName(name, database, schema);
     }
 
     /**

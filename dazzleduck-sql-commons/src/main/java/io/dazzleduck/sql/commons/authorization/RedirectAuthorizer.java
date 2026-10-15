@@ -124,7 +124,9 @@ public class RedirectAuthorizer {
         }
         // addFilterToEveryRead, not addFilterViaCtes: a redirect-mode query is split-planned like
         // any other, and the CTEs alone leave the planner no top-level predicate to prune on.
-        return anyTableFilter ? SqlAuthorizer.addFilterToEveryRead(updatedQuery, tableFilters) : updatedQuery;
+        return anyTableFilter
+                ? SqlAuthorizer.addFilterToEveryRead(updatedQuery, tableFilters, database, schema)
+                : updatedQuery;
     }
 
     private ResolveAccessRow findMatchingRow(ResolveResponse response,

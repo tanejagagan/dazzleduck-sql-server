@@ -2766,38 +2766,59 @@ public class Transformations {
      * filter is injected into their bodies, so they automatically see filtered data.
      */
     public static JsonNode injectFilterCtes(JsonNode query, JsonNode filter) {
-        return injectFilterCtes(query, tableName -> filter);
+        // One filter for every table, so no table name is ever looked up and the resolution
+        // defaults the per-table variant needs are irrelevant here.
+        return injectFilterCtes(query, tableName -> filter, "", "");
     }
 
     /**
      * Per-table variant of {@link #injectFilterCtes}: each base table gets its own filter
      * expression looked up by table name from {@code tableFilters}.
-     * Keys may be fully-qualified ({@code catalog.schema.table}), partially qualified
-     * ({@code schema.table}), or bare table names. Qualified keys are expanded so that every
-     * shorter suffix form is also registered (e.g. {@code "memory.main.orders"} additionally
-     * registers {@code "main.orders"} and {@code "orders"}), allowing unqualified or partially
-     * qualified AST references to match. A fully-qualified reference to a different catalog or
-     * schema (e.g. {@code other.main.orders}) will NOT match and receives a {@code false} filter.
-     * Tables not present in the map receive a {@code false} filter (no rows returned),
-     * so the map must cover every table the query touches.
+     *
+     * <p>Both sides of the lookup are resolved to a full {@code catalog.schema.table} name against
+     * {@code defaultCatalog} / {@code defaultSchema} — the connection's database and schema — and
+     * matched exactly. A reference resolves the way the access check resolves it
+     * ({@link #collectAllTableReferences}): each part the query omits is taken from the defaults,
+     * so with defaults {@code memory}/{@code main}, {@code FROM orders} is
+     * {@code memory.main.orders} and {@code FROM other.orders} is {@code memory.other.orders}. A
+     * key may be fully qualified, {@code schema.table}, or bare, and is completed the same way.
+     *
+     * <p>Resolving rather than matching on name suffixes is what keeps two granted tables that
+     * share a name in different schemas apart: a bare reference means one of them, never whichever
+     * the map happens to list first.
+     *
+     * <p>A table the map does not cover receives a {@code false} filter (no rows), so the map must
+     * list every table the query is allowed to read. Two keys that resolve to the same name with
+     * different filters are a contradictory grant and are rejected.
      */
-    public static JsonNode injectFilterCtes(JsonNode query, Map<String, JsonNode> tableFilters) {
-        // Normalize: for "catalog.schema.table" or "schema.table" keys, also register every
-        // shorter suffix so that unqualified or partially-qualified AST references still match.
-        // e.g. "memory.main.orders" → also adds "main.orders" and "orders".
-        // The lookup in the private variant uses the fully-qualified dotted key built from the
-        // AST node's catalog/schema/table fields, so "other_catalog.main.orders" will NOT match
-        // a key added for "memory.main.orders" — only exact or suffix-subset matches apply.
-        Map<String, JsonNode> normalized = new LinkedHashMap<>(tableFilters);
+    public static JsonNode injectFilterCtes(JsonNode query, Map<String, JsonNode> tableFilters,
+                                            String defaultCatalog, String defaultSchema) {
+        Map<String, JsonNode> resolved = new LinkedHashMap<>();
         for (Map.Entry<String, JsonNode> e : tableFilters.entrySet()) {
-            String[] parts = e.getKey().split("\\.", -1);
-            for (int i = 1; i < parts.length; i++) {
-                String suffix = String.join(".", Arrays.copyOfRange(parts, i, parts.length));
-                normalized.putIfAbsent(suffix, e.getValue());
+            String key = qualifiedTableName(e.getKey(), defaultCatalog, defaultSchema);
+            JsonNode previous = resolved.put(key, e.getValue());
+            if (previous != null && !previous.equals(e.getValue())) {
+                throw new IllegalArgumentException(
+                        "injectFilterCtes: two different filters resolve to the same table " + key);
             }
         }
         return injectFilterCtes(query,
-                qualifiedName -> normalized.getOrDefault(qualifiedName, ExpressionFactory.falseExpression()));
+                qualifiedName -> resolved.getOrDefault(qualifiedName, ExpressionFactory.falseExpression()),
+                defaultCatalog, defaultSchema);
+    }
+
+    /**
+     * {@code name} as a full {@code catalog.schema.table}, filling the parts it leaves out from
+     * {@code defaultCatalog} / {@code defaultSchema}: a bare {@code orders} takes both, and
+     * {@code other.orders} is read as {@code schema.table} and takes the catalog — the same reading
+     * {@code SqlAuthorizer.resolveAuthorizedTable} gives an authorized table name.
+     */
+    public static String qualifiedTableName(String name, String defaultCatalog, String defaultSchema) {
+        int firstDot = name.indexOf('.');
+        if (firstDot < 0) {
+            return defaultCatalog + "." + defaultSchema + "." + name;
+        }
+        return firstDot == name.lastIndexOf('.') ? defaultCatalog + "." + name : name;
     }
 
     /**
@@ -2829,7 +2850,8 @@ public class Transformations {
         }
     }
 
-    private static JsonNode injectFilterCtes(JsonNode query, Function<String, JsonNode> filterForTable) {
+    private static JsonNode injectFilterCtes(JsonNode query, Function<String, JsonNode> filterForTable,
+                                             String defaultCatalog, String defaultSchema) {
         var result = query.deepCopy();
         var statementNode = (ObjectNode) getFirstStatementNode(result);
 
@@ -2850,7 +2872,7 @@ public class Transformations {
         if (!tablesToWrap.isEmpty()) {
             ArrayNode newMap = JsonNodeFactory.instance.arrayNode();
             for (Map.Entry<String, ObjectNode> e : tablesToWrap.entrySet()) {
-                String qualifiedLookupKey = buildQualifiedLookupKey(e.getValue());
+                String qualifiedLookupKey = buildQualifiedLookupKey(e.getValue(), defaultCatalog, defaultSchema);
                 newMap.add(buildFilterCteEntry(e.getKey(), e.getValue(), filterForTable.apply(qualifiedLookupKey)));
             }
             JsonNode existingMap = statementNode.get(FIELD_CTE_MAP).get(FIELD_MAP);
@@ -3082,17 +3104,20 @@ public class Transformations {
         }
     }
 
-    /** Builds the lookup key used to match against the tableFilters map: "catalog.schema.table",
-     *  omitting empty parts (e.g. "main.orders" when catalog is absent, "orders" when both absent). */
-    private static String buildQualifiedLookupKey(ObjectNode tableNode) {
+    /**
+     * The key a BASE_TABLE node is looked up by in the tableFilters map: {@code
+     * "catalog.schema.table"}, with each part the query omits taken from the defaults, exactly as
+     * {@link #collectAllTableReferences} resolves the same node for the access check. Resolving
+     * here is what makes the lookup exact, so a bare reference cannot match a same-named table in
+     * another schema.
+     */
+    private static String buildQualifiedLookupKey(ObjectNode tableNode, String defaultCatalog, String defaultSchema) {
         String table = tableNode.get(FIELD_TABLE_NAME).asText();
         String schema = tableNode.has(FIELD_SCHEMA_NAME) ? tableNode.get(FIELD_SCHEMA_NAME).asText() : "";
         String catalog = tableNode.has(FIELD_CATALOG_NAME) ? tableNode.get(FIELD_CATALOG_NAME).asText() : "";
-        var sb = new StringBuilder();
-        if (!catalog.isEmpty()) sb.append(catalog).append(".");
-        if (!schema.isEmpty()) sb.append(schema).append(".");
-        sb.append(table);
-        return sb.toString();
+        if (schema.isEmpty()) schema = defaultSchema;
+        if (catalog.isEmpty()) catalog = defaultCatalog;
+        return catalog + "." + schema + "." + table;
     }
 
     /**

@@ -53,6 +53,9 @@ public class HttpServerRedirectAuthorizationTest extends HttpServerTestBase {
         );
 
         ConnectionPool.executeBatch(new String[]{
+                "CREATE SCHEMA IF NOT EXISTS other",
+                "CREATE TABLE other.t1 (age INT, class VARCHAR(50), city VARCHAR(100))",
+                "INSERT INTO other.t1 VALUES (30, 'X', 'Pune'), (31, 'Y', 'Bangalore')",
                 "CREATE TABLE t1 (age INT, class VARCHAR(50), city VARCHAR(100))",
                 "CREATE TABLE t2 (age INT, class VARCHAR(50), city VARCHAR(100))",
                 "CREATE TABLE t3 (age INT, class VARCHAR(50), city VARCHAR(100))",
@@ -65,6 +68,7 @@ public class HttpServerRedirectAuthorizationTest extends HttpServerTestBase {
     @AfterAll
     public static void cleanup() throws Exception {
         ConnectionPool.executeBatch(new String[]{
+                "DROP TABLE IF EXISTS other.t1",
                 "DROP TABLE IF EXISTS t1",
                 "DROP TABLE IF EXISTS t2",
                 "DROP TABLE IF EXISTS t3"
@@ -134,6 +138,33 @@ public class HttpServerRedirectAuthorizationTest extends HttpServerTestBase {
         try (var allocator = new RootAllocator(); var reader = new ArrowStreamReader(nested.body(), allocator)) {
             TestUtils.isEqual("select (select count(*) from t2 where age > 20) as n, city "
                     + "from t1 where city = 'Bangalore' order by city", allocator, reader);
+        }
+    }
+
+    /**
+     * {@code memory.other.t1} and {@code memory.main.t1} share a name and have different resolved
+     * filters, and the resolve endpoint lists the {@code other} one first. The bare {@code t1} must
+     * still be filtered by ITS grant (city = 'Bangalore'), not by whichever row was seen first:
+     * under a name-suffix lookup it would take city = 'Pune', which no main.t1 row has, so the
+     * scalar subquery would count 0.
+     */
+    @Test
+    void testRedirectSameTableNameInTwoSchemasKeepsTheirOwnFilters() throws Exception {
+        var jwtResponse = loginWithClaims(Map.of(Headers.HEADER_TOKEN_TYPE, "redirect", "cluster", "cc1", "org_id", "1", Headers.HEADER_REDIRECT_URL, "http://localhost:5555/v1/resolve"));
+        assertEquals(200, jwtResponse.statusCode());
+        var jwt = objectMapper.readValue(jwtResponse.body(), LoginResponse.class);
+
+        var response = query("select (select count(*) from t1) as n, city from other.t1 order by city", jwt);
+        assertEquals(200, response.statusCode());
+        try (var allocator = new RootAllocator(); var reader = new ArrowStreamReader(response.body(), allocator)) {
+            TestUtils.isEqual("select 1::BIGINT as n, 'Pune' as city", allocator, reader);
+        }
+
+        // ... and the qualified reference keeps its own filter rather than the bare name's.
+        var reversed = query("select (select count(*) from other.t1) as n, city from t1 order by city", jwt);
+        assertEquals(200, reversed.statusCode());
+        try (var allocator = new RootAllocator(); var reader = new ArrowStreamReader(reversed.body(), allocator)) {
+            TestUtils.isEqual("select 1::BIGINT as n, 'Bangalore' as city", allocator, reader);
         }
     }
 

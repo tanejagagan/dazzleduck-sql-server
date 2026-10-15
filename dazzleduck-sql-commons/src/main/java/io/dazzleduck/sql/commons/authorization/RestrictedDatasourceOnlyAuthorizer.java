@@ -102,7 +102,8 @@ public class RestrictedDatasourceOnlyAuthorizer implements SqlAuthorizer {
                         }
                     }
                     yield SqlAuthorizer.addFilterToEveryRead(updatedQuery,
-                            SqlAuthorizer.qualifyTableName(entry.name(), database, schema), entry.filter());
+                            SqlAuthorizer.qualifyTableName(entry.name(), database, schema), entry.filter(),
+                            database, schema);
                 }
                 case TableAccessEntry.PATH -> {
                     for (var cst : catalogSchemaTables) {
@@ -174,7 +175,7 @@ public class RestrictedDatasourceOnlyAuthorizer implements SqlAuthorizer {
             return SqlAuthorizer.addFilterToTableFunction(updatedQuery, compiledFilter);
         }
         return SqlAuthorizer.addFilterToEveryRead(updatedQuery,
-                SqlAuthorizer.qualifyTableName(table, database, schema), compiledFilter);
+                SqlAuthorizer.qualifyTableName(table, database, schema), compiledFilter, database, schema);
     }
 
     @Override

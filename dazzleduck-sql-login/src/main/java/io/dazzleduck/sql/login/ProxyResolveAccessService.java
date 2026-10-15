@@ -87,6 +87,12 @@ public class ProxyResolveAccessService implements HttpService {
                 "memory", "main", "cluster", "TABLE_FUNCTION",
                 List.of(), "", "read_delta", "2099-12-31");
 
+        // other.t1: same table name as memory.main.t1 in a different schema, with a DIFFERENT
+        // filter, so a lookup that matched on the bare name would apply the wrong one.
+        ResolveAccessRow otherSchemaT1 = new ResolveAccessRow(
+                "memory", "other", "t1", "BASE_TABLE",
+                List.of(), "city = 'Pune'", "", "2099-12-31");
+
         ResolveAccessRow redirectTest1 = new ResolveAccessRow(
                 "postgres", "schema", "t1", "BASE_TABLE",
                 List.of(), "city = 'Bangalore'", "", "2099-12-31");
@@ -112,8 +118,9 @@ public class ProxyResolveAccessService implements HttpService {
                 "postgres", "schema", "cluster", "TABLE_FUNCTION",
                 List.of(), "", "read_delta", "2099-12-31");
 
+        // otherSchemaT1 comes FIRST so that a name-suffix lookup would reach it before main.t1.
         ResolveResponse response = new ResolveResponse(
-                List.of(redirectTest, redirectUsers, redirectEvents, redirectTest1, redirectUsers1, redirectEvents1),
+                List.of(otherSchemaT1, redirectTest, redirectUsers, redirectEvents, redirectTest1, redirectUsers1, redirectEvents1),
                 List.of(readParquet, readDelta, readParquet1, readDelta1),
                 "1");
 
