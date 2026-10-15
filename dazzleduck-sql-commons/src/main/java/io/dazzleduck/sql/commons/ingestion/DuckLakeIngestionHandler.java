@@ -17,7 +17,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -36,9 +35,10 @@ import java.util.regex.Pattern;
  *       on the hot write path when state is fresh. A queue whose variables come from a relation
  *       (see {@link IngestionVariables}) re-reads them on every refresh even when the schema has
  *       not changed, because rows are data, not schema.</li>
- *   <li><b>queueCache</b> — the {@link ParquetIngestionQueue} instance. The queue is created
- *       exactly once per queue ID (via {@link #getOrCreateQueue}) and is never replaced unless
- *       the target path disappears and the queue is evicted.</li>
+ *   <li><b>queueCache</b> — the {@link ParquetIngestionQueue} instance, in an
+ *       {@link IngestionQueueCache}. The queue is created exactly once per queue ID (via
+ *       {@link #getOrCreateQueue}) and is never replaced unless the target path disappears and
+ *       the queue is evicted.</li>
  * </ul>
  */
 public class DuckLakeIngestionHandler implements IngestionHandler {
@@ -96,7 +96,7 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
     // Queue lifecycle cache — queue created once, evicted only on tombstone
     // -----------------------------------------------------------------------
 
-    private final ConcurrentHashMap<String, ParquetIngestionQueue> queueCache = new ConcurrentHashMap<>();
+    private final IngestionQueueCache queueCache = new IngestionQueueCache();
 
     private final Duration refreshInterval;
     private final Clock clock;
@@ -130,12 +130,7 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
         queueIdsToTableMappings.keySet().removeIf(id -> {
             if (fresh.containsKey(id)) return false;
             stateCache.remove(id);
-            ParquetIngestionQueue removed = queueCache.remove(id);
-            if (removed != null) {
-                try { removed.close(); } catch (Exception e) {
-                    logger.atWarn().setCause(e).log("Failed to close evicted queue: {}", id);
-                }
-            }
+            queueCache.evict(id);
             return true;
         });
     }
@@ -265,31 +260,13 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
                                                   QueueCreator creator,
                                                   QueueEventListener listener) {
         String path = getTargetPath(queueId); // triggers getOrRefreshState internally
-        if (path == null) {
-            // Path gone: evict any existing queue.
-            ParquetIngestionQueue removed = queueCache.remove(queueId);
-            if (removed != null) {
-                listener.onDeleted(queueId);
-                try { removed.close(); } catch (Exception e) {
-                    logger.atWarn().setCause(e).log("Failed to close evicted queue: {}", queueId);
-                }
-            }
-            return null;
-        }
-        // Create queue exactly once per ID.
-        return queueCache.compute(queueId, (id, existing) -> {
-            if (existing != null) return existing;
-            ParquetIngestionQueue q = creator.create(id, path);
-            listener.onCreated(id);
-            return q;
-        });
+        // Created exactly once per ID; a gone path evicts and closes the cached queue.
+        return queueCache.getOrCreate(queueId, path, creator, listener);
     }
 
     @Override
     public java.util.List<Stats> getQueueStats() {
-        return queueCache.values().stream()
-                .map(ParquetIngestionQueue::getStats)
-                .toList();
+        return queueCache.stats();
     }
 
     @Override
@@ -299,44 +276,7 @@ public class DuckLakeIngestionHandler implements IngestionHandler {
 
     @Override
     public void closeQueues(Duration drainTimeout) {
-        // Snapshot and clear first so nothing is routed to these queues while they shut down.
-        var queues = new ArrayList<>(queueCache.values());
-        queueCache.clear();
-        if (queues.isEmpty()) {
-            return;
-        }
-        // Drain queues concurrently: total shutdown time is bounded by the slowest queue
-        // (~drainTimeout), not the sum across all queues. Virtual threads keep this cheap even with
-        // many queues; the executor's close() blocks until every drain+close task has finished.
-        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            for (var queue : queues) {
-                executor.submit(() -> drainAndClose(queue, drainTimeout));
-            }
-        }
-    }
-
-    /**
-     * Drains a single queue within {@code drainTimeout}, then closes it. Drains buffered-but-unwritten
-     * batches gracefully and bounds the wait so a stalled write backend can't hang shutdown; the
-     * following close releases resources (and cancels/abandons anything the drain didn't finish).
-     * All failures are isolated so one bad queue cannot block the others.
-     */
-    private void drainAndClose(ParquetIngestionQueue queue, Duration drainTimeout) {
-        String id = queue.identifier();
-        try {
-            if (!queue.drain(drainTimeout)) {
-                logger.atWarn().log("Drain timed out after {} for ingestion queue: {}; forcing close",
-                        drainTimeout, id);
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            logger.atWarn().setCause(e).log("Interrupted while draining ingestion queue: {}", id);
-        }
-        try {
-            queue.close();
-        } catch (Exception e) {
-            logger.atWarn().setCause(e).log("Failed to close ingestion queue: {}", id);
-        }
+        queueCache.closeAll(drainTimeout);
     }
 
     // -----------------------------------------------------------------------

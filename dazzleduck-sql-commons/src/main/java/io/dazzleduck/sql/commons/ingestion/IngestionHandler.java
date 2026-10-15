@@ -114,9 +114,14 @@ public interface IngestionHandler {
      * Returns the live queue for {@code queueId}, creating or refreshing it as necessary.
      * Returns {@code null} when the queue's target path is gone (tombstone / deleted mapping).
      *
-     * <p>The default implementation is stateless: it creates a fresh queue on every call.
-     * Override in stateful handlers (e.g. {@link DuckLakeIngestionHandler}) to add
-     * caching and lazy-refresh semantics.
+     * <p>The default implementation is stateless: it creates a fresh queue on EVERY call and never
+     * closes it. That is only right for a caller that owns and closes the queue it gets. A handler
+     * given to a server (the Flight/HTTP producer, the OTLP collector), which calls this once per
+     * request, MUST override it to return the same queue each time — otherwise every request leaks
+     * a queue and its writer thread, and no two requests share a batch. Implement it, together with
+     * {@link #getQueueStats} and {@link #closeQueues(java.time.Duration)}, with an
+     * {@link IngestionQueueCache}, as {@link DuckLakeIngestionHandler} and the handler of
+     * {@link NOOPIngestionTaskFactoryProvider} do.
      */
     default ParquetIngestionQueue getOrCreateQueue(String queueId,
                                                    QueueCreator creator,
