@@ -2801,10 +2801,13 @@ public class Transformations {
     }
 
     /**
-     * CTE names the current {@link #injectFilterCtes} pass must not generate. Held per thread for
-     * the duration of one pass, so the recursive walkers need no extra parameter.
+     * The state of one {@link #injectFilterCtes} pass, threaded through its recursive walkers.
+     *
+     * @param tablesToWrap      ordered map of generated CTE name → the original BASE_TABLE node
+     *                          (its schema/catalog are preserved for the CTE body)
+     * @param reservedCteNames  CTE names this pass must not generate
      */
-    private static final ThreadLocal<Set<String>> RESERVED_CTE_NAMES = new ThreadLocal<>();
+    private record CteInjection(Map<String, ObjectNode> tablesToWrap, Set<String> reservedCteNames) {}
 
     /** Every CTE name declared anywhere under {@code node}, at any nesting depth. */
     private static void collectDeclaredCteNames(JsonNode node, Set<String> into) {
@@ -2830,26 +2833,20 @@ public class Transformations {
         var result = query.deepCopy();
         var statementNode = (ObjectNode) getFirstStatementNode(result);
 
-        // Ordered map: cteKey → original BASE_TABLE node (schema/catalog preserved for CTE body)
-        Map<String, ObjectNode> tablesToWrap = new LinkedHashMap<>();
-
         // Walk the whole statement — its FROM clause, expression subqueries, and any WITH clause
         // (top-level or nested) — collecting every real base table and rewriting each reference to
         // its filter-CTE name. CTE bodies are handled inside the dispatcher so nesting at any depth
         // is filtered uniformly.
-        // Names generated below must avoid every CTE name the query already declares, at any depth.
+        // Generated names must avoid every CTE name the query already declares, at any depth.
         // The per-scope visible set cannot serve: a CTE body has its own name removed from it (a
         // same-named reference there is the real table), so a body would regenerate the name of the
         // CTE enclosing it and reference itself. Collected once, up front.
         Set<String> reservedCteNames = new HashSet<>();
         collectDeclaredCteNames(statementNode, reservedCteNames);
-        RESERVED_CTE_NAMES.set(reservedCteNames);
-        try {
-            renameBaseTablesInStatementNode(statementNode, new HashSet<>(), tablesToWrap);
-        } finally {
-            RESERVED_CTE_NAMES.remove();
-        }
+        var injection = new CteInjection(new LinkedHashMap<>(), reservedCteNames);
+        renameBaseTablesInStatementNode(statementNode, new HashSet<>(), injection);
 
+        Map<String, ObjectNode> tablesToWrap = injection.tablesToWrap();
         if (!tablesToWrap.isEmpty()) {
             ArrayNode newMap = JsonNodeFactory.instance.arrayNode();
             for (Map.Entry<String, ObjectNode> e : tablesToWrap.entrySet()) {
@@ -2879,7 +2876,7 @@ public class Transformations {
      * self-reference in {@link #renameBaseTablesInStatementNode}.
      */
     private static Set<String> walkNestedCtes(ObjectNode node, Set<String> visibleCteNames,
-                                              Map<String, ObjectNode> tablesToWrap) {
+                                              CteInjection injection) {
         JsonNode cteMapNode = node.get(FIELD_CTE_MAP);
         if (cteMapNode == null) return visibleCteNames;
         JsonNode mapArray = cteMapNode.get(FIELD_MAP);
@@ -2894,7 +2891,7 @@ public class Transformations {
             Set<String> namesVisibleInBody = new HashSet<>(withDeclared);
             namesVisibleInBody.remove(cteName);
             ObjectNode cteBody = (ObjectNode) entry.get(FIELD_VALUE).get(FIELD_QUERY).get(FIELD_NODE);
-            renameBaseTablesInStatementNode(cteBody, namesVisibleInBody, tablesToWrap);
+            renameBaseTablesInStatementNode(cteBody, namesVisibleInBody, injection);
         }
         return withDeclared;
     }
@@ -2907,21 +2904,21 @@ public class Transformations {
      * any shape it does not understand must abort the query, not leak.
      */
     private static void renameBaseTablesInStatementNode(ObjectNode statementNode, Set<String> visibleCteNames,
-                                                         Map<String, ObjectNode> tablesToWrap) {
+                                                         CteInjection injection) {
         String type = statementNode.get(FIELD_TYPE).asText();
         switch (type) {
             case NODE_TYPE_SELECT_NODE -> {
-                Set<String> visible = walkNestedCtes(statementNode, visibleCteNames, tablesToWrap);
-                renameBaseTablesInSelect(statementNode, visible, tablesToWrap);
+                Set<String> visible = walkNestedCtes(statementNode, visibleCteNames, injection);
+                renameBaseTablesInSelect(statementNode, visible, injection);
             }
             case NODE_TYPE_SET_OPERATION_NODE -> {
-                Set<String> visible = walkNestedCtes(statementNode, visibleCteNames, tablesToWrap);
-                renameBaseTablesInStatementNode((ObjectNode) statementNode.get(FIELD_LEFT), visible, tablesToWrap);
-                renameBaseTablesInStatementNode((ObjectNode) statementNode.get(FIELD_RIGHT), visible, tablesToWrap);
-                walkModifiersForSubqueries(statementNode.get(FIELD_MODIFIERS), visible, tablesToWrap);
+                Set<String> visible = walkNestedCtes(statementNode, visibleCteNames, injection);
+                renameBaseTablesInStatementNode((ObjectNode) statementNode.get(FIELD_LEFT), visible, injection);
+                renameBaseTablesInStatementNode((ObjectNode) statementNode.get(FIELD_RIGHT), visible, injection);
+                walkModifiersForSubqueries(statementNode.get(FIELD_MODIFIERS), visible, injection);
             }
             case NODE_TYPE_RECURSIVE_CTE_NODE -> {
-                Set<String> visible = walkNestedCtes(statementNode, visibleCteNames, tablesToWrap);
+                Set<String> visible = walkNestedCtes(statementNode, visibleCteNames, injection);
                 // The recursive self-reference (FROM r inside the CTE body) is a CTE reference, not a
                 // base table; keep the CTE's own name visible so it is not wrapped as a phantom table.
                 JsonNode cteName = statementNode.get(FIELD_CTE_NAME);
@@ -2929,9 +2926,9 @@ public class Transformations {
                     visible = new HashSet<>(visible);
                     visible.add(cteName.asText());
                 }
-                renameBaseTablesInStatementNode((ObjectNode) statementNode.get(FIELD_LEFT), visible, tablesToWrap);
-                renameBaseTablesInStatementNode((ObjectNode) statementNode.get(FIELD_RIGHT), visible, tablesToWrap);
-                walkModifiersForSubqueries(statementNode.get(FIELD_MODIFIERS), visible, tablesToWrap);
+                renameBaseTablesInStatementNode((ObjectNode) statementNode.get(FIELD_LEFT), visible, injection);
+                renameBaseTablesInStatementNode((ObjectNode) statementNode.get(FIELD_RIGHT), visible, injection);
+                walkModifiersForSubqueries(statementNode.get(FIELD_MODIFIERS), visible, injection);
             }
             default -> throw new IllegalStateException(
                     "injectFilterCtes: unsupported query node type '" + type + "'; refusing to run to "
@@ -2946,28 +2943,28 @@ public class Transformations {
      * in {@code orders[].expression}), NOT a top-level {@code order_bys} field.
      */
     private static void walkModifiersForSubqueries(JsonNode modifiers, Set<String> visibleCteNames,
-                                                    Map<String, ObjectNode> tablesToWrap) {
+                                                    CteInjection injection) {
         if (modifiers == null || !modifiers.isArray()) return;
         for (JsonNode modifier : modifiers) {
             JsonNode orders = modifier.get(FIELD_ORDERS);
             if (orders != null && orders.isArray()) {
                 for (JsonNode order : orders) {
-                    walkExpressionsForSubqueries(order.get(FIELD_EXPRESSION), visibleCteNames, tablesToWrap);
+                    walkExpressionsForSubqueries(order.get(FIELD_EXPRESSION), visibleCteNames, injection);
                 }
             }
-            walkExpressionsForSubqueries(modifier.get(FIELD_LIMIT), visibleCteNames, tablesToWrap);
-            walkExpressionsForSubqueries(modifier.get(FIELD_OFFSET), visibleCteNames, tablesToWrap);
+            walkExpressionsForSubqueries(modifier.get(FIELD_LIMIT), visibleCteNames, injection);
+            walkExpressionsForSubqueries(modifier.get(FIELD_OFFSET), visibleCteNames, injection);
         }
     }
 
     private static void renameBaseTablesInSelect(ObjectNode selectNode, Set<String> userCteNames,
-                                                  Map<String, ObjectNode> tablesToWrap) {
+                                                  CteInjection injection) {
         JsonNode fromTable = selectNode.get(FIELD_FROM_TABLE);
         if (fromTable != null && !(fromTable instanceof NullNode)) {
-            renameBaseTablesInFromNode(fromTable, userCteNames, tablesToWrap);
+            renameBaseTablesInFromNode(fromTable, userCteNames, injection);
         }
         // Walk all expression-bearing fields for subqueries (WHERE IN, EXISTS, scalar, etc.)
-        walkExpressionFieldsInSelect(selectNode, userCteNames, tablesToWrap);
+        walkExpressionFieldsInSelect(selectNode, userCteNames, injection);
     }
 
     /**
@@ -2975,14 +2972,14 @@ public class Transformations {
      * expressions found (IN, EXISTS, scalar, ANY/ALL).
      */
     private static void walkExpressionFieldsInSelect(ObjectNode selectNode, Set<String> userCteNames,
-                                                       Map<String, ObjectNode> tablesToWrap) {
-        walkExpressionsForSubqueries(selectNode.get(FIELD_WHERE_CLAUSE), userCteNames, tablesToWrap);
-        walkExpressionsForSubqueries(selectNode.get("having"), userCteNames, tablesToWrap);
-        walkExpressionsForSubqueries(selectNode.get("qualify"), userCteNames, tablesToWrap);
-        walkExpressionsForSubqueries(selectNode.get("select_list"), userCteNames, tablesToWrap);
-        walkExpressionsForSubqueries(selectNode.get("group_expressions"), userCteNames, tablesToWrap);
+                                                       CteInjection injection) {
+        walkExpressionsForSubqueries(selectNode.get(FIELD_WHERE_CLAUSE), userCteNames, injection);
+        walkExpressionsForSubqueries(selectNode.get("having"), userCteNames, injection);
+        walkExpressionsForSubqueries(selectNode.get("qualify"), userCteNames, injection);
+        walkExpressionsForSubqueries(selectNode.get("select_list"), userCteNames, injection);
+        walkExpressionsForSubqueries(selectNode.get("group_expressions"), userCteNames, injection);
         // ORDER BY / LIMIT / OFFSET live under modifiers[], not a top-level "order_bys" field.
-        walkModifiersForSubqueries(selectNode.get(FIELD_MODIFIERS), userCteNames, tablesToWrap);
+        walkModifiersForSubqueries(selectNode.get(FIELD_MODIFIERS), userCteNames, injection);
     }
 
     /**
@@ -2990,12 +2987,12 @@ public class Transformations {
      * (IN/ANY/ALL, EXISTS, scalar subqueries) by renaming their base tables.
      */
     private static void walkExpressionsForSubqueries(JsonNode expr, Set<String> userCteNames,
-                                                      Map<String, ObjectNode> tablesToWrap) {
+                                                      CteInjection injection) {
         if (expr == null || expr instanceof NullNode) return;
 
         if (expr.isArray()) {
             for (JsonNode element : expr) {
-                walkExpressionsForSubqueries(element, userCteNames, tablesToWrap);
+                walkExpressionsForSubqueries(element, userCteNames, injection);
             }
             return;
         }
@@ -3010,29 +3007,29 @@ public class Transformations {
             if (subqueryContent != null) {
                 ObjectNode innerNode = (ObjectNode) subqueryContent.get(FIELD_NODE);
                 if (innerNode != null) {
-                    renameBaseTablesInStatementNode(innerNode, userCteNames, tablesToWrap);
+                    renameBaseTablesInStatementNode(innerNode, userCteNames, injection);
                 }
             }
             // Walk the `child` field (the expression on the left side of IN/ANY/ALL)
-            walkExpressionsForSubqueries(expr.get(FIELD_CHILD), userCteNames, tablesToWrap);
+            walkExpressionsForSubqueries(expr.get(FIELD_CHILD), userCteNames, injection);
             return;
         }
 
         // Recurse into known expression child fields for all other expression types
-        walkExpressionsForSubqueries(expr.get(FIELD_LEFT), userCteNames, tablesToWrap);
-        walkExpressionsForSubqueries(expr.get(FIELD_RIGHT), userCteNames, tablesToWrap);
-        walkExpressionsForSubqueries(expr.get(FIELD_CHILDREN), userCteNames, tablesToWrap);
-        walkExpressionsForSubqueries(expr.get(FIELD_CHILD), userCteNames, tablesToWrap);
-        walkExpressionsForSubqueries(expr.get(FIELD_FILTER), userCteNames, tablesToWrap);
+        walkExpressionsForSubqueries(expr.get(FIELD_LEFT), userCteNames, injection);
+        walkExpressionsForSubqueries(expr.get(FIELD_RIGHT), userCteNames, injection);
+        walkExpressionsForSubqueries(expr.get(FIELD_CHILDREN), userCteNames, injection);
+        walkExpressionsForSubqueries(expr.get(FIELD_CHILD), userCteNames, injection);
+        walkExpressionsForSubqueries(expr.get(FIELD_FILTER), userCteNames, injection);
         // CASE WHEN THEN ELSE
-        walkExpressionsForSubqueries(expr.get(FIELD_WHEN_EXPR), userCteNames, tablesToWrap);
-        walkExpressionsForSubqueries(expr.get(FIELD_THEN_EXPR), userCteNames, tablesToWrap);
-        walkExpressionsForSubqueries(expr.get(FIELD_ELSE_EXPR), userCteNames, tablesToWrap);
-        walkExpressionsForSubqueries(expr.get(FIELD_CASE_CHECKS), userCteNames, tablesToWrap);
+        walkExpressionsForSubqueries(expr.get(FIELD_WHEN_EXPR), userCteNames, injection);
+        walkExpressionsForSubqueries(expr.get(FIELD_THEN_EXPR), userCteNames, injection);
+        walkExpressionsForSubqueries(expr.get(FIELD_ELSE_EXPR), userCteNames, injection);
+        walkExpressionsForSubqueries(expr.get(FIELD_CASE_CHECKS), userCteNames, injection);
     }
 
     private static void renameBaseTablesInFromNode(JsonNode fromNode, Set<String> userCteNames,
-                                                    Map<String, ObjectNode> tablesToWrap) {
+                                                    CteInjection injection) {
         if (fromNode == null || fromNode instanceof NullNode) return;
         String type = fromNode.get(FIELD_TYPE).asText();
         switch (type) {
@@ -3041,9 +3038,9 @@ public class Transformations {
                 if (userCteNames.contains(tableName)) return; // CTE reference — skip
                 String schema = fromNode.has(FIELD_SCHEMA_NAME) ? fromNode.get(FIELD_SCHEMA_NAME).asText() : "";
                 String catalog = fromNode.has(FIELD_CATALOG_NAME) ? fromNode.get(FIELD_CATALOG_NAME).asText() : "";
-                String cteKey = freshCteKey(buildCteKey(tableName, schema, catalog));
-                if (!tablesToWrap.containsKey(cteKey)) {
-                    tablesToWrap.put(cteKey, (ObjectNode) fromNode.deepCopy());
+                String cteKey = freshCteKey(buildCteKey(tableName, schema, catalog), injection.reservedCteNames());
+                if (!injection.tablesToWrap().containsKey(cteKey)) {
+                    injection.tablesToWrap().put(cteKey, (ObjectNode) fromNode.deepCopy());
                 }
                 ObjectNode mutable = (ObjectNode) fromNode;
                 String existingAlias = mutable.has(FIELD_ALIAS) ? mutable.get(FIELD_ALIAS).asText() : "";
@@ -3055,26 +3052,26 @@ public class Transformations {
                 mutable.put(FIELD_CATALOG_NAME, "");
             }
             case NODE_TYPE_JOIN -> {
-                renameBaseTablesInFromNode(fromNode.get(FIELD_LEFT), userCteNames, tablesToWrap);
-                renameBaseTablesInFromNode(fromNode.get(FIELD_RIGHT), userCteNames, tablesToWrap);
+                renameBaseTablesInFromNode(fromNode.get(FIELD_LEFT), userCteNames, injection);
+                renameBaseTablesInFromNode(fromNode.get(FIELD_RIGHT), userCteNames, injection);
                 // Walk the join condition for subqueries (rare but possible)
-                walkExpressionsForSubqueries(fromNode.get("condition"), userCteNames, tablesToWrap);
+                walkExpressionsForSubqueries(fromNode.get("condition"), userCteNames, injection);
             }
             case NODE_TYPE_SUBQUERY -> {
                 // The derived-table body may be a SELECT, a set operation, or a recursive CTE;
                 // dispatch on its type so nested base tables are filtered too.
                 ObjectNode inner = (ObjectNode) fromNode.get(FIELD_SUBQUERY).get(FIELD_NODE);
-                renameBaseTablesInStatementNode(inner, userCteNames, tablesToWrap);
+                renameBaseTablesInStatementNode(inner, userCteNames, injection);
             }
             case NODE_TYPE_PIVOT -> {
                 // PIVOT / UNPIVOT: the scanned relation is under `source`; recurse into it so the
                 // pivoted base table is filtered. Aggregate expressions may hold subqueries.
-                renameBaseTablesInFromNode(fromNode.get(FIELD_SOURCE), userCteNames, tablesToWrap);
-                walkExpressionsForSubqueries(fromNode.get(FIELD_AGGREGATES), userCteNames, tablesToWrap);
+                renameBaseTablesInFromNode(fromNode.get(FIELD_SOURCE), userCteNames, injection);
+                walkExpressionsForSubqueries(fromNode.get(FIELD_AGGREGATES), userCteNames, injection);
             }
             case NODE_TYPE_EXPRESSION_LIST -> {
                 // VALUES list: each value expression may embed a subquery over a base table.
-                walkExpressionsForSubqueries(fromNode.get(FIELD_VALUES), userCteNames, tablesToWrap);
+                walkExpressionsForSubqueries(fromNode.get(FIELD_VALUES), userCteNames, injection);
             }
             case NODE_TYPE_EMPTY -> {
                 // FROM-less SELECT (e.g. SELECT 1): no relation to filter.
@@ -3099,14 +3096,13 @@ public class Transformations {
     }
 
     /**
-     * {@code base}, or {@code base_1}, {@code base_2}, ... — the first name the query does not
-     * already declare as a CTE (see {@link #RESERVED_CTE_NAMES}). Reusing one would make the filter
+     * {@code base}, or {@code base_1}, {@code base_2}, ... — the first name not in {@code reserved},
+     * which holds every CTE name the query already declares. Reusing one would make the filter
      * CTE's body reference that CTE instead of the table, which is what happens when a query that
      * already carries filter CTEs is authorized again (the Flight server authorizes a query once
      * for its info and once for its stream).
      */
-    private static String freshCteKey(String base) {
-        Set<String> reserved = RESERVED_CTE_NAMES.get();
+    private static String freshCteKey(String base, Set<String> reserved) {
         if (reserved == null || !reserved.contains(base)) {
             return base;
         }

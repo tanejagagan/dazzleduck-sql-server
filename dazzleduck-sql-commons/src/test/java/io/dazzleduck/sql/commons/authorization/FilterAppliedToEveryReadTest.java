@@ -17,6 +17,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * RESTRICTED mode's row filter must apply to EVERY read of the authorized table, not only the
@@ -126,6 +127,74 @@ public class FilterAppliedToEveryReadTest {
                 assertEquals(List.of("1", "3"), firstColumn(Transformations.parseToSql(conn, twice)), sql);
             }
         }
+    }
+
+    /**
+     * A correlated subquery is one read of the table per outer row, and each must be filtered: here
+     * it asks for the largest OTHER row, which unfiltered answers 200 — tenant xyz's amount.
+     */
+    @Test
+    void aCorrelatedSubqueryCannotSeeAnotherTenantsRows() throws Exception {
+        for (var claims : grants()) {
+            assertEquals(List.of("300", "100"),
+                    run("SELECT (SELECT max(amount) FROM orders o2 WHERE o2.id <> o.id) AS m FROM orders o ORDER BY o.id", claims));
+        }
+    }
+
+    /** An IN subquery is an existence oracle over the whole table unless it too is filtered. */
+    @Test
+    void anInSubqueryCannotProbeAnotherTenantsValues() throws Exception {
+        for (var claims : grants()) {
+            assertEquals(List.of("false", "false"),
+                    run("SELECT 200 IN (SELECT amount FROM orders) AS probe FROM orders ORDER BY id", claims));
+        }
+    }
+
+    /** Both arms of a set operation read the table, so both are filtered: 2 rows twice, not 3. */
+    @Test
+    void bothArmsOfAUnionAreFiltered() throws Exception {
+        for (var claims : grants()) {
+            assertEquals(List.of("4"),
+                    run("SELECT count(*) FROM (SELECT amount FROM orders UNION ALL SELECT amount FROM orders) u", claims));
+        }
+    }
+
+    /**
+     * The pruning copy of the filter on the outermost WHERE is only valid where that SELECT reads
+     * the table itself. Here it reads a CTE projecting one column, so a copy of
+     * {@code tenant_id = 'abc'} would have no {@code tenant_id} to bind to and the query would fail
+     * to plan — correctness comes from the CTE, which already filtered the read.
+     */
+    @Test
+    void aCteBodyProjectingOnlySomeColumnsStillPlans() throws Exception {
+        for (var claims : grants()) {
+            assertEquals(List.of("400"), run("WITH x AS (SELECT amount FROM orders) SELECT sum(amount) FROM x", claims));
+            assertEquals(List.of("400"),
+                    run("SELECT sum(amount) FROM (SELECT amount FROM orders) u", claims));
+        }
+    }
+
+    /** A CTE may shadow the filtered column with one of its own; the read beneath it is filtered. */
+    @Test
+    void aCteThatRedefinesTheFilteredColumnStillPlans() throws Exception {
+        for (var claims : grants()) {
+            assertEquals(List.of("400"),
+                    run("WITH c AS (SELECT * EXCLUDE (tenant_id), 'zzz' AS tenant_id FROM orders) SELECT sum(amount) FROM c", claims));
+        }
+    }
+
+    /**
+     * The shape the ingestion clients and the planner generate for a path grant — a table function
+     * unioned into a typed empty relation — still takes its filter. Only authorization is exercised;
+     * the files are not read.
+     */
+    @Test
+    void theCanonicalPathGrantShapeStillTakesItsFilter() throws Exception {
+        var claims = Map.of(Headers.HEADER_ACCESS,
+                "[[\"path\",\"example/data/hive_table\",\"*\",\"key='k2'\"]]");
+        JsonNode authorized = authorizer.authorize("user", DB, SCHEMA,
+                Transformations.parseToTree(conn, io.dazzleduck.sql.commons.util.TestConstants.SUPPORTED_HIVE_PATH_QUERY), claims);
+        assertTrue(Transformations.parseToSql(conn, authorized).contains("'k2'"));
     }
 
     /**

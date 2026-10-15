@@ -12,8 +12,10 @@ import io.dazzleduck.sql.commons.Transformations;
 import java.util.function.Function;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -48,13 +50,132 @@ public interface SqlAuthorizer {
      * <p>The filter is ALSO left on the outermost WHERE, where it is redundant for correctness (the
      * CTE has already applied it) but is what partition pruning reads: a split planner prunes from
      * the top-level predicates, so moving the filter into the CTE alone would stop it pruning on
-     * the filter's columns and scan every partition. Queries whose shape has no such placement
-     * (a join, for one) keep CTE filtering only.
+     * the filter's columns and scan every partition. That copy is only added where it is valid —
+     * see {@link #pruningHintFilter}.
      */
     static JsonNode addFilterToEveryRead(JsonNode query, String qualifiedTable, JsonNode filter) {
-        JsonNode filtered = addFilterViaCtes(query, java.util.Map.of(qualifiedTable, filter));
-        JsonNode alsoAtTopLevel = addFilterToBaseTable(filtered, filter);
+        return addFilterToEveryRead(query, Map.of(qualifiedTable, filter));
+    }
+
+    /**
+     * Per-table variant of {@link #addFilterToEveryRead(JsonNode, String, JsonNode)}: every read of
+     * each table in {@code tableFilters} is rewritten to go through that table's own filtered CTE.
+     * A table the query reads but the map does not list is given a {@code false} filter, so the
+     * caller must have authorized — and listed — every table the query touches.
+     */
+    static JsonNode addFilterToEveryRead(JsonNode query, Map<String, JsonNode> tableFilters) {
+        JsonNode filtered = addFilterViaCtes(query, tableFilters);
+        JsonNode pruningHint = pruningHintFilter(query, tableFilters);
+        if (pruningHint == null) {
+            return filtered;
+        }
+        JsonNode alsoAtTopLevel = addFilterToBaseTable(filtered, pruningHint);
         return alsoAtTopLevel == null ? filtered : alsoAtTopLevel;
+    }
+
+    /**
+     * The filter to repeat on the outermost SELECT's WHERE so that split planning and partition
+     * pruning can still see it, or {@code null} when there is none to place there.
+     *
+     * <p>The copy is only valid where that SELECT reads a granted table directly, because it then
+     * reads that table's filter CTE — {@code SELECT * FROM table WHERE filter} — whose output has
+     * every column the filter names. Reading anything else, the filter may not bind: in
+     * {@code WITH x AS (SELECT amount FROM orders) SELECT sum(amount) FROM x} a copy of
+     * {@code tenant_id = 'abc'} on the outer SELECT has no {@code tenant_id} to compare against and
+     * the query fails to plan. The CTE has already made the result correct, so skipping the copy
+     * costs pruning and nothing else.
+     *
+     * <p>Evaluated against the query as it was BEFORE CTE injection, which renames base tables but
+     * leaves the shape — and so which SELECT {@link #addFilterToBaseTable} targets — unchanged.
+     */
+    private static JsonNode pruningHintFilter(JsonNode query, Map<String, JsonNode> tableFilters) {
+        JsonNode baseTable = baseTableOfOutermostRead(
+                Transformations.getFirstStatementNode(query), Set.of());
+        if (baseTable == null) {
+            return null;
+        }
+        JsonNode filter = filterForQualifiedName(qualifiedNameOf(baseTable), tableFilters);
+        // A table granted without a row restriction carries a `true` filter: nothing to prune on.
+        if (filter == null || filter.equals(ExpressionFactory.trueExpression())) {
+            return null;
+        }
+        return filter;
+    }
+
+    /**
+     * The BASE_TABLE node read by the SELECT that {@link #addFilterToBaseTable} would add a filter
+     * to, or {@code null} when that SELECT reads something else: a CTE (whose name is not a table),
+     * a set operation, or a table function. Mirrors {@link Transformations#getSelectForBaseTable}'s
+     * descent through derived tables, tracking the CTE names in scope on the way down.
+     */
+    private static JsonNode baseTableOfOutermostRead(JsonNode statement, Set<String> cteNamesInScope) {
+        if (statement == null || statement.isNull()) {
+            return null;
+        }
+        Set<String> inScope = new HashSet<>(cteNamesInScope);
+        JsonNode cteMap = statement.get(ExpressionConstants.FIELD_CTE_MAP);
+        JsonNode map = cteMap == null ? null : cteMap.get(ExpressionConstants.FIELD_MAP);
+        if (map != null && map.isArray()) {
+            for (JsonNode entry : map) {
+                JsonNode key = entry.get(ExpressionConstants.FIELD_KEY);
+                if (key != null && !key.isNull()) {
+                    inScope.add(key.asText().toLowerCase(Locale.ROOT));
+                }
+            }
+        }
+        JsonNode from = statement.get(ExpressionConstants.FIELD_FROM_TABLE);
+        if (from == null || from.isNull()) {
+            return null;
+        }
+        JsonNode type = from.get(ExpressionConstants.FIELD_TYPE);
+        if (type == null || type.isNull()) {
+            return null;
+        }
+        switch (type.asText()) {
+            case ExpressionConstants.NODE_TYPE_BASE_TABLE -> {
+                JsonNode name = from.get(ExpressionConstants.FIELD_TABLE_NAME);
+                if (name == null || name.isNull()) {
+                    return null;
+                }
+                return inScope.contains(name.asText().toLowerCase(Locale.ROOT)) ? null : from;
+            }
+            case ExpressionConstants.NODE_TYPE_SUBQUERY -> {
+                JsonNode subquery = from.get(ExpressionConstants.FIELD_SUBQUERY);
+                return subquery == null ? null
+                        : baseTableOfOutermostRead(subquery.get(ExpressionConstants.FIELD_NODE), inScope);
+            }
+            default -> {
+                return null;
+            }
+        }
+    }
+
+    /** {@code "catalog.schema.table"} of a BASE_TABLE node, omitting the parts it does not carry. */
+    private static String qualifiedNameOf(JsonNode baseTable) {
+        var name = new StringBuilder();
+        for (String field : new String[]{ExpressionConstants.FIELD_CATALOG_NAME, ExpressionConstants.FIELD_SCHEMA_NAME}) {
+            JsonNode part = baseTable.get(field);
+            if (part != null && !part.isNull() && !part.asText().isEmpty()) {
+                name.append(part.asText()).append('.');
+            }
+        }
+        return name.append(baseTable.get(ExpressionConstants.FIELD_TABLE_NAME).asText()).toString();
+    }
+
+    /**
+     * The filter granted for {@code qualifiedName}, matching the map's fully-qualified keys against
+     * a reference that may name fewer parts ({@code orders} matching {@code memory.main.orders}) —
+     * the same suffix rule {@link Transformations#injectFilterCtes(JsonNode, Map)} applies.
+     */
+    private static JsonNode filterForQualifiedName(String qualifiedName, Map<String, JsonNode> tableFilters) {
+        String name = qualifiedName.toLowerCase(Locale.ROOT);
+        for (Map.Entry<String, JsonNode> grant : tableFilters.entrySet()) {
+            String granted = grant.getKey().toLowerCase(Locale.ROOT);
+            if (granted.equals(name) || granted.endsWith("." + name)) {
+                return grant.getValue();
+            }
+        }
+        return null;
     }
 
     /**

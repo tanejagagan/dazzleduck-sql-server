@@ -108,6 +108,36 @@ public class HttpServerRedirectAuthorizationTest extends HttpServerTestBase {
     }
 
     /**
+     * Two tables in one query, each with its own resolved filter: t1 is restricted to Bangalore and
+     * t2 to age > 20, and both must be applied to their own table. The filter CTEs are keyed by the
+     * qualified table name, so a key that did not match the AST reference would give that table a
+     * {@code false} filter and return nothing — this pins the match.
+     */
+    @Test
+    void testRedirectTwoTablesEachGetItsOwnFilter() throws Exception {
+        var jwtResponse = loginWithClaims(Map.of(Headers.HEADER_TOKEN_TYPE, "redirect", "cluster", "cc1", "org_id", "1", Headers.HEADER_REDIRECT_URL, "http://localhost:5555/v1/resolve"));
+        assertEquals(200, jwtResponse.statusCode());
+        var jwt = objectMapper.readValue(jwtResponse.body(), LoginResponse.class);
+
+        var joined = query("select t1.city as c1, t2.city as c2 from t1, t2 order by c1, c2", jwt);
+        assertEquals(200, joined.statusCode());
+        try (var allocator = new RootAllocator(); var reader = new ArrowStreamReader(joined.body(), allocator)) {
+            TestUtils.isEqual("select t1.city as c1, t2.city as c2 "
+                    + "from (select * from t1 where city = 'Bangalore') t1, "
+                    + "(select * from t2 where age > 20) t2 order by c1, c2", allocator, reader);
+        }
+
+        // The same two tables read through a scalar subquery and a CTE rather than side by side.
+        var nested = query("with a as (select city from t1) "
+                + "select (select count(*) from t2) as n, city from a order by city", jwt);
+        assertEquals(200, nested.statusCode());
+        try (var allocator = new RootAllocator(); var reader = new ArrowStreamReader(nested.body(), allocator)) {
+            TestUtils.isEqual("select (select count(*) from t2 where age > 20) as n, city "
+                    + "from t1 where city = 'Bangalore' order by city", allocator, reader);
+        }
+    }
+
+    /**
      * Inline authorization (no {@code token_type} claim) still works correctly
      * when running alongside redirect-mode tests.
      * The inline filter {@code id = 2} is applied and only bob is returned.
