@@ -35,14 +35,7 @@ public class RestrictedReadOnlyAuthorizer implements SqlAuthorizer {
                               Map<String, String> verifiedClaims) throws UnauthorizedException {
         SelectOnlyAuthorizer.INSTANCE.authorize(user, database, schema, query, verifiedClaims);
 
-        // Multi-statement queries are rejected here: the CTE filter injection only
-        // rewrites the first statement, and DuckDB JDBC's executeQuery returns the
-        // last statement's result — leaving any trailing statements unfiltered.
-        JsonNode statementsNode = query.get(ExpressionConstants.FIELD_STATEMENTS);
-        if (statementsNode != null && statementsNode.isArray() && statementsNode.size() > 1) {
-            throw new UnauthorizedException(
-                    "Multi-statement queries are not allowed in RESTRICT_READ_ONLY mode.");
-        }
+        SqlAuthorizer.requireSingleStatement(query, "RESTRICT_READ_ONLY");
 
         // Block any TABLE_FUNCTION usage (read_parquet, read_json, duckdb_tables,
         // duckdb_secrets, etc.). The CTE-based filter injection only rewrites BASE_TABLE
@@ -74,7 +67,7 @@ public class RestrictedReadOnlyAuthorizer implements SqlAuthorizer {
                 // from matching same-named tables in other catalogs.
                 tableFilters.put(SqlAuthorizer.qualifyTableName(entry.name(), database, schema), entry.filter());
             }
-            return SqlAuthorizer.addFilterViaCtes(query, tableFilters);
+            return SqlAuthorizer.addFilterViaCtes(query, tableFilters, database, schema);
         }
 
         String filterStr = verifiedClaims.get(Headers.HEADER_FILTER);
@@ -89,9 +82,9 @@ public class RestrictedReadOnlyAuthorizer implements SqlAuthorizer {
                     "use 'access' for multi-table queries");
         }
         // filter + table is shorthand for a single-entry access: [[table, "*", filter]].
-        // Use the fully-qualified key (database.schema.table) so the AST lookup — which now
-        // builds a qualified key from catalog/schema/table AST fields — finds the filter via
-        // exact match, with suffix aliases (schema.table, table) added by injectFilterCtes.
+        // The key is qualified from the token's database/schema claims when it has them; anything
+        // it leaves out injectFilterCtes fills from the connection's database/schema, which is
+        // also what it resolves the query's table references against.
         String databaseStr = verifiedClaims.get(Headers.HEADER_DATABASE);
         String schemaStr = verifiedClaims.get(Headers.HEADER_SCHEMA);
         String qualifiedKey = (databaseStr != null && !databaseStr.isEmpty()
@@ -100,7 +93,7 @@ public class RestrictedReadOnlyAuthorizer implements SqlAuthorizer {
                 : tableStr;
         Map<String, JsonNode> tableFilters = new LinkedHashMap<>();
         tableFilters.put(qualifiedKey, SqlAuthorizer.compileFilterString(filterStr));
-        return SqlAuthorizer.addFilterViaCtes(query, tableFilters);
+        return SqlAuthorizer.addFilterViaCtes(query, tableFilters, database, schema);
     }
 
     @Override

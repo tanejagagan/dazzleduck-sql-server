@@ -2771,57 +2771,138 @@ public class Transformations {
      * filter is injected into their bodies, so they automatically see filtered data.
      */
     public static JsonNode injectFilterCtes(JsonNode query, JsonNode filter) {
-        return injectFilterCtes(query, tableName -> filter);
+        // One filter for every table, so no table name is ever looked up and the resolution
+        // defaults the per-table variant needs are irrelevant here.
+        return injectFilterCtes(query, tableName -> filter, "", "");
     }
 
     /**
      * Per-table variant of {@link #injectFilterCtes}: each base table gets its own filter
      * expression looked up by table name from {@code tableFilters}.
-     * Keys may be fully-qualified ({@code catalog.schema.table}), partially qualified
-     * ({@code schema.table}), or bare table names. Qualified keys are expanded so that every
-     * shorter suffix form is also registered (e.g. {@code "memory.main.orders"} additionally
-     * registers {@code "main.orders"} and {@code "orders"}), allowing unqualified or partially
-     * qualified AST references to match. A fully-qualified reference to a different catalog or
-     * schema (e.g. {@code other.main.orders}) will NOT match and receives a {@code false} filter.
-     * Tables not present in the map receive a {@code false} filter (no rows returned),
-     * so the map must cover every table the query touches.
+     *
+     * <p>Both sides of the lookup are resolved to a full {@code catalog.schema.table} name against
+     * {@code defaultCatalog} / {@code defaultSchema} — the connection's database and schema — and
+     * matched exactly. A reference resolves the way the access check resolves it
+     * ({@link #collectAllTableReferences}): each part the query omits is taken from the defaults,
+     * so with defaults {@code memory}/{@code main}, {@code FROM orders} is
+     * {@code memory.main.orders} and {@code FROM other.orders} is {@code memory.other.orders}. A
+     * key may be fully qualified, {@code schema.table}, or bare, and is completed the same way.
+     *
+     * <p>Resolving rather than matching on name suffixes is what keeps two granted tables that
+     * share a name in different schemas apart: a bare reference means one of them, never whichever
+     * the map happens to list first.
+     *
+     * <p>A table the map does not cover receives a {@code false} filter (no rows), so the map must
+     * list every table the query is allowed to read. Two keys that resolve to the same name with
+     * different filters are a contradictory grant and are rejected.
      */
-    public static JsonNode injectFilterCtes(JsonNode query, Map<String, JsonNode> tableFilters) {
-        // Normalize: for "catalog.schema.table" or "schema.table" keys, also register every
-        // shorter suffix so that unqualified or partially-qualified AST references still match.
-        // e.g. "memory.main.orders" → also adds "main.orders" and "orders".
-        // The lookup in the private variant uses the fully-qualified dotted key built from the
-        // AST node's catalog/schema/table fields, so "other_catalog.main.orders" will NOT match
-        // a key added for "memory.main.orders" — only exact or suffix-subset matches apply.
-        Map<String, JsonNode> normalized = new LinkedHashMap<>(tableFilters);
+    public static JsonNode injectFilterCtes(JsonNode query, Map<String, JsonNode> tableFilters,
+                                            String defaultCatalog, String defaultSchema) {
+        Map<String, JsonNode> resolved = new LinkedHashMap<>();
         for (Map.Entry<String, JsonNode> e : tableFilters.entrySet()) {
-            String[] parts = e.getKey().split("\\.", -1);
-            for (int i = 1; i < parts.length; i++) {
-                String suffix = String.join(".", Arrays.copyOfRange(parts, i, parts.length));
-                normalized.putIfAbsent(suffix, e.getValue());
+            String key = qualifiedTableName(e.getKey(), defaultCatalog, defaultSchema);
+            JsonNode previous = resolved.put(key, e.getValue());
+            if (previous != null && !previous.equals(e.getValue())) {
+                throw new IllegalArgumentException(
+                        "injectFilterCtes: two different filters resolve to the same table " + key);
             }
         }
         return injectFilterCtes(query,
-                qualifiedName -> normalized.getOrDefault(qualifiedName, ExpressionFactory.falseExpression()));
+                qualifiedName -> resolved.getOrDefault(qualifiedName, ExpressionFactory.falseExpression()),
+                defaultCatalog, defaultSchema);
     }
 
-    private static JsonNode injectFilterCtes(JsonNode query, Function<String, JsonNode> filterForTable) {
+    /**
+     * {@code name} as a full {@code catalog.schema.table}, filling the parts it leaves out from
+     * {@code defaultCatalog} / {@code defaultSchema}: a bare {@code orders} takes both, and
+     * {@code other.orders} is read as {@code schema.table} and takes the catalog — the same reading
+     * {@code SqlAuthorizer.resolveAuthorizedTable} gives an authorized table name.
+     */
+    public static String qualifiedTableName(String name, String defaultCatalog, String defaultSchema) {
+        int firstDot = name.indexOf('.');
+        if (firstDot < 0) {
+            return defaultCatalog + "." + defaultSchema + "." + name;
+        }
+        return firstDot == name.lastIndexOf('.') ? defaultCatalog + "." + name : name;
+    }
+
+    /**
+     * The state of one {@link #injectFilterCtes} pass, threaded through its recursive walkers.
+     *
+     * @param tablesToWrap      ordered map of generated CTE name → the original BASE_TABLE node
+     *                          (its schema/catalog are preserved for the CTE body)
+     * @param cteKeyByTable     the CTE name already generated for a table, keyed by the table
+     *                          itself: {@code [catalog, schema, table]} as the reference writes
+     *                          them. Two references to one table share its CTE; two DIFFERENT
+     *                          tables must not, which is why the identity is the parts and not
+     *                          the name built from them — {@link #buildCteKey} joins with
+     *                          underscores, so schema {@code a_b} + table {@code c} and schema
+     *                          {@code a} + table {@code b_c} both come out {@code ___a_b_c}, and
+     *                          sharing on that name would read one table in place of the other.
+     * @param reservedCteNames  CTE names this pass must not generate: those the query already
+     *                          declares, plus every name generated so far
+     */
+    private record CteInjection(Map<String, ObjectNode> tablesToWrap,
+                                Map<List<String>, String> cteKeyByTable,
+                                Set<String> reservedCteNames) {
+
+        /** The CTE name for {@code table}, generating and registering one on first sight. */
+        String cteKeyFor(List<String> table, ObjectNode reference) {
+            String existing = cteKeyByTable.get(table);
+            if (existing != null) {
+                return existing;
+            }
+            String cteKey = freshCteKey(buildCteKey(table.get(2), table.get(1), table.get(0)), reservedCteNames);
+            reservedCteNames.add(cteKey);
+            cteKeyByTable.put(table, cteKey);
+            tablesToWrap.put(cteKey, (ObjectNode) reference.deepCopy());
+            return cteKey;
+        }
+    }
+
+    /** Every CTE name declared anywhere under {@code node}, at any nesting depth. */
+    private static void collectDeclaredCteNames(JsonNode node, Set<String> into) {
+        if (node == null || node.isNull()) return;
+        if (node.isObject()) {
+            JsonNode cteMap = node.get(FIELD_CTE_MAP);
+            if (cteMap != null) {
+                JsonNode map = cteMap.get(FIELD_MAP);
+                if (map != null && map.isArray()) {
+                    for (JsonNode entry : map) {
+                        String key = asText(entry, FIELD_KEY);
+                        if (key != null) into.add(key);
+                    }
+                }
+            }
+        }
+        for (JsonNode child : node) {
+            collectDeclaredCteNames(child, into);
+        }
+    }
+
+    private static JsonNode injectFilterCtes(JsonNode query, Function<String, JsonNode> filterForTable,
+                                             String defaultCatalog, String defaultSchema) {
         var result = query.deepCopy();
         var statementNode = (ObjectNode) getFirstStatementNode(result);
-
-        // Ordered map: cteKey → original BASE_TABLE node (schema/catalog preserved for CTE body)
-        Map<String, ObjectNode> tablesToWrap = new LinkedHashMap<>();
 
         // Walk the whole statement — its FROM clause, expression subqueries, and any WITH clause
         // (top-level or nested) — collecting every real base table and rewriting each reference to
         // its filter-CTE name. CTE bodies are handled inside the dispatcher so nesting at any depth
         // is filtered uniformly.
-        renameBaseTablesInStatementNode(statementNode, new HashSet<>(), tablesToWrap);
+        // Generated names must avoid every CTE name the query already declares, at any depth.
+        // The per-scope visible set cannot serve: a CTE body has its own name removed from it (a
+        // same-named reference there is the real table), so a body would regenerate the name of the
+        // CTE enclosing it and reference itself. Collected once, up front.
+        Set<String> reservedCteNames = new HashSet<>();
+        collectDeclaredCteNames(statementNode, reservedCteNames);
+        var injection = new CteInjection(new LinkedHashMap<>(), new LinkedHashMap<>(), reservedCteNames);
+        renameBaseTablesInStatementNode(statementNode, new HashSet<>(), injection);
 
+        Map<String, ObjectNode> tablesToWrap = injection.tablesToWrap();
         if (!tablesToWrap.isEmpty()) {
             ArrayNode newMap = JsonNodeFactory.instance.arrayNode();
             for (Map.Entry<String, ObjectNode> e : tablesToWrap.entrySet()) {
-                String qualifiedLookupKey = buildQualifiedLookupKey(e.getValue());
+                String qualifiedLookupKey = buildQualifiedLookupKey(e.getValue(), defaultCatalog, defaultSchema);
                 newMap.add(buildFilterCteEntry(e.getKey(), e.getValue(), filterForTable.apply(qualifiedLookupKey)));
             }
             JsonNode existingMap = statementNode.get(FIELD_CTE_MAP).get(FIELD_MAP);
@@ -2847,7 +2928,7 @@ public class Transformations {
      * self-reference in {@link #renameBaseTablesInStatementNode}.
      */
     private static Set<String> walkNestedCtes(ObjectNode node, Set<String> visibleCteNames,
-                                              Map<String, ObjectNode> tablesToWrap) {
+                                              CteInjection injection) {
         JsonNode cteMapNode = node.get(FIELD_CTE_MAP);
         if (cteMapNode == null) return visibleCteNames;
         JsonNode mapArray = cteMapNode.get(FIELD_MAP);
@@ -2862,7 +2943,7 @@ public class Transformations {
             Set<String> namesVisibleInBody = new HashSet<>(withDeclared);
             namesVisibleInBody.remove(cteName);
             ObjectNode cteBody = (ObjectNode) entry.get(FIELD_VALUE).get(FIELD_QUERY).get(FIELD_NODE);
-            renameBaseTablesInStatementNode(cteBody, namesVisibleInBody, tablesToWrap);
+            renameBaseTablesInStatementNode(cteBody, namesVisibleInBody, injection);
         }
         return withDeclared;
     }
@@ -2875,21 +2956,21 @@ public class Transformations {
      * any shape it does not understand must abort the query, not leak.
      */
     private static void renameBaseTablesInStatementNode(ObjectNode statementNode, Set<String> visibleCteNames,
-                                                         Map<String, ObjectNode> tablesToWrap) {
+                                                         CteInjection injection) {
         String type = statementNode.get(FIELD_TYPE).asText();
         switch (type) {
             case NODE_TYPE_SELECT_NODE -> {
-                Set<String> visible = walkNestedCtes(statementNode, visibleCteNames, tablesToWrap);
-                renameBaseTablesInSelect(statementNode, visible, tablesToWrap);
+                Set<String> visible = walkNestedCtes(statementNode, visibleCteNames, injection);
+                renameBaseTablesInSelect(statementNode, visible, injection);
             }
             case NODE_TYPE_SET_OPERATION_NODE -> {
-                Set<String> visible = walkNestedCtes(statementNode, visibleCteNames, tablesToWrap);
-                renameBaseTablesInStatementNode((ObjectNode) statementNode.get(FIELD_LEFT), visible, tablesToWrap);
-                renameBaseTablesInStatementNode((ObjectNode) statementNode.get(FIELD_RIGHT), visible, tablesToWrap);
-                walkModifiersForSubqueries(statementNode.get(FIELD_MODIFIERS), visible, tablesToWrap);
+                Set<String> visible = walkNestedCtes(statementNode, visibleCteNames, injection);
+                renameBaseTablesInStatementNode((ObjectNode) statementNode.get(FIELD_LEFT), visible, injection);
+                renameBaseTablesInStatementNode((ObjectNode) statementNode.get(FIELD_RIGHT), visible, injection);
+                walkModifiersForSubqueries(statementNode.get(FIELD_MODIFIERS), visible, injection);
             }
             case NODE_TYPE_RECURSIVE_CTE_NODE -> {
-                Set<String> visible = walkNestedCtes(statementNode, visibleCteNames, tablesToWrap);
+                Set<String> visible = walkNestedCtes(statementNode, visibleCteNames, injection);
                 // The recursive self-reference (FROM r inside the CTE body) is a CTE reference, not a
                 // base table; keep the CTE's own name visible so it is not wrapped as a phantom table.
                 JsonNode cteName = statementNode.get(FIELD_CTE_NAME);
@@ -2897,9 +2978,9 @@ public class Transformations {
                     visible = new HashSet<>(visible);
                     visible.add(cteName.asText());
                 }
-                renameBaseTablesInStatementNode((ObjectNode) statementNode.get(FIELD_LEFT), visible, tablesToWrap);
-                renameBaseTablesInStatementNode((ObjectNode) statementNode.get(FIELD_RIGHT), visible, tablesToWrap);
-                walkModifiersForSubqueries(statementNode.get(FIELD_MODIFIERS), visible, tablesToWrap);
+                renameBaseTablesInStatementNode((ObjectNode) statementNode.get(FIELD_LEFT), visible, injection);
+                renameBaseTablesInStatementNode((ObjectNode) statementNode.get(FIELD_RIGHT), visible, injection);
+                walkModifiersForSubqueries(statementNode.get(FIELD_MODIFIERS), visible, injection);
             }
             default -> throw new IllegalStateException(
                     "injectFilterCtes: unsupported query node type '" + type + "'; refusing to run to "
@@ -2914,28 +2995,28 @@ public class Transformations {
      * in {@code orders[].expression}), NOT a top-level {@code order_bys} field.
      */
     private static void walkModifiersForSubqueries(JsonNode modifiers, Set<String> visibleCteNames,
-                                                    Map<String, ObjectNode> tablesToWrap) {
+                                                    CteInjection injection) {
         if (modifiers == null || !modifiers.isArray()) return;
         for (JsonNode modifier : modifiers) {
             JsonNode orders = modifier.get(FIELD_ORDERS);
             if (orders != null && orders.isArray()) {
                 for (JsonNode order : orders) {
-                    walkExpressionsForSubqueries(order.get(FIELD_EXPRESSION), visibleCteNames, tablesToWrap);
+                    walkExpressionsForSubqueries(order.get(FIELD_EXPRESSION), visibleCteNames, injection);
                 }
             }
-            walkExpressionsForSubqueries(modifier.get(FIELD_LIMIT), visibleCteNames, tablesToWrap);
-            walkExpressionsForSubqueries(modifier.get(FIELD_OFFSET), visibleCteNames, tablesToWrap);
+            walkExpressionsForSubqueries(modifier.get(FIELD_LIMIT), visibleCteNames, injection);
+            walkExpressionsForSubqueries(modifier.get(FIELD_OFFSET), visibleCteNames, injection);
         }
     }
 
     private static void renameBaseTablesInSelect(ObjectNode selectNode, Set<String> userCteNames,
-                                                  Map<String, ObjectNode> tablesToWrap) {
+                                                  CteInjection injection) {
         JsonNode fromTable = selectNode.get(FIELD_FROM_TABLE);
         if (fromTable != null && !(fromTable instanceof NullNode)) {
-            renameBaseTablesInFromNode(fromTable, userCteNames, tablesToWrap);
+            renameBaseTablesInFromNode(fromTable, userCteNames, injection);
         }
         // Walk all expression-bearing fields for subqueries (WHERE IN, EXISTS, scalar, etc.)
-        walkExpressionFieldsInSelect(selectNode, userCteNames, tablesToWrap);
+        walkExpressionFieldsInSelect(selectNode, userCteNames, injection);
     }
 
     /**
@@ -2943,14 +3024,14 @@ public class Transformations {
      * expressions found (IN, EXISTS, scalar, ANY/ALL).
      */
     private static void walkExpressionFieldsInSelect(ObjectNode selectNode, Set<String> userCteNames,
-                                                       Map<String, ObjectNode> tablesToWrap) {
-        walkExpressionsForSubqueries(selectNode.get(FIELD_WHERE_CLAUSE), userCteNames, tablesToWrap);
-        walkExpressionsForSubqueries(selectNode.get("having"), userCteNames, tablesToWrap);
-        walkExpressionsForSubqueries(selectNode.get("qualify"), userCteNames, tablesToWrap);
-        walkExpressionsForSubqueries(selectNode.get("select_list"), userCteNames, tablesToWrap);
-        walkExpressionsForSubqueries(selectNode.get("group_expressions"), userCteNames, tablesToWrap);
+                                                       CteInjection injection) {
+        walkExpressionsForSubqueries(selectNode.get(FIELD_WHERE_CLAUSE), userCteNames, injection);
+        walkExpressionsForSubqueries(selectNode.get("having"), userCteNames, injection);
+        walkExpressionsForSubqueries(selectNode.get("qualify"), userCteNames, injection);
+        walkExpressionsForSubqueries(selectNode.get("select_list"), userCteNames, injection);
+        walkExpressionsForSubqueries(selectNode.get("group_expressions"), userCteNames, injection);
         // ORDER BY / LIMIT / OFFSET live under modifiers[], not a top-level "order_bys" field.
-        walkModifiersForSubqueries(selectNode.get(FIELD_MODIFIERS), userCteNames, tablesToWrap);
+        walkModifiersForSubqueries(selectNode.get(FIELD_MODIFIERS), userCteNames, injection);
     }
 
     /**
@@ -2958,12 +3039,12 @@ public class Transformations {
      * (IN/ANY/ALL, EXISTS, scalar subqueries) by renaming their base tables.
      */
     private static void walkExpressionsForSubqueries(JsonNode expr, Set<String> userCteNames,
-                                                      Map<String, ObjectNode> tablesToWrap) {
+                                                      CteInjection injection) {
         if (expr == null || expr instanceof NullNode) return;
 
         if (expr.isArray()) {
             for (JsonNode element : expr) {
-                walkExpressionsForSubqueries(element, userCteNames, tablesToWrap);
+                walkExpressionsForSubqueries(element, userCteNames, injection);
             }
             return;
         }
@@ -2978,29 +3059,29 @@ public class Transformations {
             if (subqueryContent != null) {
                 ObjectNode innerNode = (ObjectNode) subqueryContent.get(FIELD_NODE);
                 if (innerNode != null) {
-                    renameBaseTablesInStatementNode(innerNode, userCteNames, tablesToWrap);
+                    renameBaseTablesInStatementNode(innerNode, userCteNames, injection);
                 }
             }
             // Walk the `child` field (the expression on the left side of IN/ANY/ALL)
-            walkExpressionsForSubqueries(expr.get(FIELD_CHILD), userCteNames, tablesToWrap);
+            walkExpressionsForSubqueries(expr.get(FIELD_CHILD), userCteNames, injection);
             return;
         }
 
         // Recurse into known expression child fields for all other expression types
-        walkExpressionsForSubqueries(expr.get(FIELD_LEFT), userCteNames, tablesToWrap);
-        walkExpressionsForSubqueries(expr.get(FIELD_RIGHT), userCteNames, tablesToWrap);
-        walkExpressionsForSubqueries(expr.get(FIELD_CHILDREN), userCteNames, tablesToWrap);
-        walkExpressionsForSubqueries(expr.get(FIELD_CHILD), userCteNames, tablesToWrap);
-        walkExpressionsForSubqueries(expr.get(FIELD_FILTER), userCteNames, tablesToWrap);
+        walkExpressionsForSubqueries(expr.get(FIELD_LEFT), userCteNames, injection);
+        walkExpressionsForSubqueries(expr.get(FIELD_RIGHT), userCteNames, injection);
+        walkExpressionsForSubqueries(expr.get(FIELD_CHILDREN), userCteNames, injection);
+        walkExpressionsForSubqueries(expr.get(FIELD_CHILD), userCteNames, injection);
+        walkExpressionsForSubqueries(expr.get(FIELD_FILTER), userCteNames, injection);
         // CASE WHEN THEN ELSE
-        walkExpressionsForSubqueries(expr.get(FIELD_WHEN_EXPR), userCteNames, tablesToWrap);
-        walkExpressionsForSubqueries(expr.get(FIELD_THEN_EXPR), userCteNames, tablesToWrap);
-        walkExpressionsForSubqueries(expr.get(FIELD_ELSE_EXPR), userCteNames, tablesToWrap);
-        walkExpressionsForSubqueries(expr.get(FIELD_CASE_CHECKS), userCteNames, tablesToWrap);
+        walkExpressionsForSubqueries(expr.get(FIELD_WHEN_EXPR), userCteNames, injection);
+        walkExpressionsForSubqueries(expr.get(FIELD_THEN_EXPR), userCteNames, injection);
+        walkExpressionsForSubqueries(expr.get(FIELD_ELSE_EXPR), userCteNames, injection);
+        walkExpressionsForSubqueries(expr.get(FIELD_CASE_CHECKS), userCteNames, injection);
     }
 
     private static void renameBaseTablesInFromNode(JsonNode fromNode, Set<String> userCteNames,
-                                                    Map<String, ObjectNode> tablesToWrap) {
+                                                    CteInjection injection) {
         if (fromNode == null || fromNode instanceof NullNode) return;
         String type = fromNode.get(FIELD_TYPE).asText();
         switch (type) {
@@ -3009,10 +3090,7 @@ public class Transformations {
                 if (userCteNames.contains(tableName)) return; // CTE reference — skip
                 String schema = fromNode.has(FIELD_SCHEMA_NAME) ? fromNode.get(FIELD_SCHEMA_NAME).asText() : "";
                 String catalog = fromNode.has(FIELD_CATALOG_NAME) ? fromNode.get(FIELD_CATALOG_NAME).asText() : "";
-                String cteKey = buildCteKey(tableName, schema, catalog);
-                if (!tablesToWrap.containsKey(cteKey)) {
-                    tablesToWrap.put(cteKey, (ObjectNode) fromNode.deepCopy());
-                }
+                String cteKey = injection.cteKeyFor(List.of(catalog, schema, tableName), (ObjectNode) fromNode);
                 ObjectNode mutable = (ObjectNode) fromNode;
                 String existingAlias = mutable.has(FIELD_ALIAS) ? mutable.get(FIELD_ALIAS).asText() : "";
                 if (existingAlias.isEmpty()) {
@@ -3023,26 +3101,26 @@ public class Transformations {
                 mutable.put(FIELD_CATALOG_NAME, "");
             }
             case NODE_TYPE_JOIN -> {
-                renameBaseTablesInFromNode(fromNode.get(FIELD_LEFT), userCteNames, tablesToWrap);
-                renameBaseTablesInFromNode(fromNode.get(FIELD_RIGHT), userCteNames, tablesToWrap);
+                renameBaseTablesInFromNode(fromNode.get(FIELD_LEFT), userCteNames, injection);
+                renameBaseTablesInFromNode(fromNode.get(FIELD_RIGHT), userCteNames, injection);
                 // Walk the join condition for subqueries (rare but possible)
-                walkExpressionsForSubqueries(fromNode.get("condition"), userCteNames, tablesToWrap);
+                walkExpressionsForSubqueries(fromNode.get("condition"), userCteNames, injection);
             }
             case NODE_TYPE_SUBQUERY -> {
                 // The derived-table body may be a SELECT, a set operation, or a recursive CTE;
                 // dispatch on its type so nested base tables are filtered too.
                 ObjectNode inner = (ObjectNode) fromNode.get(FIELD_SUBQUERY).get(FIELD_NODE);
-                renameBaseTablesInStatementNode(inner, userCteNames, tablesToWrap);
+                renameBaseTablesInStatementNode(inner, userCteNames, injection);
             }
             case NODE_TYPE_PIVOT -> {
                 // PIVOT / UNPIVOT: the scanned relation is under `source`; recurse into it so the
                 // pivoted base table is filtered. Aggregate expressions may hold subqueries.
-                renameBaseTablesInFromNode(fromNode.get(FIELD_SOURCE), userCteNames, tablesToWrap);
-                walkExpressionsForSubqueries(fromNode.get(FIELD_AGGREGATES), userCteNames, tablesToWrap);
+                renameBaseTablesInFromNode(fromNode.get(FIELD_SOURCE), userCteNames, injection);
+                walkExpressionsForSubqueries(fromNode.get(FIELD_AGGREGATES), userCteNames, injection);
             }
             case NODE_TYPE_EXPRESSION_LIST -> {
                 // VALUES list: each value expression may embed a subquery over a base table.
-                walkExpressionsForSubqueries(fromNode.get(FIELD_VALUES), userCteNames, tablesToWrap);
+                walkExpressionsForSubqueries(fromNode.get(FIELD_VALUES), userCteNames, injection);
             }
             case NODE_TYPE_EMPTY -> {
                 // FROM-less SELECT (e.g. SELECT 1): no relation to filter.
@@ -3053,17 +3131,40 @@ public class Transformations {
         }
     }
 
-    /** Builds the lookup key used to match against the tableFilters map: "catalog.schema.table",
-     *  omitting empty parts (e.g. "main.orders" when catalog is absent, "orders" when both absent). */
-    private static String buildQualifiedLookupKey(ObjectNode tableNode) {
+    /**
+     * The key a BASE_TABLE node is looked up by in the tableFilters map: {@code
+     * "catalog.schema.table"}, with each part the query omits taken from the defaults, exactly as
+     * {@link #collectAllTableReferences} resolves the same node for the access check. Resolving
+     * here is what makes the lookup exact, so a bare reference cannot match a same-named table in
+     * another schema.
+     */
+    private static String buildQualifiedLookupKey(ObjectNode tableNode, String defaultCatalog, String defaultSchema) {
         String table = tableNode.get(FIELD_TABLE_NAME).asText();
         String schema = tableNode.has(FIELD_SCHEMA_NAME) ? tableNode.get(FIELD_SCHEMA_NAME).asText() : "";
         String catalog = tableNode.has(FIELD_CATALOG_NAME) ? tableNode.get(FIELD_CATALOG_NAME).asText() : "";
-        var sb = new StringBuilder();
-        if (!catalog.isEmpty()) sb.append(catalog).append(".");
-        if (!schema.isEmpty()) sb.append(schema).append(".");
-        sb.append(table);
-        return sb.toString();
+        if (schema.isEmpty()) schema = defaultSchema;
+        if (catalog.isEmpty()) catalog = defaultCatalog;
+        return catalog + "." + schema + "." + table;
+    }
+
+    /**
+     * {@code base}, or {@code base_1}, {@code base_2}, ... — the first name not in {@code reserved},
+     * which holds every CTE name the query already declares and every name this pass has already
+     * generated. Reusing a declared one would make the filter CTE's body reference that CTE instead
+     * of the table, which is what happens when a query that already carries filter CTEs is
+     * authorized again (the Flight server authorizes a query once for its info and once for its
+     * stream); reusing a generated one would point two different tables at one CTE.
+     */
+    private static String freshCteKey(String base, Set<String> reserved) {
+        if (reserved == null || !reserved.contains(base)) {
+            return base;
+        }
+        String candidate = base;
+        int suffix = 0;
+        while (reserved.contains(candidate)) {
+            candidate = base + "_" + (++suffix);
+        }
+        return candidate;
     }
 
     private static String buildCteKey(String tableName, String schema, String catalog) {

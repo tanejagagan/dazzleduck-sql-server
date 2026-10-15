@@ -31,8 +31,12 @@ public interface SplitPlanner {
     static List<List<FileStatus>> getSplitStatus(JsonNode tree,
                                                  long maxSplitSize,
                                                  List<String> sessionSetupSqls) throws SQLException, IOException {
+        // CTE-aware: the row-level-security filter is injected by wrapping each read of the table in
+        // a filter CTE, so the top-level FROM names that CTE rather than the table. This collector
+        // skips CTE references and reports the real table inside the CTE body, with its catalog —
+        // which is what picks the split planner below.
         var catalogSchemaAndTables =
-                Transformations.getAllTablesOrPathsFromSelect(Transformations.getFirstStatementNode(tree), null, null);
+                Transformations.collectAllTableReferences(Transformations.getFirstStatementNode(tree), null, null);
 
         if (catalogSchemaAndTables.size() != 1) {
             throw new SQLException("unsupported number of tables or path in the query");

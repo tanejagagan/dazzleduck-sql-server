@@ -12,8 +12,10 @@ import io.dazzleduck.sql.commons.Transformations;
 import java.util.function.Function;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -33,8 +35,195 @@ public interface SqlAuthorizer {
         return Transformations.injectFilterCtes(query, filter);
     }
 
-    static JsonNode addFilterViaCtes(JsonNode query, java.util.Map<String, JsonNode> tableFilters) {
-        return Transformations.injectFilterCtes(query, tableFilters);
+    /**
+     * @param database the connection's catalog, and {@code schema} its schema: the defaults every
+     *                 key and every table reference is resolved against
+     *                 ({@link Transformations#injectFilterCtes(JsonNode, Map, String, String)})
+     */
+    static JsonNode addFilterViaCtes(JsonNode query, Map<String, JsonNode> tableFilters,
+                                     String database, String schema) {
+        return Transformations.injectFilterCtes(query, tableFilters, database, schema);
+    }
+
+    /**
+     * Applies {@code filter} to every read of {@code qualifiedTable} in {@code query} — the FROM
+     * clause, joins, subqueries in any clause and CTE bodies, at any depth — by reading the table
+     * through a filtered CTE ({@link #addFilterViaCtes}). A filter added only to the outermost
+     * SELECT's WHERE, as {@link #addFilterToBaseTable} does, leaves every other read of the same
+     * table unfiltered. The caller must already have rejected references to any other table, since
+     * a table with no entry in the map is given a {@code false} filter.
+     *
+     * <p>The filter is ALSO left on the outermost WHERE, where it is redundant for correctness (the
+     * CTE has already applied it) but is what partition pruning reads: a split planner prunes from
+     * the top-level predicates, so moving the filter into the CTE alone would stop it pruning on
+     * the filter's columns and scan every partition. That copy is only added where it is valid —
+     * see {@link #pruningHintFilter}.
+     */
+    static JsonNode addFilterToEveryRead(JsonNode query, String qualifiedTable, JsonNode filter,
+                                         String database, String schema) {
+        return addFilterToEveryRead(query, Map.of(qualifiedTable, filter), database, schema);
+    }
+
+    /**
+     * Per-table variant of the above: every read of each table in {@code tableFilters} is rewritten
+     * to go through that table's own filtered CTE. A table the query reads but the map does not
+     * list is given a {@code false} filter, so the caller must have authorized — and listed — every
+     * table the query touches. Keys and references are resolved against {@code database} /
+     * {@code schema} before matching, so a bare name means one table and not every table that
+     * shares it.
+     */
+    static JsonNode addFilterToEveryRead(JsonNode query, Map<String, JsonNode> tableFilters,
+                                         String database, String schema) {
+        JsonNode filtered = addFilterViaCtes(query, tableFilters, database, schema);
+        JsonNode pruningHint = pruningHintFilter(query, tableFilters, database, schema);
+        if (pruningHint == null) {
+            return filtered;
+        }
+        JsonNode alsoAtTopLevel = addFilterToBaseTable(filtered, pruningHint);
+        return alsoAtTopLevel == null ? filtered : alsoAtTopLevel;
+    }
+
+    /**
+     * The filter to repeat on the outermost SELECT's WHERE so that split planning and partition
+     * pruning can still see it, or {@code null} when there is none to place there.
+     *
+     * <p>The copy is only valid where that SELECT reads a granted table directly, because it then
+     * reads that table's filter CTE — {@code SELECT * FROM table WHERE filter} — whose output has
+     * every column the filter names. Reading anything else, the filter may not bind: in
+     * {@code WITH x AS (SELECT amount FROM orders) SELECT sum(amount) FROM x} a copy of
+     * {@code tenant_id = 'abc'} on the outer SELECT has no {@code tenant_id} to compare against and
+     * the query fails to plan. The CTE has already made the result correct, so skipping the copy
+     * costs pruning and nothing else.
+     *
+     * <p>Evaluated against the query as it was BEFORE CTE injection, which renames base tables but
+     * leaves the shape — and so which SELECT {@link #addFilterToBaseTable} targets — unchanged.
+     */
+    private static JsonNode pruningHintFilter(JsonNode query, Map<String, JsonNode> tableFilters,
+                                              String database, String schema) {
+        JsonNode baseTable = baseTableOfOutermostRead(
+                Transformations.getFirstStatementNode(query), Set.of());
+        if (baseTable == null) {
+            return null;
+        }
+        JsonNode filter = filterForQualifiedName(
+                qualifiedNameOf(baseTable, database, schema), tableFilters, database, schema);
+        // A table granted without a row restriction carries a `true` filter: nothing to prune on.
+        if (filter == null || filter.equals(ExpressionFactory.trueExpression())) {
+            return null;
+        }
+        return filter;
+    }
+
+    /**
+     * The BASE_TABLE node read by the SELECT that {@link #addFilterToBaseTable} would add a filter
+     * to, or {@code null} when that SELECT reads something else: a CTE (whose name is not a table),
+     * a set operation, or a table function. Mirrors {@link Transformations#getSelectForBaseTable}'s
+     * descent through derived tables, tracking the CTE names in scope on the way down.
+     */
+    private static JsonNode baseTableOfOutermostRead(JsonNode statement, Set<String> cteNamesInScope) {
+        if (statement == null || statement.isNull()) {
+            return null;
+        }
+        Set<String> inScope = new HashSet<>(cteNamesInScope);
+        JsonNode cteMap = statement.get(ExpressionConstants.FIELD_CTE_MAP);
+        JsonNode map = cteMap == null ? null : cteMap.get(ExpressionConstants.FIELD_MAP);
+        if (map != null && map.isArray()) {
+            for (JsonNode entry : map) {
+                JsonNode key = entry.get(ExpressionConstants.FIELD_KEY);
+                if (key != null && !key.isNull()) {
+                    inScope.add(key.asText().toLowerCase(Locale.ROOT));
+                }
+            }
+        }
+        JsonNode from = statement.get(ExpressionConstants.FIELD_FROM_TABLE);
+        if (from == null || from.isNull()) {
+            return null;
+        }
+        JsonNode type = from.get(ExpressionConstants.FIELD_TYPE);
+        if (type == null || type.isNull()) {
+            return null;
+        }
+        switch (type.asText()) {
+            case ExpressionConstants.NODE_TYPE_BASE_TABLE -> {
+                JsonNode name = from.get(ExpressionConstants.FIELD_TABLE_NAME);
+                if (name == null || name.isNull()) {
+                    return null;
+                }
+                return inScope.contains(name.asText().toLowerCase(Locale.ROOT)) ? null : from;
+            }
+            case ExpressionConstants.NODE_TYPE_SUBQUERY -> {
+                JsonNode subquery = from.get(ExpressionConstants.FIELD_SUBQUERY);
+                return subquery == null ? null
+                        : baseTableOfOutermostRead(subquery.get(ExpressionConstants.FIELD_NODE), inScope);
+            }
+            default -> {
+                return null;
+            }
+        }
+    }
+
+    /**
+     * {@code "catalog.schema.table"} of a BASE_TABLE node, taking each part the query omits from
+     * the connection's {@code database} / {@code schema}, as the filter-CTE lookup does.
+     */
+    private static String qualifiedNameOf(JsonNode baseTable, String database, String schema) {
+        String catalog = textOrEmpty(baseTable, ExpressionConstants.FIELD_CATALOG_NAME);
+        String tableSchema = textOrEmpty(baseTable, ExpressionConstants.FIELD_SCHEMA_NAME);
+        return (catalog.isEmpty() ? database : catalog) + "."
+                + (tableSchema.isEmpty() ? schema : tableSchema) + "."
+                + baseTable.get(ExpressionConstants.FIELD_TABLE_NAME).asText();
+    }
+
+    private static String textOrEmpty(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        return value == null || value.isNull() ? "" : value.asText();
+    }
+
+    /**
+     * The filter granted for {@code qualifiedName}, resolving each key the same way
+     * {@link Transformations#injectFilterCtes(JsonNode, Map, String, String)} does so that this
+     * lookup and the CTE it is a hint for cannot disagree about which table a name means.
+     */
+    private static JsonNode filterForQualifiedName(String qualifiedName, Map<String, JsonNode> tableFilters,
+                                                   String database, String schema) {
+        for (Map.Entry<String, JsonNode> grant : tableFilters.entrySet()) {
+            if (Transformations.qualifiedTableName(grant.getKey(), database, schema).equals(qualifiedName)) {
+                return grant.getValue();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Refuses a query that carries more than one statement, naming {@code mode} in the message.
+     *
+     * <p>Authorization reads one statement — {@link Transformations#getFirstStatementNode} — and the
+     * filter injection rewrites only that one, but the whole tree is rendered back into the SQL that
+     * runs, and DuckDB executes every statement in it and returns the last one's result. A trailing
+     * statement would therefore run against tables this authorizer never checked and never filtered,
+     * so a mode that restricts which tables may be read, or which rows of them, has to refuse the
+     * shape outright.
+     */
+    static void requireSingleStatement(JsonNode query, String mode) throws UnauthorizedException {
+        JsonNode statements = query.get(ExpressionConstants.FIELD_STATEMENTS);
+        if (statements != null && statements.isArray() && statements.size() > 1) {
+            throw new UnauthorizedException(
+                    "Multi-statement queries are not allowed in " + mode + " mode.");
+        }
+    }
+
+    /**
+     * A filter for a path or function grant is applied by {@link #addFilterToTableFunction}, which
+     * adds it to the SELECT that {@link Transformations#getSelectForTableFunction} identifies. When
+     * there is no such SELECT the filter has nowhere to go, and the old code then returned
+     * {@code null} — which the caller dereferenced into a NullPointerException rather than
+     * refusing. The query is refused instead.
+     */
+    static void requireFilterablePlacement(JsonNode query) throws UnauthorizedException {
+        if (Transformations.getSelectForTableFunction(Transformations.getFirstStatementNode(query)) == null) {
+            throw new UnauthorizedException(
+                    "This query shape cannot have a path or function grant's filter applied to it");
+        }
     }
 
     static JsonNode addFilterToTableFunction(JsonNode query, JsonNode toAdd) {
@@ -198,8 +387,7 @@ public interface SqlAuthorizer {
      * Used by callers (e.g. {@link RestrictedReadOnlyAuthorizer}) that need a string key.
      */
     static String qualifyTableName(String name, String database, String schema) {
-        var t = resolveAuthorizedTable(name, database, schema);
-        return t.catalog() + "." + t.schema() + "." + t.tableOrPath();
+        return Transformations.qualifiedTableName(name, database, schema);
     }
 
     /**
@@ -220,6 +408,22 @@ public interface SqlAuthorizer {
      * FROM table, but only when the FROM clause is a BASE_TABLE. For TABLE_FUNCTION queries the
      * original tree is returned unchanged.
      */
+    /** Whether {@code fromTable} (a BASE_TABLE node) names a CTE declared by {@code statement}. */
+    private static boolean namesATopLevelCte(JsonNode statement, ObjectNode fromTable) {
+        JsonNode name = fromTable.get(ExpressionConstants.FIELD_TABLE_NAME);
+        if (name == null || name.isNull()) return false;
+        JsonNode cteMap = statement.get(ExpressionConstants.FIELD_CTE_MAP);
+        JsonNode map = cteMap == null ? null : cteMap.get(ExpressionConstants.FIELD_MAP);
+        if (map == null || !map.isArray()) return false;
+        for (JsonNode entry : map) {
+            JsonNode key = entry.get(ExpressionConstants.FIELD_KEY);
+            if (key != null && !key.isNull() && key.asText().equalsIgnoreCase(name.asText())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     static JsonNode withUpdatedDatabaseSchema(JsonNode tree, String database, String schema) {
         var copy = tree.deepCopy();
         Function<JsonNode, JsonNode> identity = t -> t;
@@ -231,6 +435,12 @@ public interface SqlAuthorizer {
         var fromTable = (ObjectNode) fromTableNode;
         var typeNode = fromTable.get(ExpressionConstants.FIELD_TYPE);
         if (typeNode != null && typeNode.asText().equals(ExpressionConstants.BASE_TABLE_TYPE)) {
+            // A FROM that names one of the query's own CTEs is not a table: qualifying it with the
+            // connection's catalog/schema would turn `FROM x` into `FROM db.schema.x`, which no
+            // longer resolves to the CTE.
+            if (namesATopLevelCte(f, fromTable)) {
+                return tree;
+            }
             var existingCatalog = fromTable.get(ExpressionConstants.FIELD_CATALOG_NAME);
             var existingSchema = fromTable.get(ExpressionConstants.FIELD_SCHEMA_NAME);
             if (existingCatalog == null || existingCatalog.asText().isEmpty()) {

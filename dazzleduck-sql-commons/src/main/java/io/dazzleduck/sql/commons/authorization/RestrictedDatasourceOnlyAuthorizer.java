@@ -36,7 +36,9 @@ import static io.dazzleduck.sql.common.Headers.HEADER_TOKEN_REDIRECT;
  *   <li>Either 'table' or 'path' claim must be present</li>
  *   <li>For BASE_TABLE queries: 'table' claim must match the queried table name</li>
  *   <li>For TABLE_FUNCTION queries: 'path' must be a prefix of the queried path, OR 'function' must match</li>
- *   <li>If 'filter' claim is present, it is automatically added to the query's WHERE clause</li>
+ *   <li>If 'filter' claim is present, it is applied to every read of the authorized table (each
+ *       reference reads it through a filtered CTE), and for a path or function grant to the table
+ *       function the filter can be placed on</li>
  * </ul>
  *
  * <p><b>For Write Access:</b></p>
@@ -62,6 +64,10 @@ public class RestrictedDatasourceOnlyAuthorizer implements SqlAuthorizer {
 
     @Override
     public JsonNode authorize(String user, String database, String schema, JsonNode query, Map<String, String> verifiedClaims) throws UnauthorizedException {
+        // First, so that it also covers the redirect dispatch below: that authorizer reads one
+        // statement as well.
+        SqlAuthorizer.requireSingleStatement(query, "RESTRICTED");
+
         // Dispatch to redirect authorizer when the token signals redirect mode
         String tokenType = verifiedClaims.get(Headers.HEADER_TOKEN_TYPE);
         if (HEADER_TOKEN_REDIRECT.equalsIgnoreCase(tokenType)) {
@@ -99,7 +105,9 @@ public class RestrictedDatasourceOnlyAuthorizer implements SqlAuthorizer {
                             throw new UnauthorizedException("No access to %s".formatted(cst));
                         }
                     }
-                    yield SqlAuthorizer.addFilterToBaseTable(updatedQuery, entry.filter());
+                    yield SqlAuthorizer.addFilterToEveryRead(updatedQuery,
+                            SqlAuthorizer.qualifyTableName(entry.name(), database, schema), entry.filter(),
+                            database, schema);
                 }
                 case TableAccessEntry.PATH -> {
                     for (var cst : catalogSchemaTables) {
@@ -111,6 +119,7 @@ public class RestrictedDatasourceOnlyAuthorizer implements SqlAuthorizer {
                             throw new UnauthorizedException("No access to %s".formatted(cst));
                         }
                     }
+                    SqlAuthorizer.requireFilterablePlacement(query);
                     yield SqlAuthorizer.addFilterToTableFunction(updatedQuery, entry.filter());
                 }
                 case TableAccessEntry.FUNCTION -> {
@@ -123,6 +132,7 @@ public class RestrictedDatasourceOnlyAuthorizer implements SqlAuthorizer {
                             throw new UnauthorizedException("No access to %s".formatted(cst));
                         }
                     }
+                    SqlAuthorizer.requireFilterablePlacement(query);
                     yield SqlAuthorizer.addFilterToTableFunction(updatedQuery, entry.filter());
                 }
                 default -> throw new UnauthorizedException("Unknown access type: " + entry.type());
@@ -151,17 +161,25 @@ public class RestrictedDatasourceOnlyAuthorizer implements SqlAuthorizer {
             }
         }
 
-        var catalogSchemaTable = catalogSchemaTables.get(0);
         var filter = verifiedClaims.get(Headers.HEADER_FILTER);
         if (filter == null) {
             return updatedQuery;
         }
         JsonNode compiledFilter = SqlAuthorizer.compileFilterString(filter);
-        switch (catalogSchemaTable.type()) {
-            case TABLE_FUNCTION -> { return SqlAuthorizer.addFilterToTableFunction(updatedQuery, compiledFilter); }
-            case BASE_TABLE    -> { return SqlAuthorizer.addFilterToBaseTable(updatedQuery, compiledFilter); }
-            default            -> { return null; }
+        boolean readsTables = catalogSchemaTables.stream()
+                .anyMatch(t -> t.type() == Transformations.TableType.BASE_TABLE);
+        boolean readsFunctions = catalogSchemaTables.stream()
+                .anyMatch(t -> t.type() == Transformations.TableType.TABLE_FUNCTION);
+        if (readsTables && readsFunctions) {
+            // One filter, one kind of datasource: it cannot be placed for both.
+            throw new UnauthorizedException("A filtered grant cannot read both a table and a table function");
         }
+        if (readsFunctions) {
+            SqlAuthorizer.requireFilterablePlacement(query);
+            return SqlAuthorizer.addFilterToTableFunction(updatedQuery, compiledFilter);
+        }
+        return SqlAuthorizer.addFilterToEveryRead(updatedQuery,
+                SqlAuthorizer.qualifyTableName(table, database, schema), compiledFilter, database, schema);
     }
 
     @Override

@@ -69,6 +69,38 @@ public class HttpServerAuthorizationTest extends HttpServerTestBase {
         }
     }
 
+    /**
+     * A query carrying a second statement is refused rather than run. Only the first statement is
+     * authorized and filtered, but every statement is rendered back into the SQL that executes and
+     * DuckDB returns the last one's result, so a trailing statement would read whatever it names.
+     */
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testMultiStatementQueryIsRefused() throws Exception {
+        var claims = Map.of(
+                Headers.HEADER_FILTER, "id = 1",
+                Headers.HEADER_TABLE, "auth_test",
+                Headers.HEADER_PATH, warehousePath
+        );
+        var jwtResponse = loginWithClaims(claims);
+        assertEquals(200, jwtResponse.statusCode());
+        var jwt = objectMapper.readValue(jwtResponse.body(), LoginResponse.class);
+
+        for (String sql : new String[]{
+                "select id from auth_test; select id from auth_test",
+                "select id from auth_test; select 1"}) {
+            var response = queryAsString(sql, jwt);
+            assertEquals(403, response.statusCode(), sql + " -> " + response.body());
+        }
+
+        // The single-statement form of the same read still works, trailing semicolon and all.
+        var allowed = query("select * from auth_test;", jwt);
+        try (var allocator = new RootAllocator();
+             ArrowReader reader = new ArrowStreamReader(allowed.body(), allocator)) {
+            TestUtils.isEqual("select * from auth_test where (id = 1)", allocator, reader);
+        }
+    }
+
     @Test
     @Timeout(value = 30, unit = TimeUnit.SECONDS)
     public void testSessionVariableInFilter() throws Exception {
@@ -240,5 +272,16 @@ public class HttpServerAuthorizationTest extends HttpServerTestBase {
                 .header(HeaderNames.AUTHORIZATION.defaultCase(), jwt.tokenType() + " " + jwt.accessToken())
                 .build();
         return client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+    }
+
+    /** The same request, read as a string, for the cases that assert on the status code. */
+    private HttpResponse<String> queryAsString(String sql, LoginResponse jwt) throws Exception {
+        var body = objectMapper.writeValueAsBytes(new QueryRequest(sql));
+        var request = HttpRequest.newBuilder(URI.create(baseUrl + "/v1/query"))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+                .header(HeaderValues.ACCEPT_JSON.name(), HeaderValues.ACCEPT_JSON.values())
+                .header(HeaderNames.AUTHORIZATION.defaultCase(), jwt.tokenType() + " " + jwt.accessToken())
+                .build();
+        return client.send(request, HttpResponse.BodyHandlers.ofString());
     }
 }
