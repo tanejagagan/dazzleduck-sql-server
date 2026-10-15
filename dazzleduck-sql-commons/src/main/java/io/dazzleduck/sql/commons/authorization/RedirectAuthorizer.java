@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.dazzleduck.sql.common.Headers;
 import io.dazzleduck.sql.commons.Transformations;
+import io.dazzleduck.sql.commons.ExpressionFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -16,6 +17,7 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -83,32 +85,44 @@ public class RedirectAuthorizer {
             throw new UnauthorizedException("No table or path found in query");
         }
 
-        // Authorize each table/function and track the first filter to apply
-        String firstFilter = null;
-        Transformations.TableType firstType = null;
-
+        // Authorize each table/function. Each table gets its own resolved filter, applied to every
+        // read of it; table functions share one, which can only be placed in one SELECT.
+        Map<String, JsonNode> tableFilters = new LinkedHashMap<>();
+        boolean anyTableFilter = false;
+        String functionFilter = null;
+        boolean readsTables = false;
         for (var cst : catalogSchemaTables) {
             ResolveAccessRow matched = findMatchingRow(response, cst);
             if (matched == null) {
                 throw new UnauthorizedException("No access to %s".formatted(cst));
             }
-            if (firstFilter == null && matched.filter() != null && !matched.filter().isEmpty()) {
-                firstFilter = matched.filter();
-                firstType = cst.type();
+            String filter = matched.filter() == null || matched.filter().isEmpty() ? null : matched.filter();
+            if (cst.type() == Transformations.TableType.BASE_TABLE) {
+                readsTables = true;
+                String name = java.util.stream.Stream.of(cst.catalog(), cst.schema(), cst.tableOrPath())
+                        .filter(part -> part != null && !part.isEmpty())
+                        .collect(java.util.stream.Collectors.joining("."));
+                tableFilters.putIfAbsent(SqlAuthorizer.qualifyTableName(name, database, schema),
+                        filter == null ? ExpressionFactory.trueExpression() : SqlAuthorizer.compileFilterString(filter));
+                anyTableFilter |= filter != null;
+            } else if (filter != null) {
+                if (functionFilter != null && !functionFilter.equals(filter)) {
+                    throw new UnauthorizedException("Table functions with different filters cannot be combined");
+                }
+                functionFilter = filter;
             }
         }
 
         var updatedQuery = SqlAuthorizer.withUpdatedDatabaseSchema(query, database, schema);
 
-        if (firstFilter == null) {
-            return updatedQuery;
+        if (functionFilter != null) {
+            if (readsTables) {
+                throw new UnauthorizedException("A filtered table function cannot be combined with a table");
+            }
+            SqlAuthorizer.requireFilterablePlacement(query);
+            return SqlAuthorizer.addFilterToTableFunction(updatedQuery, SqlAuthorizer.compileFilterString(functionFilter));
         }
-
-        JsonNode compiledFilter = SqlAuthorizer.compileFilterString(firstFilter);
-        return switch (firstType) {
-            case TABLE_FUNCTION -> SqlAuthorizer.addFilterToTableFunction(updatedQuery, compiledFilter);
-            case BASE_TABLE -> SqlAuthorizer.addFilterToBaseTable(updatedQuery, compiledFilter);
-        };
+        return anyTableFilter ? SqlAuthorizer.addFilterViaCtes(updatedQuery, tableFilters) : updatedQuery;
     }
 
     private ResolveAccessRow findMatchingRow(ResolveResponse response,

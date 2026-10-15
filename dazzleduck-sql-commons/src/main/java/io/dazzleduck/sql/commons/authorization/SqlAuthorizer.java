@@ -37,6 +37,40 @@ public interface SqlAuthorizer {
         return Transformations.injectFilterCtes(query, tableFilters);
     }
 
+    /**
+     * Applies {@code filter} to every read of {@code qualifiedTable} in {@code query} — the FROM
+     * clause, joins, subqueries in any clause and CTE bodies, at any depth — by reading the table
+     * through a filtered CTE ({@link #addFilterViaCtes}). A filter added only to the outermost
+     * SELECT's WHERE, as {@link #addFilterToBaseTable} does, leaves every other read of the same
+     * table unfiltered. The caller must already have rejected references to any other table, since
+     * a table with no entry in the map is given a {@code false} filter.
+     *
+     * <p>The filter is ALSO left on the outermost WHERE, where it is redundant for correctness (the
+     * CTE has already applied it) but is what partition pruning reads: a split planner prunes from
+     * the top-level predicates, so moving the filter into the CTE alone would stop it pruning on
+     * the filter's columns and scan every partition. Queries whose shape has no such placement
+     * (a join, for one) keep CTE filtering only.
+     */
+    static JsonNode addFilterToEveryRead(JsonNode query, String qualifiedTable, JsonNode filter) {
+        JsonNode filtered = addFilterViaCtes(query, java.util.Map.of(qualifiedTable, filter));
+        JsonNode alsoAtTopLevel = addFilterToBaseTable(filtered, filter);
+        return alsoAtTopLevel == null ? filtered : alsoAtTopLevel;
+    }
+
+    /**
+     * A filter for a path or function grant is applied by {@link #addFilterToTableFunction}, which
+     * adds it to the SELECT that {@link Transformations#getSelectForTableFunction} identifies. When
+     * there is no such SELECT the filter has nowhere to go, and the old code then returned
+     * {@code null} — which the caller dereferenced into a NullPointerException rather than
+     * refusing. The query is refused instead.
+     */
+    static void requireFilterablePlacement(JsonNode query) throws UnauthorizedException {
+        if (Transformations.getSelectForTableFunction(Transformations.getFirstStatementNode(query)) == null) {
+            throw new UnauthorizedException(
+                    "This query shape cannot have a path or function grant's filter applied to it");
+        }
+    }
+
     static JsonNode addFilterToTableFunction(JsonNode query, JsonNode toAdd) {
         var statement = Transformations.getFirstStatementNode(query);
         var selectOrig = Transformations.getSelectForTableFunction(statement);
@@ -220,6 +254,22 @@ public interface SqlAuthorizer {
      * FROM table, but only when the FROM clause is a BASE_TABLE. For TABLE_FUNCTION queries the
      * original tree is returned unchanged.
      */
+    /** Whether {@code fromTable} (a BASE_TABLE node) names a CTE declared by {@code statement}. */
+    private static boolean namesATopLevelCte(JsonNode statement, ObjectNode fromTable) {
+        JsonNode name = fromTable.get(ExpressionConstants.FIELD_TABLE_NAME);
+        if (name == null || name.isNull()) return false;
+        JsonNode cteMap = statement.get(ExpressionConstants.FIELD_CTE_MAP);
+        JsonNode map = cteMap == null ? null : cteMap.get(ExpressionConstants.FIELD_MAP);
+        if (map == null || !map.isArray()) return false;
+        for (JsonNode entry : map) {
+            JsonNode key = entry.get(ExpressionConstants.FIELD_KEY);
+            if (key != null && !key.isNull() && key.asText().equalsIgnoreCase(name.asText())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     static JsonNode withUpdatedDatabaseSchema(JsonNode tree, String database, String schema) {
         var copy = tree.deepCopy();
         Function<JsonNode, JsonNode> identity = t -> t;
@@ -231,6 +281,12 @@ public interface SqlAuthorizer {
         var fromTable = (ObjectNode) fromTableNode;
         var typeNode = fromTable.get(ExpressionConstants.FIELD_TYPE);
         if (typeNode != null && typeNode.asText().equals(ExpressionConstants.BASE_TABLE_TYPE)) {
+            // A FROM that names one of the query's own CTEs is not a table: qualifying it with the
+            // connection's catalog/schema would turn `FROM x` into `FROM db.schema.x`, which no
+            // longer resolves to the CTE.
+            if (namesATopLevelCte(f, fromTable)) {
+                return tree;
+            }
             var existingCatalog = fromTable.get(ExpressionConstants.FIELD_CATALOG_NAME);
             var existingSchema = fromTable.get(ExpressionConstants.FIELD_SCHEMA_NAME);
             if (existingCatalog == null || existingCatalog.asText().isEmpty()) {

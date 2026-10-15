@@ -65,7 +65,10 @@ public interface PartitionPrunerV2 {
 
     static String getPath(JsonNode tree) {
         var catalogSchemaAndTables =
-                Transformations.getAllTablesOrPathsFromSelect(Transformations.getFirstStatementNode(tree), null, null);
+                // CTE-aware, as in SplitPlanner: a row-level-security filter is injected by wrapping
+                // each read of the table in a filter CTE, so the top-level FROM names that CTE and
+                // only this collector reports the real table (and its catalog) inside the body.
+                Transformations.collectAllTableReferences(Transformations.getFirstStatementNode(tree), null, null);
         return catalogSchemaAndTables.get(0).tableOrPath();
     }
 
@@ -111,7 +114,10 @@ class DucklakeSplitPlanner implements PartitionPrunerV2 {
     public List<FileStatus> pruneFiles( JsonNode tree, long maxSplitSize, Map<String, String> properties,
                                         List<String> sessionSetupSqls) throws SQLException, IOException {
         var catalogSchemaAndTables =
-                Transformations.getAllTablesOrPathsFromSelect(Transformations.getFirstStatementNode(tree), null, null);
+                // CTE-aware, as in SplitPlanner: a row-level-security filter is injected by wrapping
+                // each read of the table in a filter CTE, so the top-level FROM names that CTE and
+                // only this collector reports the real table (and its catalog) inside the body.
+                Transformations.collectAllTableReferences(Transformations.getFirstStatementNode(tree), null, null);
         var first = catalogSchemaAndTables.get(0);
         var catalog = first.catalog();
         var metadata = "__ducklake_metadata_" + catalog;

@@ -2800,6 +2800,32 @@ public class Transformations {
                 qualifiedName -> normalized.getOrDefault(qualifiedName, ExpressionFactory.falseExpression()));
     }
 
+    /**
+     * CTE names the current {@link #injectFilterCtes} pass must not generate. Held per thread for
+     * the duration of one pass, so the recursive walkers need no extra parameter.
+     */
+    private static final ThreadLocal<Set<String>> RESERVED_CTE_NAMES = new ThreadLocal<>();
+
+    /** Every CTE name declared anywhere under {@code node}, at any nesting depth. */
+    private static void collectDeclaredCteNames(JsonNode node, Set<String> into) {
+        if (node == null || node.isNull()) return;
+        if (node.isObject()) {
+            JsonNode cteMap = node.get(FIELD_CTE_MAP);
+            if (cteMap != null) {
+                JsonNode map = cteMap.get(FIELD_MAP);
+                if (map != null && map.isArray()) {
+                    for (JsonNode entry : map) {
+                        String key = asText(entry, FIELD_KEY);
+                        if (key != null) into.add(key);
+                    }
+                }
+            }
+        }
+        for (JsonNode child : node) {
+            collectDeclaredCteNames(child, into);
+        }
+    }
+
     private static JsonNode injectFilterCtes(JsonNode query, Function<String, JsonNode> filterForTable) {
         var result = query.deepCopy();
         var statementNode = (ObjectNode) getFirstStatementNode(result);
@@ -2811,7 +2837,18 @@ public class Transformations {
         // (top-level or nested) — collecting every real base table and rewriting each reference to
         // its filter-CTE name. CTE bodies are handled inside the dispatcher so nesting at any depth
         // is filtered uniformly.
-        renameBaseTablesInStatementNode(statementNode, new HashSet<>(), tablesToWrap);
+        // Names generated below must avoid every CTE name the query already declares, at any depth.
+        // The per-scope visible set cannot serve: a CTE body has its own name removed from it (a
+        // same-named reference there is the real table), so a body would regenerate the name of the
+        // CTE enclosing it and reference itself. Collected once, up front.
+        Set<String> reservedCteNames = new HashSet<>();
+        collectDeclaredCteNames(statementNode, reservedCteNames);
+        RESERVED_CTE_NAMES.set(reservedCteNames);
+        try {
+            renameBaseTablesInStatementNode(statementNode, new HashSet<>(), tablesToWrap);
+        } finally {
+            RESERVED_CTE_NAMES.remove();
+        }
 
         if (!tablesToWrap.isEmpty()) {
             ArrayNode newMap = JsonNodeFactory.instance.arrayNode();
@@ -3004,7 +3041,7 @@ public class Transformations {
                 if (userCteNames.contains(tableName)) return; // CTE reference — skip
                 String schema = fromNode.has(FIELD_SCHEMA_NAME) ? fromNode.get(FIELD_SCHEMA_NAME).asText() : "";
                 String catalog = fromNode.has(FIELD_CATALOG_NAME) ? fromNode.get(FIELD_CATALOG_NAME).asText() : "";
-                String cteKey = buildCteKey(tableName, schema, catalog);
+                String cteKey = freshCteKey(buildCteKey(tableName, schema, catalog));
                 if (!tablesToWrap.containsKey(cteKey)) {
                     tablesToWrap.put(cteKey, (ObjectNode) fromNode.deepCopy());
                 }
@@ -3059,6 +3096,26 @@ public class Transformations {
         if (!schema.isEmpty()) sb.append(schema).append(".");
         sb.append(table);
         return sb.toString();
+    }
+
+    /**
+     * {@code base}, or {@code base_1}, {@code base_2}, ... — the first name the query does not
+     * already declare as a CTE (see {@link #RESERVED_CTE_NAMES}). Reusing one would make the filter
+     * CTE's body reference that CTE instead of the table, which is what happens when a query that
+     * already carries filter CTEs is authorized again (the Flight server authorizes a query once
+     * for its info and once for its stream).
+     */
+    private static String freshCteKey(String base) {
+        Set<String> reserved = RESERVED_CTE_NAMES.get();
+        if (reserved == null || !reserved.contains(base)) {
+            return base;
+        }
+        String candidate = base;
+        int suffix = 0;
+        while (reserved.contains(candidate)) {
+            candidate = base + "_" + (++suffix);
+        }
+        return candidate;
     }
 
     private static String buildCteKey(String tableName, String schema, String catalog) {
