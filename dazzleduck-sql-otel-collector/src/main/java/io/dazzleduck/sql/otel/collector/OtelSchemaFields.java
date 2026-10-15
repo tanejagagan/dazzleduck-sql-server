@@ -44,16 +44,48 @@ class OtelSchemaFields {
     }
 
     static Field mapField(String name) {
+        return mapField(name, new ArrowType.Utf8());
+    }
+
+    /** A {@code MAP(VARCHAR, valueType)} column; values are nullable. */
+    static Field mapField(String name, ArrowType valueType) {
+        return mapField(name, valueType, null);
+    }
+
+    /** As {@link #mapField(String, ArrowType)}, with {@code valueMetadata} on the value field. */
+    static Field mapField(String name, ArrowType valueType, Map<String, String> valueMetadata) {
         return new Field(name,
                 FieldType.nullable(new ArrowType.Map(false)),
                 List.of(new Field("entries",
                         FieldType.notNullable(new ArrowType.Struct()),
                         List.of(
                                 new Field("key", FieldType.notNullable(new ArrowType.Utf8()), null),
-                                new Field("value", FieldType.nullable(new ArrowType.Utf8()), null)
+                                new Field("value", new FieldType(true, valueType, null, valueMetadata), null)
                         )
                 ))
         );
+    }
+
+    /**
+     * The typed companions of the {@code prefix} attribute map, in {@link AttributeType} order:
+     * {@code prefix_int}, {@code prefix_double}, {@code prefix_bool}, {@code prefix_bytes} and
+     * {@code prefix_json}. The plain {@code prefix} map (strings) is not included.
+     */
+    static List<Field> typedAttributeFields(String prefix) {
+        List<Field> fields = new ArrayList<>(AttributeType.TYPED.size());
+        for (AttributeType type : AttributeType.TYPED) {
+            fields.add(mapField(prefix + type.suffix(), type.arrowType(), type.metadata()));
+        }
+        return fields;
+    }
+
+    /** {@code head}, then the typed attribute maps for each of {@code prefixes}, in order. */
+    static List<Field> withTypedAttributes(List<Field> head, String... prefixes) {
+        List<Field> fields = new ArrayList<>(head);
+        for (String prefix : prefixes) {
+            fields.addAll(typedAttributeFields(prefix));
+        }
+        return fields;
     }
 
     static Field listField(String name, ArrowType elementType) {

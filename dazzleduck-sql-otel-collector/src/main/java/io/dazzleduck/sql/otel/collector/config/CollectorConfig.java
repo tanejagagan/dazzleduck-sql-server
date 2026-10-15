@@ -321,6 +321,15 @@ public class CollectorConfig {
         return config.hasPath(fullPath) && config.getBoolean(fullPath);
     }
 
+    /**
+     * See {@code attributes.string_copy} in reference.conf; on unless set to false. Strict like
+     * {@link #getMetricsWriteDescription()}: a value that is not a boolean fails startup.
+     */
+    public boolean getAttributesStringCopy() {
+        String fullPath = CONFIG_PREFIX + ".attributes.string_copy";
+        return !config.hasPath(fullPath) || config.getBoolean(fullPath);
+    }
+
     /** The {@code compaction} block, parsed strictly; disabled when the block is absent. */
     public CompactionSettings getCompactionSettings() {
         String path = CONFIG_PREFIX + ".compaction";
@@ -350,6 +359,7 @@ public class CollectorConfig {
         props.setVerifySignature(getVerifySignature());
         props.setTempWriteLocation(getTempWriteLocation());
         props.setMetricsWriteDescription(getMetricsWriteDescription());
+        props.setAttributesStringCopy(getAttributesStringCopy());
         props.setCompactionSettings(getCompactionSettings());
         props.setQuerySettings(getQuerySettings());
         return props;

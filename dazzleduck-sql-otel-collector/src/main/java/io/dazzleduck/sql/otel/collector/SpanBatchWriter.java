@@ -1,7 +1,6 @@
 package io.dazzleduck.sql.otel.collector;
 
 import io.opentelemetry.proto.common.v1.InstrumentationScope;
-import io.opentelemetry.proto.common.v1.KeyValue;
 import io.opentelemetry.proto.resource.v1.Resource;
 import io.opentelemetry.proto.trace.v1.Span;
 import io.opentelemetry.proto.trace.v1.Status;
@@ -9,9 +8,6 @@ import org.apache.arrow.vector.BigIntVector;
 import org.apache.arrow.vector.TimeStampMilliVector;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
-import org.apache.arrow.vector.complex.ListVector;
-import org.apache.arrow.vector.complex.MapVector;
-import org.apache.arrow.vector.complex.writer.BaseWriter;
 
 import java.nio.charset.StandardCharsets;
 import java.util.HexFormat;
@@ -26,6 +22,14 @@ public class SpanBatchWriter {
     private static final HexFormat HEX = HexFormat.of();
 
     public static void write(List<SpanEntry> entries, VectorSchemaRoot root) {
+        write(entries, root, true);
+    }
+
+    /**
+     * @param stringCopy also write every non-string attribute value, as text, to the string
+     *                   attribute maps — the span's, its resource's, and its events' and links'
+     */
+    public static void write(List<SpanEntry> entries, VectorSchemaRoot root, boolean stringCopy) {
         root.allocateNew();
 
         VarCharVector traceIdVec        = (VarCharVector)        root.getVector(OtelTraceSchema.COL_TRACE_ID);
@@ -38,15 +42,15 @@ public class SpanBatchWriter {
         BigIntVector durationVec        = (BigIntVector)         root.getVector(OtelTraceSchema.COL_DURATION_MS);
         VarCharVector statusCodeVec     = (VarCharVector)        root.getVector(OtelTraceSchema.COL_STATUS_CODE);
         VarCharVector statusMsgVec      = (VarCharVector)        root.getVector(OtelTraceSchema.COL_STATUS_MESSAGE);
-        MapVector attributesVec         = (MapVector)            root.getVector(OtelTraceSchema.COL_ATTRIBUTES);
-        MapVector resourceAttributesVec = (MapVector)            root.getVector(OtelTraceSchema.COL_RESOURCE_ATTRIBUTES);
         VarCharVector scopeNameVec      = (VarCharVector)        root.getVector(OtelTraceSchema.COL_SCOPE_NAME);
         VarCharVector scopeVersionVec   = (VarCharVector)        root.getVector(OtelTraceSchema.COL_SCOPE_VERSION);
-        ListVector eventsVec            = (ListVector)           root.getVector(OtelTraceSchema.COL_EVENTS);
-        ListVector linksVec             = (ListVector)           root.getVector(OtelTraceSchema.COL_LINKS);
 
-        MapColumnWriter attrWriter    = MapColumnWriter.of(attributesVec);
-        MapColumnWriter resAttrWriter = MapColumnWriter.of(resourceAttributesVec);
+        AttributeMapsWriter attrWriter = AttributeMapsWriter.of(root,
+                OtelTraceSchema.COL_ATTRIBUTES, OtelTraceSchema.COL_TYPED_ATTRIBUTES, stringCopy, entries.size());
+        AttributeMapsWriter resAttrWriter = AttributeMapsWriter.of(root,
+                OtelTraceSchema.COL_RESOURCE_ATTRIBUTES, OtelTraceSchema.COL_TYPED_RESOURCE_ATTRIBUTES, stringCopy, entries.size());
+        SpanListWriter<Span.Event> eventsWriter = SpanListWriter.events(root, stringCopy);
+        SpanListWriter<Span.Link> linksWriter = SpanListWriter.links(root, stringCopy);
 
         for (int i = 0; i < entries.size(); i++) {
             SpanEntry entry = entries.get(i);
@@ -89,72 +93,15 @@ public class SpanBatchWriter {
                 scopeVersionVec.setNull(i);
             }
 
-            writeEvents(eventsVec.getWriter(), i, span);
-            writeLinks(linksVec.getWriter(), i, span);
+            eventsWriter.write(i, span.getEventsList());
+            linksWriter.write(i, span.getLinksList());
         }
 
+        attrWriter.finish(entries.size());
+        resAttrWriter.finish(entries.size());
+        eventsWriter.finish(entries.size());
+        linksWriter.finish(entries.size());
         root.setRowCount(entries.size());
-    }
-
-    private static void writeEvents(BaseWriter.ListWriter writer, int index, Span span) {
-        writer.setPosition(index);
-        if (span.getEventsCount() == 0) {
-            writer.writeNull();
-            return;
-        }
-        writer.startList();
-        for (Span.Event e : span.getEventsList()) {
-            BaseWriter.StructWriter sw = writer.struct();
-            sw.start();
-            writeStructVarChar(sw, "name", LogRecordConverter.emptyToNull(e.getName()));
-            if (e.getTimeUnixNano() > 0) {
-                sw.bigInt("time_ms").writeBigInt(e.getTimeUnixNano() / 1_000_000L);
-            } else {
-                sw.bigInt("time_ms").writeNull();
-            }
-            writeStructMap(sw, "attributes", e.getAttributesList());
-            sw.end();
-        }
-        writer.endList();
-    }
-
-    private static void writeLinks(BaseWriter.ListWriter writer, int index, Span span) {
-        writer.setPosition(index);
-        if (span.getLinksCount() == 0) {
-            writer.writeNull();
-            return;
-        }
-        writer.startList();
-        for (Span.Link l : span.getLinksList()) {
-            BaseWriter.StructWriter sw = writer.struct();
-            sw.start();
-            writeStructVarChar(sw, "trace_id", hexOrNull(l.getTraceId().toByteArray()));
-            writeStructVarChar(sw, "span_id", hexOrNull(l.getSpanId().toByteArray()));
-            writeStructMap(sw, "attributes", l.getAttributesList());
-            sw.end();
-        }
-        writer.endList();
-    }
-
-    private static void writeStructVarChar(BaseWriter.StructWriter sw, String name, String value) {
-        if (value == null) {
-            sw.varChar(name).writeNull();
-        } else {
-            sw.varChar(name).writeVarChar(value);
-        }
-    }
-
-    private static void writeStructMap(BaseWriter.StructWriter sw, String name, List<KeyValue> kvList) {
-        BaseWriter.MapWriter mw = sw.map(name, false);
-        if (kvList.isEmpty()) {
-            mw.writeNull();
-            return;
-        }
-        mw.startMap();
-        for (KeyValue kv : kvList) {
-            OtelSchemaFields.writeEntry(mw, kv.getKey(), LogRecordConverter.anyValueToString(kv.getValue()));
-        }
-        mw.endMap();
     }
 
     private static void writeVarChar(VarCharVector vec, int index, String value) {
@@ -165,7 +112,7 @@ public class SpanBatchWriter {
         }
     }
 
-    private static String hexOrNull(byte[] bytes) {
+    static String hexOrNull(byte[] bytes) {
         return bytes.length > 0 ? HEX.formatHex(bytes) : null;
     }
 }

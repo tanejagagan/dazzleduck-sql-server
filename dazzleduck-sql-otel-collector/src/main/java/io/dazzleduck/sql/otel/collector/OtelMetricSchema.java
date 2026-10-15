@@ -34,8 +34,12 @@ public class OtelMetricSchema {
     public static final int COL_QUANTILE_VALUES = 16;
     public static final int COL_IS_MONOTONIC = 17;
     public static final int COL_AGGREGATION_TEMPORALITY = 18;
+    /** First of the five typed {@code attributes_*} maps, in {@link AttributeType#TYPED} order. */
+    public static final int COL_TYPED_ATTRIBUTES = 19;
+    /** First of the five typed {@code resource_attributes_*} maps. */
+    public static final int COL_TYPED_RESOURCE_ATTRIBUTES = 24;
 
-    public static final Schema SCHEMA = new Schema(List.of(
+    public static final Schema SCHEMA = new Schema(OtelSchemaFields.withTypedAttributes(List.of(
             new Field("name",
                     FieldType.nullable(new ArrowType.Utf8()), null),
             new Field("description",
@@ -69,7 +73,7 @@ public class OtelMetricSchema {
                     FieldType.nullable(new ArrowType.Bool()), null),
             new Field("aggregation_temporality",
                     FieldType.nullable(new ArrowType.Utf8()), null)
-    ));
+    ), "attributes", "resource_attributes"));
 
     private static Field quantileValuesField() {
         Field qvStruct = new Field("quantile_value",

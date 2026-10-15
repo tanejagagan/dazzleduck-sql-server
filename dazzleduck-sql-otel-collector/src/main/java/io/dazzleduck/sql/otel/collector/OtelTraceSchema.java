@@ -30,8 +30,12 @@ public class OtelTraceSchema {
     public static final int COL_SCOPE_VERSION = 13;
     public static final int COL_EVENTS = 14;
     public static final int COL_LINKS = 15;
+    /** First of the five typed {@code attributes_*} maps, in {@link AttributeType#TYPED} order. */
+    public static final int COL_TYPED_ATTRIBUTES = 16;
+    /** First of the five typed {@code resource_attributes_*} maps. */
+    public static final int COL_TYPED_RESOURCE_ATTRIBUTES = 21;
 
-    public static final Schema SCHEMA = new Schema(List.of(
+    public static final Schema SCHEMA = new Schema(OtelSchemaFields.withTypedAttributes(List.of(
             new Field("trace_id",
                     FieldType.nullable(new ArrowType.Utf8()), null),
             new Field("span_id",
@@ -60,27 +64,27 @@ public class OtelTraceSchema {
                     FieldType.nullable(new ArrowType.Utf8()), null),
             eventListField(),
             linkListField()
-    ));
+    ), "attributes", "resource_attributes"));
 
     private static Field eventListField() {
         Field eventStruct = new Field("event",
                 FieldType.nullable(new ArrowType.Struct()),
-                List.of(
+                OtelSchemaFields.withTypedAttributes(List.of(
                         new Field("name", FieldType.nullable(new ArrowType.Utf8()), null),
                         new Field("time_ms", FieldType.nullable(new ArrowType.Int(64, true)), null),
                         OtelSchemaFields.mapField("attributes")
-                ));
+                ), "attributes"));
         return new Field("events", FieldType.nullable(new ArrowType.List()), List.of(eventStruct));
     }
 
     private static Field linkListField() {
         Field linkStruct = new Field("link",
                 FieldType.nullable(new ArrowType.Struct()),
-                List.of(
+                OtelSchemaFields.withTypedAttributes(List.of(
                         new Field("trace_id", FieldType.nullable(new ArrowType.Utf8()), null),
                         new Field("span_id", FieldType.nullable(new ArrowType.Utf8()), null),
                         OtelSchemaFields.mapField("attributes")
-                ));
+                ), "attributes"));
         return new Field("links", FieldType.nullable(new ArrowType.List()), List.of(linkStruct));
     }
 

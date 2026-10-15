@@ -33,10 +33,19 @@ public class OtelLogService extends LogsServiceGrpc.LogsServiceImplBase implemen
 
     private final OtelCollectorMetrics metrics;
     private final OtelServiceBase base;
+    private final boolean attributesStringCopy;
 
     public OtelLogService(Path scratchDir, IngestionHandler handler, IngestionConfig ingestionConfig,
                           ScheduledExecutorService flushScheduler, OtelCollectorMetrics metrics) {
+        this(scratchDir, handler, ingestionConfig, flushScheduler, metrics, true);
+    }
+
+    /** @param attributesStringCopy see {@code attributes.string_copy} in reference.conf */
+    public OtelLogService(Path scratchDir, IngestionHandler handler, IngestionConfig ingestionConfig,
+                          ScheduledExecutorService flushScheduler, OtelCollectorMetrics metrics,
+                          boolean attributesStringCopy) {
         this.metrics = metrics;
+        this.attributesStringCopy = attributesStringCopy;
         this.base = new OtelServiceBase(scratchDir, handler, ingestionConfig, flushScheduler, metrics);
     }
 
@@ -62,7 +71,8 @@ public class OtelLogService extends LogsServiceGrpc.LogsServiceImplBase implemen
         var sample = metrics.startSample();
 
         try {
-            Path arrowFile = base.writeArrowFile(queueId, entries, OtelLogSchema.SCHEMA, LogRecordBatchWriter::write);
+            Path arrowFile = base.writeArrowFile(queueId, entries, OtelLogSchema.SCHEMA,
+                    (batch, root) -> LogRecordBatchWriter.write(batch, root, attributesStringCopy));
             base.addBatch(queue, arrowFile).whenComplete(
                     OtelServiceBase.batchCompleteHandler(arrowFile, recordCount, queueId,
                             sample, metrics,

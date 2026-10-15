@@ -1,16 +1,16 @@
 package io.dazzleduck.sql.otel.collector;
 
-import io.opentelemetry.proto.common.v1.KeyValue;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.complex.MapVector;
 import org.apache.arrow.vector.complex.StructVector;
 
 import java.nio.charset.StandardCharsets;
-import java.util.List;
 
 /**
- * Writes an OTLP attribute map column by addressing the {@link MapVector}'s child vectors
- * directly, instead of going through {@code UnionMapWriter}.
+ * Writes a {@code MAP(VARCHAR, VARCHAR)} column by addressing the {@link MapVector}'s child
+ * vectors directly, instead of going through {@code UnionMapWriter}. It now writes only the JWT
+ * claims column: the attribute maps moved to {@link AttributeMapsWriter}, which goes one step
+ * further and loads each batch's buffers whole.
  *
  * <p>WHY THIS EXISTS. A JFR profile of the benchmark collector at 15.5k rec/s put <b>69.7% of
  * all Java CPU</b> inside the {@code UnionMapWriter} loop this replaces — and essentially none
@@ -77,30 +77,6 @@ final class MapColumnWriter {
 
     static MapColumnWriter of(MapVector vector) {
         return new MapColumnWriter(vector);
-    }
-
-    /**
-     * Writes one row's map. An empty {@code kvList} yields an empty — not null — map, which is
-     * what the {@code startMap()}/{@code endMap()} pair it replaces produced.
-     */
-    void write(int row, List<KeyValue> kvList) {
-        vector.startNewValue(row);
-        int count = kvList.size();
-        // Indexed, not for-each: protobuf's list is RandomAccess, and the iterator allocation
-        // showed up in the profile at 1.1% of the map-write path.
-        for (int i = 0; i < count; i++) {
-            KeyValue kv = kvList.get(i);
-            entries.setIndexDefined(entryIndex);
-            keyVector.setSafe(entryIndex, utf8(kv.getKey()));
-            String value = LogRecordConverter.anyValueToString(kv.getValue());
-            if (value == null) {
-                valueVector.setNull(entryIndex);
-            } else {
-                valueVector.setSafe(entryIndex, utf8(value));
-            }
-            entryIndex++;
-        }
-        vector.endValue(row, count);
     }
 
     /**

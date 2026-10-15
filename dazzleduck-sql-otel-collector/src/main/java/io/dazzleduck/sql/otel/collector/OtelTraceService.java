@@ -33,10 +33,19 @@ public class OtelTraceService extends TraceServiceGrpc.TraceServiceImplBase impl
 
     private final OtelCollectorMetrics metrics;
     private final OtelServiceBase base;
+    private final boolean attributesStringCopy;
 
     public OtelTraceService(Path scratchDir, IngestionHandler handler, IngestionConfig ingestionConfig,
                             ScheduledExecutorService flushScheduler, OtelCollectorMetrics metrics) {
+        this(scratchDir, handler, ingestionConfig, flushScheduler, metrics, true);
+    }
+
+    /** @param attributesStringCopy see {@code attributes.string_copy} in reference.conf */
+    public OtelTraceService(Path scratchDir, IngestionHandler handler, IngestionConfig ingestionConfig,
+                            ScheduledExecutorService flushScheduler, OtelCollectorMetrics metrics,
+                            boolean attributesStringCopy) {
         this.metrics = metrics;
+        this.attributesStringCopy = attributesStringCopy;
         this.base = new OtelServiceBase(scratchDir, handler, ingestionConfig, flushScheduler, metrics);
     }
 
@@ -62,7 +71,8 @@ public class OtelTraceService extends TraceServiceGrpc.TraceServiceImplBase impl
         var sample = metrics.startSample();
 
         try {
-            Path arrowFile = base.writeArrowFile(queueId, entries, OtelTraceSchema.SCHEMA, SpanBatchWriter::write);
+            Path arrowFile = base.writeArrowFile(queueId, entries, OtelTraceSchema.SCHEMA,
+                    (batch, root) -> SpanBatchWriter.write(batch, root, attributesStringCopy));
             base.addBatch(queue, arrowFile).whenComplete(
                     OtelServiceBase.batchCompleteHandler(arrowFile, spanCount, queueId,
                             sample, metrics,

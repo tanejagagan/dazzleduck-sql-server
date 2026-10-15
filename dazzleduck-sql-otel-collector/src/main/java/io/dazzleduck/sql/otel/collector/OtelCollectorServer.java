@@ -106,14 +106,16 @@ public class OtelCollectorServer implements Closeable {
             // existed but could never be closed if creation failed.
             logService     = new OtelLogService(
                     createScratchDir(tempWriteDir, OtelLogService.SCRATCH_PREFIX),
-                    handler, ingestionConfig, flushScheduler, collectorMetrics);
+                    handler, ingestionConfig, flushScheduler, collectorMetrics,
+                    props.isAttributesStringCopy());
             traceService   = new OtelTraceService(
                     createScratchDir(tempWriteDir, OtelTraceService.SCRATCH_PREFIX),
-                    handler, ingestionConfig, flushScheduler, collectorMetrics);
+                    handler, ingestionConfig, flushScheduler, collectorMetrics,
+                    props.isAttributesStringCopy());
             metricsService = new OtelMetricsService(
                     createScratchDir(tempWriteDir, OtelMetricsService.SCRATCH_PREFIX),
                     handler, ingestionConfig, flushScheduler, collectorMetrics,
-                    props.isMetricsWriteDescription());
+                    props.isMetricsWriteDescription(), props.isAttributesStringCopy());
 
             if (!"jwt".equals(props.getAuthentication())) {
                 throw new IllegalStateException(
