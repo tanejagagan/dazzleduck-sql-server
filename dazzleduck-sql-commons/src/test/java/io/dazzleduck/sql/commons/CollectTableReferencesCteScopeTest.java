@@ -35,6 +35,31 @@ class CollectTableReferencesCteScopeTest {
         assertEquals(List.of("b", "src"), tables("WITH a AS (SELECT * FROM src), b AS (SELECT * FROM b JOIN a USING (id)) SELECT * FROM b"));
     }
 
+    // A forward reference — a CTE body naming a LATER sibling — binds to the real table, not the
+    // CTE: verified in DuckDB 1.5.5, where `WITH a AS (SELECT * FROM b), b AS (SELECT * FROM src)
+    // SELECT * FROM a` reads table b. So the table must be reported.
+
+    @Test
+    void aCteBodyNamingALaterCteReadsTheTable() throws Exception {
+        // b: the forward reference in a's body. src: read by b's own body, reported as well, since
+        // every CTE body is walked whether or not the main query uses it.
+        assertEquals(List.of("b", "src"), tables("WITH a AS (SELECT * FROM b), b AS (SELECT * FROM src) SELECT * FROM a"));
+    }
+
+    @Test
+    void aForwardReferenceIsReportedAlongsideTheTablesItJoins() throws Exception {
+        assertEquals(List.of("later", "other", "src"), tables(
+                "WITH first AS (SELECT * FROM src JOIN later USING (id)), later AS (SELECT * FROM other) "
+                        + "SELECT * FROM first"));
+    }
+
+    @Test
+    void aForwardReferenceInASubqueryReadsTheTable() throws Exception {
+        assertEquals(List.of("later", "src"), tables(
+                "WITH first AS (SELECT * FROM src WHERE id IN (SELECT id FROM later)), later AS (SELECT 1 AS id) "
+                        + "SELECT * FROM first"));
+    }
+
     @Test
     void theMainQuerySeesEveryCte() throws Exception {
         assertEquals(List.of("src"), tables("WITH a AS (SELECT * FROM src), b AS (SELECT 1 AS one) SELECT * FROM a, b"));
