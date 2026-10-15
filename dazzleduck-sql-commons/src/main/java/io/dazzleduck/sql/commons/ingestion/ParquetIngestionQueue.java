@@ -432,6 +432,34 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
     }
 
     /**
+     * Exposes {@code inputSql} as {@code __this} and applies {@code transformation} over it.
+     * The transformation is nested as a subquery rather than appended after the {@code __this}
+     * CTE, so a transformation that declares its own {@code WITH} clause stays valid SQL; its
+     * CTEs can still reference the outer {@code __this}. Returns {@code inputSql} unchanged when
+     * there is no transformation.
+     *
+     * <p>The closing parenthesis goes on its own line so a trailing {@code --} comment cannot
+     * swallow it; see {@link #embeddable} for semicolons and comments.
+     */
+    static String applyTransformation(String inputSql, String transformation) {
+        if (transformation == null || transformation.isBlank()) {
+            return inputSql;
+        }
+        return "WITH __this AS (%s) SELECT * FROM (%s\n)".formatted(inputSql, embeddable(transformation));
+    }
+
+    /**
+     * {@code transformation} as text that can be nested inside parentheses: the user's own SQL with
+     * only its trailing statement terminators and comments removed (see
+     * {@link TransformationText#stripTrailing}). A {@code ;} is valid at the end of a statement but
+     * not inside a subquery, and a trailing comment would otherwise run into the closing
+     * parenthesis.
+     */
+    static String embeddable(String transformation) {
+        return TransformationText.stripTrailing(transformation);
+    }
+
+    /**
      * The relation the output files are written from: the temp input files with the
      * transformation and any partition projections applied. This is also the relation the
      * watermark rows are computed over — same schema, same rows as the written output, read
@@ -448,10 +476,7 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
 
         // The transformation is fetched fresh from the handler on every write (currentWriteInputs)
         // so view-based and handler-refreshed transformations are always current without caching.
-        String transformation = inputs.transformation();
-        var querySql = (transformation != null && !transformation.isBlank())
-                ? "WITH __this AS (%s) %s".formatted(innerSql, transformation)
-                : innerSql;
+        var querySql = applyTransformation(innerSql, inputs.transformation());
 
         // Add handler-supplied derived-column projections (e.g. day(timestamp) AS day) so the
         // PARTITION_BY tokens resolve. Not needed for header-supplied partitionBy, which names

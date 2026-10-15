@@ -709,6 +709,94 @@ public class ParquetIngestionQueueTest {
     }
 
     @Test
+    public void testTransformationWithCte() throws Exception {
+        var service = new DeterministicScheduler();
+        var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());
+        // The transformation declares its own CTEs; the first one reads __this
+        String transformation = "WITH doubled AS (SELECT id, value * 2 AS doubled_value FROM __this), "
+                + "kept AS (SELECT * FROM doubled WHERE id >= 50) SELECT * FROM kept";
+        var postTaskFactory = createPostTaskFactory(new AtomicBoolean(), false, transformation);
+
+        try (var queue = new ParquetIngestionQueue(
+                TEST_APP_ID, INPUT_FORMAT, targetPath.toString(), "test-queue",
+                DEFAULT_MIN_BATCH_SIZE, Long.MAX_VALUE, Integer.MAX_VALUE, Long.MAX_VALUE,
+                DEFAULT_MAX_DELAY, postTaskFactory, service, clock)) {
+
+            var future = queue.add(createBatch(sourceFile1.toString(), "producer1", 0, DEFAULT_MIN_BATCH_SIZE + 1));
+            service.tick(1, TimeUnit.MILLISECONDS);
+            var result = future.get(2, SECONDS);
+
+            String outputFile = result.filesCreated().get(0);
+            TestUtils.isEqual(
+                "SELECT id, value * 2 AS doubled_value FROM (%s) WHERE id >= 50".formatted(sourceData(100)),
+                "SELECT * FROM read_parquet('%s')".formatted(outputFile));
+        }
+    }
+
+    @Test
+    public void testApplyTransformation() {
+        assertEquals("SELECT 1", ParquetIngestionQueue.applyTransformation("SELECT 1", null));
+        assertEquals("SELECT 1", ParquetIngestionQueue.applyTransformation("SELECT 1", "  "));
+        assertEquals("WITH __this AS (SELECT 1) SELECT * FROM (SELECT * FROM __this\n)",
+                ParquetIngestionQueue.applyTransformation("SELECT 1", "SELECT * FROM __this"));
+        // A transformation is used verbatim, minus its trailing terminators and comments.
+        assertEquals("SELECT a FROM __this WHERE b = 'x'",
+                ParquetIngestionQueue.embeddable("SELECT a FROM __this WHERE b = 'x'"));
+        assertEquals("SELECT * FROM __this", ParquetIngestionQueue.embeddable("SELECT * FROM __this; -- note"));
+    }
+
+    @Test
+    public void testTransformationWithModernLambdaSyntaxRunsWhenArrowLambdasAreDisabled() throws Exception {
+        // The transformation must reach DuckDB as written. Re-rendering it through DuckDB's parser
+        // would turn `lambda y: ...` and list comprehensions into the deprecated `y -> ...` form,
+        // which fails to bind under DISABLE_SINGLE_ARROW. lambda_syntax is a GLOBAL setting, so
+        // this runs on a private in-memory database rather than the shared pool.
+        String transformation = "SELECT list_transform([a], lambda y: y * 10)[1] AS b, "
+                + "[x FOR x IN [a] IF x >= 0][1] AS c FROM __this; -- trailing note";
+        String sql = ParquetIngestionQueue.applyTransformation("SELECT range AS a FROM range(3)", transformation)
+                + " ORDER BY b";
+        try (var conn = java.sql.DriverManager.getConnection("jdbc:duckdb:");
+             var st = conn.createStatement()) {
+            st.execute("SET lambda_syntax = 'DISABLE_SINGLE_ARROW'");
+            var values = new java.util.ArrayList<Long>();
+            try (var rs = st.executeQuery(sql)) {
+                while (rs.next()) values.add(rs.getLong(1));
+            }
+            assertIterableEquals(java.util.List.of(0L, 10L, 20L), values);
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource(delimiter = '|', value = {
+            "SELECT a * 10 AS b FROM __this",
+            "SELECT a * 10 AS b FROM __this;",
+            "'SELECT a * 10 AS b FROM __this;\n'",
+            "SELECT a * 10 AS b FROM __this -- trailing comment",
+            "WITH t AS (SELECT a * 10 AS b FROM __this) SELECT * FROM t;",
+            "SELECT a * 10 AS b FROM __this ;; ",
+            "SELECT a * 10 AS b FROM __this; -- note",
+            "'SELECT a * 10 AS b FROM __this;\n-- note'",
+            "SELECT a * 10 AS b FROM __this; /* c */",
+            "SELECT a * 10 AS b FROM __this -- a comment; with a semicolon",
+            "'-- leading comment\nSELECT a * 10 AS b FROM __this'",
+            "SELECT a * 10 AS b FROM __this WHERE '--;' <> 'x'",
+            "WITH __this AS (SELECT a * 10 AS b FROM __this) SELECT * FROM __this",
+            "SELECT a * 10 AS b FROM __this /* outer /* nested */ still */ ;",
+            "SELECT a * 10 AS b FROM __this WHERE E'\\';--' <> 'x'; -- note",
+            "SELECT a * 10 AS b FROM __this WHERE $$;--$$ <> 'x'; -- note",
+    })
+    public void testAppliedTransformationExecutes(String transformation) throws Exception {
+        // Every form that ran when the transformation was appended after the __this CTE must still
+        // run now that it is nested as a subquery.
+        String sql = ParquetIngestionQueue.applyTransformation("SELECT range AS a FROM range(3)", transformation)
+                + " ORDER BY b";
+        try (var conn = ConnectionPool.getConnection()) {
+            assertIterableEquals(java.util.List.of(0L, 10L, 20L),
+                    ConnectionPool.collectAll(conn, sql, rs -> rs.getLong(1)));
+        }
+    }
+
+    @Test
     public void testNullTransformationWritesAllColumns() throws Exception {
         var service = new DeterministicScheduler();
         var clock = new MutableClock(Instant.now(), ZoneId.systemDefault());

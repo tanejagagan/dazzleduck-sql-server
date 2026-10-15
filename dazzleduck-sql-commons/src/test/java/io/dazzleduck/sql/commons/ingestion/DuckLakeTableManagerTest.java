@@ -74,6 +74,25 @@ class DuckLakeTableManagerTest {
     }
 
     @Test
+    void createsTableWithCteTransformationColumns() throws Exception {
+        DuckLakeTableManager.ensureTable(mapping("cte_logs",
+                "WITH t AS (SELECT *, severity_text AS level FROM __this) SELECT * FROM t", LOGS));
+
+        assertEquals(List.of("severity_number", "severity_text", "body", "level"), columns("cte_logs"));
+    }
+
+    @Test
+    void createsTableWhenTransformationEndsWithSemicolonOrComment() throws Exception {
+        DuckLakeTableManager.ensureTable(
+                mapping("semi_logs", "SELECT *, severity_text AS level FROM __this;", LOGS));
+        DuckLakeTableManager.ensureTable(
+                mapping("comment_logs", "SELECT *, severity_text AS level FROM __this -- add level", LOGS));
+
+        assertEquals(List.of("severity_number", "severity_text", "body", "level"), columns("semi_logs"));
+        assertEquals(List.of("severity_number", "severity_text", "body", "level"), columns("comment_logs"));
+    }
+
+    @Test
     void createsTableWithRawSchemaWhenNoTransformation() throws Exception {
         DuckLakeTableManager.ensureTable(mapping("raw_logs", null, LOGS));
 

@@ -45,9 +45,35 @@ public class DuckLakeIngestionHandlerProviderTest {
                 "SELECT id, upper(category) AS category FROM __this"));
     }
 
+    @Test
+    public void testValidTransformationWithCte() {
+        // __this is referenced only inside the CTE body, not in the outer FROM
+        assertDoesNotThrow(() ->
+            DuckLakeIngestionTaskFactoryProvider.validateTransformation("q",
+                "WITH parsed AS (SELECT *, upper(category) AS cat FROM __this) SELECT id, cat FROM parsed"));
+    }
+
+    @Test
+    public void testValidTransformationWithChainedCtes() {
+        assertDoesNotThrow(() ->
+            DuckLakeIngestionTaskFactoryProvider.validateTransformation("q",
+                "WITH a AS (SELECT id, value FROM __this), b AS (SELECT id, value * 2 AS v2 FROM a) "
+                    + "SELECT * FROM b WHERE v2 > 10"));
+    }
+
     // -------------------------------------------------------------------------
     // Missing __this reference
     // -------------------------------------------------------------------------
+
+    @Test
+    public void testInvalidTransformationCteNotReadingThis() {
+        var ex = assertThrows(IllegalArgumentException.class, () ->
+            DuckLakeIngestionTaskFactoryProvider.validateTransformation("log",
+                "WITH x AS (SELECT * FROM some_other_table) SELECT * FROM x"));
+
+        assertTrue(ex.getMessage().contains("__this"),
+            "Error should mention __this, got: " + ex.getMessage());
+    }
 
     @Test
     public void testInvalidTransformationMissingThisTable() {
@@ -120,6 +146,97 @@ public class DuckLakeIngestionHandlerProviderTest {
             }]
             """);
         assertDoesNotThrow(provider::validate);
+    }
+
+    @Test
+    public void testValidatePassesWithCteTransformation() {
+        // A transformation starting with WITH is a full query and must not get the
+        // "SELECT *, <expr> FROM __this" shorthand wrapping.
+        var provider = providerFromHocon("""
+            ingestion_queue_table_mapping = [{
+                ingestion_queue = "log"
+                catalog = "loglake"
+                schema  = "main"
+                table   = "log"
+                transformation = "WITH t AS (SELECT id, ts FROM __this) SELECT * FROM t"
+            }]
+            """);
+        assertDoesNotThrow(provider::validate);
+    }
+
+    @Test
+    public void testShorthandOnKeywordPrefixedColumnIsStillWrapped() {
+        // with_flag / selected_at start with WITH / SELECT but are expressions, not full queries.
+        var provider = providerFromHocon("""
+            ingestion_queue_table_mapping = [
+                { ingestion_queue = "a", catalog = "loglake", schema = "main", table = "a",
+                  transformation = "with_flag AS f" },
+                { ingestion_queue = "b", catalog = "loglake", schema = "main", table = "b",
+                  transformation = "selected_at AS s" },
+                { ingestion_queue = "c", catalog = "loglake", schema = "main", table = "c",
+                  transformation = "  with t AS (SELECT * FROM __this) SELECT * FROM t" }
+            ]
+            """);
+        var mappings = provider.loadMappings();
+        assertEquals("SELECT *, with_flag AS f FROM __this", mappings.get("a").transformation());
+        assertEquals("SELECT *, selected_at AS s FROM __this", mappings.get("b").transformation());
+        assertEquals("  with t AS (SELECT * FROM __this) SELECT * FROM t", mappings.get("c").transformation());
+        assertDoesNotThrow(provider::validate);
+    }
+
+    @Test
+    public void testFullQueryNotStartingWithSelectOrWithIsNotWrapped() {
+        // A leading comment (common in multi-line HOCON), a parenthesized query and FROM-first
+        // syntax are full queries too; only a select-list expression is shorthand.
+        var provider = providerFromHocon("""
+            ingestion_queue_table_mapping = [
+                { ingestion_queue = "a", catalog = "loglake", schema = "main", table = "a",
+                  transformation = "-- parse once\\nWITH t AS (SELECT * FROM __this) SELECT * FROM t" },
+                { ingestion_queue = "b", catalog = "loglake", schema = "main", table = "b",
+                  transformation = "(SELECT id FROM __this)" },
+                { ingestion_queue = "c", catalog = "loglake", schema = "main", table = "c",
+                  transformation = "FROM __this SELECT id" },
+                { ingestion_queue = "d", catalog = "loglake", schema = "main", table = "d",
+                  transformation = "upper(level) AS lvl" }
+            ]
+            """);
+        var mappings = provider.loadMappings();
+        assertEquals("-- parse once\nWITH t AS (SELECT * FROM __this) SELECT * FROM t", mappings.get("a").transformation());
+        assertEquals("(SELECT id FROM __this)", mappings.get("b").transformation());
+        assertEquals("FROM __this SELECT id", mappings.get("c").transformation());
+        assertEquals("SELECT *, upper(level) AS lvl FROM __this", mappings.get("d").transformation());
+        assertDoesNotThrow(provider::validate);
+    }
+
+    @Test
+    public void testShorthandWithTrailingCommentOrSemicolonIsWrappedValidly() {
+        // Appended verbatim, a trailing comment swallowed " FROM __this" and a trailing ';' ended the
+        // statement before it; both are trimmed before wrapping.
+        var provider = providerFromHocon("""
+            ingestion_queue_table_mapping = [
+                { ingestion_queue = "a", catalog = "loglake", schema = "main", table = "a",
+                  transformation = "upper(level) AS lvl -- uppercase the level" },
+                { ingestion_queue = "b", catalog = "loglake", schema = "main", table = "b",
+                  transformation = "upper(level) AS lvl;" }
+            ]
+            """);
+        var mappings = provider.loadMappings();
+        assertEquals("SELECT *, upper(level) AS lvl FROM __this", mappings.get("a").transformation());
+        assertEquals("SELECT *, upper(level) AS lvl FROM __this", mappings.get("b").transformation());
+        assertDoesNotThrow(provider::validate);
+    }
+
+    @Test
+    public void testValidateRejectsMultipleStatements() {
+        // Only the first statement used to be checked, and the write then failed on every batch.
+        var provider = providerFromHocon("""
+            ingestion_queue_table_mapping = [{
+                ingestion_queue = "log", catalog = "loglake", schema = "main", table = "log"
+                transformation = "SELECT * FROM __this; SELECT 1"
+            }]
+            """);
+        var e = assertThrows(IllegalArgumentException.class, provider::validate);
+        assertTrue(e.getMessage().contains("single statement"), e.getMessage());
     }
 
     @Test
