@@ -181,6 +181,43 @@ public class RestrictedDatasourceOnlyAuthorizerSecurityTest {
                 authorizer.authorize("user", DB, SCHEMA, tree, claims("orders", "tenant_id='abc'")));
     }
 
+    /**
+     * Only one statement is authorized and only one is filtered, but the whole tree is rendered
+     * back into the SQL that runs and DuckDB executes all of it, returning the last statement's
+     * result. A query carrying more than one statement is refused for that reason, in RESTRICTED
+     * mode and in the redirect mode this authorizer dispatches to.
+     */
+    @Test
+    void multiStatementQuery_rejected() throws SQLException, JsonProcessingException {
+        for (String sql : new String[]{
+                "SELECT id FROM orders; SELECT secret FROM sensitive",
+                "SELECT id FROM orders; SELECT id FROM orders",
+                "SELECT id FROM orders;SELECT 1"}) {
+            JsonNode tree = Transformations.parseToTree(conn, sql);
+            // The message matters: it must be this guard refusing, not a later check.
+            var refused = assertThrows(UnauthorizedException.class, () ->
+                    authorizer.authorize("user", DB, SCHEMA, tree, claims("orders", "tenant_id='abc'")), sql);
+            assertTrue(refused.getMessage().contains("Multi-statement"), refused.getMessage());
+            var refusedRedirect = assertThrows(UnauthorizedException.class, () ->
+                    authorizer.authorize("user", DB, SCHEMA, tree,
+                            Map.of(Headers.HEADER_TOKEN_TYPE, "redirect")), sql);
+            assertTrue(refusedRedirect.getMessage().contains("Multi-statement"), refusedRedirect.getMessage());
+        }
+    }
+
+    /** A single statement with a trailing semicolon is one statement, and stays allowed. */
+    @Test
+    void aTrailingSemicolonIsStillOneStatement() throws Exception {
+        JsonNode tree = Transformations.parseToTree(conn, "SELECT id FROM orders ORDER BY id;");
+        JsonNode authorized = authorizer.authorize("user", DB, SCHEMA, tree,
+                claims("orders", "tenant_id='abc'"));
+        List<Object> ids = new ArrayList<>();
+        try (ResultSet rs = conn.createStatement().executeQuery(Transformations.parseToSql(conn, authorized))) {
+            while (rs.next()) ids.add(rs.getObject(1));
+        }
+        assertEquals(List.of(1, 3), ids);
+    }
+
     @Test
     void orderBySubquery_unauthorizedTable_rejected() throws SQLException, JsonProcessingException {
         // Regression: ORDER BY subqueries live under modifiers[], not the "order_bys" field the

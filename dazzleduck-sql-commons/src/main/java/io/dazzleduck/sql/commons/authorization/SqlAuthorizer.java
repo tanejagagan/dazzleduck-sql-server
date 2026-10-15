@@ -195,6 +195,24 @@ public interface SqlAuthorizer {
     }
 
     /**
+     * Refuses a query that carries more than one statement, naming {@code mode} in the message.
+     *
+     * <p>Authorization reads one statement — {@link Transformations#getFirstStatementNode} — and the
+     * filter injection rewrites only that one, but the whole tree is rendered back into the SQL that
+     * runs, and DuckDB executes every statement in it and returns the last one's result. A trailing
+     * statement would therefore run against tables this authorizer never checked and never filtered,
+     * so a mode that restricts which tables may be read, or which rows of them, has to refuse the
+     * shape outright.
+     */
+    static void requireSingleStatement(JsonNode query, String mode) throws UnauthorizedException {
+        JsonNode statements = query.get(ExpressionConstants.FIELD_STATEMENTS);
+        if (statements != null && statements.isArray() && statements.size() > 1) {
+            throw new UnauthorizedException(
+                    "Multi-statement queries are not allowed in " + mode + " mode.");
+        }
+    }
+
+    /**
      * A filter for a path or function grant is applied by {@link #addFilterToTableFunction}, which
      * adds it to the SELECT that {@link Transformations#getSelectForTableFunction} identifies. When
      * there is no such SELECT the filter has nowhere to go, and the old code then returned

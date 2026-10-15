@@ -35,14 +35,7 @@ public class RestrictedReadOnlyAuthorizer implements SqlAuthorizer {
                               Map<String, String> verifiedClaims) throws UnauthorizedException {
         SelectOnlyAuthorizer.INSTANCE.authorize(user, database, schema, query, verifiedClaims);
 
-        // Multi-statement queries are rejected here: the CTE filter injection only
-        // rewrites the first statement, and DuckDB JDBC's executeQuery returns the
-        // last statement's result — leaving any trailing statements unfiltered.
-        JsonNode statementsNode = query.get(ExpressionConstants.FIELD_STATEMENTS);
-        if (statementsNode != null && statementsNode.isArray() && statementsNode.size() > 1) {
-            throw new UnauthorizedException(
-                    "Multi-statement queries are not allowed in RESTRICT_READ_ONLY mode.");
-        }
+        SqlAuthorizer.requireSingleStatement(query, "RESTRICT_READ_ONLY");
 
         // Block any TABLE_FUNCTION usage (read_parquet, read_json, duckdb_tables,
         // duckdb_secrets, etc.). The CTE-based filter injection only rewrites BASE_TABLE

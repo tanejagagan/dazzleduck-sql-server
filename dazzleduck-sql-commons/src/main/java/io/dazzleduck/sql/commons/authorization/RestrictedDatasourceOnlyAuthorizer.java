@@ -64,6 +64,10 @@ public class RestrictedDatasourceOnlyAuthorizer implements SqlAuthorizer {
 
     @Override
     public JsonNode authorize(String user, String database, String schema, JsonNode query, Map<String, String> verifiedClaims) throws UnauthorizedException {
+        // First, so that it also covers the redirect dispatch below: that authorizer reads one
+        // statement as well.
+        SqlAuthorizer.requireSingleStatement(query, "RESTRICTED");
+
         // Dispatch to redirect authorizer when the token signals redirect mode
         String tokenType = verifiedClaims.get(Headers.HEADER_TOKEN_TYPE);
         if (HEADER_TOKEN_REDIRECT.equalsIgnoreCase(tokenType)) {
