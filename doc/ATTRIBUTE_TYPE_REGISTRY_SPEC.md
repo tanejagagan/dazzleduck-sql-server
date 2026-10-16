@@ -28,8 +28,9 @@ recorded, not rejected); value statistics; exact first-seen times across a fleet
 |---|---|
 | **Where** | Whatever table each stream's own config names — `attribute_types_table` in that queue's mapping, resolved in the queue's catalog and schema |
 | **When** | In the same transaction that registers the batch's Parquet files |
+| **Created by** | The collector, `CREATE TABLE IF NOT EXISTS` in that same transaction, so a missing table is created by the first batch that needs it |
 | **Shape** | Append-only, duplicates tolerated, nothing ever updated or deleted |
-| **Dedup** | A per-process cache, built from the tables at startup |
+| **Dedup** | A per-process cache of committed mappings, built from the tables at startup |
 | **Scope** | DuckLake queues only; opt-in per stream |
 
 ### Key and table
@@ -149,6 +150,16 @@ written as a SQL literal at all (a NUL byte) is dropped rather than sent. The me
 `SidecarRows` in commons, the producer-side counterpart to `WatermarkSpec`: rows derived by
 whoever built the batch, from information the write path never sees.
 
+**The collector creates the table.** `CREATE TABLE IF NOT EXISTS`, with the schema above, in the
+queue's catalog and schema, queued ahead of the insert in that same transaction. So the first batch
+carrying a new mapping creates the table and records into it atomically, and nothing has to be
+provisioned to turn the feature on — which is what the opt-in-by-config model implies. An operator
+who would rather own the DDL can create it beforehand; the statement is then a no-op.
+
+This is also the other half of why the startup cache load tolerates a missing table: before the
+first batch there is nothing to read, and that is the normal state of a newly configured stream,
+not an error.
+
 **Append-only, duplicates tolerated.** The insert reads nothing, so it cannot conflict with
 another process appending the same value and adds no scan to the transaction. Two collectors
 seeing a mapping for the first time both record it; a reader deduplicates with `GROUP BY` over the
@@ -162,10 +173,23 @@ process's streams are not cached for nothing. It never fails startup: a table th
 yet is where every deployment begins, and any other failure costs duplicate rows in a table that
 tolerates them.
 
-**Settled on the batch's own future, not optimistically.** A mapping is claimed when the batch is
-built, carried on it, and marked known only once that batch's registration has committed; a batch
-that failed releases its mappings so a later one carries them again. Marking them known when they
-were merely sent would lose a mapping on any rollback.
+**A batch carries every mapping that is not yet committed, and is settled by its own outcome.** A
+mapping is marked known only once a batch that carried it has committed; a batch that fails changes
+nothing. Marking a mapping known when it was merely sent would lose it on any rollback.
+
+What a batch carries is decided against committed mappings only — *not* against what other batches
+have in flight. An earlier draft skipped a mapping another in-flight batch was already carrying,
+which is wrong, and in a way that defeats the whole point of the in-transaction write. With batches
+A and B both containing a new `x:int`: A is built and carries it; B is built while A is in flight,
+sees it as already handled and carries nothing; B commits; A fails. B's files are registered with
+no `x:int` row to explain them. A later batch would repair it, but until then — and forever, if `x`
+never arrives as an int again — the data holds a mapping the registry denies.
+
+Carrying it on every batch gives the invariant instead: **a batch that does not carry a mapping its
+data contains is one whose mapping was already committed**, since `known` only ever gains a mapping
+from a commit that included it. The cost is a duplicate row per overlapping batch, on the first
+appearance of a mapping only, bounded by how many batches are in flight at once — which the
+append-only table and its grouping readers already absorb.
 
 ## Keeping it off the hot path
 
@@ -229,7 +253,7 @@ Micrometer meters, tagged with `queue` like the collector's existing ones except
 | `otel.attribute_types.persisted` | counter | mappings committed with a batch's files |
 | `otel.attribute_types.rollbacks` | counter | mappings released because their batch did not commit; a later batch carries them again |
 | `otel.attribute_types.dropped` | counter | mappings not recorded: past `max_entries`, or a name that cannot be written as a SQL literal |
-| `otel.attribute_types.in_flight` | gauge | mappings on a batch that has not committed yet (process-wide) |
+| `otel.attribute_types.in_flight` | gauge | mappings carried on a batch that has not committed yet (process-wide) |
 | `otel.attribute_types.known` | gauge | mappings the cache holds (process-wide) |
 
 A non-zero `rollbacks` rate means batches are failing, which the writer metrics already report; a
@@ -265,6 +289,10 @@ climbing `dropped` means `max_entries` is too small for the attribute cardinalit
 
 1. The atomicity trade: a rejected row fails the batch. Accepted here, with the mitigations above —
    worth confirming that is the right call versus never touching ingestion.
-2. Whether `max_entries` should be per stream as well as per process. It is global today, so one
+2. Whether `max_entries` should be per stream as well as per process. It is global, so one
    pathological stream can exhaust the budget for the rest.
 3. The end-to-end CPU measurement above, which needs tightening before the code lands.
+
+Settled in review: who creates the table (the collector, in the same transaction), and that a batch
+carries every uncommitted mapping rather than skipping one another batch has in flight. Both are
+written into the decisions above.
