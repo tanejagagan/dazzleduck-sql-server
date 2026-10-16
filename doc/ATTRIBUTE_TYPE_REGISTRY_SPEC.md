@@ -26,7 +26,7 @@ recorded, not rejected); value statistics; exact first-seen times across a fleet
 
 | | |
 |---|---|
-| **Where** | One table per schema, named per queue by `attribute_types_table` in that queue's mapping, resolved in the queue's own catalog and schema |
+| **Where** | Whatever table each stream's own config names — `attribute_types_table` in that queue's mapping, resolved in the queue's catalog and schema |
 | **When** | In the same transaction that registers the batch's Parquet files |
 | **Shape** | Append-only, duplicates tolerated, nothing ever updated or deleted |
 | **Dedup** | A per-process cache, built from the tables at startup |
@@ -53,7 +53,8 @@ OTLP `AnyValue` case, not the column.
 
 ### Configuration
 
-Per stream, in the queue's own mapping — optional, and the only switch that turns recording on:
+Per stream, in the queue's own mapping — optional, and the only switch that turns recording on.
+How many tables there end up being is whatever these name:
 
 ```hocon
 ingestion_queue_table_mapping = [
@@ -65,11 +66,19 @@ ingestion_queue_table_mapping = [
         }
     },
     {
-        # Same schema, same table name: this stream shares the table above.
+        # Same schema, same name: this stream shares the table above.
         ingestion_queue = "traces"
         catalog = "my_catalog", schema = "main", table = "spans"
         additional_parameters {
             attribute_types_table = "otel_attribute_types"
+        }
+    },
+    {
+        # Same schema, a different name: its own table, next to the one above.
+        ingestion_queue = "audit"
+        catalog = "my_catalog", schema = "main", table = "audit"
+        additional_parameters {
+            attribute_types_table = "audit_attribute_types"
         }
     },
     {
@@ -118,13 +127,17 @@ Every read groups, because the table is append-only and duplicates are expected.
 
 ## Decisions
 
-**Per-queue table, not one global one.** `watermark_table` already works this way: an unqualified
-name resolved in the queue's own catalog and schema. That puts the registry beside the tables it
-describes, so a query can join them, and it lets streams sharing a schema share one table (their
-rows kept apart by `ingestion_queue`) or have one each. It also removes a configuration item that
-could not have been right: with a dynamic queue registry the collector does not know a queue's
-schema until a batch arrives. Resolution therefore happens in `DuckLakePostIngestionTask`, the one
-place that knows it.
+**The table is per-stream config, not a fixed layout.** `watermark_table` already works this way:
+an unqualified name in the queue's mapping, resolved in that queue's own catalog and schema. So the
+registry lands beside the tables it describes and a query can join them, and the operator decides
+everything else — two streams may name one table and share it, their rows kept apart by
+`ingestion_queue`, or each may name its own, and a stream that names none records nothing.
+
+Nothing here imposes one table per schema, or any other arrangement; the shape of the deployment is
+the config's to choose. What follows from it is only that resolution happens in
+`DuckLakePostIngestionTask`, the one place that knows which catalog and schema a batch went to —
+which is also why the name cannot be configured process-wide: with a dynamic queue registry the
+collector does not know a queue's schema until a batch arrives.
 
 **Written in the ingestion transaction, not by a background writer.** A background writer was
 built first and replaced. The transaction gives the property that matters — a registered file
@@ -232,7 +245,7 @@ climbing `dropped` means `max_entries` is too small for the attribute cardinalit
    be added as a column later without changing what is there.
 3. **Event name as a dimension** — no, same reasoning.
 4. **Detection fallback** — not needed; the previous-row filter met the target (above).
-5. **Where the registry lives** — per queue, shareable, resolved per schema (above).
+5. **Where the registry lives** — wherever each stream's config says. Not a fixed layout (above).
 6. **Retention** — none. The table grows only with distinct mappings per stream, and `max_entries`
    bounds what any one process will add. Duplicates make it grow with collector restarts, which a
    reader's `GROUP BY` absorbs; if that ever matters, a periodic `DELETE`-and-reinsert of the
