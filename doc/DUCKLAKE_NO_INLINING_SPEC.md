@@ -1,8 +1,9 @@
 # DuckLake Data Inlining Must Be Off — Design Specification
 
-Status: **proposed.** Small and self-contained, but it has one trap worth reviewing before the code
-lands: there are five places inlining can be switched on and they are not all visible in the same
-view.
+Status: **accepted.** Both open questions are settled (see the last section): the collector refuses
+to start, and the watermark's `INSERT` becomes a write-then-register. One trap survives into the
+implementation: there are five places inlining can be switched on and they are not all visible in
+the same view.
 
 ## The problem
 
@@ -55,7 +56,8 @@ design" motivation an earlier draft of this gave, and the dependency
 Parquet file wrote no delete file — the delete went into a catalog table
 (`ducklake_inlined_delete_<n>`); at limit 0 the same delete wrote a delete file. That is what makes
 this matter for the watermark's conflict path, where the snapshot-id tightening is an `UPDATE`, so a
-delete plus an insert.
+delete plus an insert — and it is why the check is still needed after that path is the *only* SQL
+write left on a watermark table (see below).
 
 Step 1 alone guarantees nothing, which is the point of step 2 — see below.
 
@@ -124,6 +126,60 @@ whether something else in the process had already called `validate()`. An instan
 changed by whoever starts first is order-dependent, and a test or a co-tenant catalog can be on the
 receiving end. The fixture now states the limit it needs. See the note under Scope.
 
+## The watermark becomes a write-then-register
+
+Decided in review. The watermark rows stop being an `INSERT ... VALUES` inside the ingestion
+transaction and become what the attribute type registry already does: the rows are written as a
+Parquet file *before* the transaction, and `ducklake_add_data_files` registers that file *inside*
+it, alongside the batch's own data files. Atomicity is unchanged — registration and the data files
+still commit or roll back together — and the mechanism is the one `SidecarRows` already provides, so
+this unifies the two tables rather than adding a second way of doing it.
+
+Four things were measured before accepting it, because two of them constrain the implementation and
+one of them retires an argument this spec was making.
+
+**1. The sidecar file's column types must match the table's.** `ducklake_add_data_files` does not
+cast. Registering an all-VARCHAR file — which is exactly what `SidecarRows.copySql` produces today,
+since it renders values as string literals in a `VALUES` list — into a table with `TIMESTAMP` and
+`BIGINT` columns fails:
+
+```
+Invalid Input Error: Failed to map column "min_ts" from file "dd_varchar.parquet" to the
+column in table "wm"
+* Expected one of TIMESTAMP_NS, TIMESTAMP, TIMESTAMP_MS, TIMESTAMP_S, found type VARCHAR
+```
+
+The registry got away with it because its columns are all strings. The watermark's are not, so the
+sidecar writer needs the target table's column types in its projection. The same typed file
+registers and reads back correctly. This is the one real piece of work in the conversion, and it is
+a change to `SidecarRows`, which both tables then share.
+
+**2. The tightening `UPDATE` still finds its rows.** It identifies them by `rowid` from
+`ducklake_table_insertions` for the committed snapshot, and that was written against rows inserted
+by SQL. Rows that arrive as a *registered file* are returned there too — a one-row sidecar
+registered in snapshot 2 came back from `ducklake_table_insertions('c','main','wm',2,2)` with
+`rowid = 0`, and the `UPDATE` keyed on it changed exactly that row. So the conflict path survives
+the conversion unmodified.
+
+**3. The tightening now rewrites the sidecar instead of editing catalog rows.** With inlining off,
+the `UPDATE` expired the registered file (`end_snapshot` set) and wrote a replacement Parquet file in
+the new snapshot, with nothing inlined. That is correct but it leaves an expired file for snapshot
+expiry and cleanup to remove — housekeeping the compactor already does. The cost is bounded by how
+often the tightening fires at all, which is only when a competing writer takes the predicted
+snapshot id.
+
+**4. It does *not* remove the need for the startup check** — the old open question asserted it
+would, and that was wrong. The tightening is still an `UPDATE`, so it is still an insert/delete plan
+and still inlinable. At the default limit of 10 the same tightening put **one row in
+`ducklake_inlined_data_<n>` and one in `ducklake_inlined_delete_<n>`**, and left the original file
+unexpired — so the file on disk said `snapshot_id = 4` while the table read `2`, with the entire
+correction living in the catalog database. With inlining off, zero inlined rows. The check therefore
+stays, and this measurement is the sharpest argument for it in the whole spec: the inlined case is
+not merely untidy, it is a registered Parquet file that disagrees with the table it belongs to.
+
+So the conversion buys a shorter transaction, one write mechanism instead of two, and a watermark
+table whose normal path never issues a row-level write — not an escape from the check.
+
 ## Failure message
 
 Naming the table and quoting the remedy, since the fix is not guessable:
@@ -144,20 +200,29 @@ option for a local misconfiguration would be a global change to fix a local one.
 
 ## Why fail startup rather than warn
 
-The failure is silent and slow otherwise. Nothing errors, writes succeed, queries return correct
+**Decided in review: it refuses to start.** The failure is silent and slow otherwise. Nothing errors, writes succeed, queries return correct
 results — and the catalog grows without bound while the operator believes data is in object
 storage. By the time it is noticed, the catalog holds rows that have to be flushed before anything
 can be migrated or compacted. A collector that refuses to start names the problem at the one moment
 someone is watching.
 
 The counter-argument is that this makes the collector refuse to start over a configuration that
-"works". That is accepted here on the grounds that it works in a way nobody asked for; the fix is
-one statement and the message contains it.
+"works". That is accepted on the grounds that it works in a way nobody asked for; the fix is one
+statement and the message contains it. The measurement in point 4 above settles the proportionality
+question the alternative rested on: an inlined tightening leaves a registered file whose contents
+contradict the table, which is not a condition to warn about and carry on from.
 
 ## Scope
 
 In: `DuckLakeInlining` in commons (disable, resolve the effective limit across all five sources,
 render the remedy), the startup check over the watermark tables, and a test per source.
+
+Also in, now that review has decided it: converting the watermark rows to a write-then-register.
+That is typed-column support in `SidecarRows` (finding 1 above), the watermark's sidecar write ahead
+of the transaction with its registration inside it, and a test of the conflict path proving the
+tightening still keys on the right `rowid` after the rows arrive as a file. It depends on
+`SidecarRows` landing with the registry (`doc/ATTRIBUTE_TYPE_REGISTRY_SPEC.md`) — the dependency runs
+that way only, and it is a sequencing one, not a design one.
 
 Also in, as stated rather than discovered: the disable is **instance-wide and cannot be narrower**.
 A per-connection `SET` was tried and does not exist in practice — `ConnectionPool` hands out
@@ -172,18 +237,18 @@ Out: anything about existing inlined rows. If a deployment already has them, the
 `ducklake_flush_inlined_data` — a compaction concern, and the collector should say so rather than
 try to flush on someone's behalf.
 
-## What review should settle
+## What review settled
 
-1. Whether refusing to start is right, or whether a loud warning plus a metric is enough. The case
-   for refusing: with a shared catalog this is a scalability fault, not a preference, and it is
-   invisible — nothing errors, writes succeed, queries are correct, and the catalog absorbs the
-   load until it does not.
-2. Whether the watermark's own `INSERT` should become a write-then-register like the registry's,
-   now that inlining is ruled out either way. It would avoid relying on this check at all, at the
-   cost of the data-path resolution and orphan handling the registry needed. Out of scope here.
+Nothing is left open. The two questions this spec carried were decided as follows:
 
-Settled in review, with the evidence folded in above: the schema scope as a fifth source; that
-registration is immune to inlining, so only tables the collector inserts into need checking; that
+1. **Refusing to start is right**, not a warning plus a metric — see the section above, and
+   particularly the inlined tightening that leaves a file disagreeing with its table.
+2. **The watermark's `INSERT` becomes a write-then-register**, with the measured constraints and the
+   one retired argument in its own section above. It is in scope now rather than deferred.
+
+Settled earlier in review, with the evidence folded in above: the schema scope as a fifth source;
+that registration is immune to inlining, so only tables the collector inserts into need checking;
+that
 the limit covers deletes as well as inserts; and that the file churn from disabling inlining is
 compaction's job, whereas data rows in a shared remote catalog are on every insert's critical
 path.
