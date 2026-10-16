@@ -30,7 +30,7 @@ recorded, not rejected); value statistics; exact first-seen times across a fleet
 | **How** | A Parquet file written before the transaction, then registered — the same semantics as the data itself, not an `INSERT` |
 | **When** | Registered by the same transaction that registers the batch's data files |
 | **Created by** | The collector, **at startup**, before the gRPC server accepts traffic; startup fails if it cannot be |
-| **Inlining** | Must be off. The collector disables it and **refuses to start** if any table it writes re-enables it |
+| **Inlining** | Must be off for the registry table; specified separately (see below) |
 | **Shape** | Append-only, duplicates tolerated, nothing ever updated or deleted |
 | **Dedup** | A per-process cache of committed mappings, read from the tables at startup |
 | **Scope** | DuckLake queues only; opt-in per stream |
@@ -326,52 +326,22 @@ climbing `dropped` means `max_entries` is too small for the attribute cardinalit
    reader's `GROUP BY` absorbs; if that ever matters, a periodic `DELETE`-and-reinsert of the
    deduplicated set is a compaction job, not a collector concern.
 
-## Data inlining must be off, and startup proves it
+## Data inlining must be off
 
-DuckLake can keep a small write in the catalog database instead of a Parquet file. That is the
-opposite of what this design is for, and it is **on by default**, so it is not enough to write
-Parquet — the collector has to make sure nothing turns the rows back into catalog data.
+DuckLake can keep a small write in the catalog database instead of a Parquet file, which would undo
+the decision above entirely — and it is **on by default**. Turning it off, and refusing to start
+when something has turned it back on, is a collector-wide rule rather than this feature's: it
+applies equally to the watermark table, and the sources that enable it sit outside this design.
 
-Measured, because every part of this is counter-intuitive:
-
-- `ducklake_default_data_inlining_row_limit` is a DuckDB setting whose default is **10**. So any
-  insert of ten rows or fewer is inlined unless something says otherwise. `SET GLOBAL` changes it
-  for every connection of the instance.
-- A catalog- or table-scoped `data_inlining_row_limit`, set with
-  `CALL <catalog>.set_option('data_inlining_row_limit', n [, table_name => '<schema>.<table>'])`,
-  **overrides that setting**. With the global limit at 0 and a table option of 3, a one-row insert
-  was still inlined: no Parquet file, one row in the catalog's inlined-data table.
-- Those options are readable from `ducklake_options('<catalog>')`, which reports each one's `scope`
-  (`GLOBAL` or `TABLE`) and `scope_entry` (`<schema>.<table>`).
-
-So two things, both required, because neither is sufficient alone:
-
-1. **The collector sets the limit to 0** for its own instance, so nothing it writes can be inlined
-   by default.
-2. **Startup checks the effective limit** for every table the collector writes — the registry
-   tables and the watermark tables — and **fails** when any of them is above zero, naming the table
-   and the statement that fixes it:
-   `CALL <catalog>.set_option('data_inlining_row_limit', 0, table_name => '<schema>.<table>')`.
-   The effective limit is the table option if set, else the catalog option if set, else the
-   instance setting the collector just zeroed. Checking per table rather than per catalog means a
-   catalog shared with other tools, which may want inlining for its own tables, is not rejected
-   outright — only a table the collector writes has to have it off.
-
-Why it is worth failing startup over: an inlined row lives in the catalog database, which may be
-SQLite, and only reaches storage when `ducklake_flush_inlined_data` runs. Collector compaction is
-**off by default**, so on a default deployment those rows would accumulate in the catalog
-indefinitely — and for the registry it would quietly undo the write-Parquet-and-register decision
-above, which is the whole mechanism.
-
-Target tables need no check: the collector only ever registers files for them and never inserts, so
-inlining cannot apply to its writes.
+It is therefore **a separate proposal**, and this one depends on it. See
+`doc/DUCKLAKE_NO_INLINING_SPEC.md`.
 
 ## Why the watermark keeps its INSERT
 
 The obvious question is whether `WatermarkSpec` should move to Parquet too, since it appends in the
 same transaction. It should not, and the reasons are measured.
 
-**With inlining off — which the rule above now requires — an `INSERT` writes a Parquet file.** The
+**With inlining off — which the separate rule above requires — an `INSERT` writes a Parquet file.** The
 same single-row insert that was inlined at the default limit produced a real data file once the
 limit was zero. So the watermark is not choosing catalog rows over files; both paths end in a file,
 and the only question left is who writes it.
@@ -424,5 +394,8 @@ into the decisions above.
 
 `WatermarkSpec` still appends with `INSERT ... VALUES` in that same transaction, and that was
 checked rather than left as an inconsistency — see below. It should stay as it is.
+
+Depends on: the no-inlining rule, specified separately. Without it a registry row could be kept in
+the catalog database rather than written as Parquet, which would defeat the mechanism above.
 
 Deferred: a tighter end-to-end CPU measurement. Not a gate on the implementation.
