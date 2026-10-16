@@ -1,7 +1,7 @@
 # DuckLake Data Inlining Must Be Off — Design Specification
 
 Status: **proposed.** Small and self-contained, but it has one trap worth reviewing before the code
-lands: there are four places inlining can be switched on and they are not all visible in the same
+lands: there are five places inlining can be switched on and they are not all visible in the same
 view.
 
 ## The problem
