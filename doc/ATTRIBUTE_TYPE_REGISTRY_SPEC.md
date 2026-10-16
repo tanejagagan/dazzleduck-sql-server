@@ -28,9 +28,9 @@ recorded, not rejected); value statistics; exact first-seen times across a fleet
 |---|---|
 | **Where** | Whatever table each stream's own config names — `attribute_types_table` in that queue's mapping, resolved in the queue's catalog and schema |
 | **When** | In the same transaction that registers the batch's Parquet files |
-| **Created by** | The collector, `CREATE TABLE IF NOT EXISTS` in that same transaction, so a missing table is created by the first batch that needs it |
+| **Created by** | The collector, **at startup**, before the gRPC server accepts traffic; startup fails if it cannot be |
 | **Shape** | Append-only, duplicates tolerated, nothing ever updated or deleted |
-| **Dedup** | A per-process cache of committed mappings, built from the tables at startup |
+| **Dedup** | A per-process cache of committed mappings, read from the tables at startup |
 | **Scope** | DuckLake queues only; opt-in per stream |
 
 ### Key and table
@@ -102,7 +102,7 @@ otel_collector {
 ```
 
 Both levels are optional and default to harmless: `enabled` is on, but with no queue naming a table
-nothing is recorded and nothing is scanned.
+nothing is recorded, nothing is scanned, and nothing is created at startup.
 
 ### Query patterns
 
@@ -150,15 +150,27 @@ written as a SQL literal at all (a NUL byte) is dropped rather than sent. The me
 `SidecarRows` in commons, the producer-side counterpart to `WatermarkSpec`: rows derived by
 whoever built the batch, from information the write path never sees.
 
-**The collector creates the table.** `CREATE TABLE IF NOT EXISTS`, with the schema above, in the
-queue's catalog and schema, queued ahead of the insert in that same transaction. So the first batch
-carrying a new mapping creates the table and records into it atomically, and nothing has to be
-provisioned to turn the feature on — which is what the opt-in-by-config model implies. An operator
-who would rather own the DDL can create it beforehand; the statement is then a no-op.
+**The collector creates and checks the table at startup, not while processing.** For each distinct
+table its configured streams name, `CREATE TABLE IF NOT EXISTS` with the schema above, in that
+stream's catalog and schema, before the gRPC server accepts a single export. The same statement
+does both jobs: it creates a table that is missing, and it fails on a table that cannot be created
+— a catalog that is not attached, a schema that does not exist, a name taken by something else,
+insufficient permission. **A failure fails startup.**
 
-This is also the other half of why the startup cache load tolerates a missing table: before the
-first batch there is nothing to read, and that is the normal state of a newly configured stream,
-not an error.
+Doing it at startup rather than in the ingestion transaction is what makes a misconfigured stream
+a startup error with a message naming the table, instead of a batch that fails at commit once
+traffic arrives and then fails forever. It is the same fail-fast rule the collector already applies
+to a broken ingestion provider or startup script, and for the same reason: the alternative is a
+process that looks healthy while dropping work on the floor.
+
+It also keeps DDL out of the ingestion transaction entirely. That transaction now does exactly two
+things — register the files and insert the rows — so there is no DDL mixed with
+`ducklake_add_data_files` and no per-batch catalog check for a table that was already there.
+
+The trade: a table dropped under a running collector is no longer silently recreated, so that
+stream's batches fail until it is restored. That is the same class of operator action as dropping
+the stream's target table, which breaks it just as thoroughly, and failing loudly beats recreating
+a table someone deliberately removed.
 
 **Append-only, duplicates tolerated.** The insert reads nothing, so it cannot conflict with
 another process appending the same value and adds no scan to the transaction. Two collectors
@@ -167,11 +179,12 @@ five key columns, taking `min(first_seen)`. An earlier design used an anti-join 
 row; it was dropped because tolerating duplicates is cheaper and conflict-free, which matters more
 than a tidy table.
 
-**The cache is built at startup.** One query per distinct registry table, restricted to the queues
-this process serves, so a restart does not re-append what it already recorded and another
-process's streams are not cached for nothing. It never fails startup: a table that does not exist
-yet is where every deployment begins, and any other failure costs duplicate rows in a table that
-tolerates them.
+**The cache is read at startup, in the same pass.** Having created or checked each table, the
+collector reads it: one query per distinct table, restricted to the streams this process serves, so
+a restart does not re-append what it already recorded and another process's streams are not cached
+for nothing. A read that fails also fails startup — the table was just verified, so a failure here
+is a real problem rather than the empty-table case, which is simply a new deployment with nothing
+recorded yet.
 
 **A batch carries every mapping that is not yet committed, and is settled by its own outcome.** A
 mapping is marked known only once a batch that carried it has committed; a batch that fails changes
@@ -305,8 +318,10 @@ climbing `dropped` means `max_entries` is too small for the attribute cardinalit
    damage to the stream causing it, and would make the log name that stream — a far more useful
    signal than a global counter climbing. The global cap would stay as the heap bound it is.
 
-Settled in review: who creates the table (the collector, in the same transaction), and that a batch
-carries every uncommitted mapping rather than skipping one another batch has in flight. Both are
-written into the decisions above.
+Settled in review: the collector creates and checks each table **at startup**, failing startup if
+it cannot, so a misconfigured stream is a startup error rather than a batch that fails at commit
+forever — and the ingestion transaction carries no DDL. Also that a batch carries every uncommitted
+mapping rather than skipping one another batch has in flight. Both are written into the decisions
+above.
 
 Deferred: a tighter end-to-end CPU measurement. Not a gate on the implementation.
