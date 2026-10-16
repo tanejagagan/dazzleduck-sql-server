@@ -325,6 +325,36 @@ climbing `dropped` means `max_entries` is too small for the attribute cardinalit
    reader's `GROUP BY` absorbs; if that ever matters, a periodic `DELETE`-and-reinsert of the
    deduplicated set is a compaction job, not a collector concern.
 
+## Why the watermark keeps its INSERT
+
+The obvious question is whether `WatermarkSpec` should move to Parquet too, since it appends in the
+same transaction. It should not, and the reasons are measured.
+
+**A small `INSERT` into DuckLake does not write a Parquet file at all.** Three single-row inserts
+produced zero files on disk and three snapshots of `{inlined_insert}` — the rows live in the
+catalog's own metadata, and `ducklake_flush_inlined_data` (which the collector's major compaction
+already runs) flushes them to Parquet in bulk later. So "INSERT" here is not a row-store write; it
+is DuckLake batching small writes on the caller's behalf.
+
+That makes the cardinality decisive. A watermark row is produced **per batch**; a mapping row only
+on a mapping's **first appearance**. Writing Parquet per batch means one small file per bucket
+write, for ever, proportional to the ingest rate — precisely the churn inlining exists to avoid.
+The registry writes nothing in steady state.
+
+**And the conflict path argues the same way.** When a concurrent writer takes the predicted
+snapshot id, the watermark tightens the row with an `UPDATE`. That does work against a row that
+arrived as a registered file — tested — but it becomes `inlined_insert` + `inlined_delete`: the row
+moves into the catalog anyway and the Parquet file just written stays behind holding the stale
+value. The Parquet model does not remove the catalog write on conflict; it adds a superseded file
+to it.
+
+**The same measurement sharpens why the registry does want Parquet**, and it is not the reason
+given above. Inlined rows only reach storage when something flushes them, and collector compaction
+is **off by default** — so an inserted mapping would sit in the catalog database, possibly SQLite,
+indefinitely for anyone who has not enabled it. Writing the file directly needs no flush step and
+no compaction to be configured. The small-file cost is acceptable only because the write is rare;
+it would not be acceptable per batch, which is exactly the watermark's case.
+
 ## Deliberately out of scope
 
 - **A generated view.** The registry makes "one correctly typed column per attribute" possible;
@@ -352,9 +382,7 @@ rather than skipping one another batch has in flight. And the rows are written a
 and registered, following the data path's semantics rather than inserting. All three are written
 into the decisions above.
 
-One consequence to note: `WatermarkSpec` still appends with `INSERT ... VALUES` in that same
-transaction. If "write Parquet and register, never insert" is the rule for the collector generally
-rather than for this feature, the watermark is the remaining exception and should change with it —
-that is a separate decision about released behaviour, not something this takes on.
+`WatermarkSpec` still appends with `INSERT ... VALUES` in that same transaction, and that was
+checked rather than left as an inconsistency — see below. It should stay as it is.
 
 Deferred: a tighter end-to-end CPU measurement. Not a gate on the implementation.
