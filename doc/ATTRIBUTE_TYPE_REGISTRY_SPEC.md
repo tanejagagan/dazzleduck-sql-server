@@ -222,9 +222,10 @@ this understates the collector's own share):
 | pair 2 (on first) | 88.7s | 88.3s |
 
 That is +4.0% and −0.5%, averaging **+1.8%** — consistent with the per-call figure above, and
-inside the 3% target on average, but not separated from run-to-run noise by these four runs. The
-implementation PR should land a tighter measurement (more pairs, or JFR as in the typed-maps work)
-rather than treat the average as settled. `-Dbenchmark.attribute_types=true` reproduces the A/B.
+inside the 3% target on average, but not separated from run-to-run noise by these four runs. A
+tighter measurement (more pairs, or JFR as in the typed-maps work) is deferred rather than treated
+as settled; the per-call figure is the one to rely on until then.
+`-Dbenchmark.attribute_types=true` reproduces the A/B.
 
 ## Memory
 
@@ -239,9 +240,18 @@ the same information as:
 - one **shared instance** of each name across every stream that records it.
 
 So a name's second scope or type costs a bit rather than an entry, and a name common to a thousand
-streams is stored once. `max_entries` caps the mappings held across all queues; past it new ones
-are counted (`otel.attribute_types.dropped`) and logged, not recorded, which bounds attribute names
-that embed ids.
+streams is stored once.
+
+`max_entries` (default 100,000, across every stream in the process) caps what this cache holds. It
+is not a limit on the table, which is append-only and unbounded. It exists because attribute
+*names* are client-controlled and can be: a producer that puts an id in the name rather than the
+value — `user.8f21ac.action` — yields a new mapping per id forever, which without a bound grows the
+cache until the collector runs out of heap and appends a row per id on the way. At the cap new
+mappings are simply not claimed, so no row is written for them; they are counted
+(`otel.attribute_types.dropped`) and logged. Nothing fails and nothing already recorded stops
+working — ingestion is untouched and the attributes still land in their typed maps; only the
+description of them stops being extended. At the default the cache is of the order of a few
+megabytes, less when streams share names, which they normally do.
 
 ## Observability
 
@@ -289,10 +299,14 @@ climbing `dropped` means `max_entries` is too small for the attribute cardinalit
 
 1. The atomicity trade: a rejected row fails the batch. Accepted here, with the mitigations above —
    worth confirming that is the right call versus never touching ingestion.
-2. Whether `max_entries` should be per stream as well as per process. It is global, so one
-   pathological stream can exhaust the budget for the rest.
-3. The end-to-end CPU measurement above, which needs tightening before the code lands.
+2. **Whether `max_entries` should be per stream as well as per process.** It is global, so a single
+   stream whose attribute *names* carry ids (`user.8f21ac.action`) can consume the whole budget and
+   silently stop every other stream from recording anything new. A per-stream cap would contain the
+   damage to the stream causing it, and would make the log name that stream — a far more useful
+   signal than a global counter climbing. The global cap would stay as the heap bound it is.
 
 Settled in review: who creates the table (the collector, in the same transaction), and that a batch
 carries every uncommitted mapping rather than skipping one another batch has in flight. Both are
 written into the decisions above.
+
+Deferred: a tighter end-to-end CPU measurement. Not a gate on the implementation.
