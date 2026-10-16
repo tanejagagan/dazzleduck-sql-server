@@ -2,7 +2,8 @@
 
 Status: **agreed, not yet merged.** This is the design to review; the implementation follows as its
 own PR. Everything below has been prototyped against the real ingestion path and the numbers are
-measured, not estimated — so the open points are the design's, not unknowns about feasibility.
+measured, not estimated — so the open points are the design's, not unknowns about feasibility. The
+one item left is a confirmation rather than a question (see the last section).
 
 Builds on the typed attribute maps shipped in 0.2.24 (#506).
 
@@ -97,10 +98,23 @@ Process-wide, with nothing in it that names a table:
 ```hocon
 otel_collector {
     attribute_types {
-        enabled = true        # honour those per-queue tables at all; false turns it off everywhere
-        max_entries = 100000  # cap on mappings held in memory, across every stream
+        enabled = true                   # honour those per-queue tables at all; false turns it off everywhere
+        max_entries = 100000             # process-wide cap on mappings held in memory: the heap bound
+        max_entries_per_stream = 10000   # per-queue cap: contains one stream's cardinality to itself
     }
 }
+```
+
+A queue may raise or lower its own cap, for a stream legitimately wider than the default:
+
+```hocon
+ingestion_queue_table_mapping = [
+    {
+        ingestion_queue = "wide"
+        attribute_types_table = "otel_attribute_types"
+        attribute_types_max_entries = 50000   # this stream only; still bounded by max_entries
+    }
+]
 ```
 
 Both levels are optional and default to harmless: `enabled` is on, but with no queue naming a table
@@ -283,16 +297,38 @@ the same information as:
 So a name's second scope or type costs a bit rather than an entry, and a name common to a thousand
 streams is stored once.
 
-`max_entries` (default 100,000, across every stream in the process) caps what this cache holds. It
-is not a limit on the table, which is append-only and unbounded. It exists because attribute
-*names* are client-controlled and can be: a producer that puts an id in the name rather than the
-value — `user.8f21ac.action` — yields a new mapping per id forever, which without a bound grows the
-cache until the collector runs out of heap and appends a row per id on the way. At the cap new
-mappings are simply not claimed, so no row is written for them; they are counted
-(`otel.attribute_types.dropped`) and logged. Nothing fails and nothing already recorded stops
-working — ingestion is untouched and the attributes still land in their typed maps; only the
-description of them stops being extended. At the default the cache is of the order of a few
-megabytes, less when streams share names, which they normally do.
+Two caps bound what this cache holds. Neither is a limit on the table, which is append-only and
+unbounded. They exist because attribute *names* are client-controlled and can be: a producer that
+puts an id in the name rather than the value — `user.8f21ac.action` — yields a new mapping per id
+forever, which without a bound grows the cache until the collector runs out of heap and appends a
+row per id on the way.
+
+- **`max_entries`** (default 100,000, process-wide) is the **heap bound**. It is what stops the
+  process dying, and it is sized against memory rather than against any stream's expected width.
+- **`max_entries_per_stream`** (default 10,000, overridable per queue with
+  `attribute_types_max_entries`) is the **containment and attribution bound**. It counts the
+  mappings claimed for one ingestion queue, summed across that queue's signals.
+
+Decided in review: the per-stream cap is needed, because the process-wide one alone has a failure
+mode that is worse than the problem it solves. One stream sending id-bearing names consumes the
+entire budget, and every *other* stream then silently stops recording new mappings — streams that
+were behaving correctly lose their description because of a neighbour. The global counter climbing
+says only that it happened somewhere. The per-stream cap keeps the damage inside the stream causing
+it and lets the log and the `dropped` counter name that stream, which is the signal an operator can
+act on.
+
+Whichever cap is reached first stops new claims for that stream; the two are not redundant. With
+thousands of streams in a process the per-stream default multiplied by the stream count far exceeds
+the global cap, so `max_entries` stays the thing that actually protects the heap, and
+`max_entries_per_stream` is what makes a single bad producer diagnosable instead of a process-wide
+degradation. Raising a queue's own cap cannot escape `max_entries`.
+
+At the cap new mappings are simply not claimed, so no row is written for them; they are counted
+(`otel.attribute_types.dropped`, already tagged with the queue) and logged once per stream rather
+than per drop. Nothing fails and nothing already recorded stops working — ingestion is untouched and
+the attributes still land in their typed maps; only the description of them stops being extended. At
+the defaults the cache is of the order of a few megabytes, less when streams share names, which they
+normally do.
 
 ## Observability
 
@@ -303,12 +339,16 @@ Micrometer meters, tagged with `queue` like the collector's existing ones except
 | `otel.attribute_types.new` | counter | mappings seen for the first time |
 | `otel.attribute_types.persisted` | counter | mappings committed with a batch's files |
 | `otel.attribute_types.rollbacks` | counter | mappings released because their batch did not commit; a later batch carries them again |
-| `otel.attribute_types.dropped` | counter | mappings not recorded: past `max_entries`, or a name that cannot be written as a SQL literal |
+| `otel.attribute_types.dropped` | counter | mappings not recorded: past either cap, or a name that cannot be written as a SQL literal |
 | `otel.attribute_types.in_flight` | gauge | mappings carried on a batch that has not committed yet (process-wide) |
 | `otel.attribute_types.known` | gauge | mappings the cache holds (process-wide) |
 
-A non-zero `rollbacks` rate means batches are failing, which the writer metrics already report; a
-climbing `dropped` means `max_entries` is too small for the attribute cardinality being sent.
+A non-zero `rollbacks` rate means batches are failing, which the writer metrics already report. A
+climbing `dropped` means a cap is too small for the attribute cardinality being sent — and because
+it is tagged with `queue`, it says *which stream* is sending it, which is the point of having the
+per-stream cap at all. `dropped` on one queue while others stay flat is a producer problem in that
+stream; `dropped` appearing across every queue at once means the process-wide `max_entries` is the
+one being hit.
 
 ## Open questions, and how they are answered here
 
@@ -321,8 +361,8 @@ climbing `dropped` means `max_entries` is too small for the attribute cardinalit
 3. **Event name as a dimension** — no, same reasoning.
 4. **Detection fallback** — not needed; the previous-row filter met the target (above).
 5. **Where the registry lives** — wherever each stream's config says. Not a fixed layout (above).
-6. **Retention** — none. The table grows only with distinct mappings per stream, and `max_entries`
-   bounds what any one process will add. Duplicates make it grow with collector restarts, which a
+6. **Retention** — none. The table grows only with distinct mappings per stream, and the caps bound
+   what any one process will add. Duplicates make it grow with collector restarts, which a
    reader's `GROUP BY` absorbs; if that ever matters, a periodic `DELETE`-and-reinsert of the
    deduplicated set is a compaction job, not a collector concern.
 
@@ -336,36 +376,55 @@ registering a file: `ducklake_add_data_files` with a one-row file at the default
 
 So writing Parquet and registering it is immune by construction, which is one more point in its
 favour. The separate no-inlining rule (`doc/DUCKLAKE_NO_INLINING_SPEC.md`) covers the paths that do
-insert, the watermark among them. **This spec does not depend on it.**
+insert. **This spec does not depend on it** — but the dependency now runs the other way: that rule's
+watermark conversion needs `SidecarRows` from here, so this lands first. A sequencing order, not a
+design coupling.
 
-## Why the watermark keeps its INSERT
+## The watermark moves to write-then-register too
 
-The obvious question is whether `WatermarkSpec` should move to Parquet too, since it appends in the
-same transaction. It should not, and the reasons are measured.
+An earlier draft of this spec argued the opposite — that `WatermarkSpec` should keep its
+`INSERT ... VALUES` — and review decided against it. The reversal is recorded here because the
+argument that was made for keeping it was measured under the wrong conditions.
 
-**With inlining off — which the separate rule requires for insert paths — an `INSERT` writes a
-Parquet file.** The same single-row insert that was inlined at the default limit produced a real
-data file once the limit was zero. So the watermark is not choosing catalog rows over files; both
-paths end in a file, and the only question left is who writes it.
+What held up: **with inlining off, an `INSERT` does write a Parquet file.** The same single-row
+insert that was inlined at the default limit produced a real data file once the limit was zero. So
+the watermark was never choosing catalog rows over files, and cardinality is not the decider — a
+watermark row is produced per batch and a mapping row only on a mapping's first appearance, but both
+mechanisms end in one small file per batch for the watermark either way.
 
-That makes cardinality the decider, and it favours leaving the watermark alone. A watermark row is
-produced **per batch**, a mapping row only on a mapping's **first appearance**, so either mechanism
-writes one small file per batch for the watermark. `INSERT` gets that from DuckLake with no extra
-machinery — no data-path resolution, no file naming, no orphan to clean up when registration fails
-— whereas the registry needs the explicit file because its rows are produced upstream of the write
-path, by the producer, from information that path never sees.
+What did not hold up was the conflict path. The old argument was that tightening a row which
+arrived as a registered file becomes `inlined_insert` + `inlined_delete`, moving the row into the
+catalog anyway and leaving the just-written Parquet file behind holding the stale value. That is
+**true at the default inlining limit and false once the no-inlining rule is in force**, which is the
+only configuration either spec permits:
 
-**And the conflict path argues the same way.** When a concurrent writer takes the predicted
-snapshot id, the watermark tightens the row with an `UPDATE`. That does work against a row that
-arrived as a registered file — tested — but it becomes `inlined_insert` + `inlined_delete`: the row
-moves into the catalog anyway and the Parquet file just written stays behind holding the stale
-value. The Parquet model does not remove the catalog write on conflict; it adds a superseded file
-to it.
+| Tightening `UPDATE` on a row that arrived as a registered file | Inlined rows | The file |
+|---|---|---|
+| At the default limit of 10 | 1 in `ducklake_inlined_data_<n>`, 1 in `ducklake_inlined_delete_<n>` | left unexpired, still holding the stale id |
+| With the limit at 0 | none | expired, and a corrected replacement file written |
 
-So the two sit on opposite sides for a reason, not by accident: the watermark's rows are computed
-inside the write path and can simply be inserted there, while the registry's are carried in from
-outside it and are written as a file explicitly. Both land as Parquet, which is what the inlining
-rule guarantees.
+So the objection measured the behaviour the companion rule exists to prevent. With the rule applied
+the conflict path is clean: no catalog rows, and no file left disagreeing with the table it belongs
+to. (That second row is also the sharpest argument for the rule's startup check, and
+`doc/DUCKLAKE_NO_INLINING_SPEC.md` now carries it.)
+
+Two further facts settled the conversion:
+
+- **The tightening still finds its rows.** It keys on `rowid` from `ducklake_table_insertions`,
+  which was written against rows inserted by SQL. A one-row sidecar registered in snapshot 2 comes
+  back from `ducklake_table_insertions(..., 2, 2)` with `rowid = 0`, and the `UPDATE` keyed on it
+  changes exactly that row.
+- **The sidecar must be typed.** `ducklake_add_data_files` does not cast, so the all-VARCHAR file
+  `SidecarRows` renders today cannot be registered into a table with `TIMESTAMP` and `BIGINT`
+  columns — it fails with `Failed to map column "min_ts"`. The registry never hit this because its
+  columns are all strings. Typed projection in `SidecarRows` is therefore shared work, and it is
+  the one real cost of the conversion.
+
+What remains true is that the two sets of rows are computed in different places — the watermark's
+inside the write path, the registry's carried in from the producer — but that difference no longer
+justifies two mechanisms. The registry's sidecar write is the one mechanism, and the watermark uses
+it. The conversion itself is specified in `doc/DUCKLAKE_NO_INLINING_SPEC.md`, where the question was
+asked; this spec only needs to note that `SidecarRows` must carry column types for it.
 
 ## Deliberately out of scope
 
@@ -377,24 +436,29 @@ rule guarantees.
 - **`/stats`.** The cache size and in-flight count are Micrometer gauges; putting them on the
   dashboard can come later.
 
-## What review should settle
+## What review settled, and what is left
 
-1. The atomicity trade: a rejected row fails the batch. Accepted here, with the mitigations above —
+One item is left, and it is a confirmation rather than an open design question:
+
+1. The atomicity trade — a rejected row fails the batch. Accepted here, with the mitigations above;
    worth confirming that is the right call versus never touching ingestion.
-2. **Whether `max_entries` should be per stream as well as per process.** It is global, so a single
-   stream whose attribute *names* carry ids (`user.8f21ac.action`) can consume the whole budget and
-   silently stop every other stream from recording anything new. A per-stream cap would contain the
-   damage to the stream causing it, and would make the log name that stream — a far more useful
-   signal than a global counter climbing. The global cap would stay as the heap bound it is.
 
-Settled in review: the collector creates and checks each table **at startup**, failing startup if
-it cannot, so a misconfigured stream is a startup error rather than a batch that fails at commit
-forever — and the ingestion transaction carries no DDL. A batch carries every uncommitted mapping
-rather than skipping one another batch has in flight. And the rows are written as a Parquet file
-and registered, following the data path's semantics rather than inserting. All three are written
-into the decisions above.
+Settled in review:
 
-`WatermarkSpec` still appends with `INSERT ... VALUES` in that same transaction, and that was
-checked rather than left as an inconsistency — see below. It should stay as it is.
+- **`max_entries` is per stream as well as per process.** `max_entries_per_stream` (default 10,000,
+  overridable per queue) contains one producer's name cardinality to the stream sending it, and
+  makes the `dropped` counter and the log name that stream; the process-wide cap stays as the heap
+  bound. Sizing and the interaction between the two are under Memory above.
+- **The collector creates and checks each table at startup**, failing startup if it cannot, so a
+  misconfigured stream is a startup error rather than a batch that fails at commit forever — and the
+  ingestion transaction carries no DDL.
+- **A batch carries every uncommitted mapping**, rather than skipping one another batch has in
+  flight.
+- **The rows are written as a Parquet file and registered**, following the data path's semantics
+  rather than inserting.
+- **`WatermarkSpec` moves to the same mechanism.** The earlier conclusion that it should keep its
+  `INSERT` was reversed, and the measurement behind it was wrong once the no-inlining rule is in
+  force — see the section above. The consequence for this spec is that `SidecarRows` must carry the
+  target table's column types, since `ducklake_add_data_files` does not cast.
 
 Deferred: a tighter end-to-end CPU measurement. Not a gate on the implementation.
