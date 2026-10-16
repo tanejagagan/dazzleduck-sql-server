@@ -101,6 +101,29 @@ Three consequences for the check:
 Options are resolved per session/attachment, so changing them under a running process does not take
 effect — which means the limit the check reads at startup is the limit the writes will use.
 
+## What it changes for a deployment that already runs
+
+Not nothing, and this was measured by turning the rule on against the existing suite rather than
+reasoned about. Two existing tests changed behaviour, and both are the rule working:
+
+- A partition-pruning fixture went from **6 files to 9**. Its own comment recorded the old
+  behaviour — "the 7 inserts collapse into 4 parquet files (grouped by partition) + 2 manual = 6" —
+  and that collapse *was* inlining, plus the `ducklake_flush_inlined_data` the fixture calls to undo
+  it. With inlining off each insert is its own file. So an operator should expect more, smaller
+  files immediately after this lands, until compaction merges them. That is the cost named in the
+  motivation, now with a number against it.
+- A watermark test's join started matching every row twice, because the watermark table now has
+  **data files of its own** in the same snapshot as the data it describes. Nothing was wrong with
+  the rows; a query that joined `ducklake_data_file` on `begin_snapshot` without restricting to a
+  table was relying on the watermark's rows not being files. Worth knowing for anyone who has
+  written such a query against a watermark table.
+
+A third thing the same exercise exposed, which is about the mechanism rather than the rule: the
+pruning fixture had no ingestion provider and never asked about inlining, yet its result depended on
+whether something else in the process had already called `validate()`. An instance-wide setting
+changed by whoever starts first is order-dependent, and a test or a co-tenant catalog can be on the
+receiving end. The fixture now states the limit it needs. See the note under Scope.
+
 ## Failure message
 
 Naming the table and quoting the remedy, since the fix is not guessable:
@@ -136,11 +159,14 @@ one statement and the message contains it.
 In: `DuckLakeInlining` in commons (disable, resolve the effective limit across all five sources,
 render the remedy), the startup check over the watermark tables, and a test per source.
 
-Also in, as stated rather than discovered: `SET GLOBAL` moves the default for the whole DuckDB
-instance, including catalogs the collector does not own. That is acceptable — it only moves a
-default that every option above overrides — but it is a process-wide side effect and belongs in the
-log line. And an attach value that is not a number must be reported as unknown rather than read with
-a cast that yields NULL and silently falls through to the instance setting.
+Also in, as stated rather than discovered: the disable is **instance-wide and cannot be narrower**.
+A per-connection `SET` was tried and does not exist in practice — `ConnectionPool` hands out
+duplicates of one instance, and setting it on a duplicate moved it for all of them. So the default
+moves for every catalog the process has attached, including ones it does not own. Acceptable,
+because it only moves a default that every scoped option overrides, but it is a side effect that
+belongs in the log line and in this spec rather than in a surprise. And an attach value that is not
+a number must be reported as unknown rather than read with a cast that yields NULL and silently
+falls through to the instance setting.
 
 Out: anything about existing inlined rows. If a deployment already has them, the fix is
 `ducklake_flush_inlined_data` — a compaction concern, and the collector should say so rather than
