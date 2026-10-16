@@ -27,7 +27,8 @@ recorded, not rejected); value statistics; exact first-seen times across a fleet
 | | |
 |---|---|
 | **Where** | Whatever table each stream's own config names — `attribute_types_table` in that queue's mapping, resolved in the queue's catalog and schema |
-| **When** | In the same transaction that registers the batch's Parquet files |
+| **How** | A Parquet file written before the transaction, then registered — the same semantics as the data itself, not an `INSERT` |
+| **When** | Registered by the same transaction that registers the batch's data files |
 | **Created by** | The collector, **at startup**, before the gRPC server accepts traffic; startup fails if it cannot be |
 | **Shape** | Append-only, duplicates tolerated, nothing ever updated or deleted |
 | **Dedup** | A per-process cache of committed mappings, read from the tables at startup |
@@ -150,6 +151,9 @@ written as a SQL literal at all (a NUL byte) is dropped rather than sent. The me
 `SidecarRows` in commons, the producer-side counterpart to `WatermarkSpec`: rows derived by
 whoever built the batch, from information the write path never sees.
 
+A failed registration leaves the mapping file unreferenced, which is the same outcome the batch's
+own data file has and is cleaned up by the same `ducklake_cleanup_old_files` path.
+
 **The collector creates and checks the table at startup, not while processing.** For each distinct
 table its configured streams name, `CREATE TABLE IF NOT EXISTS` with the schema above, in that
 stream's catalog and schema, before the gRPC server accepts a single export. The same statement
@@ -163,21 +167,44 @@ traffic arrives and then fails forever. It is the same fail-fast rule the collec
 to a broken ingestion provider or startup script, and for the same reason: the alternative is a
 process that looks healthy while dropping work on the floor.
 
-It also keeps DDL out of the ingestion transaction entirely. That transaction now does exactly two
-things — register the files and insert the rows — so there is no DDL mixed with
-`ducklake_add_data_files` and no per-batch catalog check for a table that was already there.
+It also keeps DDL out of the ingestion transaction entirely. That transaction now does exactly one
+kind of thing — register files — so there is no DDL mixed with `ducklake_add_data_files` and no
+per-batch catalog check for a table that was already there. Startup creates the table's data
+directory too, since the file written per batch has to land in it.
 
 The trade: a table dropped under a running collector is no longer silently recreated, so that
 stream's batches fail until it is restored. That is the same class of operator action as dropping
 the stream's target table, which breaks it just as thoroughly, and failing loudly beats recreating
 a table someone deliberately removed.
 
-**Append-only, duplicates tolerated.** The insert reads nothing, so it cannot conflict with
-another process appending the same value and adds no scan to the transaction. Two collectors
-seeing a mapping for the first time both record it; a reader deduplicates with `GROUP BY` over the
-five key columns, taking `min(first_seen)`. An earlier design used an anti-join to converge on one
-row; it was dropped because tolerating duplicates is cheaper and conflict-free, which matters more
-than a tidy table.
+**Written as a Parquet file and registered, not inserted.** The ingest path never inserts: it
+`COPY`s to Parquet and calls `ducklake_add_data_files`, and these rows follow the same semantics.
+The file is written before the transaction, exactly as the batch's own data file is, and registered
+inside it.
+
+Three things that follow, all verified against DuckLake rather than assumed:
+
+- `ducklake_add_data_files` **references the file in place** — it copies nothing into the data
+  path. So the file has to be written somewhere durable, not a scratch directory: it goes in the
+  registry table's own data directory, which the catalog metadata gives from
+  `ducklake_schema`/`ducklake_table`/`data_path` — the same query the ingestion handler already
+  uses to find a queue's target path. Startup creates that directory along with the table.
+- Two `ducklake_add_data_files` calls commit together in one transaction, so the batch's data file
+  and its mapping file land or roll back as one.
+- Duplicates accumulate as separate small files, and a reader's `GROUP BY` with `min(first_seen)`
+  reads across them unchanged.
+
+The cost is one small Parquet file per new-mapping event. That is per *first appearance* of a
+mapping, not per batch — zero files in steady state — and the collector's own compaction
+(`ducklake_merge_adjacent_files`, already configurable per catalog) merges what accumulates. An
+`INSERT` would avoid those files, at the price of being the only write in the collector that does
+not go through Parquet, and of depending on the catalog's write path rather than object storage.
+
+**Append-only, duplicates tolerated.** Nothing is read, updated or deleted, so a write cannot
+conflict with another process recording the same value. Two collectors seeing a mapping for the
+first time both record it; a reader deduplicates with `GROUP BY` over the five key columns, taking
+`min(first_seen)`. An earlier design used an anti-join to converge on one row; it was dropped
+because tolerating duplicates is cheaper and conflict-free, which matters more than a tidy table.
 
 **The cache is read at startup, in the same pass.** Having created or checked each table, the
 collector reads it: one query per distinct table, restricted to the streams this process serves, so
@@ -320,8 +347,14 @@ climbing `dropped` means `max_entries` is too small for the attribute cardinalit
 
 Settled in review: the collector creates and checks each table **at startup**, failing startup if
 it cannot, so a misconfigured stream is a startup error rather than a batch that fails at commit
-forever — and the ingestion transaction carries no DDL. Also that a batch carries every uncommitted
-mapping rather than skipping one another batch has in flight. Both are written into the decisions
-above.
+forever — and the ingestion transaction carries no DDL. A batch carries every uncommitted mapping
+rather than skipping one another batch has in flight. And the rows are written as a Parquet file
+and registered, following the data path's semantics rather than inserting. All three are written
+into the decisions above.
+
+One consequence to note: `WatermarkSpec` still appends with `INSERT ... VALUES` in that same
+transaction. If "write Parquet and register, never insert" is the rule for the collector generally
+rather than for this feature, the watermark is the remaining exception and should change with it —
+that is a separate decision about released behaviour, not something this takes on.
 
 Deferred: a tighter end-to-end CPU measurement. Not a gate on the implementation.
