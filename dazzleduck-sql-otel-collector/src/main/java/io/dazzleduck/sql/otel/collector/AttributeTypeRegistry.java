@@ -366,12 +366,33 @@ public final class AttributeTypeRegistry {
         if (registry == null || !registry.settings.enabled() || table == null) {
             return null;
         }
-        return registry.atCap(queue) ? null : new AttributeTypeScan();
+        if (registry.atCap(queue)) {
+            // Reported HERE, because skipping the scan means claim() never runs and all drop
+            // accounting lives there: without this, dropped goes flat and the warning goes quiet
+            // right after a stream is capped, which reads as the stream having recovered. It also
+            // names queues stopped by the GLOBAL cap that never dropped anything themselves.
+            registry.reportCappedBatch(queue);
+            return null;
+        }
+        return new AttributeTypeScan();
     }
 
     /** Whether {@code queue} can still record anything: its own cap, or the process's. */
     private boolean atCap(String queue) {
         return known.size() >= settings.maxEntries() || known.sizeOf(queue) >= capFor(queue);
+    }
+
+    private void reportCappedBatch(String queue) {
+        metrics.recordCappedAttributeTypeBatch(queue);
+        String cause = known.size() >= settings.maxEntries()
+                ? "the process is at its max_entries cap (%d)".formatted(settings.maxEntries())
+                : "queue '%s' is at its own cap of %d held mapping(s)".formatted(queue, capFor(queue));
+        if (shouldWarnAboutDrops(queue)) {
+            log.warn("Attribute types of queue '{}' are no longer scanned or recorded: {}. Further batches"
+                    + " are counted in otel.attribute_types.capped_batches and logged at debug", queue, cause);
+        } else {
+            log.debug("Attribute types of queue '{}' not scanned: {}", queue, cause);
+        }
     }
 
     /**
@@ -444,9 +465,9 @@ public final class AttributeTypeRegistry {
             // fire thousands of times a minute and bury everything else in the log. The first one
             // is the operator's signal; the volume lives in otel.attribute_types.dropped.
             if (shouldWarnAboutDrops(queue)) {
-                log.warn("{} attribute type mapping(s) of queue '{}' were not recorded: {}. Further"
-                        + " occurrences for this queue are logged at debug; see"
-                        + " otel.attribute_types.dropped for the rate", dropped, queue, cause);
+                log.warn("{} attribute type mapping(s) of queue '{}' were not recorded: {}. Once a queue"
+                        + " is at a cap it is no longer scanned; see otel.attribute_types.capped_batches",
+                        dropped, queue, cause);
             } else {
                 log.debug("{} attribute type mapping(s) of queue '{}' were not recorded: {}",
                         dropped, queue, cause);

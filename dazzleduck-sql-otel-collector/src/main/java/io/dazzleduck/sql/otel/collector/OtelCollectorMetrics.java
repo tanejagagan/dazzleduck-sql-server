@@ -41,7 +41,8 @@ import java.util.function.Supplier;
  *   otel.attribute_types.new               {queue=&lt;id&gt;}  – attribute name/type mappings seen first time
  *   otel.attribute_types.persisted         {queue=&lt;id&gt;}  – mappings committed with a batch's files
  *   otel.attribute_types.rollbacks         {queue=&lt;id&gt;}  – mappings released, their batch not committed
- *   otel.attribute_types.dropped           {queue=&lt;id&gt;}  – mappings past the registry's max_entries
+ *   otel.attribute_types.dropped           {queue=&lt;id&gt;}  – mappings not recorded, in the batch that crossed a cap
+ *   otel.attribute_types.capped_batches    {queue=&lt;id&gt;}  – batches not scanned because the queue is at a cap
  *   otel.attribute_types.in_flight                       – mappings on an uncommitted batch (process-wide)
  *   otel.attribute_types.known                           – mappings held in memory (process-wide)
  * </pre>
@@ -61,6 +62,7 @@ public class OtelCollectorMetrics implements Closeable {
     private final ConcurrentHashMap<String, LongAdder> persistedAttributeTypes = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, LongAdder> droppedAttributeTypes   = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, LongAdder> rolledBackAttributeTypes = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, LongAdder> cappedAttributeTypeBatches = new ConcurrentHashMap<>();
 
     // Not per-queue and never removed by unregisterQueue/close — unlike the writer FunctionCounters
     // above (which are bound to a live ParquetIngestionQueue and intentionally dropped on eviction
@@ -199,10 +201,26 @@ public class OtelCollectorMetrics implements Closeable {
                 "Attribute name/type mappings appended to the registry table").add(count);
     }
 
-    /** Mappings not recorded because the registry is at its {@code max_entries} cap. */
+    /**
+     * Mappings not recorded: past either cap, or unrenderable. Counted in the batches that are still
+     * scanned — once a queue is at a cap it is no longer scanned, and
+     * {@link #recordCappedAttributeTypeBatch} reports it from then on.
+     */
     public void recordDroppedAttributeTypes(String queueId, int count) {
         getOrCreate(droppedAttributeTypes, queueId, "otel.attribute_types.dropped",
-                "Attribute name/type mappings not recorded because max_entries was reached").add(count);
+                "Attribute name/type mappings not recorded: a cap was reached, or the name is unrenderable")
+                .add(count);
+    }
+
+    /**
+     * One batch of a queue that was not scanned because the queue is at its own cap or the process
+     * is at max_entries. This is the steady-state signal of a capped stream: after the batch that
+     * crosses the cap, no further mappings are dropped because none are collected, so
+     * {@code dropped} goes flat — which would otherwise read as the stream having recovered.
+     */
+    public void recordCappedAttributeTypeBatch(String queueId) {
+        getOrCreate(cappedAttributeTypeBatches, queueId, "otel.attribute_types.capped_batches",
+                "Batches whose attribute types were not scanned because the queue is at a cap").increment();
     }
 
     /** Mappings whose batch did not commit, released for a later batch to carry again. */
@@ -247,6 +265,7 @@ public class OtelCollectorMetrics implements Closeable {
         persistedAttributeTypes.remove(queueId);
         droppedAttributeTypes.remove(queueId);
         rolledBackAttributeTypes.remove(queueId);
+        cappedAttributeTypeBatches.remove(queueId);
     }
 
     // -----------------------------------------------------------------------

@@ -410,6 +410,36 @@ public class AttributeTypeRegistryTest {
                 "a different queue is unaffected — this is per stream");
     }
 
+    /**
+     * Skipping the scan means claim() never runs, and claim() is where drops are counted — so
+     * without a signal at the skip, a capped stream's metrics go flat right after the cap, which
+     * reads as recovery. Every skipped batch must be counted, per queue.
+     */
+    @Test
+    void aSkippedBatchIsCountedSoACappedStreamDoesNotLookRecovered() {
+        var meters = new SimpleMeterRegistry();
+        var registry = new AttributeTypeRegistry(new AttributeTypeSettings(true, 100, 2),
+                new OtelCollectorMetrics(meters));
+        assertEquals(2, record(registry, "noisy", "user.id-", 2));
+        for (int i = 0; i < 3; i++) {
+            assertNull(AttributeTypeRegistry.scanFor(registry, "noisy", TABLE));
+        }
+        assertEquals(3.0, meters.get("otel.attribute_types.capped_batches").tag("queue", "noisy")
+                .functionCounter().count(), "every skipped batch is counted, not just the first");
+    }
+
+    /** A queue stopped by the GLOBAL cap is named too, though it never dropped anything itself. */
+    @Test
+    void aQueueStoppedByTheGlobalCapIsNamed() {
+        var meters = new SimpleMeterRegistry();
+        var registry = new AttributeTypeRegistry(new AttributeTypeSettings(true, 2, 100),
+                new OtelCollectorMetrics(meters));
+        assertEquals(2, record(registry, "noisy", "a", 2));
+        assertNull(AttributeTypeRegistry.scanFor(registry, "quiet", TABLE));
+        assertEquals(1.0, meters.get("otel.attribute_types.capped_batches").tag("queue", "quiet")
+                .functionCounter().count());
+    }
+
     /** The process-wide cap stops every queue being scanned, not just the one that filled it. */
     @Test
     void theGlobalCapStopsScanningEveryQueue() {
