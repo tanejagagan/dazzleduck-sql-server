@@ -612,6 +612,9 @@ public class ParquetIngestionQueue extends BulkIngestQueue<String, IngestionResu
         return new IngestionResult(this.queueId, writeTask.taskId(), this.applicationId,
                 writeTask.bucket().getProducerMaxBatchId(),
                 count,
-                files, sql, watermarkRows);
+                files, sql, watermarkRows,
+                // The bucket's batches' sidecar rows, unioned: one COPY registers one set of files,
+                // so they commit together with it or not at all.
+                SidecarRows.union(writeTask.bucket().batches().stream().map(Batch::sidecarRows).toList()));
     }
 }

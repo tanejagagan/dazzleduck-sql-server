@@ -35,6 +35,7 @@ public class OtelMetricsService extends MetricsServiceGrpc.MetricsServiceImplBas
     private final OtelServiceBase base;
     private final boolean writeDescription;
     private final boolean attributesStringCopy;
+    private final AttributeTypeRegistry attributeTypes;
 
     public OtelMetricsService(Path scratchDir, IngestionHandler handler, IngestionConfig ingestionConfig,
                               ScheduledExecutorService flushScheduler, OtelCollectorMetrics metrics) {
@@ -52,9 +53,19 @@ public class OtelMetricsService extends MetricsServiceGrpc.MetricsServiceImplBas
     public OtelMetricsService(Path scratchDir, IngestionHandler handler, IngestionConfig ingestionConfig,
                               ScheduledExecutorService flushScheduler, OtelCollectorMetrics metrics,
                               boolean writeDescription, boolean attributesStringCopy) {
+        this(scratchDir, handler, ingestionConfig, flushScheduler, metrics, writeDescription,
+                attributesStringCopy, null);
+    }
+
+    /** @param attributeTypes records the attribute name/type mappings seen; null records none */
+    public OtelMetricsService(Path scratchDir, IngestionHandler handler, IngestionConfig ingestionConfig,
+                              ScheduledExecutorService flushScheduler, OtelCollectorMetrics metrics,
+                              boolean writeDescription, boolean attributesStringCopy,
+                              AttributeTypeRegistry attributeTypes) {
         this.metrics = metrics;
         this.writeDescription = writeDescription;
         this.attributesStringCopy = attributesStringCopy;
+        this.attributeTypes = attributeTypes;
         this.base = new OtelServiceBase(scratchDir, handler, ingestionConfig, flushScheduler, metrics);
     }
 
@@ -80,10 +91,21 @@ public class OtelMetricsService extends MetricsServiceGrpc.MetricsServiceImplBas
         var sample = metrics.startSample();
 
         try {
+            String typesTable = base.attributeTypesTable(queueId);
+            AttributeTypeScan scan = AttributeTypeRegistry.scanFor(attributeTypes, typesTable);
             Path arrowFile = base.writeArrowFile(queueId, entries, OtelMetricSchema.SCHEMA,
-                    (batch, root) -> MetricBatchWriter.write(batch, root, writeDescription, attributesStringCopy));
-            base.addBatch(queue, arrowFile).whenComplete(
-                    OtelServiceBase.batchCompleteHandler(arrowFile, metricCount, queueId,
+                    (batch, root) -> MetricBatchWriter.write(batch, root, writeDescription, attributesStringCopy, scan));
+            // The mappings this batch is the first to carry ride its registration transaction, so
+            // they are settled by its own outcome rather than written on a timer.
+            var claimed = scan == null ? java.util.List.<AttributeTypeRegistry.Key>of()
+                    : attributeTypes.claim(queueId, Signal.METRICS, scan);
+            base.addBatch(queue, arrowFile, scan == null ? null : attributeTypes.sidecar(claimed, typesTable))
+                    .whenComplete((v, ex) -> {
+                        if (scan != null) {
+                            attributeTypes.settle(claimed, ex == null);
+                        }
+                    })
+                    .whenComplete(OtelServiceBase.batchCompleteHandler(arrowFile, metricCount, queueId,
                             sample, metrics,
                             responseObserver, ExportMetricsServiceResponse.getDefaultInstance()));
         } catch (IOException e) {

@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.function.Supplier;
 
 /**
  * Micrometer metrics for the OTLP collector. All meters are keyed by queue ID so
@@ -37,6 +38,12 @@ import java.util.concurrent.atomic.LongAdder;
  *   dazzleduck.otel.writer.batches_written {queue=&lt;id&gt;}  – batches flushed to Parquet
  *   dazzleduck.otel.writer.pending_batches {queue=&lt;id&gt;}  – queue depth (batches not yet written)
  *   dazzleduck.otel.writer.pending_buckets {queue=&lt;id&gt;}  – bucket queue depth
+ *   otel.attribute_types.new               {queue=&lt;id&gt;}  – attribute name/type mappings seen first time
+ *   otel.attribute_types.persisted         {queue=&lt;id&gt;}  – mappings committed with a batch's files
+ *   otel.attribute_types.rollbacks         {queue=&lt;id&gt;}  – mappings released, their batch not committed
+ *   otel.attribute_types.dropped           {queue=&lt;id&gt;}  – mappings past the registry's max_entries
+ *   otel.attribute_types.in_flight                       – mappings on an uncommitted batch (process-wide)
+ *   otel.attribute_types.known                           – mappings held in memory (process-wide)
  * </pre>
  */
 public class OtelCollectorMetrics implements Closeable {
@@ -48,6 +55,12 @@ public class OtelCollectorMetrics implements Closeable {
     private final ConcurrentHashMap<String, LongAdder> recordsPerQueue  = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, LongAdder> errorsPerQueue   = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Timer>     timersPerQueue   = new ConcurrentHashMap<>();
+
+    // Attribute type registry, per queue; see recordNewAttributeTypes and friends below.
+    private final ConcurrentHashMap<String, LongAdder> newAttributeTypes       = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, LongAdder> persistedAttributeTypes = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, LongAdder> droppedAttributeTypes   = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, LongAdder> rolledBackAttributeTypes = new ConcurrentHashMap<>();
 
     // Not per-queue and never removed by unregisterQueue/close — unlike the writer FunctionCounters
     // above (which are bound to a live ParquetIngestionQueue and intentionally dropped on eviction
@@ -68,6 +81,25 @@ public class OtelCollectorMetrics implements Closeable {
         registeredMeters.add(meter);
         metersByQueue.computeIfAbsent(queueId, k -> new CopyOnWriteArrayList<>()).add(meter);
         return meter;
+    }
+
+    /** A meter that is not tied to one queue: removed by {@link #close}, never by eviction. */
+    private <M extends Meter> M trackGlobal(M meter) {
+        registeredMeters.add(meter);
+        return meter;
+    }
+
+    /** A per-queue counter created on first use, named {@code name} and tagged with the queue. */
+    private LongAdder getOrCreate(ConcurrentHashMap<String, LongAdder> counters, String queueId,
+                                  String name, String description) {
+        return counters.computeIfAbsent(queueId, id -> {
+            var adder = new LongAdder();
+            track(id, FunctionCounter.builder(name, adder, LongAdder::sum)
+                    .tag("queue", id)
+                    .description(description)
+                    .register(registry));
+            return adder;
+        });
     }
 
     // -----------------------------------------------------------------------
@@ -151,6 +183,48 @@ public class OtelCollectorMetrics implements Closeable {
                 .register(registry));
     }
 
+    // -----------------------------------------------------------------------
+    // Attribute type registry — per-queue counters, plus two process-wide gauges
+    // -----------------------------------------------------------------------
+
+    /** Mappings {@link AttributeTypeRegistry} saw for the first time. */
+    public void recordNewAttributeTypes(String queueId, int count) {
+        getOrCreate(newAttributeTypes, queueId, "otel.attribute_types.new",
+                "Attribute name/type mappings detected as new").add(count);
+    }
+
+    /** Mappings appended to the registry table. */
+    public void recordPersistedAttributeTypes(String queueId, int count) {
+        getOrCreate(persistedAttributeTypes, queueId, "otel.attribute_types.persisted",
+                "Attribute name/type mappings appended to the registry table").add(count);
+    }
+
+    /** Mappings not recorded because the registry is at its {@code max_entries} cap. */
+    public void recordDroppedAttributeTypes(String queueId, int count) {
+        getOrCreate(droppedAttributeTypes, queueId, "otel.attribute_types.dropped",
+                "Attribute name/type mappings not recorded because max_entries was reached").add(count);
+    }
+
+    /** Mappings whose batch did not commit, released for a later batch to carry again. */
+    public void recordAttributeTypeRollbacks(String queueId, int count) {
+        getOrCreate(rolledBackAttributeTypes, queueId, "otel.attribute_types.rollbacks",
+                "Attribute name/type mappings released because their batch did not commit").add(count);
+    }
+
+    /**
+     * The registry's in-flight count and size. Both are process-wide — the registry holds one set
+     * for every queue and signal — so they carry no {@code queue} tag, and they live for as long as
+     * the collector does rather than being dropped when a queue is evicted.
+     */
+    public void registerAttributeTypeGauges(Supplier<Number> inFlight, Supplier<Number> known) {
+        trackGlobal(Gauge.builder("otel.attribute_types.in_flight", inFlight)
+                .description("Attribute name/type mappings on a batch that has not committed yet")
+                .register(registry));
+        trackGlobal(Gauge.builder("otel.attribute_types.known", known)
+                .description("Attribute name/type mappings held in memory")
+                .register(registry));
+    }
+
     /**
      * Removes every meter registered for {@code queueId} (writer gauges/counters plus any
      * lazily-created export counters/timer) and drops the per-queue accumulators. Called when a
@@ -169,6 +243,10 @@ public class OtelCollectorMetrics implements Closeable {
         recordsPerQueue.remove(queueId);
         errorsPerQueue.remove(queueId);
         timersPerQueue.remove(queueId);
+        newAttributeTypes.remove(queueId);
+        persistedAttributeTypes.remove(queueId);
+        droppedAttributeTypes.remove(queueId);
+        rolledBackAttributeTypes.remove(queueId);
     }
 
     // -----------------------------------------------------------------------

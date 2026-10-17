@@ -34,6 +34,7 @@ public class OtelTraceService extends TraceServiceGrpc.TraceServiceImplBase impl
     private final OtelCollectorMetrics metrics;
     private final OtelServiceBase base;
     private final boolean attributesStringCopy;
+    private final AttributeTypeRegistry attributeTypes;
 
     public OtelTraceService(Path scratchDir, IngestionHandler handler, IngestionConfig ingestionConfig,
                             ScheduledExecutorService flushScheduler, OtelCollectorMetrics metrics) {
@@ -44,8 +45,16 @@ public class OtelTraceService extends TraceServiceGrpc.TraceServiceImplBase impl
     public OtelTraceService(Path scratchDir, IngestionHandler handler, IngestionConfig ingestionConfig,
                             ScheduledExecutorService flushScheduler, OtelCollectorMetrics metrics,
                             boolean attributesStringCopy) {
+        this(scratchDir, handler, ingestionConfig, flushScheduler, metrics, attributesStringCopy, null);
+    }
+
+    /** @param attributeTypes records the attribute name/type mappings seen; null records none */
+    public OtelTraceService(Path scratchDir, IngestionHandler handler, IngestionConfig ingestionConfig,
+                            ScheduledExecutorService flushScheduler, OtelCollectorMetrics metrics,
+                            boolean attributesStringCopy, AttributeTypeRegistry attributeTypes) {
         this.metrics = metrics;
         this.attributesStringCopy = attributesStringCopy;
+        this.attributeTypes = attributeTypes;
         this.base = new OtelServiceBase(scratchDir, handler, ingestionConfig, flushScheduler, metrics);
     }
 
@@ -71,10 +80,21 @@ public class OtelTraceService extends TraceServiceGrpc.TraceServiceImplBase impl
         var sample = metrics.startSample();
 
         try {
+            String typesTable = base.attributeTypesTable(queueId);
+            AttributeTypeScan scan = AttributeTypeRegistry.scanFor(attributeTypes, typesTable);
             Path arrowFile = base.writeArrowFile(queueId, entries, OtelTraceSchema.SCHEMA,
-                    (batch, root) -> SpanBatchWriter.write(batch, root, attributesStringCopy));
-            base.addBatch(queue, arrowFile).whenComplete(
-                    OtelServiceBase.batchCompleteHandler(arrowFile, spanCount, queueId,
+                    (batch, root) -> SpanBatchWriter.write(batch, root, attributesStringCopy, scan));
+            // The mappings this batch is the first to carry ride its registration transaction, so
+            // they are settled by its own outcome rather than written on a timer.
+            var claimed = scan == null ? java.util.List.<AttributeTypeRegistry.Key>of()
+                    : attributeTypes.claim(queueId, Signal.TRACES, scan);
+            base.addBatch(queue, arrowFile, scan == null ? null : attributeTypes.sidecar(claimed, typesTable))
+                    .whenComplete((v, ex) -> {
+                        if (scan != null) {
+                            attributeTypes.settle(claimed, ex == null);
+                        }
+                    })
+                    .whenComplete(OtelServiceBase.batchCompleteHandler(arrowFile, spanCount, queueId,
                             sample, metrics,
                             responseObserver, ExportTraceServiceResponse.getDefaultInstance()));
         } catch (IOException e) {
