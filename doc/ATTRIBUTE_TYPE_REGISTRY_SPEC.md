@@ -392,39 +392,50 @@ the watermark was never choosing catalog rows over files, and cardinality is not
 watermark row is produced per batch and a mapping row only on a mapping's first appearance, but both
 mechanisms end in one small file per batch for the watermark either way.
 
-What did not hold up was the conflict path. The old argument was that tightening a row which
-arrived as a registered file becomes `inlined_insert` + `inlined_delete`, moving the row into the
-catalog anyway and leaving the just-written Parquet file behind holding the stale value. That is
-**true at the default inlining limit and false once the no-inlining rule is in force**, which is the
-only configuration either spec permits:
+What did not hold up was the conflict path, twice over. The old argument was that tightening a row
+which arrived as a registered file becomes `inlined_insert` + `inlined_delete`, moving the row into
+the catalog anyway and stranding the just-written Parquet file with a stale value. That is **true at
+the default inlining limit and false once the no-inlining rule is in force**, which is the only
+configuration either spec permits:
 
 | Tightening `UPDATE` on a row that arrived as a registered file | Inlined rows | The file |
 |---|---|---|
 | At the default limit of 10 | 1 in `ducklake_inlined_data_<n>`, 1 in `ducklake_inlined_delete_<n>` | left unexpired, still holding the stale id |
 | With the limit at 0 | none | expired, and a corrected replacement file written |
 
-So the objection measured the behaviour the companion rule exists to prevent. With the rule applied
-the conflict path is clean: no catalog rows, and no file left disagreeing with the table it belongs
-to. (That second row is also the sharpest argument for the rule's startup check, and
-`doc/DUCKLAKE_NO_INLINING_SPEC.md` now carries it.)
+And then review removed the `UPDATE` altogether: the conflict path **appends** a correction row
+carrying the exact snapshot id, and a reader takes the latest snapshot per batch. So the watermark
+table becomes append-only with duplicates tolerated — the registry's own model — and the two tables
+now agree on shape as well as on mechanism.
+
+That append needs an identity on the row, which is the part worth knowing here because it is the
+same problem the registry solved differently. Watermark rows carry no key, and two batches in the
+same group can aggregate identically, so a correction cannot be told from a second batch. Measured
+on a corrected batch plus a same-aggregate second batch, where the truth is 200 ingested rows:
+latest-snapshot-per-batch-id gives **200**, grouping by the value columns gives **100** (it merges
+the two batches), and a raw `sum(row_count)` gives **300** (it counts the correction). Hence an
+optional `watermark_batch_id_column` holding the sidecar file's UUID. The registry needs no
+equivalent: its key *is* the row, so a duplicate is absorbed by `GROUP BY` rather than
+double-counted.
 
 Two further facts settled the conversion:
 
-- **The tightening still finds its rows.** It keys on `rowid` from `ducklake_table_insertions`,
-  which was written against rows inserted by SQL. A one-row sidecar registered in snapshot 2 comes
-  back from `ducklake_table_insertions(..., 2, 2)` with `rowid = 0`, and the `UPDATE` keyed on it
-  changes exactly that row.
 - **The sidecar must be typed.** `ducklake_add_data_files` does not cast, so the all-VARCHAR file
   `SidecarRows` renders today cannot be registered into a table with `TIMESTAMP` and `BIGINT`
   columns — it fails with `Failed to map column "min_ts"`. The registry never hit this because its
   columns are all strings. Typed projection in `SidecarRows` is therefore shared work, and it is
-  the one real cost of the conversion.
+  the one real cost of the conversion for this PR.
+- **`ducklake_table_insertions` does return a rowid for a row that arrived as a registered file** —
+  a one-row sidecar registered in snapshot 2 came back with `rowid = 0`. That was measured to prove
+  the tightening could still key correctly, and the append then made it moot; it is recorded because
+  it is the kind of thing worth not having to measure twice.
 
 What remains true is that the two sets of rows are computed in different places — the watermark's
 inside the write path, the registry's carried in from the producer — but that difference no longer
-justifies two mechanisms. The registry's sidecar write is the one mechanism, and the watermark uses
-it. The conversion itself is specified in `doc/DUCKLAKE_NO_INLINING_SPEC.md`, where the question was
-asked; this spec only needs to note that `SidecarRows` must carry column types for it.
+justifies two mechanisms, and with the `UPDATE` gone it no longer justifies two shapes either. The
+registry's sidecar write is the one mechanism. The conversion itself is specified in
+`doc/DUCKLAKE_NO_INLINING_SPEC.md`, where the question was asked; what this spec owes it is
+`SidecarRows` carrying column types.
 
 ## Deliberately out of scope
 
@@ -456,9 +467,12 @@ Settled in review:
   flight.
 - **The rows are written as a Parquet file and registered**, following the data path's semantics
   rather than inserting.
-- **`WatermarkSpec` moves to the same mechanism.** The earlier conclusion that it should keep its
-  `INSERT` was reversed, and the measurement behind it was wrong once the no-inlining rule is in
-  force — see the section above. The consequence for this spec is that `SidecarRows` must carry the
-  target table's column types, since `ducklake_add_data_files` does not cast.
+- **`WatermarkSpec` moves to the same mechanism, and to the same shape.** The earlier conclusion
+  that it should keep its `INSERT` was reversed, and the measurement behind it was wrong once the
+  no-inlining rule is in force. Its conflict-path `UPDATE` is then replaced by an appended
+  correction with the reader taking the latest snapshot per batch, so the watermark table becomes
+  append-only with duplicates tolerated, as this one is — see the section above. The consequence for
+  this spec is that `SidecarRows` must carry the target table's column types, since
+  `ducklake_add_data_files` does not cast.
 
 Deferred: a tighter end-to-end CPU measurement. Not a gate on the implementation.
