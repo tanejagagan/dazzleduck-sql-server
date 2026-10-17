@@ -92,7 +92,7 @@ public class OtelMetricsService extends MetricsServiceGrpc.MetricsServiceImplBas
 
         try {
             String typesTable = base.attributeTypesTable(queueId);
-            AttributeTypeScan scan = AttributeTypeRegistry.scanFor(attributeTypes, typesTable);
+            AttributeTypeScan scan = AttributeTypeRegistry.scanFor(attributeTypes, queueId, typesTable);
             Path arrowFile = base.writeArrowFile(queueId, entries, OtelMetricSchema.SCHEMA,
                     (batch, root) -> MetricBatchWriter.write(batch, root, writeDescription, attributesStringCopy, scan));
             // The mappings this batch is the first to carry ride its registration transaction, so

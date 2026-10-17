@@ -469,7 +469,15 @@ heap bound. **`max_entries_per_stream`** (default 10,000, overridable per queue 
 under a single global cap, one queue whose attribute *names* embed ids (`user.8f21ac.action`)
 consumes the whole budget and every other queue silently stops recording, which punishes the wrong
 streams and tells you only that it happened somewhere. Past either cap new mappings are counted
-(`otel.attribute_types.dropped`, tagged with the queue) and logged, but not recorded. With thousands
+(`otel.attribute_types.dropped`, tagged with the queue) and logged, but not recorded.
+
+Two things to know about that counter and that log line. The counter measures **drop events, not
+distinct names**: a stream past its cap presents the same unrecorded names on every export, so each
+is counted again every time — the rate tells you a stream is capped and how hard, not how many names
+it has. And the log warns **once per queue, then at most once every five minutes**, because a capped
+stream drops on every batch and a per-batch warning would bury everything else; the first line is
+the signal, the counter is the volume. A queue that is at its cap is also **no longer scanned at
+all**, since nothing a scan collected there could be recorded. With thousands
 of streams the per-stream default times the stream count far exceeds the global cap, so
 `max_entries` remains what protects the heap; a queue raising its own cannot escape it.
 
@@ -524,7 +532,7 @@ Per queue, except the last two, which are process-wide.
 | `otel.attribute_types.new` | FunctionCounter | mappings seen for the first time |
 | `otel.attribute_types.persisted` | FunctionCounter | mappings committed with a batch's files |
 | `otel.attribute_types.rollbacks` | FunctionCounter | mappings released because their batch did not commit; a later batch carries them again |
-| `otel.attribute_types.dropped` | FunctionCounter | mappings not recorded: past either cap, or a name that cannot be written as a SQL literal |
+| `otel.attribute_types.dropped` | FunctionCounter | mappings not recorded: past either cap, or a name that cannot be written as a SQL literal (counted per occurrence, so a capped stream re-counts the same names every batch) |
 | `otel.attribute_types.in_flight` | Gauge | mappings on a batch that has not committed yet |
 | `otel.attribute_types.known` | Gauge | mappings held in memory |
 

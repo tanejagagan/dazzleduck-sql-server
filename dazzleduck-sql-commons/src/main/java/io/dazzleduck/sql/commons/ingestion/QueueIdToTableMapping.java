@@ -95,6 +95,15 @@ public record QueueIdToTableMapping(
         // would now fail every batch rather than just itself.
         attributeTypesTable(ingestionQueue, additionalParameters);
         attributeTypesMaxEntries(ingestionQueue, additionalParameters);
+        // The table is resolved in this queue's own catalog and schema, so without them there is
+        // nowhere to put it. Rejected here rather than at startup, where it surfaced as a
+        // reference to 'null.null.<table>' and a message about attaching the catalog.
+        if (attributeTypesTable(ingestionQueue, additionalParameters) != null
+                && (catalog == null || schema == null)) {
+            throw new IllegalArgumentException(("Queue '%s': '%s' needs a catalog and schema to resolve the"
+                    + " table in, but this queue has catalog=%s, schema=%s")
+                    .formatted(ingestionQueue, ATTRIBUTE_TYPES_TABLE_KEY, catalog, schema));
+        }
     }
 
     /**

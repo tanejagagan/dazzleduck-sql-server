@@ -349,13 +349,29 @@ public final class AttributeTypeRegistry {
     }
 
     /**
-     * A scan for one batch of a queue whose registry table is {@code table}, or null when there is
-     * no registry, it is off, or that queue names no table — which is what the batch writers take
-     * to mean "collect nothing", at the cost of one null check per row.
+     * A scan for one batch of {@code queue}, whose registry table is {@code table}, or null when
+     * there is no registry, it is off, that queue names no table, or <b>that queue is at a cap</b>
+     * — which is what the batch writers take to mean "collect nothing", at the cost of one null
+     * check per row.
+     *
+     * <p>Skipping the scan at the cap changes no outcome, because the caps count mappings rather
+     * than names: {@link #claim} can only skip what is already known or drop what is new, so
+     * nothing it returns would be recorded. It matters because the stream the cap exists for is
+     * also the one the scan costs most on — every row of an id-in-name stream has a different
+     * layout, so the previous-row filter never fires and every attribute goes through the batch's
+     * hash set, which is exactly the per-attribute hashing {@link AttributeTypeScan} exists to
+     * avoid. A queue's held count never falls, so a queue at its cap stays off the scan.
      */
-    static AttributeTypeScan scanFor(AttributeTypeRegistry registry, String table) {
-        return registry != null && registry.settings.enabled() && table != null
-                ? new AttributeTypeScan() : null;
+    static AttributeTypeScan scanFor(AttributeTypeRegistry registry, String queue, String table) {
+        if (registry == null || !registry.settings.enabled() || table == null) {
+            return null;
+        }
+        return registry.atCap(queue) ? null : new AttributeTypeScan();
+    }
+
+    /** Whether {@code queue} can still record anything: its own cap, or the process's. */
+    private boolean atCap(String queue) {
+        return known.size() >= settings.maxEntries() || known.sizeOf(queue) >= capFor(queue);
     }
 
     /**
@@ -374,8 +390,8 @@ public final class AttributeTypeRegistry {
      * and bounded by the batches in flight — which an append-only table whose readers group
      * already absorbs.
      *
-     * <p>Every returned key must be passed to {@link #settle} once the batch's outcome is known,
-     * or the in-flight gauge drifts.
+     * <p>The returned {@link Claim} must be passed to {@link #settle} once the batch's outcome is
+     * known, or the in-flight gauge drifts. Settling it twice is harmless — see {@link Claim}.
      */
     public Claim claim(String queue, Signal signal, AttributeTypeScan scan) {
         if (!settings.enabled() || scan == null || scan.isEmpty()) {
@@ -423,7 +439,18 @@ public final class AttributeTypeRegistry {
                     : atGlobalCap
                     ? "the process is at its max_entries cap (%d)".formatted(settings.maxEntries())
                     : "the attribute name cannot be written as a SQL literal";
-            log.warn("{} attribute type mapping(s) of queue '{}' were not recorded: {}", dropped, queue, cause);
+            // Once per queue, then at most once per interval. A capped stream drops on EVERY batch
+            // — the id-in-name case brings new names in every export — so warning per batch would
+            // fire thousands of times a minute and bury everything else in the log. The first one
+            // is the operator's signal; the volume lives in otel.attribute_types.dropped.
+            if (shouldWarnAboutDrops(queue)) {
+                log.warn("{} attribute type mapping(s) of queue '{}' were not recorded: {}. Further"
+                        + " occurrences for this queue are logged at debug; see"
+                        + " otel.attribute_types.dropped for the rate", dropped, queue, cause);
+            } else {
+                log.debug("{} attribute type mapping(s) of queue '{}' were not recorded: {}",
+                        dropped, queue, cause);
+            }
         }
         if (!claimed.isEmpty()) {
             metrics.recordNewAttributeTypes(queue, claimed.size());
@@ -507,6 +534,27 @@ public final class AttributeTypeRegistry {
     // -----------------------------------------------------------------------
     // Accessors, for tests and /stats
     // -----------------------------------------------------------------------
+
+    /** How often one queue may warn about dropped mappings, after the first. */
+    private static final long WARN_INTERVAL_NANOS = java.time.Duration.ofMinutes(5).toNanos();
+
+    /** queue -> when it last warned, so a capped stream does not warn on every batch. */
+    private final Map<String, Long> lastDropWarning = new ConcurrentHashMap<>();
+
+    /**
+     * True the first time a queue drops anything, and at most once per {@link #WARN_INTERVAL_NANOS}
+     * after that. Raced deliberately loosely: two threads may both warn once, which costs a
+     * duplicate line and avoids a lock on the write path.
+     */
+    private boolean shouldWarnAboutDrops(String queue) {
+        long now = System.nanoTime();
+        Long last = lastDropWarning.get(queue);
+        if (last != null && now - last < WARN_INTERVAL_NANOS) {
+            return false;
+        }
+        lastDropWarning.put(queue, now);
+        return true;
+    }
 
     /** This queue's cap, falling back to the default for a queue resolved after startup. */
     private int capFor(String queue) {

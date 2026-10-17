@@ -114,12 +114,18 @@ public record SidecarRows(String table, List<String> columns, List<String> colum
 
     /**
      * One bucket's rows: the batches of a bucket come from one producer with one configuration, so
-     * they agree on table and columns and only their rows differ. Identical rows are collapsed —
-     * two batches of the same export stream usually carry the same new mapping. Returns null when
-     * there is nothing to append.
+     * they agree on table, columns and declared types, and only their rows differ. Returns null
+     * when there is nothing to append.
      *
-     * @throws IllegalArgumentException if two batches disagree about the table or its columns,
-     *                                  which would mean one bucket holding two producers' schemas
+     * <p>Rows that are equal <em>in full</em> are collapsed, which in practice is fewer than it
+     * sounds: a producer whose rows carry a timestamp or a producer id — as the attribute type
+     * registry's do — makes two batches' versions of the same new mapping distinct, so both
+     * survive into the file. That is harmless, because the table is append-only and its readers
+     * group anyway; it is said here only so the collapsing is not mistaken for deduplication.
+     *
+     * @throws IllegalArgumentException if two batches disagree about the table, or about its
+     *                                  columns or their declared types, which would mean one
+     *                                  bucket holding two producers' schemas
      */
     static SidecarRows union(java.util.Collection<SidecarRows> all) {
         SidecarRows first = null;

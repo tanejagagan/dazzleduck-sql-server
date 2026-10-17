@@ -81,7 +81,7 @@ public class OtelLogService extends LogsServiceGrpc.LogsServiceImplBase implemen
 
         try {
             String typesTable = base.attributeTypesTable(queueId);
-            AttributeTypeScan scan = AttributeTypeRegistry.scanFor(attributeTypes, typesTable);
+            AttributeTypeScan scan = AttributeTypeRegistry.scanFor(attributeTypes, queueId, typesTable);
             Path arrowFile = base.writeArrowFile(queueId, entries, OtelLogSchema.SCHEMA,
                     (batch, root) -> LogRecordBatchWriter.write(batch, root, attributesStringCopy, scan));
             // The mappings this batch is the first to carry ride its registration transaction, so

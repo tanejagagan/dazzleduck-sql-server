@@ -81,7 +81,7 @@ public class OtelTraceService extends TraceServiceGrpc.TraceServiceImplBase impl
 
         try {
             String typesTable = base.attributeTypesTable(queueId);
-            AttributeTypeScan scan = AttributeTypeRegistry.scanFor(attributeTypes, typesTable);
+            AttributeTypeScan scan = AttributeTypeRegistry.scanFor(attributeTypes, queueId, typesTable);
             Path arrowFile = base.writeArrowFile(queueId, entries, OtelTraceSchema.SCHEMA,
                     (batch, root) -> SpanBatchWriter.write(batch, root, attributesStringCopy, scan));
             // The mappings this batch is the first to carry ride its registration transaction, so

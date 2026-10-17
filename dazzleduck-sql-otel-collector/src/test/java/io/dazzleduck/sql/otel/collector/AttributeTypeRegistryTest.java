@@ -379,8 +379,8 @@ public class AttributeTypeRegistryTest {
     /** A queue that names no table is not even scanned. */
     @Test
     void aQueueWithNoTableIsNotScanned() {
-        assertNull(AttributeTypeRegistry.scanFor(registry(100), null));
-        assertNotNull(AttributeTypeRegistry.scanFor(registry(100), TABLE));
+        assertNull(AttributeTypeRegistry.scanFor(registry(100), "logs", null));
+        assertNotNull(AttributeTypeRegistry.scanFor(registry(100), "logs", TABLE));
     }
 
     /** {@code enabled = false} turns it off for every queue, whatever they name. */
@@ -389,13 +389,40 @@ public class AttributeTypeRegistryTest {
         var registry = new AttributeTypeRegistry(new AttributeTypeSettings(false, 100, 100),
                 new OtelCollectorMetrics(new SimpleMeterRegistry()));
         assertFalse(registry.isEnabled());
-        assertNull(AttributeTypeRegistry.scanFor(registry, TABLE));
+        assertNull(AttributeTypeRegistry.scanFor(registry, "logs", TABLE));
         assertTrue((registry.claim("logs", Signal.LOGS, scanOf("x", str("v")))).isEmpty());
+    }
+
+    /**
+     * A queue at its cap can only drop or skip, so scanning it collects nothing — and it is the
+     * expensive case: every row of an id-in-name stream has its own layout, so the previous-row
+     * filter never fires and every attribute is hashed. Its neighbours must keep being scanned.
+     */
+    @Test
+    void aQueueAtItsCapIsNotScannedWhileOthersStillAre() {
+        var registry = registry(100, 2);
+        assertNotNull(AttributeTypeRegistry.scanFor(registry, "noisy", TABLE), "before the cap");
+
+        assertEquals(2, record(registry, "noisy", "user.id-", 5));
+        assertNull(AttributeTypeRegistry.scanFor(registry, "noisy", TABLE),
+                "at its cap: nothing a scan collected could be recorded");
+        assertNotNull(AttributeTypeRegistry.scanFor(registry, "quiet", TABLE),
+                "a different queue is unaffected — this is per stream");
+    }
+
+    /** The process-wide cap stops every queue being scanned, not just the one that filled it. */
+    @Test
+    void theGlobalCapStopsScanningEveryQueue() {
+        var registry = registry(2, 100);
+        assertEquals(2, record(registry, "noisy", "a", 5));
+        assertNull(AttributeTypeRegistry.scanFor(registry, "noisy", TABLE));
+        assertNull(AttributeTypeRegistry.scanFor(registry, "quiet", TABLE),
+                "the heap bound is the process's, so no queue can record more");
     }
 
     @Test
     void noRegistryAtAllMeansNoScan() {
-        assertNull(AttributeTypeRegistry.scanFor(null, TABLE));
+        assertNull(AttributeTypeRegistry.scanFor(null, "logs", TABLE));
     }
 
     // --- the startup cache ---------------------------------------------------------------
