@@ -130,13 +130,19 @@ public record SidecarRows(String table, List<String> columns, List<String> colum
             }
             if (first == null) {
                 first = sidecar;
-            } else if (!first.table.equals(sidecar.table) || !first.columns.equals(sidecar.columns)) {
-                throw new IllegalArgumentException(("one bucket carries sidecar rows for two different tables:"
-                        + " '%s' and '%s'").formatted(first.table, sidecar.table));
+            } else if (!first.table.equals(sidecar.table) || !first.columns.equals(sidecar.columns)
+                    || !first.columnTypes.equals(sidecar.columnTypes)) {
+                // Types are part of what makes two sets of rows the same shape: unioning rows that
+                // declare different ones would produce a file that matches neither.
+                throw new IllegalArgumentException(("one bucket carries sidecar rows for two different tables"
+                        + " or shapes: '%s' and '%s'").formatted(first.table, sidecar.table));
             }
             rows.addAll(sidecar.rows);
         }
-        return first == null ? null : new SidecarRows(first.table, first.columns, List.copyOf(rows));
+        // Types carried through: dropping them here would silently undo the declaration, and every
+        // batch goes through this on its way to the COPY.
+        return first == null ? null
+                : new SidecarRows(first.table, first.columns, first.columnTypes, List.copyOf(rows));
     }
 
     /**

@@ -88,15 +88,26 @@ public class OtelTraceService extends TraceServiceGrpc.TraceServiceImplBase impl
             // they are settled by its own outcome rather than written on a timer.
             var claimed = scan == null ? java.util.List.<AttributeTypeRegistry.Key>of()
                     : attributeTypes.claim(queueId, Signal.TRACES, scan);
-            base.addBatch(queue, arrowFile, scan == null ? null : attributeTypes.sidecar(claimed, typesTable))
-                    .whenComplete((v, ex) -> {
-                        if (scan != null) {
-                            attributeTypes.settle(claimed, ex == null);
-                        }
-                    })
-                    .whenComplete(OtelServiceBase.batchCompleteHandler(arrowFile, spanCount, queueId,
-                            sample, metrics,
-                            responseObserver, ExportTraceServiceResponse.getDefaultInstance()));
+            // addBatch can throw before it returns a future — a rejected queue, or sizing the
+            // file — and then no whenComplete below ever runs, so the claim would stay in flight
+            // for the life of the process and the gauge would drift up. Settled as failed here,
+            // which releases the mappings for a later batch to carry.
+            try {
+                base.addBatch(queue, arrowFile, scan == null ? null : attributeTypes.sidecar(claimed, typesTable))
+                        .whenComplete((v, ex) -> {
+                            if (scan != null) {
+                                attributeTypes.settle(claimed, ex == null);
+                            }
+                        })
+                        .whenComplete(OtelServiceBase.batchCompleteHandler(arrowFile, spanCount, queueId,
+                                sample, metrics,
+                                responseObserver, ExportTraceServiceResponse.getDefaultInstance()));
+            } catch (Throwable t) {
+                if (scan != null) {
+                    attributeTypes.settle(claimed, false);
+                }
+                throw t;
+            }
         } catch (IOException e) {
             metrics.recordError(queueId, sample);
             log.error("Failed to write Arrow file for {} spans", spanCount, e);

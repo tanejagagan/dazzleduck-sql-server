@@ -49,17 +49,19 @@ import java.util.stream.Collectors;
  * stay apart by the {@code ingestion_queue} column — or each name its own. The collector never
  * names a catalog, and could not: with a dynamic queue registry it does not know a queue's schema
  * until a batch arrives.
- * {@link io.dazzleduck.sql.commons.ingestion.DuckLakePostIngestionTask} resolves it and creates
- * the table when it is missing. A queue that names none is not scanned at all.
+ * {@link io.dazzleduck.sql.commons.ingestion.DuckLakePostIngestionTask} resolves it in the queue's
+ * own catalog and schema; {@link #start} creates it, at startup. A queue that names none is not
+ * scanned at all.
  *
  * <h2>How a mapping gets there</h2>
  * <ol>
  *   <li>{@link AttributeTypeScan} collects a batch's distinct mappings as the batch is written,
  *       off the per-attribute hot path.</li>
- *   <li>{@link #claim} keeps the ones this process has not recorded and is not already recording,
- *       and {@link #sidecar} renders them as rows carried on the batch.</li>
- *   <li>They are inserted by the SAME transaction that registers the batch's Parquet files, so a
- *       registered file always has its mappings committed.</li>
+ *   <li>{@link #claim} keeps every one this process has not yet COMMITTED — what another batch
+ *       holds in flight is deliberately not consulted, since that batch may fail — and
+ *       {@link #sidecar} renders them as rows carried on the batch.</li>
+ *   <li>They are written as a Parquet file and registered by the SAME transaction that registers
+ *       the batch's own files, so a registered file always has its mappings committed.</li>
  *   <li>{@link #settle} then marks them known, or — if the batch failed — releases them so a later
  *       batch carries them again.</li>
  * </ol>
@@ -78,8 +80,10 @@ import java.util.stream.Collectors;
  *
  * <p>{@link #start} builds that cache from the table at startup — one query per distinct registry
  * table, restricted to the queues this process serves — so a restart does not re-append everything
- * it already knows. It never fails startup: a table that does not exist yet is the normal state
- * before the first batch, and any other failure costs duplicate rows, which are tolerated.
+ * it already knows. It also CREATES each table and its data directory there, and <b>fails startup
+ * if it cannot</b>: a stream whose table cannot be created would otherwise fail every batch at
+ * commit, forever, which is a worse way to learn about a misconfiguration than a startup error.
+ * Nothing is created during processing, so the ingestion transaction carries no DDL.
  *
  * <p>{@code first_seen} is when the recording collector noticed the mapping — not when the data
  * was produced. {@code min(first_seen)} across the duplicates is as close to the fleet's first
@@ -350,16 +354,19 @@ public final class AttributeTypeRegistry {
             if (known.contains(key)) {
                 continue;
             }
-            // Against what is held, not what is in flight: concurrent batches can carry the same
-            // mapping and commit it, so a cap can be overshot by at most the batches in flight.
-            if (known.size() >= settings.maxEntries()) {
+            // Against what is held PLUS what this batch has already claimed. Counting only what
+            // is held would let a single batch through whole: the case these caps exist for — ids
+            // embedded in attribute names — arrives as one scan of hundreds of distinct names.
+            // What is in flight on OTHER batches is deliberately not counted, since they may yet
+            // fail; that is the overshoot the caps tolerate, bounded by the batches in flight.
+            if (known.size() + claimed.size() >= settings.maxEntries()) {
                 dropped++;
                 atGlobalCap = true;
                 continue;
             }
             // This stream's own cap, so one producer's name cardinality cannot consume the budget
             // of every other stream in the process.
-            if (known.sizeOf(queue) >= capFor(queue)) {
+            if (known.sizeOf(queue) + claimed.size() >= capFor(queue)) {
                 dropped++;
                 atStreamCap = true;
                 continue;
@@ -414,12 +421,6 @@ public final class AttributeTypeRegistry {
      * in the table, so the mappings are known and never sent again; otherwise they are released
      * and a later batch carries them.
      */
-    /** This queue's cap, falling back to the default for a queue resolved after startup. */
-    private int capFor(String queue) {
-        Integer cap = capByQueue.get(queue);
-        return cap == null ? settings.capFor(null) : cap;
-    }
-
     public void settle(Collection<Key> claimed, boolean committed) {
         if (claimed.isEmpty()) {
             return;
@@ -459,6 +460,12 @@ public final class AttributeTypeRegistry {
     // -----------------------------------------------------------------------
 
     /** Mappings this collector knows are recorded. */
+    /** This queue's cap, falling back to the default for a queue resolved after startup. */
+    private int capFor(String queue) {
+        Integer cap = capByQueue.get(queue);
+        return cap == null ? settings.capFor(null) : cap;
+    }
+
     public int knownCount() {
         return known.size();
     }

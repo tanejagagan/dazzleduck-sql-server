@@ -102,10 +102,11 @@ public class OtelCollectorServer implements Closeable {
                 return t;
             });
 
-            // Before the services, which hold it. start() builds its cache from what the
-            // configured queues' registry tables already hold, on the instance whose catalogs the
-            // startup script has attached; it never fails startup. A no-op unless
-            // attribute_types.enabled is true.
+            // Before the services, which hold it. start() creates each configured queue's
+            // registry table and its data directory, then builds the cache from what those tables
+            // already hold, on the instance whose catalogs the startup script has attached. It
+            // FAILS startup if a table cannot be created or read, rather than leaving a stream to
+            // fail every batch at commit. A no-op unless attribute_types.enabled is true.
             attributeTypes = new AttributeTypeRegistry(props.getAttributeTypeSettings(), collectorMetrics);
             attributeTypes.start(handler);
 

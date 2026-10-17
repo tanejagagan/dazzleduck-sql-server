@@ -75,6 +75,63 @@ public class AttributeTypeRegistryTest {
         assertEquals(9, registry.knownCount());
     }
 
+    /**
+     * A cap has to hold within one batch, not only across batches. The case it exists for — ids
+     * embedded in attribute names — arrives as one scan carrying hundreds of distinct names, so a
+     * check that counts only what is already committed lets a whole batch through.
+     */
+    @Test
+    void aSingleBatchCannotExceedTheCaps() {
+        var registry = registry(100, 3);
+        var scan = new AttributeTypeScan();
+        var cursor = scan.cursor(AttributeScope.ATTRIBUTE);
+        List<KeyValue> attributes = new java.util.ArrayList<>();
+        for (int i = 0; i < 50; i++) {
+            attributes.add(KeyValue.newBuilder().setKey("user." + i + ".action").setValue(str("v")).build());
+        }
+        cursor.observe(attributes);
+
+        var claimed = registry.claim("noisy", Signal.LOGS, scan);
+        assertEquals(3, claimed.size(), "one batch of 50 names must still stop at the cap of 3");
+        registry.settle(claimed, true);
+        assertEquals(3, registry.knownCount());
+    }
+
+    /**
+     * A claim that is never handed to a batch has to be settled anyway, or the in-flight gauge
+     * drifts up for the life of the process. The services do this when {@code addBatch} throws
+     * before returning a future; what is pinned here is that settling as failed releases the
+     * mappings and leaves nothing in flight, so a later batch carries them again.
+     */
+    @Test
+    void aClaimSettledAsFailedIsReleasedAndLeavesNothingInFlight() {
+        var registry = registry(100);
+        var claimed = registry.claim("q", Signal.LOGS, scanOf("x", str("v")));
+        assertEquals(1, claimed.size());
+        assertEquals(1, registry.inFlightCount());
+
+        registry.settle(claimed, false);
+        assertEquals(0, registry.inFlightCount(), "released, not left in flight");
+        assertEquals(0, registry.knownCount(), "and not recorded, since the batch did not commit");
+
+        // So the next batch carries it again.
+        assertEquals(1, registry.claim("q", Signal.LOGS, scanOf("x", str("v"))).size());
+    }
+
+    /** The same, for the process-wide bound. */
+    @Test
+    void aSingleBatchCannotExceedTheGlobalCap() {
+        var registry = registry(3, 100);
+        var scan = new AttributeTypeScan();
+        var cursor = scan.cursor(AttributeScope.ATTRIBUTE);
+        List<KeyValue> attributes = new java.util.ArrayList<>();
+        for (int i = 0; i < 50; i++) {
+            attributes.add(KeyValue.newBuilder().setKey("a" + i).setValue(str("v")).build());
+        }
+        cursor.observe(attributes);
+        assertEquals(3, registry.claim("q", Signal.LOGS, scan).size());
+    }
+
     /** A queue may raise its own cap, but not past the heap bound. */
     @Test
     void aQueueCapIsClampedToTheGlobalOne() {

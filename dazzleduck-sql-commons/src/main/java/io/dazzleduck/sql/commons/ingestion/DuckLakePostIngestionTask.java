@@ -119,19 +119,38 @@ public class DuckLakePostIngestionTask implements PostIngestionTask {
         // watermark's snapshot-id prediction below, which must be the last thing read before the
         // transaction opens; writing this file does not touch snapshots.
         SidecarRows sidecar = ingestionResult.sidecarRows();
+        // Every file this task wrote, which is what the queue deletes if registration is rejected.
+        // The batch's own data files plus the sidecar's, since that one is equally an orphan then,
+        // and a catalog retry writes a fresh one rather than reusing it.
+        List<String> written = files;
         if (sidecar != null && !sidecar.isEmpty()) {
+            String sidecarFile;
+            try {
+                sidecarFile = writeSidecarFile(sidecar);
+            } catch (SQLException e) {
+                // The COPY runs before the transaction opens, so a failure here registered
+                // NOTHING. Reported as such: a plain SQLException would be read as "outcome
+                // unknown", which leaves the batch's data files behind as orphans and skips the
+                // retry that would have succeeded.
+                throw new FilesNotRegisteredException(
+                        "Sidecar rows for '%s' could not be written, so nothing was registered: %s"
+                                .formatted(sidecar.table(), e.getMessage()), files, e);
+            }
+            written = new ArrayList<>(files);
+            written.add(sidecarFile);
             queries.add(ADD_FILE_QUERY.formatted(escapeLiteral(catalogName), escapeLiteral(sidecar.table()),
-                    escapeLiteral(writeSidecarFile(sidecar)), escapeLiteral(schemaName)));
+                    escapeLiteral(sidecarFile), escapeLiteral(schemaName)));
         }
         try (Connection conn = ConnectionPool.getConnection()) {
             if (!hasWatermark) {
-                executeInTxn(conn, queries, files);
+                executeInTxn(conn, queries, written);
                 return;
             }
             long predictedSnapshotId = predictNextSnapshotId(conn);
             UUID batchId = UUID.randomUUID();
             queries.add(watermarkSpec.insertSql(catalogName, schemaName, watermarkRows, predictedSnapshotId, batchId));
-            executeInTxn(conn, queries, files);
+            executeInTxn(conn, queries, written);
+            // The data table's own file, not the sidecar's: its begin_snapshot is the batch's.
             verifySnapshotId(conn, files, predictedSnapshotId, batchId);
         }
     }
@@ -145,8 +164,11 @@ public class DuckLakePostIngestionTask implements PostIngestionTask {
      * file that is about to be deleted. The directory is the producer's to create, at its startup,
      * along with the table.
      *
-     * <p>A file whose registration then fails is left unreferenced, which is what happens to the
-     * batch's own data files too, and is cleaned up the same way.
+     * <p>Written BEFORE the transaction, so a failure here has registered nothing — the caller
+     * reports it as {@link FilesNotRegisteredException} rather than as an unknown outcome. A file
+     * whose registration is then rejected is handed to the queue for deletion alongside the
+     * batch's own data files, which is the only way it gets cleaned up: a catalog retry writes a
+     * fresh one rather than reusing this path.
      */
     private String writeSidecarFile(SidecarRows sidecar) throws SQLException {
         String directory = DuckLakeIngestionHandler.tableDataPath(catalogName, schemaName, sidecar.table());

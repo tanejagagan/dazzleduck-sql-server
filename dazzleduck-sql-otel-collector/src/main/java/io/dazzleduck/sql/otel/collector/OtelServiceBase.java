@@ -179,9 +179,12 @@ class OtelServiceBase implements Closeable {
     }
 
     /**
-     * The queue's attribute type registry table, or null when it records none. Read per export, so
-     * a queue whose mapping gains or loses the parameter takes effect on the next config refresh
-     * without a restart.
+     * The queue's attribute type registry table, or null when it records none.
+     *
+     * <p>Read per export, but that does not make the parameter hot-swappable: the table and its
+     * data directory are created by {@link AttributeTypeRegistry#start}, so a queue that gains the
+     * parameter while running has nowhere to write until the collector restarts. Losing it does
+     * take effect without one — the stream simply stops being scanned.
      */
     String attributeTypesTable(String queueId) {
         return handler.getAttributeTypesTable(queueId);

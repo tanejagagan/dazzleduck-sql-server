@@ -176,10 +176,14 @@ public class SidecarRowsTest {
                     "CREATE TABLE %s.main.wm (grp VARCHAR, \"at\" TIMESTAMP, n BIGINT, batch_id UUID)"
                             .formatted(catalog)});
 
-            var typed = new SidecarRows("wm", List.of("grp", "at", "n", "batch_id"),
+            var one = new SidecarRows("wm", List.of("grp", "at", "n", "batch_id"),
                     List.of("VARCHAR", "TIMESTAMP", "BIGINT", "UUID"),
                     List.of(List.of("'king'", "'2026-08-01 03:00:00'", "'2'",
                             "'0199e0a0-1111-7000-8000-0000000000b1'")));
+            // Through union, because that is the only path a real batch takes to the COPY: it
+            // rebuilds the record, so declared types have to survive it.
+            var typed = SidecarRows.union(List.of(one));
+            assertEquals(one.columnTypes(), typed.columnTypes(), "union must carry the declared types");
             String file = data.resolve("main").resolve("wm").resolve("typed.parquet").toString();
             ConnectionPool.execute(conn, typed.copySql(file));
             ConnectionPool.execute(conn, ("CALL ducklake_add_data_files('%s', 'wm', '%s', schema => 'main',"
@@ -203,6 +207,18 @@ public class SidecarRowsTest {
 
             ConnectionPool.execute(conn, "DETACH " + catalog);
         }
+    }
+
+    /** Two batches of the same columns but different declared types are not one file's worth. */
+    @Test
+    void unionRefusesRowsWhoseDeclaredTypesDisagree() {
+        var rows = List.of(List.of("'a'"));
+        var asText = new SidecarRows("t", List.of("c"), List.of("VARCHAR"), rows);
+        var asNumber = new SidecarRows("t", List.of("c"), List.of("BIGINT"), rows);
+        assertThrows(IllegalArgumentException.class, () -> SidecarRows.union(List.of(asText, asNumber)));
+        // And the untyped/typed pair is equally a mismatch, not a silent fallback to untyped.
+        var untyped = new SidecarRows("t", List.of("c"), rows);
+        assertThrows(IllegalArgumentException.class, () -> SidecarRows.union(List.of(asText, untyped)));
     }
 
     @Test
