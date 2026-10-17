@@ -74,6 +74,17 @@ public abstract class AbstractIngestionTaskFactoryProvider implements IngestionT
         });
     }
 
+    /** Whether this queue inserts watermark rows, which is the only SQL write on the ingest path. */
+    private static boolean writesWatermarkRows(QueueIdToTableMapping mapping) {
+        try {
+            return WatermarkSpec.fromParameters(mapping.ingestionQueue(), mapping.additionalParameters()) != null;
+        } catch (RuntimeException e) {
+            // A malformed spec is reported by validateNoDataInlining/WatermarkSpec itself, with a
+            // better message than anything this could add; treat it as configured.
+            return true;
+        }
+    }
+
     /**
      * Fails startup when DuckLake would keep this queue's watermark rows in the catalog database
      * instead of writing them as Parquet.
@@ -91,17 +102,6 @@ public abstract class AbstractIngestionTaskFactoryProvider implements IngestionT
      * table option — or an {@code ATTACH} parameter — that overrides it, which is the only way
      * inlining can still apply.
      */
-    /** Whether this queue inserts watermark rows, which is the only SQL write on the ingest path. */
-    private static boolean writesWatermarkRows(QueueIdToTableMapping mapping) {
-        try {
-            return WatermarkSpec.fromParameters(mapping.ingestionQueue(), mapping.additionalParameters()) != null;
-        } catch (RuntimeException e) {
-            // A malformed spec is reported by validateNoDataInlining/WatermarkSpec itself, with a
-            // better message than anything this could add; treat it as configured.
-            return true;
-        }
-    }
-
     protected static void validateNoDataInlining(QueueIdToTableMapping mapping) {
         WatermarkSpec spec = WatermarkSpec.fromParameters(mapping.ingestionQueue(), mapping.additionalParameters());
         if (spec == null || mapping.catalog() == null || mapping.schema() == null) {

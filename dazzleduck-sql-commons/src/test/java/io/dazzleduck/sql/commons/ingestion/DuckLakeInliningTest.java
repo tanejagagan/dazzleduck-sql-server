@@ -9,6 +9,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -186,6 +187,13 @@ public class DuckLakeInliningTest {
                 "SELECT count(*) FROM ducklake_options('%s') WHERE option_name = '%s'"
                         .formatted(catalog, DuckLakeInlining.OPTION), Long.class),
                 "and it is invisible to ducklake_options, which is what makes it the trap");
+
+        // The case the per-table check exists for: the instance setting zeroed, exactly as
+        // disable() does, and a write still inlined because the ATTACH parameter wins.
+        ConnectionPool.execute("SET GLOBAL %s = 0".formatted(DuckLakeInlining.SETTING));
+        assertEquals(10L, DuckLakeInlining.effectiveRowLimit(catalog, "main", "t").rowLimit(),
+                "zeroing the setting does not change the effective limit");
+        assertResolverMatchesAWrite("main", "t");
     }
 
     @Test
@@ -266,7 +274,61 @@ public class DuckLakeInliningTest {
                 () -> DuckLakeInlining.effectiveRowLimit(catalog, "main", "t"));
     }
 
-    /** The remedy names the source's own fix first, since it is the narrower change. */
+    /** A static provider whose one queue writes watermark rows into {@code main.wm}. */
+    private DuckLakeIngestionTaskFactoryProvider providerWithWatermark() {
+        var provider = new DuckLakeIngestionTaskFactoryProvider();
+        provider.setConfig(com.typesafe.config.ConfigFactory.parseString("""
+                ingestion_queue_table_mapping = [{
+                    ingestion_queue = "q"
+                    catalog = "%s"
+                    schema  = "main"
+                    table   = "t"
+                    additional_parameters {
+                        watermark_table                = "wm"
+                        watermark_timestamp_column     = "ts"
+                        watermark_min_timestamp_column = "min_ts"
+                        watermark_max_timestamp_column = "max_ts"
+                        watermark_row_count_column     = "row_count"
+                        watermark_snapshot_id_column   = "snap"
+                        watermark_batch_id_column      = "batch_id"
+                    }
+                }]
+                """.formatted(catalog)));
+        return provider;
+    }
+
+    /**
+     * The feature itself, end to end through {@code validate()}: a watermark table that would
+     * inline must stop startup, naming the table and the fix. The resolver and the remedy are
+     * tested above in isolation; without this, removing the check from validate() would leave the
+     * suite green. It also covers the positive side of the gate — a watermark is configured, so the
+     * instance setting is zeroed before the check runs.
+     */
+    @Test
+    void validateRefusesToStartWhenAWatermarkTableWouldInline() throws Exception {
+        attach("inlining_validate_test", 10);
+        ConnectionPool.execute("CREATE TABLE %s.main.wm (a INT)".formatted(catalog));
+        ConnectionPool.execute("SET GLOBAL %s = 7".formatted(DuckLakeInlining.SETTING));
+
+        var e = assertThrows(IllegalStateException.class, () -> providerWithWatermark().validate());
+        assertTrue(e.getMessage().contains("%s.main.wm".formatted(catalog)), e.getMessage());
+        assertTrue(e.getMessage().contains("remove DATA_INLINING_ROW_LIMIT"), e.getMessage());
+
+        assertEquals("0", ConnectionPool.collectFirst(
+                "SELECT current_setting('%s')::VARCHAR".formatted(DuckLakeInlining.SETTING), String.class),
+                "a watermark is configured, so the instance setting was zeroed before the check");
+    }
+
+    /** And the same provider starts once the table is exempted where the stored option lives. */
+    @Test
+    void validatePassesOnceTheWatermarkTableIsExempted() throws Exception {
+        attach("inlining_validate_ok_test", 10);
+        ConnectionPool.execute("CREATE TABLE %s.main.wm (a INT)".formatted(catalog));
+        setOption("table", "main.wm", 0);
+        reattach();
+        assertDoesNotThrow(() -> providerWithWatermark().validate());
+    }
+
     /** When the table's own option is the cause, the fix and the fallback would be one statement. */
     @Test
     void theRemedyForATableOptionIsStatedOnce() {
@@ -276,6 +338,7 @@ public class DuckLakeInliningTest {
         assertFalse(remedy.contains("not yours to change"), remedy);
     }
 
+    /** The remedy names the source's own fix first, since it is the narrower change. */
     @Test
     void theRemedyNamesTheSourcesOwnFixBeforeTheStoredOption() {
         String forAttach = DuckLakeInlining.remedy("c", "main", "t", "the ATTACH parameter DATA_INLINING_ROW_LIMIT");
