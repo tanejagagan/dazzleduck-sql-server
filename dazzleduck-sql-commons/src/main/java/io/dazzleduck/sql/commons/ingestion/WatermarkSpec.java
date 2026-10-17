@@ -229,15 +229,34 @@ public record WatermarkSpec(String table, String timestampColumn, List<String> g
      * one higher; {@code DuckLakePostIngestionTask} appends a correction afterwards on the rare
      * occasion they disagree, which is why {@code batchId} is written here — it is what the
      * correction attaches to.
+     *
+     * <p>{@code batchId} must be present exactly when {@link #batchIdColumn} is configured, and is
+     * checked rather than quietly reconciled. Both mismatches are programming errors with silent
+     * consequences: an id for a table with no column for it could only be discarded, and a missing
+     * id on a table that has the column would leave the batch's rows with nothing a correction
+     * could attach to — so the exact snapshot would be lost, rarely and invisibly.
+     *
+     * @throws IllegalArgumentException if {@code batchId} is present without the column configured,
+     *         or absent with it configured
      */
     public String insertSql(String catalog, String schema, List<List<String>> rows, long snapshotId, String batchId) {
+        if (batchIdColumn == null && batchId != null) {
+            throw new IllegalArgumentException(
+                    "watermark configuration: a batch id was given but no '%s' is configured to hold it"
+                            .formatted(BATCH_ID_COLUMN_KEY));
+        }
+        if (batchIdColumn != null && batchId == null) {
+            throw new IllegalArgumentException(
+                    "watermark configuration: '%s' is configured, so every batch must carry an id"
+                            .formatted(BATCH_ID_COLUMN_KEY));
+        }
         String columnList = groupColumns.stream().map(HeaderUtils::quoteIdentifier).collect(Collectors.joining(", "));
         columnList = (columnList.isEmpty() ? "" : columnList + ", ") + HeaderUtils.quoteIdentifier(minTimestampColumn);
         columnList += ", " + HeaderUtils.quoteIdentifier(maxTimestampColumn)
                 + ", " + HeaderUtils.quoteIdentifier(rowCountColumn);
         columnList += ", " + HeaderUtils.quoteIdentifier(snapshotIdColumn);
         String suffix = ", " + snapshotId;
-        if (batchIdColumn != null && batchId != null) {
+        if (batchIdColumn != null) {   // guarded above: so batchId is present too
             columnList += ", " + HeaderUtils.quoteIdentifier(batchIdColumn);
             suffix += ", " + literal(batchId);
         }
@@ -248,11 +267,6 @@ public record WatermarkSpec(String table, String timestampColumn, List<String> g
         return "INSERT INTO %s.%s.%s (%s) VALUES %s".formatted(
                 HeaderUtils.quoteIdentifier(catalog), HeaderUtils.quoteIdentifier(schema),
                 HeaderUtils.quoteIdentifier(table), columnList, values);
-    }
-
-    /** The rows without a batch id, so without a correction available later. */
-    public String insertSql(String catalog, String schema, List<List<String>> rows, long snapshotId) {
-        return insertSql(catalog, schema, rows, snapshotId, null);
     }
 
     /**

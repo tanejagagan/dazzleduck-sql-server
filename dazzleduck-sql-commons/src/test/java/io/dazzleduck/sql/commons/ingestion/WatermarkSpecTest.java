@@ -111,18 +111,34 @@ class WatermarkSpecTest {
     }
 
     @Test
-    void insertSqlCarriesTheBatchIdOnlyWhenBothColumnAndValueArePresent() {
+    void insertSqlCarriesTheBatchIdWhenTheColumnIsConfigured() {
         WatermarkSpec with = new WatermarkSpec("wm", "ts", List.of("county"), "min_ts", "max_ts", "row_count",
                 "snap", "batch_id");
         assertEquals("INSERT INTO \"cat\".\"main\".\"wm\""
                         + " (\"county\", \"min_ts\", \"max_ts\", \"row_count\", \"snap\", \"batch_id\") "
                         + "VALUES ('king', '1', '9', '2', 7, 'b-1')",
                 with.insertSql("cat", "main", List.of(List.of("king", "1", "9", "2")), 7, "b-1"));
+    }
 
+    /**
+     * The batch id and its column travel together, and a mismatch is refused rather than
+     * reconciled: an id with no column to hold it could only be discarded, and a missing id on a
+     * table that has the column would leave the batch's rows with nothing a correction could
+     * attach to — losing the exact snapshot rarely and invisibly.
+     */
+    @Test
+    void insertSqlRefusesABatchIdThatDoesNotMatchTheConfiguration() {
+        List<List<String>> rows = List.of(List.of("king", "1", "9", "2"));
         WatermarkSpec without = new WatermarkSpec("wm", "ts", List.of("county"), "min_ts", "max_ts", "row_count", "snap");
-        assertFalse(without.insertSql("cat", "main", List.of(List.of("king", "1", "9", "2")), 7, "b-1")
-                        .contains("b-1"),
-                "a batch id cannot be written to a table that has no column for it");
+        var given = assertThrows(IllegalArgumentException.class,
+                () -> without.insertSql("cat", "main", rows, 7, "b-1"));
+        assertTrue(given.getMessage().contains(WatermarkSpec.BATCH_ID_COLUMN_KEY), given.getMessage());
+
+        WatermarkSpec with = new WatermarkSpec("wm", "ts", List.of("county"), "min_ts", "max_ts", "row_count",
+                "snap", "batch_id");
+        var missing = assertThrows(IllegalArgumentException.class,
+                () -> with.insertSql("cat", "main", rows, 7, null));
+        assertTrue(missing.getMessage().contains(WatermarkSpec.BATCH_ID_COLUMN_KEY), missing.getMessage());
     }
 
     /**
@@ -206,7 +222,7 @@ class WatermarkSpecTest {
     void insertSqlQuotesIdentifiersAndEscapesValues() {
         WatermarkSpec spec = new WatermarkSpec("ingest-watermark", "timestamp", List.of("county"), "min_ts", "max_ts", "row_count", "min_commit_snapshot_id");
         String sql = spec.insertSql("cat", "main",
-                List.of(List.of("o'brien", "2026-01-01 00:00:00", "2026-01-01 06:00:00", "3")), 7);
+                List.of(List.of("o'brien", "2026-01-01 00:00:00", "2026-01-01 06:00:00", "3")), 7, null);
         assertEquals("INSERT INTO \"cat\".\"main\".\"ingest-watermark\""
                 + " (\"county\", \"min_ts\", \"max_ts\", \"row_count\", \"min_commit_snapshot_id\") "
                 + "VALUES ('o''brien', '2026-01-01 00:00:00', '2026-01-01 06:00:00', '3', 7)", sql);
@@ -229,7 +245,7 @@ class WatermarkSpecTest {
         assertEquals("INSERT INTO \"cat\".\"main\".\"wm\""
                 + " (\"county\", \"min_ts\", \"max_ts\", \"rows\", \"min_commit_snapshot_id\")"
                 + " VALUES ('a', '1', '9', '42', 7)",
-                spec.insertSql("cat", "main", List.of(List.of("a", "1", "9", "42")), 7));
+                spec.insertSql("cat", "main", List.of(List.of("a", "1", "9", "42")), 7, null));
     }
 
     @Test
