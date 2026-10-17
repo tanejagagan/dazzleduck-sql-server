@@ -86,7 +86,9 @@ public class OtelTraceService extends TraceServiceGrpc.TraceServiceImplBase impl
                     (batch, root) -> SpanBatchWriter.write(batch, root, attributesStringCopy, scan));
             // The mappings this batch is the first to carry ride its registration transaction, so
             // they are settled by its own outcome rather than written on a timer.
-            var claimed = scan == null ? java.util.List.<AttributeTypeRegistry.Key>of()
+            // Null rather than an empty claim when the queue records nothing: a claim is a thing
+            // to be settled exactly once, and there is nothing to settle here.
+            AttributeTypeRegistry.Claim claimed = scan == null ? null
                     : attributeTypes.claim(queueId, Signal.TRACES, scan);
             // addBatch can throw before it returns a future — a rejected queue, or sizing the
             // file — and then nothing would ever settle the claim, so it would stay in flight for

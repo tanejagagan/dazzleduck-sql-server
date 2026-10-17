@@ -125,6 +125,46 @@ public final class AttributeTypeRegistry {
     /** One mapping, as the table's key columns record it. */
     record Key(String queue, Signal signal, AttributeScope scope, String name, AttributeValueType type) {}
 
+    /**
+     * One batch's claim: the mappings it carries, and whether its outcome has been recorded.
+     *
+     * <p>A claim exists so that {@link #settle} can be <b>idempotent</b>. Settling twice would
+     * otherwise decrement the in-flight gauge twice and double-count the persisted or rollback
+     * counters, and the second call is easy to reach: the services attach a completion handler
+     * that settles, so any later synchronous failure on that path could settle again. Absorbing it
+     * here is better than asking every caller to remember, which is what a bare list required.
+     *
+     * <p>The flag is per claim rather than per mapping on purpose: the same mapping may legitimately
+     * be claimed by two concurrent batches, which is what makes the design's invariant hold.
+     */
+    public static final class Claim {
+        private final List<Key> keys;
+        private final java.util.concurrent.atomic.AtomicBoolean settled =
+                new java.util.concurrent.atomic.AtomicBoolean();
+
+        private Claim(List<Key> keys) {
+            this.keys = keys;
+        }
+
+        public boolean isEmpty() {
+            return keys.isEmpty();
+        }
+
+        public int size() {
+            return keys.size();
+        }
+
+        /** The mappings, for rendering and for tests; settling is the only mutation. */
+        public List<Key> keys() {
+            return keys;
+        }
+
+        /** True for the first settle only. */
+        private boolean claimOutcome() {
+            return settled.compareAndSet(false, true);
+        }
+    }
+
     private final AttributeTypeSettings settings;
     private final OtelCollectorMetrics metrics;
     private final String collectorId;
@@ -337,9 +377,9 @@ public final class AttributeTypeRegistry {
      * <p>Every returned key must be passed to {@link #settle} once the batch's outcome is known,
      * or the in-flight gauge drifts.
      */
-    public List<Key> claim(String queue, Signal signal, AttributeTypeScan scan) {
+    public Claim claim(String queue, Signal signal, AttributeTypeScan scan) {
         if (!settings.enabled() || scan == null || scan.isEmpty()) {
-            return List.of();
+            return new Claim(List.of());
         }
         List<Key> claimed = new ArrayList<>();
         int dropped = 0;
@@ -388,7 +428,7 @@ public final class AttributeTypeRegistry {
         if (!claimed.isEmpty()) {
             metrics.recordNewAttributeTypes(queue, claimed.size());
         }
-        return claimed;
+        return new Claim(claimed);
     }
 
     /**
@@ -396,10 +436,11 @@ public final class AttributeTypeRegistry {
      * {@code table} is the queue's configured table name, unqualified: the post-ingestion task
      * resolves it in that queue's own catalog and schema.
      */
-    public SidecarRows sidecar(List<Key> claimed, String table) {
-        if (claimed.isEmpty()) {
+    public SidecarRows sidecar(Claim claim, String table) {
+        if (claim == null || claim.isEmpty()) {
             return null;
         }
+        List<Key> claimed = claim.keys();
         String seen = "TIMESTAMPTZ " + literal(TIMESTAMP.format(Instant.now()) + "+00");
         String collector = literal(collectorId);
         List<List<String>> rows = new ArrayList<>(claimed.size());
@@ -421,10 +462,18 @@ public final class AttributeTypeRegistry {
      * in the table, so the mappings are known and never sent again; otherwise they are released
      * and a later batch carries them.
      */
-    public void settle(Collection<Key> claimed, boolean committed) {
-        if (claimed.isEmpty()) {
+    public void settle(Claim claim, boolean committed) {
+        if (claim == null || claim.isEmpty()) {
             return;
         }
+        if (!claim.claimOutcome()) {
+            // Idempotent, but not silent: a second settle is a caller bug worth seeing, and
+            // absorbing it without a word would hide the thing that made this necessary.
+            log.debug("Attribute type claim of {} mapping(s) was already settled; ignoring the second settle",
+                    claim.size());
+            return;
+        }
+        List<Key> claimed = claim.keys();
         if (committed) {
             for (Key key : claimed) {
                 known.add(key);

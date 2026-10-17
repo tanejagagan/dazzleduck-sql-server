@@ -191,8 +191,8 @@ public class AttributeTypeRegistryTest {
     }
 
     /** {@code claimed} as sorted {@code queue/signal/scope/name/type} text. */
-    private static String keys(List<AttributeTypeRegistry.Key> claimed) {
-        return String.join(" ", claimed.stream()
+    private static String keys(AttributeTypeRegistry.Claim claimed) {
+        return String.join(" ", claimed.keys().stream()
                 .map(k -> String.join("/", k.queue(), k.signal().wireName(), k.scope().wireName(),
                         k.name(), k.type().wireName()))
                 .sorted().toList());
@@ -208,8 +208,7 @@ public class AttributeTypeRegistryTest {
         registry.settle(claimed, true);
         assertEquals(1, registry.knownCount());
         assertEquals(0, registry.inFlightCount());
-        assertEquals(List.of(), registry.claim("logs", Signal.LOGS, scanOf("x", str("v"))),
-                "committed mappings are never carried again");
+        assertTrue((registry.claim("logs", Signal.LOGS, scanOf("x", str("v")))).isEmpty(), "committed mappings are never carried again");
     }
 
     /**
@@ -232,8 +231,7 @@ public class AttributeTypeRegistryTest {
 
         assertEquals(1, registry.knownCount(), "B's commit recorded it, so the data is explained");
         assertEquals(0, registry.inFlightCount());
-        assertEquals(List.of(), registry.claim("logs", Signal.LOGS, scanOf("x", num(1))),
-                "and it is not carried a third time");
+        assertTrue((registry.claim("logs", Signal.LOGS, scanOf("x", num(1)))).isEmpty(), "and it is not carried a third time");
     }
 
     /** The same interleaving the other way round: the failure first, the commit after. */
@@ -245,7 +243,7 @@ public class AttributeTypeRegistryTest {
         registry.settle(batchA, false);
         registry.settle(batchB, true);
         assertEquals(1, registry.knownCount());
-        assertEquals(List.of(), registry.claim("logs", Signal.LOGS, scanOf("x", num(1))));
+        assertTrue((registry.claim("logs", Signal.LOGS, scanOf("x", num(1)))).isEmpty());
     }
 
     /**
@@ -288,9 +286,9 @@ public class AttributeTypeRegistryTest {
         var registry = registry(2);
         registry.settle(registry.claim("logs", Signal.LOGS, scanOf("a", str("v"))), true);
         registry.settle(registry.claim("logs", Signal.LOGS, scanOf("b", str("v"))), true);
-        assertEquals(List.of(), registry.claim("logs", Signal.LOGS, scanOf("c", str("v"))));
+        assertTrue((registry.claim("logs", Signal.LOGS, scanOf("c", str("v")))).isEmpty());
         // A mapping already known is still recognised at the cap, rather than counted as dropped.
-        assertEquals(List.of(), registry.claim("logs", Signal.LOGS, scanOf("a", str("v"))));
+        assertTrue((registry.claim("logs", Signal.LOGS, scanOf("a", str("v")))).isEmpty());
         assertEquals(2, registry.knownCount());
     }
 
@@ -307,8 +305,7 @@ public class AttributeTypeRegistryTest {
         assertEquals(1, registry.claim("logs", Signal.LOGS, scanOf("b", str("v"))).size(),
                 "nothing is held yet, so room remains");
         registry.settle(claimed, true);
-        assertEquals(List.of(), registry.claim("logs", Signal.LOGS, scanOf("c", str("v"))),
-                "now one is held, and the cap is one");
+        assertTrue((registry.claim("logs", Signal.LOGS, scanOf("c", str("v")))).isEmpty(), "now one is held, and the cap is one");
     }
 
     @Test
@@ -338,13 +335,43 @@ public class AttributeTypeRegistryTest {
     @Test
     void anAttributeNameWithANulByteIsDroppedRatherThanRisked() {
         var registry = registry(100);
-        assertEquals(List.of(), registry.claim("logs", Signal.LOGS, scanOf("bad\u0000name", str("v"))));
+        assertTrue((registry.claim("logs", Signal.LOGS, scanOf("bad\u0000name", str("v")))).isEmpty());
         assertEquals(0, registry.inFlightCount());
     }
 
     @Test
     void thereAreNoRowsWhenNothingWasClaimed() {
-        assertNull(registry(100).sidecar(List.of(), TABLE));
+        var registry = registry(100);
+        // An empty claim — a batch whose mappings were all already committed — and no claim at all.
+        assertNull(registry.sidecar(registry.claim("q", Signal.LOGS, new AttributeTypeScan()), TABLE));
+        assertNull(registry.sidecar(null, TABLE));
+    }
+
+    /**
+     * Settling twice must not decrement the gauge twice or double-count the counters. The services
+     * attach a completion handler that settles, so a later synchronous failure on that path can
+     * reach settle again; absorbing it here is what makes that safe rather than asking every
+     * caller to remember.
+     */
+    @Test
+    void settlingTheSameClaimTwiceIsIgnored() {
+        var registry = registry(100);
+        var claimed = registry.claim("q", Signal.LOGS, scanOf("x", str("v")));
+        assertEquals(1, claimed.size());
+        assertEquals(1, registry.inFlightCount());
+
+        registry.settle(claimed, true);
+        assertEquals(0, registry.inFlightCount());
+        assertEquals(1, registry.knownCount());
+
+        registry.settle(claimed, true);
+        assertEquals(0, registry.inFlightCount(), "not -1: the second settle is ignored");
+        assertEquals(1, registry.knownCount());
+
+        // And a contradictory second outcome cannot un-record what the first one recorded.
+        registry.settle(claimed, false);
+        assertEquals(0, registry.inFlightCount());
+        assertEquals(1, registry.knownCount(), "still known, and not counted as a rollback");
     }
 
     // --- the two optional switches -------------------------------------------------------
@@ -363,7 +390,7 @@ public class AttributeTypeRegistryTest {
                 new OtelCollectorMetrics(new SimpleMeterRegistry()));
         assertFalse(registry.isEnabled());
         assertNull(AttributeTypeRegistry.scanFor(registry, TABLE));
-        assertEquals(List.of(), registry.claim("logs", Signal.LOGS, scanOf("x", str("v"))));
+        assertTrue((registry.claim("logs", Signal.LOGS, scanOf("x", str("v")))).isEmpty());
     }
 
     @Test
@@ -401,8 +428,7 @@ public class AttributeTypeRegistryTest {
             assertEquals(2, registry.knownCount(), "the duplicate counts once; the other stream and the"
                     + " unrecognised row are not cached");
             assertEquals(1, registry.knownNameCount());
-            assertEquals(List.of(), registry.claim("logs", Signal.LOGS, scanOf("mine", str("v"))),
-                    "a mapping already in the table is not appended again after a restart");
+            assertTrue((registry.claim("logs", Signal.LOGS, scanOf("mine", str("v")))).isEmpty(), "a mapping already in the table is not appended again after a restart");
             assertEquals(1, registry.claim("logs", Signal.LOGS, scanOf("fresh", str("v"))).size(),
                     "a mapping the table does not hold still is");
         } finally {
