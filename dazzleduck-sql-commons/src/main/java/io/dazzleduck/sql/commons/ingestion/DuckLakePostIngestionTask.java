@@ -40,11 +40,10 @@ import java.util.UUID;
  * <p>{@link #verifySnapshotId} then records the exact snapshot when it differs, by APPENDING a
  * correction row for the batch rather than updating the rows in place — so the watermark table is
  * append-only and the ingestion path issues no row-level write. A reader takes
- * {@code max(snapshot_id)} over a batch id; see {@link WatermarkSpec#snapshotCorrectionSql}. This
- * needs {@code watermark_batch_id_column} to be configured, because the correction has to attach to
- * something: without it no correction is written and the column keeps its lower bound, which is
- * what it is specified as. Either way the step is an accuracy improvement, not a correctness
- * requirement — if it is skipped or fails, the column still satisfies its contract.
+ * {@code max(snapshot_id)} over a batch id; see {@link WatermarkSpec#snapshotCorrectionSql}. Every
+ * batch carries an id ({@code watermark_batch_id_column} is required) for the correction to attach
+ * to. The step is an accuracy improvement, not a correctness requirement — if it is skipped or
+ * fails, the column still satisfies its contract as a lower bound.
  *
  * <p>Limitation: queues registered through the dynamic SQLite registry
  * ({@link DynamicQueueRepository}) do not carry {@code additional_parameters}, so watermarks are
@@ -113,7 +112,7 @@ public class DuckLakePostIngestionTask implements PostIngestionTask {
                 return;
             }
             long predictedSnapshotId = predictNextSnapshotId(conn);
-            String batchId = watermarkSpec.recordsExactSnapshot() ? UUID.randomUUID().toString() : null;
+            String batchId = UUID.randomUUID().toString();
             queries.add(watermarkSpec.insertSql(catalogName, schemaName, watermarkRows, predictedSnapshotId, batchId));
             executeInTxn(conn, queries, files);
             verifySnapshotId(conn, files, predictedSnapshotId, batchId);
@@ -198,11 +197,6 @@ public class DuckLakePostIngestionTask implements PostIngestionTask {
      * (0.15-0.21ms vs 0.16ms at 1M files), and when either says "something moved" this query still
      * has to run. One unconditional exact lookup is simpler and no slower.
      *
-     * <p>With no batch id configured there is nothing to attach a correction to, so none is written
-     * and the rows keep their lower bound. That is logged at debug, not warned about: it is the
-     * documented behaviour of a watermark table without {@code watermark_batch_id_column}, not a
-     * fault.
-     *
      * <p>Failures here are logged rather than thrown. The batch is already durable, and the column
      * is specified as a lower bound, so a skipped correction leaves a value that is merely loose
      * rather than wrong — whereas failing an ingest that succeeded would be a real loss.
@@ -211,12 +205,6 @@ public class DuckLakePostIngestionTask implements PostIngestionTask {
         try {
             Long actual = resolveCommittedSnapshotId(conn, files.get(0), predicted);
             if (actual == null || actual == predicted) {
-                return;
-            }
-            if (batchId == null) {
-                logger.debug("Queue '{}' committed as snapshot {} rather than the predicted {}; no '{}' is "
-                                + "configured, so its rows keep the lower bound", ingestionResult.queueName(), actual,
-                        predicted, WatermarkSpec.BATCH_ID_COLUMN_KEY);
                 return;
             }
             logger.info("Queue '{}' committed as snapshot {} rather than the predicted {} (a concurrent "

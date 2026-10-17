@@ -38,8 +38,9 @@ class WatermarkSpecTest {
                 WatermarkSpec.MIN_TIMESTAMP_COLUMN_KEY, "min_ts",
                 WatermarkSpec.MAX_TIMESTAMP_COLUMN_KEY, "max_ts",
                 WatermarkSpec.ROW_COUNT_COLUMN_KEY, "row_count",
-                WatermarkSpec.SNAPSHOT_ID_COLUMN_KEY, "min_commit_snapshot_id"));
-        assertEquals(new WatermarkSpec("wm", "ts", List.of("county", "state"), "min_ts", "max_ts", "row_count", "min_commit_snapshot_id"), spec);
+                WatermarkSpec.SNAPSHOT_ID_COLUMN_KEY, "min_commit_snapshot_id",
+                WatermarkSpec.BATCH_ID_COLUMN_KEY, "batch_id"));
+        assertEquals(new WatermarkSpec("wm", "ts", List.of("county", "state"), "min_ts", "max_ts", "row_count", "min_commit_snapshot_id", "batch_id"), spec);
     }
 
     @Test
@@ -52,7 +53,8 @@ class WatermarkSpecTest {
                 WatermarkSpec.MIN_TIMESTAMP_COLUMN_KEY, "min_ts",
                 WatermarkSpec.MAX_TIMESTAMP_COLUMN_KEY, "max_ts",
                 WatermarkSpec.ROW_COUNT_COLUMN_KEY, "row_count",
-                WatermarkSpec.SNAPSHOT_ID_COLUMN_KEY, "min_commit_snapshot_id"));
+                WatermarkSpec.SNAPSHOT_ID_COLUMN_KEY, "min_commit_snapshot_id",
+                WatermarkSpec.BATCH_ID_COLUMN_KEY, "batch_id"));
         assertEquals(List.of("county", "state"), spec.groupColumns());
     }
 
@@ -84,30 +86,38 @@ class WatermarkSpecTest {
 
     // ------------------------------------------------------- batch id and corrections
 
+    /**
+     * Required, not optional, so there is one behaviour: the table is always append-only and the
+     * correction is always an append. A watermark table that predates the key must add the column
+     * before the queue will start, which is a startup error naming the key rather than a surprise
+     * at flush time.
+     */
     @Test
-    void batchIdColumnIsOptionalAndBlankMeansAbsent() {
-        Map<String, String> base = Map.of(
+    void batchIdColumnIsRequiredWhenAWatermarkIsConfigured() {
+        Map<String, String> withoutKey = Map.of(
                 WatermarkSpec.TABLE_KEY, "wm",
                 WatermarkSpec.TIMESTAMP_COLUMN_KEY, "ts",
                 WatermarkSpec.MIN_TIMESTAMP_COLUMN_KEY, "min_ts",
                 WatermarkSpec.MAX_TIMESTAMP_COLUMN_KEY, "max_ts",
                 WatermarkSpec.ROW_COUNT_COLUMN_KEY, "row_count",
                 WatermarkSpec.SNAPSHOT_ID_COLUMN_KEY, "snap");
-        // A watermark table configured before this existed keeps working, with no correction.
-        WatermarkSpec without = WatermarkSpec.fromParameters("q", base);
-        assertNull(without.batchIdColumn());
-        assertFalse(without.recordsExactSnapshot());
+        var missing = assertThrows(IllegalArgumentException.class,
+                () -> WatermarkSpec.fromParameters("q", withoutKey));
+        assertTrue(missing.getMessage().contains(WatermarkSpec.BATCH_ID_COLUMN_KEY),
+                "the error should name the missing key, got: " + missing.getMessage());
 
-        Map<String, String> blank = new java.util.HashMap<>(base);
+        Map<String, String> blank = new java.util.HashMap<>(withoutKey);
         blank.put(WatermarkSpec.BATCH_ID_COLUMN_KEY, "   ");
-        assertNull(WatermarkSpec.fromParameters("q", blank).batchIdColumn(),
-                "blank must normalise to absent rather than failing: absent is the documented default");
+        var blankValue = assertThrows(IllegalArgumentException.class,
+                () -> WatermarkSpec.fromParameters("q", blank));
+        assertTrue(blankValue.getMessage().contains(WatermarkSpec.BATCH_ID_COLUMN_KEY), blankValue.getMessage());
 
-        Map<String, String> set = new java.util.HashMap<>(base);
+        Map<String, String> set = new java.util.HashMap<>(withoutKey);
         set.put(WatermarkSpec.BATCH_ID_COLUMN_KEY, " batch_id ");
-        WatermarkSpec with = WatermarkSpec.fromParameters("q", set);
-        assertEquals("batch_id", with.batchIdColumn());
-        assertTrue(with.recordsExactSnapshot());
+        assertEquals("batch_id", WatermarkSpec.fromParameters("q", set).batchIdColumn(), "trimmed");
+
+        assertThrows(IllegalArgumentException.class, () -> new WatermarkSpec("wm", "ts", List.of(),
+                "min_ts", "max_ts", "row_count", "snap", null), "the record itself must require it");
     }
 
     @Test
@@ -121,24 +131,20 @@ class WatermarkSpecTest {
     }
 
     /**
-     * The batch id and its column travel together, and a mismatch is refused rather than
-     * reconciled: an id with no column to hold it could only be discarded, and a missing id on a
-     * table that has the column would leave the batch's rows with nothing a correction could
-     * attach to — losing the exact snapshot rarely and invisibly.
+     * Every batch must carry an id, checked rather than quietly omitted: rows written without one
+     * would leave nothing for a correction to attach to, losing the exact snapshot rarely and
+     * invisibly.
      */
     @Test
-    void insertSqlRefusesABatchIdThatDoesNotMatchTheConfiguration() {
+    void insertSqlRefusesRowsWithNoBatchId() {
         List<List<String>> rows = List.of(List.of("king", "1", "9", "2"));
-        WatermarkSpec without = new WatermarkSpec("wm", "ts", List.of("county"), "min_ts", "max_ts", "row_count", "snap");
-        var given = assertThrows(IllegalArgumentException.class,
-                () -> without.insertSql("cat", "main", rows, 7, "b-1"));
-        assertTrue(given.getMessage().contains(WatermarkSpec.BATCH_ID_COLUMN_KEY), given.getMessage());
-
-        WatermarkSpec with = new WatermarkSpec("wm", "ts", List.of("county"), "min_ts", "max_ts", "row_count",
+        WatermarkSpec spec = new WatermarkSpec("wm", "ts", List.of("county"), "min_ts", "max_ts", "row_count",
                 "snap", "batch_id");
-        var missing = assertThrows(IllegalArgumentException.class,
-                () -> with.insertSql("cat", "main", rows, 7, null));
-        assertTrue(missing.getMessage().contains(WatermarkSpec.BATCH_ID_COLUMN_KEY), missing.getMessage());
+        for (String noId : new String[]{null, "  "}) {
+            var e = assertThrows(IllegalArgumentException.class,
+                    () -> spec.insertSql("cat", "main", rows, 7, noId));
+            assertTrue(e.getMessage().contains(WatermarkSpec.BATCH_ID_COLUMN_KEY), e.getMessage());
+        }
     }
 
     /**
@@ -156,13 +162,6 @@ class WatermarkSpecTest {
         assertFalse(sql.contains("UPDATE"), "the correction must never be an in-place update");
     }
 
-    @Test
-    void correctionWithoutABatchIdColumnIsRefusedRatherThanGuessed() {
-        WatermarkSpec spec = new WatermarkSpec("wm", "ts", List.of(), "min_ts", "max_ts", "row_count", "snap");
-        var e = assertThrows(IllegalStateException.class, () -> spec.snapshotCorrectionSql("cat", "main", "b1", 3));
-        assertTrue(e.getMessage().contains(WatermarkSpec.BATCH_ID_COLUMN_KEY), e.getMessage());
-    }
-
     // ------------------------------------------------------------------ computation
 
     private String relationOver(Connection conn, String values, String path) throws Exception {
@@ -174,7 +173,7 @@ class WatermarkSpecTest {
 
     @Test
     void keepsAllNullTimestampGroupSoItsRowCountIsRecorded() throws Exception {
-        WatermarkSpec spec = new WatermarkSpec("wm", "ts", List.of("county", "state"), "min_ts", "max_ts", "row_count", "min_commit_snapshot_id");
+        WatermarkSpec spec = new WatermarkSpec("wm", "ts", List.of("county", "state"), "min_ts", "max_ts", "row_count", "min_commit_snapshot_id", "batch_id");
         try (Connection conn = ConnectionPool.getConnection()) {
             String relation = relationOver(conn,
                     "('king','wa',TIMESTAMP '2026-08-01 03:00'),"
@@ -197,7 +196,7 @@ class WatermarkSpecTest {
 
     @Test
     void globalModeSkipsOnlyGenuinelyEmptyInput() throws Exception {
-        WatermarkSpec spec = new WatermarkSpec("wm", "ts", List.of(), "min_ts", "max_ts", "row_count", "min_commit_snapshot_id");
+        WatermarkSpec spec = new WatermarkSpec("wm", "ts", List.of(), "min_ts", "max_ts", "row_count", "min_commit_snapshot_id", "batch_id");
         try (Connection conn = ConnectionPool.getConnection()) {
             // zero-row relation: a global MIN would be a single NULL row — must be suppressed
             String empty = relationOver(conn, "('x','y',TIMESTAMP '2026-01-01')",
@@ -220,19 +219,19 @@ class WatermarkSpecTest {
 
     @Test
     void insertSqlQuotesIdentifiersAndEscapesValues() {
-        WatermarkSpec spec = new WatermarkSpec("ingest-watermark", "timestamp", List.of("county"), "min_ts", "max_ts", "row_count", "min_commit_snapshot_id");
+        WatermarkSpec spec = new WatermarkSpec("ingest-watermark", "timestamp", List.of("county"), "min_ts", "max_ts", "row_count", "min_commit_snapshot_id", "batch_id");
         String sql = spec.insertSql("cat", "main",
-                List.of(List.of("o'brien", "2026-01-01 00:00:00", "2026-01-01 06:00:00", "3")), 7, null);
+                List.of(List.of("o'brien", "2026-01-01 00:00:00", "2026-01-01 06:00:00", "3")), 7, "b'1");
         assertEquals("INSERT INTO \"cat\".\"main\".\"ingest-watermark\""
-                + " (\"county\", \"min_ts\", \"max_ts\", \"row_count\", \"min_commit_snapshot_id\") "
-                + "VALUES ('o''brien', '2026-01-01 00:00:00', '2026-01-01 06:00:00', '3', 7)", sql);
+                + " (\"county\", \"min_ts\", \"max_ts\", \"row_count\", \"min_commit_snapshot_id\", \"batch_id\") "
+                + "VALUES ('o''brien', '2026-01-01 00:00:00', '2026-01-01 06:00:00', '3', 7, 'b''1')", sql);
     }
 
     // ------------------------------------------------ MAX timestamp and row count
 
     @Test
     void aggregationAlwaysIncludesMinMaxAndCount() {
-        WatermarkSpec spec = new WatermarkSpec("wm", "ts", List.of("county"), "min_ts", "max_ts", "rows", "min_commit_snapshot_id");
+        WatermarkSpec spec = new WatermarkSpec("wm", "ts", List.of("county"), "min_ts", "max_ts", "rows", "min_commit_snapshot_id", "batch_id");
         assertEquals("SELECT \"county\", MIN(\"ts\") AS \"min_ts\", MAX(\"ts\") AS \"max_ts\","
                 + " COUNT(*) AS \"rows\" FROM (SELECT 1) GROUP BY \"county\""
                 + " HAVING COUNT(*) > 0",
@@ -241,21 +240,21 @@ class WatermarkSpecTest {
 
     @Test
     void insertColumnOrderMatchesAggregateOrder() {
-        WatermarkSpec spec = new WatermarkSpec("wm", "ts", List.of("county"), "min_ts", "max_ts", "rows", "min_commit_snapshot_id");
+        WatermarkSpec spec = new WatermarkSpec("wm", "ts", List.of("county"), "min_ts", "max_ts", "rows", "min_commit_snapshot_id", "batch_id");
         assertEquals("INSERT INTO \"cat\".\"main\".\"wm\""
-                + " (\"county\", \"min_ts\", \"max_ts\", \"rows\", \"min_commit_snapshot_id\")"
-                + " VALUES ('a', '1', '9', '42', 7)",
-                spec.insertSql("cat", "main", List.of(List.of("a", "1", "9", "42")), 7, null));
+                + " (\"county\", \"min_ts\", \"max_ts\", \"rows\", \"min_commit_snapshot_id\", \"batch_id\")"
+                + " VALUES ('a', '1', '9', '42', 7, 'b-1')",
+                spec.insertSql("cat", "main", List.of(List.of("a", "1", "9", "42")), 7, "b-1"));
     }
 
     @Test
     void blankMaxOrRowCountColumnIsRejected() {
         assertThrows(IllegalArgumentException.class,
-                () -> new WatermarkSpec("wm", "ts", List.of(), "min_ts", "  ", "rows", "min_commit_snapshot_id"));
+                () -> new WatermarkSpec("wm", "ts", List.of(), "min_ts", "  ", "rows", "min_commit_snapshot_id", "batch_id"));
         assertThrows(IllegalArgumentException.class,
-                () -> new WatermarkSpec("wm", "ts", List.of(), "min_ts", "max_ts", null, "min_commit_snapshot_id"));
+                () -> new WatermarkSpec("wm", "ts", List.of(), "min_ts", "max_ts", null, "min_commit_snapshot_id", "batch_id"));
         assertThrows(IllegalArgumentException.class,
-                () -> new WatermarkSpec("wm", "ts", List.of(), "min_ts", "max_ts", "rows", null));
+                () -> new WatermarkSpec("wm", "ts", List.of(), "min_ts", "max_ts", "rows", null, "batch_id"));
     }
 
     @Test

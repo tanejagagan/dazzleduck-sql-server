@@ -577,7 +577,7 @@ row count. Configure under `additional_parameters`:
 | `watermark_row_count_column` | Yes | Destination column for the batch row count |
 | `watermark_group_columns` | No | Comma-separated grouping columns; empty = one global row per batch |
 | `watermark_snapshot_id_column` | Yes | Destination column for a lower bound on the DuckLake snapshot the batch committed in |
-| `watermark_batch_id_column` | No | Destination column for the batch id; enables recording the exact snapshot as an appended correction |
+| `watermark_batch_id_column` | Yes | Destination column for the batch id, which the appended snapshot correction attaches to |
 
 A malformed spec (partial keys, blanks, typos in `watermark_*` keys) fails at startup rather
 than per batch. Watermarks are not available for queues registered via the dynamic SQLite
@@ -621,15 +621,24 @@ process dies before it runs, the column still satisfies its contract and no read
 ### Reading the exact snapshot (`watermark_batch_id_column`)
 
 A correction has to attach to something, and watermark rows carry no key — two batches in the same
-group can aggregate identically — so the correction is keyed by batch id. Configure the optional
-`watermark_batch_id_column` to enable it:
+group can aggregate identically — so the correction is keyed by batch id. The key is **required**
+whenever a watermark is configured, so that there is one behaviour to reason about: the table is
+always append-only and the correction is always an append.
+
+**Migrating an existing watermark table.** Add the column, then the key. A queue whose
+`watermark_table` is set but whose `watermark_batch_id_column` is missing fails at startup, naming
+the key:
 
 ```sql
 ALTER TABLE my_catalog.main.ingest_watermark ADD COLUMN batch_id VARCHAR;
 ```
 
-With the column configured, every row of a batch carries the same batch id, and the exact snapshot
-of a batch is the greatest recorded value for that id:
+Do the `ALTER TABLE` first. Nothing verifies at startup that the column exists in the table, so
+setting the key against a table without the column fails every batch at commit instead — see the
+warning below.
+
+Every row of a batch carries the same batch id, and the exact snapshot of a batch is the greatest
+recorded value for that id:
 
 ```sql
 SELECT batch_id, max(min_commit_snapshot_id) AS commit_snapshot_id
@@ -660,6 +669,12 @@ SELECT sum(row_count) FROM ingest_watermark;
 The batch id is needed for the *snapshot*, not for the counts. The one query it does change is
 `count(*)`: correction rows are rows, so count the observations instead with
 `count(row_count)`, or filter on `batch_id IS NULL` to see only corrections.
+
+> **Column names are not verified against the table at startup.** A watermark column named in the
+> config but absent from the table fails the batch at commit — `FilesNotRegisteredException`, no
+> files registered, repeating for every batch — and the underlying error does not name the column.
+> This applies to every `watermark_*` column, and `watermark_batch_id_column` is the one most
+> likely to be missed, since it is the only one needing an `ALTER TABLE` on an existing table.
 
 Without the column configured nothing changes and nothing breaks: no correction is written and the
 column simply stays the lower bound it is specified as. The exact snapshot for a batch can still be

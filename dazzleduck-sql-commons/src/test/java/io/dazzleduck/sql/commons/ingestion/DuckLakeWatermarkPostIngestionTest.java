@@ -64,10 +64,7 @@ class DuckLakeWatermarkPostIngestionTest {
         return List.of(f1, f2);
     }
 
-    private static final WatermarkSpec SPEC = new WatermarkSpec("ingest_watermark", "ts", List.of("county", "state"), "min_ts", "max_ts", "row_count", "min_commit_snapshot_id");
-
-    /** The same table with a batch id, which is what lets the exact snapshot be recorded. */
-    private static final WatermarkSpec SPEC_WITH_BATCH_ID = new WatermarkSpec("ingest_watermark", "ts",
+    private static final WatermarkSpec SPEC = new WatermarkSpec("ingest_watermark", "ts",
             List.of("county", "state"), "min_ts", "max_ts", "row_count", "min_commit_snapshot_id", "batch_id");
 
     private static Map<String, String> watermarkParams(String table) {
@@ -78,7 +75,8 @@ class DuckLakeWatermarkPostIngestionTest {
                 WatermarkSpec.MIN_TIMESTAMP_COLUMN_KEY, "min_ts",
                 WatermarkSpec.MAX_TIMESTAMP_COLUMN_KEY, "max_ts",
                 WatermarkSpec.ROW_COUNT_COLUMN_KEY, "row_count",
-                WatermarkSpec.SNAPSHOT_ID_COLUMN_KEY, "min_commit_snapshot_id");
+                WatermarkSpec.SNAPSHOT_ID_COLUMN_KEY, "min_commit_snapshot_id",
+                WatermarkSpec.BATCH_ID_COLUMN_KEY, "batch_id");
     }
 
     /** Computes the rows the way ParquetIngestionQueue does at write time: over the source relation. */
@@ -356,7 +354,7 @@ class DuckLakeWatermarkPostIngestionTest {
         String batchId = "batch-of-the-loser";
         try (Connection conn = ConnectionPool.getConnection()) {
             ConnectionPool.executeBatchInTxn(conn, new String[]{
-                    SPEC_WITH_BATCH_ID.insertSql(CATALOG, "main", computeRowsFor(second), firstSnapshot, batchId)});
+                    SPEC.insertSql(CATALOG, "main", computeRowsFor(second), firstSnapshot, batchId)});
         }
         long secondSnapshot = maxSnapshot();
         assertTrue(secondSnapshot > firstSnapshot,
@@ -365,7 +363,7 @@ class DuckLakeWatermarkPostIngestionTest {
         // The correction, as DuckLakePostIngestionTask's verify step issues it.
         try (Connection conn = ConnectionPool.getConnection()) {
             ConnectionPool.execute(conn,
-                    SPEC_WITH_BATCH_ID.snapshotCorrectionSql(CATALOG, "main", batchId, secondSnapshot));
+                    SPEC.snapshotCorrectionSql(CATALOG, "main", batchId, secondSnapshot));
         }
 
         try (Connection conn = ConnectionPool.getConnection()) {
@@ -407,9 +405,9 @@ class DuckLakeWatermarkPostIngestionTest {
         List<String> b = writeSingleFile("d2.parquet", "same");
         try (Connection conn = ConnectionPool.getConnection()) {
             // Two batches whose rows are identical in every value column, one of them corrected.
-            ConnectionPool.execute(conn, SPEC_WITH_BATCH_ID.insertSql(CATALOG, "main", computeRowsFor(a), 4, "b1"));
-            ConnectionPool.execute(conn, SPEC_WITH_BATCH_ID.snapshotCorrectionSql(CATALOG, "main", "b1", 7));
-            ConnectionPool.execute(conn, SPEC_WITH_BATCH_ID.insertSql(CATALOG, "main", computeRowsFor(b), 9, "b2"));
+            ConnectionPool.execute(conn, SPEC.insertSql(CATALOG, "main", computeRowsFor(a), 4, "b1"));
+            ConnectionPool.execute(conn, SPEC.snapshotCorrectionSql(CATALOG, "main", "b1", 7));
+            ConnectionPool.execute(conn, SPEC.insertSql(CATALOG, "main", computeRowsFor(b), 9, "b2"));
 
             assertEquals(List.of("b1=7", "b2=9"), collect(conn, ("""
                     SELECT batch_id || '=' || max(min_commit_snapshot_id)::VARCHAR AS r
@@ -440,8 +438,8 @@ class DuckLakeWatermarkPostIngestionTest {
     void aggregatesMustNotBeGroupedByBatchId() throws Exception {
         List<String> files = writeBatchFiles();   // three groups: king/wa, cook/il, cook/in
         try (Connection conn = ConnectionPool.getConnection()) {
-            ConnectionPool.execute(conn, SPEC_WITH_BATCH_ID.insertSql(CATALOG, "main", computeRows(files), 4, "b1"));
-            ConnectionPool.execute(conn, SPEC_WITH_BATCH_ID.snapshotCorrectionSql(CATALOG, "main", "b1", 7));
+            ConnectionPool.execute(conn, SPEC.insertSql(CATALOG, "main", computeRows(files), 4, "b1"));
+            ConnectionPool.execute(conn, SPEC.snapshotCorrectionSql(CATALOG, "main", "b1", 7));
 
             assertEquals(List.of("4"), collect(conn,
                     "SELECT sum(row_count)::VARCHAR AS r FROM %s.main.ingest_watermark".formatted(CATALOG)),
@@ -462,15 +460,6 @@ class DuckLakeWatermarkPostIngestionTest {
                     FROM %s.main.ingest_watermark WHERE batch_id = 'b1'""").formatted(CATALOG)),
                     "the snapshot rule is unaffected by the group count");
         }
-    }
-
-    /** Without a batch id column there is nothing to attach a correction to, so it is refused. */
-    @Test
-    void correctionIsRefusedWithoutABatchIdColumn() {
-        var e = assertThrows(IllegalStateException.class,
-                () -> SPEC.snapshotCorrectionSql(CATALOG, "main", "b1", 7));
-        assertTrue(e.getMessage().contains(WatermarkSpec.BATCH_ID_COLUMN_KEY),
-                "the error should name the missing key, got: " + e.getMessage());
     }
 
     private long maxSnapshot() throws Exception {
