@@ -30,6 +30,15 @@ public class DuckLakePartitionPruningTest {
     public static final String QUALIFIED_PARTITIONED_TABLE = "%s.%s".formatted(DATABASE, PARTITIONED_TABLE);
     public static final String QUALIFIED_NON_PARTITIONED_TABLE = "%s.%s".formatted(DATABASE, NON_PARTITIONED_TABLE);
 
+    private static String settingBefore;
+
+    @AfterAll
+    public static void tearDown() {
+        if (settingBefore != null) {
+            ConnectionPool.execute("SET GLOBAL ducklake_default_data_inlining_row_limit = " + settingBefore);
+        }
+    }
+
     @BeforeAll
     public static void setup() throws IOException {
         String workspacePath = WORKSPACE.toString();
@@ -42,6 +51,10 @@ public class DuckLakePartitionPruningTest {
         // inserts in the catalog instead, and its limit belongs to the whole DuckDB instance —
         // which other tests in this JVM also move — so this fixture states what it needs rather
         // than inheriting whatever ran before it.
+        // Remembered and restored in tearDown: setting it and leaving it is the same pollution in
+        // the other direction, changing how many files later tests' inserts produce.
+        settingBefore = ConnectionPool.collectFirst(
+                "SELECT current_setting('ducklake_default_data_inlining_row_limit')::VARCHAR", String.class);
         ConnectionPool.execute("SET GLOBAL ducklake_default_data_inlining_row_limit = 0");
         DuckLakeTestFixture.createTestTable(QUALIFIED_PARTITIONED_TABLE, true);
         DuckLakeTestFixture.addDataFile(DATABASE, workspacePath + "/data/main/" + PARTITIONED_TABLE, PARTITIONED_TABLE, true);
