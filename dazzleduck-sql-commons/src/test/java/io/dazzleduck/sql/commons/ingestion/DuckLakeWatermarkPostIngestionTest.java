@@ -491,6 +491,26 @@ class DuckLakeWatermarkPostIngestionTest {
                     SELECT county AS r FROM %s.main.ingest_watermark
                     WHERE min_commit_snapshot_id <= 5 AND county IS NOT NULL""").formatted(CATALOG)),
                     "reading the raw column instead claims visibility at 5: the answer the docs warn against");
+
+            // A migrated table also holds rows from before the column existed, which carry no id.
+            // SQL groups those into ONE null batch, so grouping them admits or excludes the whole
+            // history together — here a single historical batch at 9 would hide the one at 2.
+            ConnectionPool.execute(conn, ("INSERT INTO %s.main.ingest_watermark "
+                    + "(county, state, min_ts, max_ts, row_count, min_commit_snapshot_id) VALUES "
+                    + "('legacy-early', 'zz', NULL, NULL, 1, 2), ('legacy-late', 'zz', NULL, NULL, 1, 9)")
+                    .formatted(CATALOG));
+
+            assertEquals(List.of(), collect(conn, ("""
+                    SELECT 'grouped' AS r FROM %s.main.ingest_watermark
+                    WHERE batch_id IS NULL GROUP BY batch_id HAVING max(min_commit_snapshot_id) <= 5""")
+                    .formatted(CATALOG)),
+                    "grouping the id-less rows hides the batch at snapshot 2 behind the one at 9");
+
+            assertEquals(List.of("legacy-early"), collect(conn, ("""
+                    SELECT county AS r FROM %s.main.ingest_watermark
+                    WHERE batch_id IS NULL AND min_commit_snapshot_id <= 5 AND county IS NOT NULL""")
+                    .formatted(CATALOG)),
+                    "read directly, they are correct: the earlier code corrected those rows in place");
         }
     }
 

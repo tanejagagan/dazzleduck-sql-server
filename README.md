@@ -603,15 +603,30 @@ appends:
 
 ```sql
 -- batches whose data is visible as of snapshot N
-SELECT batch_id FROM ingest_watermark
-GROUP BY batch_id HAVING max(min_commit_snapshot_id) <= N;
+SELECT batch_id, max(min_commit_snapshot_id) AS commit_snapshot_id
+FROM ingest_watermark WHERE batch_id IS NOT NULL
+GROUP BY batch_id HAVING max(min_commit_snapshot_id) <= N
+UNION ALL
+-- rows written before the batch id column existed carry none; the earlier code corrected those
+-- in place, so for them the recorded value is already exact and is read directly
+SELECT NULL, min_commit_snapshot_id FROM ingest_watermark
+WHERE batch_id IS NULL AND min_commit_snapshot_id <= N;
 ```
 
-Reading the raw column instead of the per-batch maximum answers this question **too early** for a
-batch that was corrected: the row as first written keeps its predicted id, and the exact id lives in
-the appended correction row. A batch that predicted snapshot 4 but committed in 7 is reported by
-`WHERE min_commit_snapshot_id <= 5` as visible at 5, when it is not. The `max(...)` is not a
-refinement here, it is the difference between the right answer and a wrong one.
+Two details in that query are each the difference between a right and a wrong answer, not
+refinements:
+
+**`max(...)` per batch.** Reading the raw column answers **too early** for a corrected batch: the
+row as first written keeps its predicted id, and the exact id lives in the appended correction row.
+A batch that predicted snapshot 4 but committed in 7 is reported by
+`WHERE min_commit_snapshot_id <= 5` as visible at 5, when it is not.
+
+**`WHERE batch_id IS NOT NULL`, with the legacy rows handled separately.** On a table migrated into
+the batch id column, every row written before it carries NULL — and SQL groups those into a single
+NULL "batch". Grouping them admits or excludes the entire history together on one `max`: with
+historical batches at snapshots 2 and 3 the grouped form returns **one** row where there are two,
+and a single historical batch at snapshot 9 would hide every earlier one from `N = 5`. Those rows
+need no `max` anyway, because the code that wrote them corrected in place.
 
 The bound holds unconditionally. DuckLake assigns the snapshot id at COMMIT and does not expose
 the pending one, so what gets written is `max(snapshot_id) + 1` — the same formula DuckLake uses,

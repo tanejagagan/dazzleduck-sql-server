@@ -52,7 +52,10 @@ import java.util.stream.Collectors;
  *
  * <p><strong>Reading the snapshot column:</strong> the table is append-only and a batch may hold
  * more than one row for its snapshot, so the exact snapshot of a batch is
- * {@code max(snapshot_id)} over its batch id. A correction row carries ONLY the batch id and the
+ * {@code max(snapshot_id)} over its batch id — restricted to rows that HAVE one. Rows written
+ * before the batch id column existed carry NULL, and SQL groups those into a single NULL batch,
+ * which would admit or exclude the whole history together; they need no maximum anyway, since the
+ * code that wrote them corrected in place. A correction row carries ONLY the batch id and the
  * snapshot — group columns and aggregates are NULL — so aggregate queries are unaffected by it:
  * {@code sum(row_count)} and {@code max(max_ts)} skip NULLs. Aggregates must NOT be folded into
  * that {@code GROUP BY batch_id}: a batch holds one row per group, so doing so keeps one group and
