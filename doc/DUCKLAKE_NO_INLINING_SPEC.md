@@ -1,11 +1,14 @@
 # DuckLake Data Inlining Must Be Off — Design Specification
 
-Status: **accepted.** The open questions are settled (see the last section): the collector refuses
-to start, the watermark's `INSERT` becomes a write-then-register, and its conflict-path `UPDATE`
-becomes an append. That last decision means nothing on the ingestion path issues a row-level write
-any more, which is worth reading together with the check this spec specifies — it no longer guards a
-write this code performs. One trap survives into the implementation: there are five places inlining
-can be switched on and they are not all visible in the same view.
+Status: **accepted; partly implemented.** The open questions are settled (see the last section):
+the collector refuses to start, the watermark's `INSERT` becomes a write-then-register, and its
+conflict-path `UPDATE` becomes an append. The append landed in #514, which this spec now assumes;
+the inlining rule itself and the sidecar conversion have not.
+
+The rule guards a live fault, not a hypothetical one: with #514 merged the watermark path still
+writes with SQL — one `INSERT` per batch for its rows, plus an `INSERT` for a correction on the rare
+conflict — and both are inlinable at the default limit. One trap survives into the implementation:
+there are five places inlining can be switched on and they are not all visible in the same view.
 
 ## The problem
 
@@ -43,8 +46,9 @@ are not comparable.
    `SET GLOBAL ducklake_default_data_inlining_row_limit = 0`, which applies to every connection of
    the instance.
 2. **Startup checks the effective limit for every table the collector writes with SQL** — which is
-   the **watermark tables** — and **refuses to start** when any is above zero, naming the table,
-   the source that set it, and the statement that fixes it.
+   the **watermark tables**, where each batch inserts its rows and may insert a snapshot
+   correction — and **refuses to start** when any is above zero, naming the table, the source that
+   set it, and the statement that fixes it.
 
 **Only tables the collector inserts into need checking.** Inlining applies to `INSERT`, `UPDATE` and
 `DELETE` plans, not to registering a file: `ducklake_add_data_files` with a one-row file at the
@@ -57,9 +61,11 @@ design" motivation an earlier draft of this gave, and the dependency
 **The limit covers deletes, not just inserts.** At the default limit a `DELETE` of a row living in a
 Parquet file wrote no delete file — the delete went into a catalog table
 (`ducklake_inlined_delete_<n>`); at limit 0 the same delete wrote a delete file. That is what makes
-this matter for the watermark's conflict path, where the snapshot-id tightening is an `UPDATE`, so a
-delete plus an insert. That was the last SQL write on a watermark table, and it is why review then
-replaced it with an append — after which no ingestion write is inlinable at all (see below).
+this matter wherever a `DELETE` or `UPDATE` reaches a DuckLake table. The watermark no longer issues
+one — #514 replaced its conflict-path `UPDATE` with an append — so for this spec the live surface is
+the two `INSERT`s that remain (see below). The delete measurement is kept because it is what makes
+the rule correct for any DML a later change introduces, and because it is the reason the old
+`UPDATE` was the worst shape of the fault.
 
 Step 1 alone guarantees nothing, which is the point of step 2 — see below.
 
@@ -156,18 +162,26 @@ sidecar writer needs the target table's column types in its projection. The same
 registers and reads back correctly. This is the one real piece of work in the conversion, and it is
 a change to `SidecarRows`, which both tables then share.
 
-**2. The tightening `UPDATE` still finds its rows.** It identifies them by `rowid` from
-`ducklake_table_insertions` for the committed snapshot, and that was written against rows inserted
-by SQL. Rows that arrive as a *registered file* are returned there too — a one-row sidecar
-registered in snapshot 2 came back from `ducklake_table_insertions('c','main','wm',2,2)` with
-`rowid = 0`, and the `UPDATE` keyed on it changed exactly that row. So the conflict path survives
-the conversion unmodified.
+**It is now two column types, not one.** The batch id below is a `UUID` (16 bytes against 36 as
+text, measured at 1,001,297 bytes against 1,986,297 over 50,000 rows — the column is distinct on
+every row, so nothing compresses it back). A UUID column is written to Parquet as
+`FIXED_LEN_BYTE_ARRAY(16)` with the standard UUID logical type; registering that file into a `UUID`
+column works and reads back as `UUID`, while the same file with the id as `VARCHAR` is rejected with
+`Expected UUID, found type VARCHAR`. So typed projection is a hard requirement of the conversion
+rather than a tidiness — a VARCHAR-rendering sidecar now fails on timestamps *and* on the batch id.
 
-**3. The tightening `UPDATE` is removed — the correction is appended instead.** Decided in review.
-Rather than editing the row in place, the conflict path appends a correction carrying the exact
-snapshot id, and a reader takes the latest snapshot per batch. That makes the watermark table
-append-only with duplicates tolerated — the registry's model — and it needs one column the table
-does not have today, which is the whole of the design question.
+**2. Rows that arrive as a registered file are still addressable by `rowid`** — measured when the
+conflict path was still an `UPDATE`, to prove it could key on a sidecar's rows: a one-row sidecar
+registered in snapshot 2 came back from `ducklake_table_insertions('c','main','wm',2,2)` with
+`rowid = 0`, and an `UPDATE` keyed on it changed exactly that row. Superseded by point 3 — nothing
+in the design uses it now — and kept only because it is the kind of fact that is expensive to
+rediscover if a later change wants to address registered rows.
+
+**3. The tightening `UPDATE` is gone; the correction is appended.** Landed in #514, which this spec
+assumes. Rather than editing the row in place, the conflict path appends a correction carrying the
+exact snapshot id, and a reader takes the latest snapshot per batch id. That makes the watermark
+table append-only with duplicates tolerated — the registry's model — and it needed one column the
+table did not have, which was the whole of the design question.
 
 **A correction is indistinguishable from a second batch without an identity.** The rows carry no
 key; the old `UPDATE` keyed on DuckLake's `rowid` precisely because two batches in the same group
@@ -181,12 +195,19 @@ aggregates — where the truth is 200 ingested rows:
 | Group by the value columns, no batch id | 100 | wrong: merges two distinct batches |
 | Raw `sum(row_count)`, as a consumer writes it today | 300 | wrong: counts the correction |
 
-So the append needs **`watermark_batch_id_column`** — optional, so existing watermark tables keep
-working; the value is the sidecar file's UUID, which `SidecarRows` already generates, so the row
-also says which file it arrived in. Without the column configured, no correction is written and the
-snapshot id simply stays the lower bound it is already specified as. The `UPDATE` path is deleted
-outright rather than kept as a fallback, which also retires the dependency on
-`ducklake_table_insertions` and on `rowid` stability.
+So the append needs **`watermark_batch_id_column`**, a `UUID` column, **required** whenever a
+watermark is configured. Optional was tried first and rejected in review: it meant two shapes of
+table and two post-commit behaviours differing only on the rare conflict path — the branch nobody
+exercises, which is the worst place to put a choice. Required means one behaviour: the table is
+always append-only and the correction is always an append. A watermark table that predates the key
+must add the column before its queue will start, which is a startup error naming the key.
+
+The `UPDATE` path is deleted outright rather than kept as a fallback, which also retires the
+dependency on `ducklake_table_insertions` and on `rowid` stability.
+
+**This half is implemented**, in #514, ahead of the sidecar conversion that the rest of this section
+describes — it needed neither the inlining disable nor `SidecarRows`, so it stands alone. What
+remains unimplemented here is the write-then-register itself.
 
 **The correction row should carry only the identity and the snapshot**, with the aggregate columns
 NULL, rather than repeating the whole row. Both work with "latest snapshot per batch", but a sparse
@@ -197,32 +218,59 @@ occasions a correction exists, which is the worst shape for a bug: right almost 
 correction is not an observation of ingested data, so a row that states only what it corrects is
 also the more honest record.
 
-**4. This removes the last SQL write from the ingestion path, and the startup check with it.**
-Stated plainly because it changes this spec's own premise. The reason the check was load-bearing was
-the tightening: it was an `UPDATE`, so an insert/delete plan, so inlinable — and at the default limit
-it put **one row in `ducklake_inlined_data_<n>` and one in `ducklake_inlined_delete_<n>`** while
-leaving the registered file unexpired, so the file said `snapshot_id = 4` where the table read `2`.
-With the `UPDATE` gone, the collector and the Flight/HTTP ingestion path issue **no** `INSERT`,
-`UPDATE` or `DELETE` against any DuckLake table: target tables, the registry and now the watermark
-are all written as Parquet and registered. Inlining cannot reach any of them.
+**What the append costs the reader, which this spec did not account for.** Implementing it (#514)
+turned up two ways a consumer query goes wrong that the in-place `UPDATE` had hidden, and both were
+found by reading the change back rather than by reasoning about it. Recorded here because they are
+the real price of the append, and because the spec as written implied the only change was on the
+write side:
 
-What that leaves:
+- **"Visible as of snapshot N" must read the per-batch maximum.** The row as first written keeps its
+  *predicted* id forever — the `UPDATE` used to overwrite it — so the exact id now lives only in the
+  correction. A batch that predicted 4 and committed in 7 is reported by
+  `WHERE snapshot_id <= 5` as visible at 5, when it is not. This is a regression in the documented
+  consumer query, not an inherited limitation.
+- **…but that maximum must exclude rows with no batch id.** SQL collapses every id-less row into a
+  single NULL batch, so on a migrated table a max over that group admits or excludes the whole
+  history together: historical batches at snapshots 2 and 9 lose the one at 2 entirely for `N = 5`.
+  Those rows need no maximum, since the code that wrote them corrected in place.
 
-- **`SET GLOBAL ducklake_default_data_inlining_row_limit = 0` stays.** It costs nothing, and it is
-  the thing that makes any future insert path correct by default rather than by review.
-- **The check becomes defensive rather than load-bearing.** It no longer guards a write this code
-  performs; it guards a write someone *else* performs into these tables, or a DML path added later
-  without noticing this rule. That is worth keeping — it is a startup query, it is the only place
-  the five-source resolution is exercised, and a rule nothing enforces decays — but **refusing to
-  start** was decided when the check protected a live fault, and that premise is now gone. Review
-  may reasonably want it downgraded to a loud warning plus a metric on that basis; the decision
-  above is recorded as made, not quietly re-opened here.
+Neither is fatal and both are now documented and tested, but the shape is worth noting for the
+remaining conversion: **the append makes the write simpler and the correct read less obvious.** The
+sparse correction row is what keeps the damage contained to the snapshot column — `sum(row_count)`,
+`max(max_ts)` and `count(row_count)` all stay correct read directly, on new and migrated tables
+alike.
 
-The measurement in point 4 keeps its force as the reason the `UPDATE` had to go, rather than as the
-reason the check must fail startup.
+**4. The append does NOT remove the SQL writes, and an earlier revision of this spec claimed it
+did.** Correcting that here, because the claim was load-bearing in the wrong direction: it was used
+to argue the startup check guards nothing.
 
-So the conversion buys a shorter transaction, one write mechanism instead of two, and an
-ingestion path with no row-level writes left anywhere in it.
+What the append changed is the *kind* of statement on the conflict path, from `UPDATE` to `INSERT`.
+It did not change that the watermark path writes with SQL. With #514 merged, each batch with a
+watermark still issues:
+
+| Write | Statement | Inlinable at the default limit |
+|---|---|---|
+| The batch's watermark rows | `INSERT ... VALUES`, inside the ingest transaction | yes |
+| A snapshot correction, on the rare conflict | `INSERT ... VALUES`, after commit | yes |
+
+So **the check is fully load-bearing today**, on the most ordinary path there is — one insert per
+batch per queue, not a rare repair. The earlier reasoning conflated the append with the
+write-then-register conversion; only the latter removes the SQL, and only if it covers the
+correction as well as the rows. Until then an operator who enables inlining for a watermark table
+gets exactly the fault this spec exists to prevent, on every batch.
+
+What the append did remove is the `UPDATE`, and with it the worst *shape* of the fault. That
+measurement stands and is worth keeping: at the default limit the old tightening put **one row in
+`ducklake_inlined_data_<n>` and one in `ducklake_inlined_delete_<n>`** and left the registered file
+unexpired, so the file said `snapshot_id = 4` where the table read `2` — a registered Parquet file
+contradicting the table it belongs to. An inlined `INSERT` is merely a row in the wrong store; an
+inlined `UPDATE` was a contradiction. Both are prevented by the same rule.
+
+**When the check does become forward-looking:** once the sidecar conversion covers both writes in
+the table above, nothing on the ingestion path issues row-level SQL and the check guards only a
+write someone else makes into these tables, or a DML path added later. That is a reason to keep it
+cheap and well-tested, not a reason to drop it — but the spec should not pretend the condition has
+already arrived.
 
 ## Failure message
 
@@ -254,14 +302,15 @@ The counter-argument is that this makes the collector refuse to start over a con
 "works". That is accepted on the grounds that it works in a way nobody asked for; the fix is one
 statement and the message contains it.
 
-**The premise for this has weakened since it was decided, and the spec says so rather than leaving
-it to be discovered.** The case was an inlined tightening leaving a registered file whose contents
-contradict the table — a condition no operator should be asked to warn-and-continue past. Replacing
-that tightening with an append removes the fault from this code entirely, so what the check now
-guards is someone else's SQL write into these tables, or a DML path added later. Failing startup
-over that is defensible (it is the only place the five-source resolution is exercised, and an
-unenforced rule decays) but it is no longer the open-and-shut case it was. Recorded as decided;
-worth revisiting deliberately rather than by drift.
+**An earlier revision of this spec said this premise had weakened, and that was wrong** — the
+correction is under point 4 above. Replacing the conflict-path `UPDATE` with an append did not stop
+the watermark writing with SQL: its rows are still inserted on every batch, and the correction is
+still an insert. So the check guards the ordinary path, not a rare repair, and the case for failing
+startup is the one it always was.
+
+What the append did remove is the worst shape of the fault — an inlined `UPDATE` left a registered
+file whose contents contradicted the table, where an inlined `INSERT` merely puts a row in the wrong
+store. Both are prevented here.
 
 ## Scope
 
@@ -270,14 +319,18 @@ render the remedy), the startup check over the watermark tables, and a test per 
 
 Also in, now that review has decided it: converting the watermark rows to a write-then-register, and
 its conflict path to an append. That is typed-column support in `SidecarRows` (finding 1 above), the
-watermark's sidecar write ahead of the transaction with its registration inside it, the optional
+watermark's sidecar write ahead of the transaction with its registration inside it, the required
 `watermark_batch_id_column`, and the appended correction in place of `updateSnapshotIdSql` — which
-is deleted, along with its use of `ducklake_table_insertions`. Tests: the conflict path appending a
-correction rather than editing a row; the reader rule returning the right row count where a
-correction and a same-aggregate second batch coexist; and a watermark table with no batch id column
-configured keeping the lower bound and writing no correction. It depends on `SidecarRows` landing
-with the registry (`doc/ATTRIBUTE_TYPE_REGISTRY_SPEC.md`) — the dependency runs that way only, and
-it is a sequencing one, not a design one.
+is deleted, along with its use of `ducklake_table_insertions`.
+
+**Status: the append half has landed** (#514), with the batch id column, the sparse correction, the
+`UUID` type and the reader rules above. What is left in this spec is the write-then-register itself:
+typed-column support in `SidecarRows` for both `TIMESTAMP` and `UUID`, and the watermark's sidecar
+write — **for the correction as well as the rows**, since leaving the correction as an `INSERT`
+keeps one inlinable write on the path and so keeps the check load-bearing. It is the same mechanism
+either way: a one-row sparse sidecar registered after commit instead of an `INSERT`. That part depends on `SidecarRows` landing with the registry
+(`doc/ATTRIBUTE_TYPE_REGISTRY_SPEC.md`) — the dependency runs that way only, and it is a sequencing
+one, not a design one.
 
 Documentation is in scope, not a follow-up: the snapshot id column's contract changes for every
 consumer. It stays a lower bound, but the exact value now comes from the latest correction for that
@@ -305,15 +358,17 @@ try to flush on someone's behalf.
 2. **The watermark's `INSERT` becomes a write-then-register**, with the measured constraints in its
    own section above. In scope now rather than deferred.
 3. **The conflict path's `UPDATE` becomes an append**, with the reader taking the latest snapshot
-   per batch. It needs `watermark_batch_id_column` to tell a correction from a second batch, and it
-   makes the watermark table append-only like the registry — after which nothing on the ingestion
-   path issues a row-level write.
+   per batch id. It needs `watermark_batch_id_column` — a required `UUID` column — to tell a
+   correction from a second batch, and it makes the watermark table append-only like the registry,
+   after which nothing on the ingestion path issues a row-level write. Implemented in #514,
+   including the two reader-side corrections that implementing it exposed.
 
 Settled earlier in review, with the evidence folded in above: the schema scope as a fifth source;
 that registration is immune to inlining, so only tables written with SQL need checking; that the
 limit covers deletes as well as inserts; and that the file churn from disabling inlining is
 compaction's job, whereas data rows in a shared remote catalog are on every insert's critical path.
 
-One consequence is left for review rather than settled here: with decision 3 in place the startup
-check guards no write this code performs. The argument for keeping it anyway, and for keeping it as
-a startup failure, is under *Why fail startup rather than warn*.
+Nothing is left open. An earlier revision raised one consequence for review — that decision 3 left
+the check guarding no write this code performs — and it was mistaken: the watermark still inserts
+its rows and its corrections with SQL. The correction is under point 4 of the watermark section, and
+*Why fail startup rather than warn* now states the case as it stands.
