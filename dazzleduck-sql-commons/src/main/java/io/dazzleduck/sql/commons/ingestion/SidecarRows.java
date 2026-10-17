@@ -130,12 +130,18 @@ public record SidecarRows(String table, List<String> columns, List<String> colum
             }
             if (first == null) {
                 first = sidecar;
-            } else if (!first.table.equals(sidecar.table) || !first.columns.equals(sidecar.columns)
-                    || !first.columnTypes.equals(sidecar.columnTypes)) {
+            } else if (!first.table.equals(sidecar.table)) {
+                throw new IllegalArgumentException(("one bucket carries sidecar rows for two different tables:"
+                        + " '%s' and '%s'").formatted(first.table, sidecar.table));
+            } else if (!first.columns.equals(sidecar.columns) || !first.columnTypes.equals(sidecar.columnTypes)) {
                 // Types are part of what makes two sets of rows the same shape: unioning rows that
-                // declare different ones would produce a file that matches neither.
-                throw new IllegalArgumentException(("one bucket carries sidecar rows for two different tables"
-                        + " or shapes: '%s' and '%s'").formatted(first.table, sidecar.table));
+                // declare different ones would produce a file that matches neither. Reported apart
+                // from the table mismatch above, because naming the table twice would say nothing
+                // when it is the shape that differs.
+                throw new IllegalArgumentException(("one bucket carries sidecar rows for table '%s' with two"
+                        + " different shapes: %s typed %s, and %s typed %s")
+                        .formatted(first.table, first.columns, first.columnTypes,
+                                sidecar.columns, sidecar.columnTypes));
             }
             rows.addAll(sidecar.rows);
         }

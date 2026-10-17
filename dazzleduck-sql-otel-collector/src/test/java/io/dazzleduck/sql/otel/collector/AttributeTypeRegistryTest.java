@@ -118,6 +118,30 @@ public class AttributeTypeRegistryTest {
         assertEquals(1, registry.claim("q", Signal.LOGS, scanOf("x", str("v"))).size());
     }
 
+    /**
+     * The cap is a count of mappings HELD, so it must be reached exactly rather than approached:
+     * a cap of 3 holds three, and the fourth is the first one dropped. Pinned because the check
+     * now sums two counters, which is where an off-by-one would hide.
+     */
+    @Test
+    void theCapIsReachedExactlyNotApproximately() {
+        var registry = registry(100, 3);
+        assertEquals(2, record(registry, "q", "a", 2), "two of three");
+        assertEquals(1, record(registry, "q", "b", 1), "the third is still accepted");
+        assertEquals(3, registry.knownCount());
+        assertEquals(0, record(registry, "q", "c", 1), "the fourth is dropped");
+
+        // And across the boundary inside one batch, where the sum is what decides.
+        var fresh = registry(100, 3);
+        assertEquals(2, record(fresh, "q", "x", 2));
+        var scan = new AttributeTypeScan();
+        var cursor = scan.cursor(AttributeScope.ATTRIBUTE);
+        cursor.observe(List.of(KeyValue.newBuilder().setKey("y0").setValue(str("v")).build(),
+                KeyValue.newBuilder().setKey("y1").setValue(str("v")).build()));
+        assertEquals(1, fresh.claim("q", Signal.LOGS, scan).size(),
+                "two held plus a two-name batch must take exactly one more");
+    }
+
     /** The same, for the process-wide bound. */
     @Test
     void aSingleBatchCannotExceedTheGlobalCap() {

@@ -89,25 +89,28 @@ public class OtelTraceService extends TraceServiceGrpc.TraceServiceImplBase impl
             var claimed = scan == null ? java.util.List.<AttributeTypeRegistry.Key>of()
                     : attributeTypes.claim(queueId, Signal.TRACES, scan);
             // addBatch can throw before it returns a future — a rejected queue, or sizing the
-            // file — and then no whenComplete below ever runs, so the claim would stay in flight
-            // for the life of the process and the gauge would drift up. Settled as failed here,
-            // which releases the mappings for a later batch to carry.
+            // file — and then nothing would ever settle the claim, so it would stay in flight for
+            // the life of the process. Only that call is guarded: the handler below settles on
+            // completion, and once it is attached a second settle here would decrement the gauge
+            // twice, since settle is not idempotent.
+            java.util.concurrent.CompletableFuture<Void> added;
             try {
-                base.addBatch(queue, arrowFile, scan == null ? null : attributeTypes.sidecar(claimed, typesTable))
-                        .whenComplete((v, ex) -> {
-                            if (scan != null) {
-                                attributeTypes.settle(claimed, ex == null);
-                            }
-                        })
-                        .whenComplete(OtelServiceBase.batchCompleteHandler(arrowFile, spanCount, queueId,
-                                sample, metrics,
-                                responseObserver, ExportTraceServiceResponse.getDefaultInstance()));
+                added = base.addBatch(queue, arrowFile,
+                        scan == null ? null : attributeTypes.sidecar(claimed, typesTable));
             } catch (Throwable t) {
                 if (scan != null) {
                     attributeTypes.settle(claimed, false);
                 }
                 throw t;
             }
+            added.whenComplete((v, ex) -> {
+                        if (scan != null) {
+                            attributeTypes.settle(claimed, ex == null);
+                        }
+                    })
+                    .whenComplete(OtelServiceBase.batchCompleteHandler(arrowFile, spanCount, queueId,
+                            sample, metrics,
+                            responseObserver, ExportTraceServiceResponse.getDefaultInstance()));
         } catch (IOException e) {
             metrics.recordError(queueId, sample);
             log.error("Failed to write Arrow file for {} spans", spanCount, e);

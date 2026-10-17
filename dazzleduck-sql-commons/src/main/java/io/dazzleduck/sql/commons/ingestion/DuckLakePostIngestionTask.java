@@ -182,6 +182,16 @@ public class DuckLakePostIngestionTask implements PostIngestionTask {
         try (Connection conn = ConnectionPool.getConnection();
              Statement statement = conn.createStatement()) {
             statement.execute(sidecar.copySql(file));
+        } catch (SQLException e) {
+            // A COPY that fails partway can leave a partial file, and nothing will ever reference
+            // it: the caller reports "nothing registered" and does not know this path. Best effort,
+            // because the batch's failure is the thing worth reporting.
+            try {
+                java.nio.file.Files.deleteIfExists(java.nio.file.Path.of(file));
+            } catch (Exception cleanup) {
+                e.addSuppressed(cleanup);
+            }
+            throw e;
         }
         return file;
     }
