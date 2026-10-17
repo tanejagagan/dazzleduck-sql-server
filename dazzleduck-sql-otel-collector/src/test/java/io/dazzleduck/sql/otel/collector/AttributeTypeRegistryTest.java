@@ -494,6 +494,42 @@ public class AttributeTypeRegistryTest {
     }
 
     /**
+     * The per-stream cap must hold at STARTUP too. Loading only against the global cap lets one
+     * noisy queue's history fill the whole budget on every restart, so a quiet queue sharing the
+     * table loads nothing and is globally capped from its first batch — the cross-stream
+     * starvation the per-stream cap exists to prevent, re-created at each restart.
+     */
+    @Test
+    void startupLoadRespectsEachQueuesOwnCap() throws Exception {
+        String table = "memory.main.startup_cap_test";
+        try {
+            ConnectionPool.execute(("CREATE TABLE %s (ingestion_queue VARCHAR, signal VARCHAR,"
+                    + " attribute_scope VARCHAR, attribute_name VARCHAR, value_type VARCHAR,"
+                    + " first_seen TIMESTAMP WITH TIME ZONE, collector_id VARCHAR)").formatted(table));
+            // The noisy queue's history is written first, so a plain LIMIT reads it first.
+            StringBuilder values = new StringBuilder();
+            for (int i = 0; i < 20; i++) {
+                values.append(i == 0 ? "" : ", ")
+                        .append("('noisy', 'logs', 'attribute', 'user.%d', 'string', now(), 'c1')".formatted(i));
+            }
+            values.append(", ('quiet', 'logs', 'attribute', 'service.name', 'string', now(), 'c1')");
+            ConnectionPool.execute("INSERT INTO %s VALUES %s".formatted(table, values));
+
+            // A global cap of 5, of which the noisy queue may hold 3.
+            var registry = registry(5, 3);
+            registry.start(handlerFor(table, dataPath.toString(), "noisy", "quiet"));
+
+            assertEquals(4, registry.knownCount(), "three for the noisy queue, one for the quiet one");
+            assertTrue(registry.claim("quiet", Signal.LOGS, scanOf("service.name", str("v"))).isEmpty(),
+                    "the quiet queue's mapping was loaded, so it is not appended again");
+            assertEquals(1, registry.claim("quiet", Signal.LOGS, scanOf("host.name", str("v"))).size(),
+                    "and the quiet queue can still record — the noisy one did not take the budget");
+        } finally {
+            ConnectionPool.execute("DROP TABLE IF EXISTS " + table);
+        }
+    }
+
+    /**
      * A table that does not exist yet is where every deployment starts: startup creates it, so
      * nothing has to be provisioned to turn the feature on, and no batch carries DDL.
      */

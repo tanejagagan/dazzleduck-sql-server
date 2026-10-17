@@ -302,9 +302,12 @@ public final class AttributeTypeRegistry {
 
     private void load(String table, List<String> queues) {
         String inList = queues.stream().map(AttributeTypeRegistry::literal).collect(Collectors.joining(", "));
+        // No LIMIT: a global one would let whichever queue's rows come first fill the budget, so a
+        // noisy queue's history would starve every other queue on each restart. Each queue's own
+        // cap is applied row by row below instead, and the global one still stops the read.
         String sql = ("SELECT DISTINCT ingestion_queue, signal, attribute_scope, attribute_name, value_type"
-                + " FROM %s WHERE ingestion_queue IN (%s) LIMIT %d")
-                .formatted(table, inList, settings.maxEntries());
+                + " FROM %s WHERE ingestion_queue IN (%s)")
+                .formatted(table, inList);
         int loaded = 0;
         int skipped = 0;
         try (Connection connection = ConnectionPool.getConnection();
@@ -324,7 +327,12 @@ public final class AttributeTypeRegistry {
                 if (known.size() >= settings.maxEntries()) {
                     break;
                 }
-                if (known.add(new Key(rs.getString(1), signal, scope, rs.getString(4), type))) {
+                String queue = rs.getString(1);
+                // The same containment as at runtime: one queue's history fills only its own share.
+                if (known.sizeOf(queue) >= capFor(queue)) {
+                    continue;
+                }
+                if (known.add(new Key(queue, signal, scope, rs.getString(4), type))) {
                     loaded++;
                 }
             }
