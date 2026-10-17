@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -35,7 +36,9 @@ import java.util.stream.Collectors;
  *       predicted id, and a correction appends the exact one rather than replacing it, so reading
  *       the raw column answers "visible as of N" too early for a corrected batch.</li>
  *   <li>{@code watermark_batch_id_column} — required when the table is set; receives an id unique
- *       to the batch, shared by every group row of it. It is what the snapshot correction attaches
+ *       to the batch, shared by every group row of it. The column should be {@code UUID}: the
+ *       value is one, and a native UUID is 16 bytes where its text is 36, which halves the stored
+ *       size of a column that is distinct on every row. A {@code VARCHAR} column still works. It is what the snapshot correction attaches
  *       to when the predicted id is taken by a competing writer: the correction is a second row for
  *       the same batch id, never an update of the first (see {@link #snapshotCorrectionSql}).</li>
  * </ul>
@@ -230,12 +233,14 @@ public record WatermarkSpec(String table, String timestampColumn, List<String> g
      *
      * <p>{@code batchId} is required, and checked rather than quietly omitted: rows written without
      * one would leave nothing for a correction to attach to, so the exact snapshot would be lost
-     * rarely and invisibly.
+     * rarely and invisibly. It is a {@link UUID} rather than a string so the column can be a
+     * native {@code UUID} — 16 bytes against 36 characters of text, which is half the stored size
+     * for a column that is distinct on every row and so compresses no better than its raw bytes.
      *
-     * @throws IllegalArgumentException if {@code batchId} is blank
+     * @throws IllegalArgumentException if {@code batchId} is null
      */
-    public String insertSql(String catalog, String schema, List<List<String>> rows, long snapshotId, String batchId) {
-        if (isBlank(batchId)) {
+    public String insertSql(String catalog, String schema, List<List<String>> rows, long snapshotId, UUID batchId) {
+        if (batchId == null) {
             throw new IllegalArgumentException(
                     "watermark configuration: every batch must carry an id for '%s'".formatted(BATCH_ID_COLUMN_KEY));
         }
@@ -245,7 +250,7 @@ public record WatermarkSpec(String table, String timestampColumn, List<String> g
                 + ", " + HeaderUtils.quoteIdentifier(rowCountColumn);
         columnList += ", " + HeaderUtils.quoteIdentifier(snapshotIdColumn);
         columnList += ", " + HeaderUtils.quoteIdentifier(batchIdColumn);
-        String valueSuffix = ", " + snapshotId + ", " + literal(batchId);
+        String valueSuffix = ", " + snapshotId + ", " + uuidLiteral(batchId);
         String values = rows.stream()
                 .map(row -> row.stream().map(WatermarkSpec::literal).collect(Collectors.joining(", ", "(", valueSuffix + ")")))
                 .collect(Collectors.joining(", "));
@@ -273,8 +278,8 @@ public record WatermarkSpec(String table, String timestampColumn, List<String> g
      * than a heuristic: the committed id is always {@code >=} the predicted one, so a correction can
      * only ever raise the value, and at most one correction is written per batch.
      */
-    public String snapshotCorrectionSql(String catalog, String schema, String batchId, long snapshotId) {
-        if (isBlank(batchId)) {
+    public String snapshotCorrectionSql(String catalog, String schema, UUID batchId, long snapshotId) {
+        if (batchId == null) {
             throw new IllegalArgumentException(
                     "watermark configuration: a correction needs the batch id it corrects, for '%s'"
                             .formatted(BATCH_ID_COLUMN_KEY));
@@ -282,12 +287,21 @@ public record WatermarkSpec(String table, String timestampColumn, List<String> g
         return "INSERT INTO %s.%s.%s (%s, %s) VALUES (%s, %d)".formatted(
                 HeaderUtils.quoteIdentifier(catalog), HeaderUtils.quoteIdentifier(schema),
                 HeaderUtils.quoteIdentifier(table), HeaderUtils.quoteIdentifier(batchIdColumn),
-                HeaderUtils.quoteIdentifier(snapshotIdColumn), literal(batchId), snapshotId);
+                HeaderUtils.quoteIdentifier(snapshotIdColumn), uuidLiteral(batchId), snapshotId);
     }
 
     /** Group columns plus the three aggregates: MIN timestamp, MAX timestamp, row count. */
     private int valueColumnCount() {
         return groupColumns.size() + 3;
+    }
+
+    /**
+     * A typed {@code UUID} literal. DuckDB casts it to text for a legacy {@code VARCHAR} column, so
+     * the same statement serves both, and {@link UUID#toString()} is canonical hex so there is
+     * nothing to escape.
+     */
+    private static String uuidLiteral(UUID value) {
+        return "UUID '" + value + "'";
     }
 
     private static String literal(String value) {

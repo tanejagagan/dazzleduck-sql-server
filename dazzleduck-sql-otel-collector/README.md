@@ -452,7 +452,7 @@ otel_collector {
                 #     watermark_row_count_column     = "row_count"
                 #     watermark_snapshot_id_column   = "min_commit_snapshot_id"   # required; BIGINT, lower bound on the commit snapshot
                 #     watermark_group_columns        = "county,state"      # optional
-                #     watermark_batch_id_column      = "batch_id"          # required; VARCHAR, carries the exact
+                #     watermark_batch_id_column      = "batch_id"          # required; UUID, carries the exact
                 #                                                         # commit snapshot (appended, not updated)
                 # }
             }

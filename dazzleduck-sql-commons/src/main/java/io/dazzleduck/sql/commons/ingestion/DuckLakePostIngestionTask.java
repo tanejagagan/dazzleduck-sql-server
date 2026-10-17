@@ -112,7 +112,7 @@ public class DuckLakePostIngestionTask implements PostIngestionTask {
                 return;
             }
             long predictedSnapshotId = predictNextSnapshotId(conn);
-            String batchId = UUID.randomUUID().toString();
+            UUID batchId = UUID.randomUUID();
             queries.add(watermarkSpec.insertSql(catalogName, schemaName, watermarkRows, predictedSnapshotId, batchId));
             executeInTxn(conn, queries, files);
             verifySnapshotId(conn, files, predictedSnapshotId, batchId);
@@ -201,7 +201,7 @@ public class DuckLakePostIngestionTask implements PostIngestionTask {
      * is specified as a lower bound, so a skipped correction leaves a value that is merely loose
      * rather than wrong — whereas failing an ingest that succeeded would be a real loss.
      */
-    private void verifySnapshotId(Connection conn, List<String> files, long predicted, String batchId) {
+    private void verifySnapshotId(Connection conn, List<String> files, long predicted, UUID batchId) {
         try {
             Long actual = resolveCommittedSnapshotId(conn, files.get(0), predicted);
             if (actual == null || actual == predicted) {

@@ -11,6 +11,7 @@ import java.sql.Connection;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -35,7 +36,7 @@ class DuckLakeWatermarkPostIngestionTest {
                     "ATTACH 'ducklake:%s' AS %s (DATA_PATH '%s')".formatted(
                             tempDir.resolve("catalog"), CATALOG, tempDir.resolve("data")),
                     "CREATE TABLE %s.main.facts (county VARCHAR, state VARCHAR, ts TIMESTAMP, v DOUBLE)".formatted(CATALOG),
-                    "CREATE TABLE %s.main.ingest_watermark (county VARCHAR, state VARCHAR, min_ts TIMESTAMP, max_ts TIMESTAMP, row_count BIGINT, min_commit_snapshot_id BIGINT, batch_id VARCHAR)".formatted(CATALOG)
+                    "CREATE TABLE %s.main.ingest_watermark (county VARCHAR, state VARCHAR, min_ts TIMESTAMP, max_ts TIMESTAMP, row_count BIGINT, min_commit_snapshot_id BIGINT, batch_id UUID)".formatted(CATALOG)
             });
         }
     }
@@ -63,6 +64,10 @@ class DuckLakeWatermarkPostIngestionTest {
         }
         return List.of(f1, f2);
     }
+
+    // Recognisable in assertions, and still well-formed UUIDs, which the column now requires.
+    private static final UUID BATCH_1 = UUID.fromString("00000000-0000-4000-8000-0000000000b1");
+    private static final UUID BATCH_2 = UUID.fromString("00000000-0000-4000-8000-0000000000b2");
 
     private static final WatermarkSpec SPEC = new WatermarkSpec("ingest_watermark", "ts",
             List.of("county", "state"), "min_ts", "max_ts", "row_count", "min_commit_snapshot_id", "batch_id");
@@ -351,7 +356,7 @@ class DuckLakeWatermarkPostIngestionTest {
         // The losing batch: it predicted firstSnapshot, which was already taken by the time it
         // committed, so its rows land carrying an id that belongs to someone else.
         List<String> second = writeSingleFile("r2.parquet", "pierce");
-        String batchId = "batch-of-the-loser";
+        UUID batchId = BATCH_1;
         try (Connection conn = ConnectionPool.getConnection()) {
             ConnectionPool.executeBatchInTxn(conn, new String[]{
                     SPEC.insertSql(CATALOG, "main", computeRowsFor(second), firstSnapshot, batchId)});
@@ -377,7 +382,7 @@ class DuckLakeWatermarkPostIngestionTest {
             // The reader rule: the exact snapshot of a batch is max(snapshot_id) over its batch id.
             assertEquals(List.of(String.valueOf(secondSnapshot)),
                     collect(conn, ("SELECT max(min_commit_snapshot_id)::VARCHAR AS r FROM %s.main.ingest_watermark "
-                            + "WHERE batch_id = '%s'").formatted(CATALOG, batchId)),
+                            + "WHERE batch_id = UUID '%s'").formatted(CATALOG, batchId)),
                     "max(snapshot_id) over the batch id must give the snapshot it really committed in");
 
             // And the correction carries no aggregates, so it cannot disturb an existing sum.
@@ -405,12 +410,12 @@ class DuckLakeWatermarkPostIngestionTest {
         List<String> b = writeSingleFile("d2.parquet", "same");
         try (Connection conn = ConnectionPool.getConnection()) {
             // Two batches whose rows are identical in every value column, one of them corrected.
-            ConnectionPool.execute(conn, SPEC.insertSql(CATALOG, "main", computeRowsFor(a), 4, "b1"));
-            ConnectionPool.execute(conn, SPEC.snapshotCorrectionSql(CATALOG, "main", "b1", 7));
-            ConnectionPool.execute(conn, SPEC.insertSql(CATALOG, "main", computeRowsFor(b), 9, "b2"));
+            ConnectionPool.execute(conn, SPEC.insertSql(CATALOG, "main", computeRowsFor(a), 4, BATCH_1));
+            ConnectionPool.execute(conn, SPEC.snapshotCorrectionSql(CATALOG, "main", BATCH_1, 7));
+            ConnectionPool.execute(conn, SPEC.insertSql(CATALOG, "main", computeRowsFor(b), 9, BATCH_2));
 
-            assertEquals(List.of("b1=7", "b2=9"), collect(conn, ("""
-                    SELECT batch_id || '=' || max(min_commit_snapshot_id)::VARCHAR AS r
+            assertEquals(List.of(BATCH_1 + "=7", BATCH_2 + "=9"), collect(conn, ("""
+                    SELECT batch_id::VARCHAR || '=' || max(min_commit_snapshot_id)::VARCHAR AS r
                     FROM %s.main.ingest_watermark WHERE batch_id IS NOT NULL
                     GROUP BY batch_id ORDER BY batch_id""").formatted(CATALOG)),
                     "the exact snapshot of a batch is max(snapshot_id) over its batch id");
@@ -438,8 +443,8 @@ class DuckLakeWatermarkPostIngestionTest {
     void aggregatesMustNotBeGroupedByBatchId() throws Exception {
         List<String> files = writeBatchFiles();   // three groups: king/wa, cook/il, cook/in
         try (Connection conn = ConnectionPool.getConnection()) {
-            ConnectionPool.execute(conn, SPEC.insertSql(CATALOG, "main", computeRows(files), 4, "b1"));
-            ConnectionPool.execute(conn, SPEC.snapshotCorrectionSql(CATALOG, "main", "b1", 7));
+            ConnectionPool.execute(conn, SPEC.insertSql(CATALOG, "main", computeRows(files), 4, BATCH_1));
+            ConnectionPool.execute(conn, SPEC.snapshotCorrectionSql(CATALOG, "main", BATCH_1, 7));
 
             assertEquals(List.of("4"), collect(conn,
                     "SELECT sum(row_count)::VARCHAR AS r FROM %s.main.ingest_watermark".formatted(CATALOG)),
@@ -457,7 +462,7 @@ class DuckLakeWatermarkPostIngestionTest {
 
             assertEquals(List.of("7"), collect(conn, ("""
                     SELECT max(min_commit_snapshot_id)::VARCHAR AS r
-                    FROM %s.main.ingest_watermark WHERE batch_id = 'b1'""").formatted(CATALOG)),
+                    FROM %s.main.ingest_watermark WHERE batch_id = UUID '%s'""").formatted(CATALOG, BATCH_1)),
                     "the snapshot rule is unaffected by the group count");
         }
     }
@@ -474,11 +479,11 @@ class DuckLakeWatermarkPostIngestionTest {
         List<String> files = writeSingleFile("v1.parquet", "king");
         try (Connection conn = ConnectionPool.getConnection()) {
             // Predicted 4, really committed in 7: the shape a lost race leaves behind.
-            ConnectionPool.execute(conn, SPEC.insertSql(CATALOG, "main", computeRowsFor(files), 4, "b1"));
-            ConnectionPool.execute(conn, SPEC.snapshotCorrectionSql(CATALOG, "main", "b1", 7));
+            ConnectionPool.execute(conn, SPEC.insertSql(CATALOG, "main", computeRowsFor(files), 4, BATCH_1));
+            ConnectionPool.execute(conn, SPEC.snapshotCorrectionSql(CATALOG, "main", BATCH_1, 7));
 
             assertEquals(List.of(), collect(conn, ("""
-                    SELECT batch_id AS r FROM %s.main.ingest_watermark
+                    SELECT batch_id::VARCHAR AS r FROM %s.main.ingest_watermark
                     GROUP BY batch_id HAVING max(min_commit_snapshot_id) <= 5""").formatted(CATALOG)),
                     "the batch committed in 7, so it is not visible as of 5");
 
@@ -486,6 +491,44 @@ class DuckLakeWatermarkPostIngestionTest {
                     SELECT county AS r FROM %s.main.ingest_watermark
                     WHERE min_commit_snapshot_id <= 5 AND county IS NOT NULL""").formatted(CATALOG)),
                     "reading the raw column instead claims visibility at 5: the answer the docs warn against");
+        }
+    }
+
+    /**
+     * The batch id survives the write-then-register path, which is where
+     * {@code doc/DUCKLAKE_NO_INLINING_SPEC.md} takes these rows next: a UUID column is written to
+     * Parquet as {@code FIXED_LEN_BYTE_ARRAY(16)} with the standard UUID logical type, and
+     * {@code ducklake_add_data_files} accepts that file into a UUID column.
+     *
+     * <p>Pinned here because {@code add_data_files} does NOT cast — the same file with the id as
+     * VARCHAR is rejected with {@code Expected UUID, found type VARCHAR} — so this is the fact that
+     * the sidecar writer will have to respect, and it is cheaper to catch its loss here than in
+     * that conversion.
+     */
+    @Test
+    void theBatchIdRoundTripsThroughParquetIntoAUuidColumn() throws Exception {
+        String file = tempDir.resolve("sidecar.parquet").toString();
+        try (Connection conn = ConnectionPool.getConnection()) {
+            ConnectionPool.execute(conn, ("""
+                    COPY (SELECT 'king' AS county, 'wa' AS state,
+                                 TIMESTAMP '2026-08-01 01:00' AS min_ts, TIMESTAMP '2026-08-01 03:00' AS max_ts,
+                                 2::BIGINT AS row_count, 4::BIGINT AS min_commit_snapshot_id,
+                                 UUID '%s' AS batch_id)
+                    TO '%s' (FORMAT parquet)""").formatted(BATCH_1, file));
+
+            assertEquals(List.of("FIXED_LEN_BYTE_ARRAY|16"), collect(conn,
+                    "SELECT type || '|' || type_length AS r FROM parquet_schema('%s') WHERE name = 'batch_id'"
+                            .formatted(file)),
+                    "a UUID column must be 16 raw bytes in the file, not 36 characters of text");
+
+            ConnectionPool.execute(conn, ("CALL ducklake_add_data_files('%s', 'ingest_watermark', '%s', "
+                    + "schema => 'main', ignore_extra_columns => true, allow_missing => true)")
+                    .formatted(CATALOG, file));
+
+            assertEquals(List.of(BATCH_1 + "|UUID"), collect(conn, ("""
+                    SELECT batch_id::VARCHAR || '|' || typeof(batch_id) AS r
+                    FROM %s.main.ingest_watermark WHERE county = 'king'""").formatted(CATALOG)),
+                    "the registered file's batch id reads back as a UUID");
         }
     }
 

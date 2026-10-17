@@ -9,6 +9,7 @@ import java.sql.Connection;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -17,6 +18,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class WatermarkSpecTest {
+
+    private static final UUID BATCH = UUID.fromString("0199e0a0-1111-7000-8000-00000000000b");
 
     @TempDir Path tempDir;
 
@@ -126,25 +129,24 @@ class WatermarkSpecTest {
                 "snap", "batch_id");
         assertEquals("INSERT INTO \"cat\".\"main\".\"wm\""
                         + " (\"county\", \"min_ts\", \"max_ts\", \"row_count\", \"snap\", \"batch_id\") "
-                        + "VALUES ('king', '1', '9', '2', 7, 'b-1')",
-                with.insertSql("cat", "main", List.of(List.of("king", "1", "9", "2")), 7, "b-1"));
+                        + "VALUES ('king', '1', '9', '2', 7, UUID '" + BATCH + "')",
+                with.insertSql("cat", "main", List.of(List.of("king", "1", "9", "2")), 7, BATCH));
     }
 
     /**
      * Every batch must carry an id, checked rather than quietly omitted: rows written without one
      * would leave nothing for a correction to attach to, losing the exact snapshot rarely and
-     * invisibly.
+     * invisibly. Only null is possible now — a malformed id is no longer representable, which is
+     * part of what the {@link UUID} type buys over a string.
      */
     @Test
     void insertSqlRefusesRowsWithNoBatchId() {
         List<List<String>> rows = List.of(List.of("king", "1", "9", "2"));
         WatermarkSpec spec = new WatermarkSpec("wm", "ts", List.of("county"), "min_ts", "max_ts", "row_count",
                 "snap", "batch_id");
-        for (String noId : new String[]{null, "  "}) {
-            var e = assertThrows(IllegalArgumentException.class,
-                    () -> spec.insertSql("cat", "main", rows, 7, noId));
-            assertTrue(e.getMessage().contains(WatermarkSpec.BATCH_ID_COLUMN_KEY), e.getMessage());
-        }
+        var e = assertThrows(IllegalArgumentException.class,
+                () -> spec.insertSql("cat", "main", rows, 7, null));
+        assertTrue(e.getMessage().contains(WatermarkSpec.BATCH_ID_COLUMN_KEY), e.getMessage());
     }
 
     /**
@@ -156,9 +158,9 @@ class WatermarkSpecTest {
     void snapshotCorrectionIsASparseInsertKeyedByBatchId() {
         WatermarkSpec spec = new WatermarkSpec("ingest-watermark", "ts", List.of("county"), "min_ts", "max_ts",
                 "row_count", "min_commit_snapshot_id", "batch id");
-        String sql = spec.snapshotCorrectionSql("cat", "main", "b'1", 11);
+        String sql = spec.snapshotCorrectionSql("cat", "main", BATCH, 11);
         assertEquals("INSERT INTO \"cat\".\"main\".\"ingest-watermark\" (\"batch id\", \"min_commit_snapshot_id\") "
-                + "VALUES ('b''1', 11)", sql);
+                + "VALUES (UUID '" + BATCH + "', 11)", sql);
         assertFalse(sql.contains("UPDATE"), "the correction must never be an in-place update");
     }
 
@@ -221,10 +223,10 @@ class WatermarkSpecTest {
     void insertSqlQuotesIdentifiersAndEscapesValues() {
         WatermarkSpec spec = new WatermarkSpec("ingest-watermark", "timestamp", List.of("county"), "min_ts", "max_ts", "row_count", "min_commit_snapshot_id", "batch_id");
         String sql = spec.insertSql("cat", "main",
-                List.of(List.of("o'brien", "2026-01-01 00:00:00", "2026-01-01 06:00:00", "3")), 7, "b'1");
+                List.of(List.of("o'brien", "2026-01-01 00:00:00", "2026-01-01 06:00:00", "3")), 7, BATCH);
         assertEquals("INSERT INTO \"cat\".\"main\".\"ingest-watermark\""
                 + " (\"county\", \"min_ts\", \"max_ts\", \"row_count\", \"min_commit_snapshot_id\", \"batch_id\") "
-                + "VALUES ('o''brien', '2026-01-01 00:00:00', '2026-01-01 06:00:00', '3', 7, 'b''1')", sql);
+                + "VALUES ('o''brien', '2026-01-01 00:00:00', '2026-01-01 06:00:00', '3', 7, UUID '" + BATCH + "')", sql);
     }
 
     // ------------------------------------------------ MAX timestamp and row count
@@ -243,8 +245,8 @@ class WatermarkSpecTest {
         WatermarkSpec spec = new WatermarkSpec("wm", "ts", List.of("county"), "min_ts", "max_ts", "rows", "min_commit_snapshot_id", "batch_id");
         assertEquals("INSERT INTO \"cat\".\"main\".\"wm\""
                 + " (\"county\", \"min_ts\", \"max_ts\", \"rows\", \"min_commit_snapshot_id\", \"batch_id\")"
-                + " VALUES ('a', '1', '9', '42', 7, 'b-1')",
-                spec.insertSql("cat", "main", List.of(List.of("a", "1", "9", "42")), 7, "b-1"));
+                + " VALUES ('a', '1', '9', '42', 7, UUID '" + BATCH + "')",
+                spec.insertSql("cat", "main", List.of(List.of("a", "1", "9", "42")), 7, BATCH));
     }
 
     @Test
