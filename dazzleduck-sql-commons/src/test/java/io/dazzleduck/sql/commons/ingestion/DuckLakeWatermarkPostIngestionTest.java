@@ -241,11 +241,15 @@ class DuckLakeWatermarkPostIngestionTest {
                     "SELECT count(DISTINCT min_commit_snapshot_id)::VARCHAR AS r FROM %s.main.ingest_watermark".formatted(CATALOG)));
             assertEquals(List.of("0"), collect(conn,
                     "SELECT count(*)::VARCHAR AS r FROM %s.main.ingest_watermark WHERE min_commit_snapshot_id IS NULL".formatted(CATALOG)));
-            // each row carries the snapshot of its own file
+            // each row carries the snapshot of its own file. Restricted to the DATA table's files:
+            // with inlining off the watermark table has data files of its own, committed in the
+            // same snapshot, so an unrestricted join matches every row twice.
             assertEquals(List.of("king", "pierce"), collect(conn, ("""
                     SELECT w.county AS r FROM %s.main.ingest_watermark w
                     JOIN __ducklake_metadata_%s.ducklake_data_file f ON f.begin_snapshot = w.min_commit_snapshot_id
-                    ORDER BY w.county""").formatted(CATALOG, CATALOG)));
+                    JOIN __ducklake_metadata_%s.ducklake_table t
+                      ON t.table_id = f.table_id AND t.table_name = 'facts'
+                    ORDER BY w.county""").formatted(CATALOG, CATALOG, CATALOG)));
         }
     }
 

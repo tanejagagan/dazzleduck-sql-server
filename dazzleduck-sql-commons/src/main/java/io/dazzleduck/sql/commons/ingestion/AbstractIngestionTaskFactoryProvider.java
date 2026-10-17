@@ -14,6 +14,10 @@ import java.util.Map;
  */
 public abstract class AbstractIngestionTaskFactoryProvider implements IngestionTaskFactoryProvider {
 
+    private static final org.slf4j.Logger LOG =
+            org.slf4j.LoggerFactory.getLogger(AbstractIngestionTaskFactoryProvider.class);
+
+
     protected Config config;
 
     @Override
@@ -34,7 +38,19 @@ public abstract class AbstractIngestionTaskFactoryProvider implements IngestionT
      */
     @Override
     public void validate() {
-        loadMappings().values().forEach(mapping -> {
+        Map<String, QueueIdToTableMapping> mappings = loadMappings();
+        if (mappings.values().stream().anyMatch(m -> m.catalog() != null)) {
+            // Once, before the per-table checks below read the effective limits: this removes the
+            // default (10) so only an explicitly set option can still enable inlining.
+            try {
+                DuckLakeInlining.disable();
+                LOG.info("DuckLake data inlining disabled ({} = 0 for this DuckDB instance); a per-catalog,"
+                        + " per-schema or per-table option still overrides it", DuckLakeInlining.SETTING);
+            } catch (Exception e) {
+                throw new IllegalStateException("Could not disable DuckLake data inlining: " + e.getMessage(), e);
+            }
+        }
+        mappings.values().forEach(mapping -> {
             if (mapping.transformation() != null) {
                 validateTransformation(mapping.ingestionQueue(), mapping.transformation());
             }
@@ -42,7 +58,48 @@ public abstract class AbstractIngestionTaskFactoryProvider implements IngestionT
                 validateViewTransformation(mapping.ingestionQueue(), mapping.view(), mapping.inputTable());
             }
             validateVariables(mapping);
+            validateNoDataInlining(mapping);
         });
+    }
+
+    /**
+     * Fails startup when DuckLake would keep this queue's watermark rows in the catalog database
+     * instead of writing them as Parquet.
+     *
+     * <p>Here, rather than in any one server: the watermark insert is in
+     * {@link DuckLakePostIngestionTask}, which the OTel collector and the Flight/HTTP ingestion
+     * path both reach through this provider. A check living in one of them would leave the other
+     * exposed to exactly the fault it is meant to prevent.
+     *
+     * <p>Only the watermark table is checked, because it is the only one written with SQL:
+     * registering a file is not an insert, so target tables and the attribute type registry cannot
+     * be inlined. A queue with no watermark has nothing to check.
+     *
+     * <p>{@link #validate()} has already removed the default; this catches a catalog, schema or
+     * table option — or an {@code ATTACH} parameter — that overrides it, which is the only way
+     * inlining can still apply.
+     */
+    protected static void validateNoDataInlining(QueueIdToTableMapping mapping) {
+        WatermarkSpec spec = WatermarkSpec.fromParameters(mapping.ingestionQueue(), mapping.additionalParameters());
+        if (spec == null || mapping.catalog() == null || mapping.schema() == null) {
+            return;
+        }
+        String table = "%s.%s.%s".formatted(mapping.catalog(), mapping.schema(), spec.table());
+        DuckLakeInlining.Limit limit;
+        try {
+            limit = DuckLakeInlining.effectiveRowLimit(mapping.catalog(), mapping.schema(), spec.table());
+        } catch (Exception e) {
+            throw new IllegalStateException(("Queue '%s': cannot determine the data inlining limit of"
+                    + " watermark table '%s': %s").formatted(mapping.ingestionQueue(), table, e.getMessage()), e);
+        }
+        if (limit.inliningEnabled()) {
+            throw new IllegalStateException(("Queue '%s': data inlining is enabled for watermark table '%s'"
+                    + " (%d rows, from %s), so its rows would be written into the catalog database instead"
+                    + " of storage, on the insertion path of every batch. %s")
+                    .formatted(mapping.ingestionQueue(), table, limit.rowLimit(), limit.source(),
+                            DuckLakeInlining.remedy(mapping.catalog(), mapping.schema(), spec.table(),
+                                    limit.source())));
+        }
     }
 
     /**
