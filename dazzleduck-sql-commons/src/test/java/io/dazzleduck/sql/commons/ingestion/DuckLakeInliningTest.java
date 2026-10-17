@@ -19,9 +19,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * that are not all visible in the same view. One test per source, because a resolver that misses
  * one is wrong in both directions: it refuses a table that is fine, or passes a table that inlines.
  *
- * <p>The behaviour each source produces — which of them beat which — was established against
- * DuckLake directly; what is pinned here is that this code reads them and resolves them in
- * DuckLake's order.
+ * <p>For the three sources stored as option rows, the resolver's answer is also checked against a
+ * real write: an insert must become a file exactly when the resolver says inlining is off. Reading
+ * the rows back only proves the query finds them, and DuckLake loads a catalog's options at ATTACH,
+ * so a row written afterwards is visible in {@code ducklake_options()} while the writes still use
+ * the attach parameter — which is why these tests reattach before writing.
  */
 public class DuckLakeInliningTest {
 
@@ -29,6 +31,7 @@ public class DuckLakeInliningTest {
     Path dir;
 
     private String catalog;
+    private Integer attachLimit;
     private String settingBefore;
 
     /**
@@ -57,6 +60,7 @@ public class DuckLakeInliningTest {
     private String attach(String name, Integer attachLimit) throws Exception {
         Files.createDirectories(dir.resolve("data"));
         catalog = name;
+        this.attachLimit = attachLimit;
         ConnectionPool.execute("ATTACH 'ducklake:%s' AS %s (DATA_PATH '%s'%s)".formatted(
                 dir.resolve("catalog"), name, dir.resolve("data"),
                 attachLimit == null ? "" : ", DATA_INLINING_ROW_LIMIT " + attachLimit));
@@ -96,6 +100,51 @@ public class DuckLakeInliningTest {
                             case "schema" -> scopeId.formatted(catalog, scopeEntry);
                             default -> scopeId;
                         }));
+    }
+
+    /**
+     * DuckLake reads a catalog's options when it ATTACHes, so an option row written afterwards is
+     * visible in {@code ducklake_options()} but does NOT affect writes until the catalog is
+     * attached again. Reattaching is therefore not tidiness: without it a behavioural assertion
+     * would test the attach parameter rather than the option under test.
+     */
+    private void reattach() {
+        ConnectionPool.execute("DETACH " + catalog);
+        ConnectionPool.execute("ATTACH 'ducklake:%s' AS %s (DATA_PATH '%s'%s)".formatted(
+                dir.resolve("catalog"), catalog, dir.resolve("data"),
+                attachLimit == null ? "" : ", DATA_INLINING_ROW_LIMIT " + attachLimit));
+    }
+
+    /** Data files DuckLake holds for one table, which is what an insert either produces or not. */
+    private int dataFiles(String schema, String table) throws Exception {
+        return ConnectionPool.collectFirst(("SELECT count(*)::INTEGER FROM __ducklake_metadata_%s.ducklake_data_file f"
+                + " JOIN __ducklake_metadata_%s.ducklake_table t ON (t.table_id = f.table_id)"
+                + " JOIN __ducklake_metadata_%s.ducklake_schema s ON (s.schema_id = t.schema_id)"
+                + " WHERE s.schema_name = '%s' AND t.table_name = '%s' AND t.end_snapshot IS NULL")
+                .formatted(catalog, catalog, catalog, schema, table), Integer.class);
+    }
+
+    /**
+     * The assertion that matters: the resolver's answer must agree with what a write actually does.
+     * Reading the option rows back only proves the query finds them — a wrong precedence order, or
+     * a {@code scope_entry} spelled differently from the stored one, would pass that and still
+     * report a limit the writes do not use.
+     */
+    private void assertResolverMatchesAWrite(String schema, String table) throws Exception {
+        reattach();
+        boolean inliningExpected = DuckLakeInlining.effectiveRowLimit(catalog, schema, table).inliningEnabled();
+        int before = dataFiles(schema, table);
+        ConnectionPool.execute("INSERT INTO %s.%s.%s VALUES (1)".formatted(catalog, schema, table));
+        int after = dataFiles(schema, table);
+        if (inliningExpected) {
+            assertEquals(before, after,
+                    "the resolver says inlining is on for %s.%s, so the row must NOT become a file"
+                            .formatted(schema, table));
+        } else {
+            assertEquals(before + 1, after,
+                    "the resolver says inlining is off for %s.%s, so the row must become a file"
+                            .formatted(schema, table));
+        }
     }
 
     @Test
@@ -146,6 +195,7 @@ public class DuckLakeInliningTest {
         var limit = DuckLakeInlining.effectiveRowLimit(catalog, "main", "t");
         assertEquals(3L, limit.rowLimit());
         assertTrue(limit.source().contains("catalog"), limit.source());
+        assertResolverMatchesAWrite("main", "t");
     }
 
     /** The fifth source, which sits between table and catalog. */
@@ -159,6 +209,8 @@ public class DuckLakeInliningTest {
         assertTrue(other.source().contains("schema 'other'"), other.source());
         assertEquals(3L, DuckLakeInlining.effectiveRowLimit(catalog, "main", "t").rowLimit(),
                 "and the other schema keeps the catalog's value");
+        assertResolverMatchesAWrite("other", "t");
+        assertResolverMatchesAWrite("main", "t");
     }
 
     @Test
@@ -170,6 +222,30 @@ public class DuckLakeInliningTest {
         var limit = DuckLakeInlining.effectiveRowLimit(catalog, "main", "t");
         assertEquals(0L, limit.rowLimit());
         assertTrue(limit.source().contains("table"), limit.source());
+        assertResolverMatchesAWrite("main", "t");
+    }
+
+    /**
+     * The two sides of the comparison come from different places: DuckLake records the object's own
+     * spelling, while the resolver is given the identifier a config file used. A table created as
+     * {@code "Mixed"} is stored as {@code main.Mixed}, so an exact match on {@code main.mixed}
+     * would miss its option and fall through to the wider scope — a false pass exactly when a
+     * table option re-enables inlining under a catalog option of zero.
+     */
+    @Test
+    void aTableOptionIsFoundWhateverCaseTheConfigUses() throws Exception {
+        attach("inlining_case_test", null);
+        ConnectionPool.execute("CREATE TABLE %s.main.\"Mixed\" (a INT)".formatted(catalog));
+        setOption("global", null, 0);
+        setOption("table", "main.Mixed", 10);
+
+        for (String spelling : new String[]{"Mixed", "mixed", "MIXED"}) {
+            var limit = DuckLakeInlining.effectiveRowLimit(catalog, "main", spelling);
+            assertEquals(10L, limit.rowLimit(), "configured as '" + spelling + "'");
+            assertTrue(limit.inliningEnabled(), "the table option must be found, not the catalog's zero");
+        }
+        // And the resolver agrees with what a write does, which is the point of finding it.
+        assertResolverMatchesAWrite("main", "Mixed");
     }
 
     /** A value that is not a number means the real limit is unknown, not that it is unset. */

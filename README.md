@@ -576,12 +576,20 @@ database on the insertion path, which is write amplification and contention on t
 every writer shares. Many small files are a solved problem (`ducklake_merge_adjacent_files`); data
 rows on every insert's critical path are not.
 
-So any server configuring DuckLake ingestion (the query server and the OTel collector alike):
+So any server configuring DuckLake ingestion (the query server and the OTel collector alike),
+**when at least one of its queues configures a watermark table**:
 
 1. sets `ducklake_default_data_inlining_row_limit = 0` for its DuckDB instance at startup, and
 2. **checks the effective limit of every table it writes with SQL — the watermark tables — and
    refuses to start** when any is above zero, naming the table, the source that set it, and the
    statement that fixes it.
+
+The condition matters, because step 1 is **instance-wide**: it moves the default for every DuckLake
+attached to that DuckDB instance, including catalogs the server does not own, so every small
+`INSERT`, `UPDATE` or `DELETE` on them becomes its own file too. With no watermark configured there
+is nothing on the ingestion path to protect — target tables are registered files, which inlining
+cannot touch — so the setting is left alone rather than changing other people's writes for no
+benefit. It is logged when it is applied.
 
 Step 2 exists because step 1 guarantees nothing on its own: a table-, schema- or catalog-scoped
 option, and the `ATTACH` parameter, all override the instance setting. The check resolves all five

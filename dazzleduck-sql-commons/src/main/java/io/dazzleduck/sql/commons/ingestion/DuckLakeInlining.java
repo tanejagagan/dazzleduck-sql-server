@@ -162,12 +162,20 @@ public final class DuckLakeInlining {
      * One scope's option value, or null when it is not set at that scope. Aggregated so the query
      * always returns a row: an unset option is a NULL, not an empty result, which
      * {@code collectFirst} would raise.
+     *
+     * <p>The scope entry is matched case-insensitively, because the two sides come from different
+     * places. DuckLake stores the object's own spelling — {@code set_option(..., table_name =>
+     * 'mixed')} on a table created as {@code "Mixed"} records {@code scope_entry = 'main.Mixed'} —
+     * while this side is the identifier a config file happened to use. An exact match would miss
+     * the option and fall through to a wider scope, which is a false pass precisely when a table
+     * option re-enables inlining under a catalog option of zero.
      */
     private static Long option(String catalog, String scope, String scopeEntry) throws SQLException {
         String query = ("SELECT max(value::BIGINT) FROM ducklake_options('%s')"
-                + " WHERE option_name = '%s' AND scope = '%s' AND scope_entry %s")
+                + " WHERE option_name = '%s' AND scope = '%s' AND %s")
                 .formatted(escape(catalog), OPTION, scope,
-                        scopeEntry == null ? "IS NULL" : "= '" + escape(scopeEntry) + "'");
+                        scopeEntry == null ? "scope_entry IS NULL"
+                                : "lower(scope_entry) = lower('" + escape(scopeEntry) + "')");
         return ConnectionPool.collectFirst(query, Long.class);
     }
 

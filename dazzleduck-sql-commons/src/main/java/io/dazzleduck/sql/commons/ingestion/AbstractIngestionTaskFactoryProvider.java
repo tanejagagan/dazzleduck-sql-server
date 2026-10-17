@@ -39,7 +39,12 @@ public abstract class AbstractIngestionTaskFactoryProvider implements IngestionT
     @Override
     public void validate() {
         Map<String, QueueIdToTableMapping> mappings = loadMappings();
-        if (mappings.values().stream().anyMatch(m -> m.catalog() != null)) {
+        // Only when something here actually writes with SQL — that is, when a queue configures a
+        // watermark table. Target tables are registered files, which inlining cannot touch, so with
+        // no watermark configured there is nothing on this path to protect and the setting would
+        // only change other people's writes: it is instance-wide, so it would make every small
+        // INSERT on every attached DuckLake its own file for no benefit here.
+        if (mappings.values().stream().anyMatch(m -> m.catalog() != null && writesWatermarkRows(m))) {
             // Once, before the per-table checks below read the effective limits: this removes the
             // default (10) so only an explicitly set option can still enable inlining.
             try {
@@ -79,6 +84,17 @@ public abstract class AbstractIngestionTaskFactoryProvider implements IngestionT
      * table option — or an {@code ATTACH} parameter — that overrides it, which is the only way
      * inlining can still apply.
      */
+    /** Whether this queue inserts watermark rows, which is the only SQL write on the ingest path. */
+    private static boolean writesWatermarkRows(QueueIdToTableMapping mapping) {
+        try {
+            return WatermarkSpec.fromParameters(mapping.ingestionQueue(), mapping.additionalParameters()) != null;
+        } catch (RuntimeException e) {
+            // A malformed spec is reported by validateNoDataInlining/WatermarkSpec itself, with a
+            // better message than anything this could add; treat it as configured.
+            return true;
+        }
+    }
+
     protected static void validateNoDataInlining(QueueIdToTableMapping mapping) {
         WatermarkSpec spec = WatermarkSpec.fromParameters(mapping.ingestionQueue(), mapping.additionalParameters());
         if (spec == null || mapping.catalog() == null || mapping.schema() == null) {
