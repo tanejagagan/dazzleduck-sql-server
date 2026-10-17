@@ -30,7 +30,10 @@ import java.util.stream.Collectors;
  *   <li>{@code watermark_snapshot_id_column} — required when the table is set; receives a LOWER
  *       BOUND on the DuckLake snapshot the batch committed in, written by the same INSERT as the
  *       rest of the row. The true snapshot is this value or higher, never lower — see
- *       {@link DuckLakePostIngestionTask} for why. Consumers must join with {@code >=}.</li>
+ *       {@link DuckLakePostIngestionTask} for why. Consumers must join with {@code >=}, and must
+ *       read the GREATEST value recorded for the batch: the row as first written keeps its
+ *       predicted id, and a correction appends the exact one rather than replacing it, so reading
+ *       the raw column answers "visible as of N" too early for a corrected batch.</li>
  *   <li>{@code watermark_batch_id_column} — required when the table is set; receives an id unique
  *       to the batch, shared by every group row of it. It is what the snapshot correction attaches
  *       to when the predicted id is taken by a competing writer: the correction is a second row for
@@ -271,6 +274,11 @@ public record WatermarkSpec(String table, String timestampColumn, List<String> g
      * only ever raise the value, and at most one correction is written per batch.
      */
     public String snapshotCorrectionSql(String catalog, String schema, String batchId, long snapshotId) {
+        if (isBlank(batchId)) {
+            throw new IllegalArgumentException(
+                    "watermark configuration: a correction needs the batch id it corrects, for '%s'"
+                            .formatted(BATCH_ID_COLUMN_KEY));
+        }
         return "INSERT INTO %s.%s.%s (%s, %s) VALUES (%s, %d)".formatted(
                 HeaderUtils.quoteIdentifier(catalog), HeaderUtils.quoteIdentifier(schema),
                 HeaderUtils.quoteIdentifier(table), HeaderUtils.quoteIdentifier(batchIdColumn),

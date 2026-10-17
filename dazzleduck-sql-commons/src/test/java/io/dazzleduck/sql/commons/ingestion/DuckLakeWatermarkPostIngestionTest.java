@@ -462,6 +462,33 @@ class DuckLakeWatermarkPostIngestionTest {
         }
     }
 
+    /**
+     * "Is this batch visible as of snapshot N" must be asked of the GREATEST value recorded for the
+     * batch, not of the raw column. Pinned because appending the correction rather than updating
+     * the row in place made this a live trap: the row as first written keeps its predicted id
+     * forever, so the raw column reports a corrected batch as visible earlier than it is. The
+     * earlier in-place UPDATE overwrote that value, which is why the question did not arise before.
+     */
+    @Test
+    void visibilityMustBeAskedOfThePerBatchMaximum() throws Exception {
+        List<String> files = writeSingleFile("v1.parquet", "king");
+        try (Connection conn = ConnectionPool.getConnection()) {
+            // Predicted 4, really committed in 7: the shape a lost race leaves behind.
+            ConnectionPool.execute(conn, SPEC.insertSql(CATALOG, "main", computeRowsFor(files), 4, "b1"));
+            ConnectionPool.execute(conn, SPEC.snapshotCorrectionSql(CATALOG, "main", "b1", 7));
+
+            assertEquals(List.of(), collect(conn, ("""
+                    SELECT batch_id AS r FROM %s.main.ingest_watermark
+                    GROUP BY batch_id HAVING max(min_commit_snapshot_id) <= 5""").formatted(CATALOG)),
+                    "the batch committed in 7, so it is not visible as of 5");
+
+            assertEquals(List.of("king"), collect(conn, ("""
+                    SELECT county AS r FROM %s.main.ingest_watermark
+                    WHERE min_commit_snapshot_id <= 5 AND county IS NOT NULL""").formatted(CATALOG)),
+                    "reading the raw column instead claims visibility at 5: the answer the docs warn against");
+        }
+    }
+
     private long maxSnapshot() throws Exception {
         try (Connection conn = ConnectionPool.getConnection()) {
             return Long.parseLong(collect(conn,

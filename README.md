@@ -598,12 +598,20 @@ lets an existing table be migrated without a rewrite.
 
 **The value is a lower bound, not an exact id** — hence the `min_` prefix in the suggested column
 name. The true snapshot is the recorded value or higher, never lower, so compare with `>=` / `<=`
-rather than `=`:
+rather than `=`, and **take the greatest value recorded for the batch**, which is what a correction
+appends:
 
 ```sql
 -- batches whose data is visible as of snapshot N
-SELECT * FROM ingest_watermark WHERE min_commit_snapshot_id <= N;
+SELECT batch_id FROM ingest_watermark
+GROUP BY batch_id HAVING max(min_commit_snapshot_id) <= N;
 ```
+
+Reading the raw column instead of the per-batch maximum answers this question **too early** for a
+batch that was corrected: the row as first written keeps its predicted id, and the exact id lives in
+the appended correction row. A batch that predicted snapshot 4 but committed in 7 is reported by
+`WHERE min_commit_snapshot_id <= 5` as visible at 5, when it is not. The `max(...)` is not a
+refinement here, it is the difference between the right answer and a wrong one.
 
 The bound holds unconditionally. DuckLake assigns the snapshot id at COMMIT and does not expose
 the pending one, so what gets written is `max(snapshot_id) + 1` — the same formula DuckLake uses,
