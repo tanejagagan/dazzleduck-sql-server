@@ -392,11 +392,17 @@ class DuckLakeWatermarkPostIngestionTest {
     /**
      * The reason the correction needs a batch id at all: two batches in the same group can
      * aggregate identically, so without one a correction is indistinguishable from a second batch.
-     * This pins the three candidate reader rules against a case that has both — a corrected batch
-     * and a same-aggregate neighbour — where the true row count is 2.
+     * This pins the reader rules against a case that has both — a corrected batch and a
+     * same-aggregate neighbour — where the true row count is 2.
+     *
+     * <p>Note which rule is which. Because a correction row is SPARSE, the aggregates need no
+     * per-batch deduplication at all: a plain {@code sum(row_count)} is correct, since the
+     * correction contributes NULL. The batch id is needed for the SNAPSHOT, not for the counts.
+     * Grouping the aggregates by batch id is both unnecessary and wrong once a batch has more than
+     * one group — see {@link #aggregatesMustNotBeGroupedByBatchId}.
      */
     @Test
-    void onlyTheBatchIdRuleCountsACorrectedAndADuplicateBatchCorrectly() throws Exception {
+    void theSnapshotRuleIsPerBatchAndTheCountsNeedNoDeduplication() throws Exception {
         List<String> a = writeSingleFile("d1.parquet", "same");
         List<String> b = writeSingleFile("d2.parquet", "same");
         try (Connection conn = ConnectionPool.getConnection()) {
@@ -405,24 +411,56 @@ class DuckLakeWatermarkPostIngestionTest {
             ConnectionPool.execute(conn, SPEC_WITH_BATCH_ID.snapshotCorrectionSql(CATALOG, "main", "b1", 7));
             ConnectionPool.execute(conn, SPEC_WITH_BATCH_ID.insertSql(CATALOG, "main", computeRowsFor(b), 9, "b2"));
 
-            assertEquals(List.of("2|9"), collect(conn, ("""
-                    SELECT sum(row_count)::VARCHAR || '|' || max(snapshot_id)::VARCHAR AS r FROM (
-                        SELECT batch_id, any_value(row_count) AS row_count,
-                               max(min_commit_snapshot_id) AS snapshot_id
-                        FROM %s.main.ingest_watermark WHERE batch_id IS NOT NULL GROUP BY batch_id)""")
-                    .formatted(CATALOG)),
-                    "latest snapshot per batch id: 2 rows ingested, newest snapshot 9");
+            assertEquals(List.of("b1=7", "b2=9"), collect(conn, ("""
+                    SELECT batch_id || '=' || max(min_commit_snapshot_id)::VARCHAR AS r
+                    FROM %s.main.ingest_watermark WHERE batch_id IS NOT NULL
+                    GROUP BY batch_id ORDER BY batch_id""").formatted(CATALOG)),
+                    "the exact snapshot of a batch is max(snapshot_id) over its batch id");
+
+            assertEquals(List.of("2"), collect(conn,
+                    "SELECT sum(row_count)::VARCHAR AS r FROM %s.main.ingest_watermark".formatted(CATALOG)),
+                    "a plain sum is correct because the correction row's row_count is NULL");
 
             assertEquals(List.of("1"), collect(conn, ("""
                     SELECT sum(row_count)::VARCHAR AS r FROM (
                         SELECT county, state, min_ts, max_ts, row_count
                         FROM %s.main.ingest_watermark WHERE row_count IS NOT NULL
                         GROUP BY county, state, min_ts, max_ts, row_count)""").formatted(CATALOG)),
-                    "grouping by the value columns instead merges the two batches into one: wrong");
+                    "deduplicating by the value columns instead merges the two batches: wrong");
+        }
+    }
 
-            assertEquals(List.of("2"), collect(conn,
+    /**
+     * A batch holds one row per group, so an aggregate folded into a {@code GROUP BY batch_id}
+     * keeps one group and silently drops the rest. Pinned because the obvious-looking query —
+     * {@code any_value(row_count) ... GROUP BY batch_id} — is correct for single-group batches and
+     * wrong for every other kind, which is the worst way for a reader rule to be wrong.
+     */
+    @Test
+    void aggregatesMustNotBeGroupedByBatchId() throws Exception {
+        List<String> files = writeBatchFiles();   // three groups: king/wa, cook/il, cook/in
+        try (Connection conn = ConnectionPool.getConnection()) {
+            ConnectionPool.execute(conn, SPEC_WITH_BATCH_ID.insertSql(CATALOG, "main", computeRows(files), 4, "b1"));
+            ConnectionPool.execute(conn, SPEC_WITH_BATCH_ID.snapshotCorrectionSql(CATALOG, "main", "b1", 7));
+
+            assertEquals(List.of("4"), collect(conn,
                     "SELECT sum(row_count)::VARCHAR AS r FROM %s.main.ingest_watermark".formatted(CATALOG)),
-                    "and a raw sum stays right only because the correction row is sparse");
+                    "the batch ingested 4 rows across its three groups");
+
+            // any_value picks an arbitrary group, so assert the property rather than which one it
+            // picked: whatever it returns is one group's count, and so short of the batch's total.
+            assertEquals(List.of("true"), collect(conn, ("""
+                    SELECT (folded < 4)::VARCHAR AS r FROM (
+                        SELECT sum(row_count) AS folded FROM (
+                            SELECT batch_id, any_value(row_count) AS row_count
+                            FROM %s.main.ingest_watermark WHERE batch_id IS NOT NULL GROUP BY batch_id))""")
+                    .formatted(CATALOG)),
+                    "folding the count into GROUP BY batch_id keeps one group of three, undercounting the batch");
+
+            assertEquals(List.of("7"), collect(conn, ("""
+                    SELECT max(min_commit_snapshot_id)::VARCHAR AS r
+                    FROM %s.main.ingest_watermark WHERE batch_id = 'b1'""").formatted(CATALOG)),
+                    "the snapshot rule is unaffected by the group count");
         }
     }
 

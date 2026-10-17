@@ -643,6 +643,24 @@ A correction row carries **only** the batch id and the snapshot — group column
 NULL — so existing aggregate queries are unaffected by it: `sum(row_count)` and `max(max_ts)` skip
 NULLs. Only a reader that wants the exact snapshot needs the per-batch rule above.
 
+**Do not fold aggregates into that `GROUP BY batch_id`.** A batch holds one row per group, so
+`any_value(row_count) ... GROUP BY batch_id` keeps one group and drops the rest — correct for a
+watermark with no group columns, and silently short for every other kind:
+
+```sql
+-- WRONG for a grouped watermark: undercounts to a single group per batch
+SELECT sum(row_count) FROM (
+    SELECT batch_id, any_value(row_count) AS row_count
+    FROM ingest_watermark GROUP BY batch_id);
+
+-- Right: the counts need no deduplication, because corrections contribute NULL
+SELECT sum(row_count) FROM ingest_watermark;
+```
+
+The batch id is needed for the *snapshot*, not for the counts. The one query it does change is
+`count(*)`: correction rows are rows, so count the observations instead with
+`count(row_count)`, or filter on `batch_id IS NULL` to see only corrections.
+
 Without the column configured nothing changes and nothing breaks: no correction is written and the
 column simply stays the lower bound it is specified as. The exact snapshot for a batch can still be
 recovered at any time by reading `begin_snapshot` from `ducklake_data_file` for that batch's files.
