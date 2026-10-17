@@ -508,13 +508,13 @@ public final class AttributeTypeRegistry {
     // Accessors, for tests and /stats
     // -----------------------------------------------------------------------
 
-    /** Mappings this collector knows are recorded. */
     /** This queue's cap, falling back to the default for a queue resolved after startup. */
     private int capFor(String queue) {
         Integer cap = capByQueue.get(queue);
         return cap == null ? settings.capFor(null) : cap;
     }
 
+    /** Mappings this collector knows are recorded. */
     public int knownCount() {
         return known.size();
     }
