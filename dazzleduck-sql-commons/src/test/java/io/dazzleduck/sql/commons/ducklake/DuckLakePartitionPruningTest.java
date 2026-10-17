@@ -40,7 +40,7 @@ public class DuckLakePartitionPruningTest {
     }
 
     @BeforeAll
-    public static void setup() throws IOException {
+    public static void setup() throws Exception {
         String workspacePath = WORKSPACE.toString();
         ConnectionPool.executeBatch(new String[]{
                 "INSTALL ducklake",
