@@ -11,6 +11,7 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * Post-ingestion task that adds newly ingested files to a DuckLake table.
@@ -36,9 +37,13 @@ import java.util.Map;
  * recorded value can be stale but never ahead of the truth, whatever happens — including a crash
  * between the commit and the verification below.
  *
- * <p>{@link #verifySnapshotId} then tightens the bound to the exact snapshot, which is the normal
- * outcome. That step is an accuracy improvement, not a correctness requirement: if it is skipped or
- * fails, the column still satisfies its contract.
+ * <p>{@link #verifySnapshotId} then records the exact snapshot when it differs, by APPENDING a
+ * correction row for the batch rather than updating the rows in place — so the watermark table is
+ * append-only and the ingestion path issues no row-level write. A reader takes
+ * {@code max(snapshot_id)} over a batch id; see {@link WatermarkSpec#snapshotCorrectionSql}. Every
+ * batch carries an id ({@code watermark_batch_id_column} is required) for the correction to attach
+ * to. The step is an accuracy improvement, not a correctness requirement — if it is skipped or
+ * fails, the column still satisfies its contract as a lower bound.
  *
  * <p>Limitation: queues registered through the dynamic SQLite registry
  * ({@link DynamicQueueRepository}) do not carry {@code additional_parameters}, so watermarks are
@@ -107,9 +112,10 @@ public class DuckLakePostIngestionTask implements PostIngestionTask {
                 return;
             }
             long predictedSnapshotId = predictNextSnapshotId(conn);
-            queries.add(watermarkSpec.insertSql(catalogName, schemaName, watermarkRows, predictedSnapshotId));
+            UUID batchId = UUID.randomUUID();
+            queries.add(watermarkSpec.insertSql(catalogName, schemaName, watermarkRows, predictedSnapshotId, batchId));
             executeInTxn(conn, queries, files);
-            verifySnapshotId(conn, files, predictedSnapshotId);
+            verifySnapshotId(conn, files, predictedSnapshotId, batchId);
         }
     }
 
@@ -182,30 +188,32 @@ public class DuckLakePostIngestionTask implements PostIngestionTask {
     }
 
     /**
-     * Tightens the recorded lower bound to the exact snapshot the batch committed in.
+     * Records the exact snapshot the batch committed in, when it differs from the predicted one, by
+     * appending a correction row for {@code batchId}.
      *
-     * <p>One query settles it: the file we just registered carries the committed id in its
+     * <p>One query settles what the committed id was: the file we just registered carries it in its
      * {@code begin_snapshot}. A cheaper pre-check was tried and removed — both a global
      * {@code current_snapshot()} and a per-table high-water mark cost about as much as this lookup
      * (0.15-0.21ms vs 0.16ms at 1M files), and when either says "something moved" this query still
      * has to run. One unconditional exact lookup is simpler and no slower.
      *
      * <p>Failures here are logged rather than thrown. The batch is already durable, and the column
-     * is specified as a lower bound, so a skipped repair leaves a value that is merely loose rather
-     * than wrong — whereas failing an ingest that succeeded would be a real loss.
+     * is specified as a lower bound, so a skipped correction leaves a value that is merely loose
+     * rather than wrong — whereas failing an ingest that succeeded would be a real loss.
      */
-    private void verifySnapshotId(Connection conn, List<String> files, long predicted) {
+    private void verifySnapshotId(Connection conn, List<String> files, long predicted, UUID batchId) {
         try {
             Long actual = resolveCommittedSnapshotId(conn, files.get(0), predicted);
             if (actual == null || actual == predicted) {
                 return;
             }
             logger.info("Queue '{}' committed as snapshot {} rather than the predicted {} (a concurrent "
-                    + "writer took the id); tightening the watermark rows", ingestionResult.queueName(), actual, predicted);
-            ConnectionPool.execute(conn, watermarkSpec.updateSnapshotIdSql(catalogName, schemaName, actual));
+                            + "writer took the id); appending a correction for batch {}",
+                    ingestionResult.queueName(), actual, predicted, batchId);
+            ConnectionPool.execute(conn, watermarkSpec.snapshotCorrectionSql(catalogName, schemaName, batchId, actual));
         } catch (Exception e) {
-            logger.warn("Could not tighten the snapshot id written to {}.{}.{}; rows keep the lower bound {}",
-                    catalogName, schemaName, watermarkSpec.table(), predicted, e);
+            logger.warn("Could not record the exact snapshot in {}.{}.{}; batch {} keeps the lower bound {}",
+                    catalogName, schemaName, watermarkSpec.table(), batchId, predicted, e);
         }
     }
 

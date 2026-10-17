@@ -577,6 +577,7 @@ row count. Configure under `additional_parameters`:
 | `watermark_row_count_column` | Yes | Destination column for the batch row count |
 | `watermark_group_columns` | No | Comma-separated grouping columns; empty = one global row per batch |
 | `watermark_snapshot_id_column` | Yes | Destination column for a lower bound on the DuckLake snapshot the batch committed in |
+| `watermark_batch_id_column` | Yes | Destination column (`UUID`) for the batch id, which the appended snapshot correction attaches to |
 
 A malformed spec (partial keys, blanks, typos in `watermark_*` keys) fails at startup rather
 than per batch. Watermarks are not available for queues registered via the dynamic SQLite
@@ -597,12 +598,35 @@ lets an existing table be migrated without a rewrite.
 
 **The value is a lower bound, not an exact id** — hence the `min_` prefix in the suggested column
 name. The true snapshot is the recorded value or higher, never lower, so compare with `>=` / `<=`
-rather than `=`:
+rather than `=`, and **take the greatest value recorded for the batch**, which is what a correction
+appends:
 
 ```sql
 -- batches whose data is visible as of snapshot N
-SELECT * FROM ingest_watermark WHERE min_commit_snapshot_id <= N;
+SELECT batch_id, max(min_commit_snapshot_id) AS commit_snapshot_id
+FROM ingest_watermark WHERE batch_id IS NOT NULL
+GROUP BY batch_id HAVING max(min_commit_snapshot_id) <= N
+UNION ALL
+-- rows written before the batch id column existed carry none; the earlier code corrected those
+-- in place, so for them the recorded value is already exact and is read directly
+SELECT NULL, min_commit_snapshot_id FROM ingest_watermark
+WHERE batch_id IS NULL AND min_commit_snapshot_id <= N;
 ```
+
+Two details in that query are each the difference between a right and a wrong answer, not
+refinements:
+
+**`max(...)` per batch.** Reading the raw column answers **too early** for a corrected batch: the
+row as first written keeps its predicted id, and the exact id lives in the appended correction row.
+A batch that predicted snapshot 4 but committed in 7 is reported by
+`WHERE min_commit_snapshot_id <= 5` as visible at 5, when it is not.
+
+**`WHERE batch_id IS NOT NULL`, with the legacy rows handled separately.** On a table migrated into
+the batch id column, every row written before it carries NULL — and SQL groups those into a single
+NULL "batch". Grouping them admits or excludes the entire history together on one `max`: with
+historical batches at snapshots 2 and 3 the grouped form returns **one** row where there are two,
+and a single historical batch at snapshot 9 would hide every earlier one from `N = 5`. Those rows
+need no `max` anyway, because the code that wrote them corrected in place.
 
 The bound holds unconditionally. DuckLake assigns the snapshot id at COMMIT and does not expose
 the pending one, so what gets written is `max(snapshot_id) + 1` — the same formula DuckLake uses,
@@ -612,13 +636,79 @@ snapshot, and ids are never reused) and a concurrent writer taking the id first 
 commit higher.
 
 In practice the bound is tight: immediately after committing, the id is verified against
-`begin_snapshot` of the batch's files and corrected if a concurrent writer won the race, so the
-recorded value is normally the exact snapshot. That step improves accuracy rather than
-correctness — if it is skipped, or the process dies before it runs, the column still satisfies its
-contract and no reader is misled.
+`begin_snapshot` of the batch's files. If a concurrent writer won the race, the exact id is
+recorded by **appending a correction row** — the watermark table is append-only, and no row is ever
+updated in place. That step improves accuracy rather than correctness: if it is skipped, or the
+process dies before it runs, the column still satisfies its contract and no reader is misled.
 
-To recover the exact snapshot for a batch at any time, read `begin_snapshot` from
-`ducklake_data_file` for that batch's files.
+### Reading the exact snapshot (`watermark_batch_id_column`)
+
+A correction has to attach to something, and watermark rows carry no key — two batches in the same
+group can aggregate identically — so the correction is keyed by batch id. The key is **required**
+whenever a watermark is configured, so that there is one behaviour to reason about: the table is
+always append-only and the correction is always an append.
+
+**Migrating an existing watermark table.** Add the column, then the key. A queue whose
+`watermark_table` is set but whose `watermark_batch_id_column` is missing fails at startup, naming
+the key:
+
+```sql
+ALTER TABLE my_catalog.main.ingest_watermark ADD COLUMN batch_id UUID;
+```
+
+**Use `UUID`, not `VARCHAR`.** The value is a UUID, and the native type is 16 bytes where its text
+is 36. The column is distinct on every row, so it compresses no better than its raw bytes and the
+difference is close to the full ratio — measured over 50,000 rows, the column costs 1,001,297 bytes
+as `UUID` against 1,986,297 as `VARCHAR`, so roughly 20 bytes per row against 40. In Parquet it is
+written as `FIXED_LEN_BYTE_ARRAY(16)` with the standard `UUID` logical type, which Arrow and Spark
+readers understand. A `VARCHAR` column still works if you have one already.
+
+Do the `ALTER TABLE` first. Nothing verifies at startup that the column exists in the table, so
+setting the key against a table without the column fails every batch at commit instead — see the
+warning below.
+
+Every row of a batch carries the same batch id, and the exact snapshot of a batch is the greatest
+recorded value for that id:
+
+```sql
+SELECT batch_id, max(min_commit_snapshot_id) AS commit_snapshot_id
+FROM ingest_watermark WHERE batch_id IS NOT NULL GROUP BY batch_id;
+```
+
+That is exact rather than a heuristic: a correction can only ever raise the value, and at most one
+is written per batch.
+
+A correction row carries **only** the batch id and the snapshot — group columns and aggregates are
+NULL — so existing aggregate queries are unaffected by it: `sum(row_count)` and `max(max_ts)` skip
+NULLs. Only a reader that wants the exact snapshot needs the per-batch rule above.
+
+**Do not fold aggregates into that `GROUP BY batch_id`.** A batch holds one row per group, so
+`any_value(row_count) ... GROUP BY batch_id` keeps one group and drops the rest — correct for a
+watermark with no group columns, and silently short for every other kind:
+
+```sql
+-- WRONG for a grouped watermark: undercounts to a single group per batch
+SELECT sum(row_count) FROM (
+    SELECT batch_id, any_value(row_count) AS row_count
+    FROM ingest_watermark GROUP BY batch_id);
+
+-- Right: the counts need no deduplication, because corrections contribute NULL
+SELECT sum(row_count) FROM ingest_watermark;
+```
+
+The batch id is needed for the *snapshot*, not for the counts. The one query it does change is
+`count(*)`: correction rows are rows, so count the observations instead with
+`count(row_count)`, or filter on `batch_id IS NULL` to see only corrections.
+
+> **Column names are not verified against the table at startup.** A watermark column named in the
+> config but absent from the table fails the batch at commit — `FilesNotRegisteredException`, no
+> files registered, repeating for every batch — and the underlying error does not name the column.
+> This applies to every `watermark_*` column, and `watermark_batch_id_column` is the one most
+> likely to be missed, since it is the only one needing an `ALTER TABLE` on an existing table.
+
+Without the column configured nothing changes and nothing breaks: no correction is written and the
+column simply stays the lower bound it is specified as. The exact snapshot for a batch can still be
+recovered at any time by reading `begin_snapshot` from `ducklake_data_file` for that batch's files.
 
 Never predict this id yourself without the verification step: a lost race commits silently, with
 no error.
