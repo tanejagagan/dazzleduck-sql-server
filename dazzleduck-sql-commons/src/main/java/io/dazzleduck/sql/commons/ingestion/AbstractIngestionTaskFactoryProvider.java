@@ -49,8 +49,15 @@ public abstract class AbstractIngestionTaskFactoryProvider implements IngestionT
             // default (10) so only an explicitly set option can still enable inlining.
             try {
                 DuckLakeInlining.disable();
-                LOG.info("DuckLake data inlining disabled ({} = 0 for this DuckDB instance); a per-catalog,"
-                        + " per-schema or per-table option still overrides it", DuckLakeInlining.SETTING);
+                // The ATTACH parameter is named first and explicitly: it also beats this setting
+                // (measured — setting 0 with DATA_INLINING_ROW_LIMIT 10 still inlined), it is
+                // invisible to ducklake_options(), and it is the source most likely to be set,
+                // since it sits in this deployment's own startup script. An operator reading a
+                // line that mentioned only stored options would think the disable was sufficient.
+                LOG.info("DuckLake data inlining disabled ({} = 0 for this DuckDB instance). This is a"
+                        + " default only: DATA_INLINING_ROW_LIMIT on a catalog's ATTACH, or a table-,"
+                        + " schema- or catalog-scoped option, still overrides it — which is what the"
+                        + " per-table check below is for", DuckLakeInlining.SETTING);
             } catch (Exception e) {
                 throw new IllegalStateException("Could not disable DuckLake data inlining: " + e.getMessage(), e);
             }

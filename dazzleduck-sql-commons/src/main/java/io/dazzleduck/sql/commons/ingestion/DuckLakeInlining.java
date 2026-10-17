@@ -155,6 +155,11 @@ public final class DuckLakeInlining {
                     .formatted(SETTING)
                     + " something set it afterwards. " + exempt;
         }
+        // When the source already IS this table's own option, "fix it, or else exempt the table"
+        // would be the same statement twice. Say it once.
+        if (source.startsWith("the table's own")) {
+            return "Fix the source: " + disableForTableSql(catalog, schema, table);
+        }
         return "Fix the source: set it to 0 where it is set (%s). %s".formatted(source, exempt);
     }
 

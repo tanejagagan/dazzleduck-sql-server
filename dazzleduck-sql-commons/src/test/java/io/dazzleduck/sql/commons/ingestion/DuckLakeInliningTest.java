@@ -267,6 +267,15 @@ public class DuckLakeInliningTest {
     }
 
     /** The remedy names the source's own fix first, since it is the narrower change. */
+    /** When the table's own option is the cause, the fix and the fallback would be one statement. */
+    @Test
+    void theRemedyForATableOptionIsStatedOnce() {
+        String remedy = DuckLakeInlining.remedy("c", "main", "t", "the table's own " + DuckLakeInlining.OPTION);
+        assertEquals(1, remedy.split("set_option", -1).length - 1,
+                "one statement, not the same one twice: " + remedy);
+        assertFalse(remedy.contains("not yours to change"), remedy);
+    }
+
     @Test
     void theRemedyNamesTheSourcesOwnFixBeforeTheStoredOption() {
         String forAttach = DuckLakeInlining.remedy("c", "main", "t", "the ATTACH parameter DATA_INLINING_ROW_LIMIT");
