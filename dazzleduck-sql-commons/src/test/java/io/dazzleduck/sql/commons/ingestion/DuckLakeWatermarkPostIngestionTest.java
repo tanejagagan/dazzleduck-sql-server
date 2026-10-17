@@ -35,7 +35,7 @@ class DuckLakeWatermarkPostIngestionTest {
                     "ATTACH 'ducklake:%s' AS %s (DATA_PATH '%s')".formatted(
                             tempDir.resolve("catalog"), CATALOG, tempDir.resolve("data")),
                     "CREATE TABLE %s.main.facts (county VARCHAR, state VARCHAR, ts TIMESTAMP, v DOUBLE)".formatted(CATALOG),
-                    "CREATE TABLE %s.main.ingest_watermark (county VARCHAR, state VARCHAR, min_ts TIMESTAMP, max_ts TIMESTAMP, row_count BIGINT, min_commit_snapshot_id BIGINT)".formatted(CATALOG)
+                    "CREATE TABLE %s.main.ingest_watermark (county VARCHAR, state VARCHAR, min_ts TIMESTAMP, max_ts TIMESTAMP, row_count BIGINT, min_commit_snapshot_id BIGINT, batch_id VARCHAR)".formatted(CATALOG)
             });
         }
     }
@@ -65,6 +65,10 @@ class DuckLakeWatermarkPostIngestionTest {
     }
 
     private static final WatermarkSpec SPEC = new WatermarkSpec("ingest_watermark", "ts", List.of("county", "state"), "min_ts", "max_ts", "row_count", "min_commit_snapshot_id");
+
+    /** The same table with a batch id, which is what lets the exact snapshot be recorded. */
+    private static final WatermarkSpec SPEC_WITH_BATCH_ID = new WatermarkSpec("ingest_watermark", "ts",
+            List.of("county", "state"), "min_ts", "max_ts", "row_count", "min_commit_snapshot_id", "batch_id");
 
     private static Map<String, String> watermarkParams(String table) {
         return Map.of(
@@ -314,25 +318,24 @@ class DuckLakeWatermarkPostIngestionTest {
     }
 
     /**
-     * The repair path, which only runs when a concurrent writer takes the predicted id. Every other
-     * test here commits unopposed, so the prediction is exact, {@code verifySnapshotId} returns
-     * early and {@link WatermarkSpec#updateSnapshotIdSql} never executes — leaving the subtlest
-     * query in the feature unexercised, and silently so, since the verify step logs its failures
-     * rather than throwing.
+     * The correction path, which only runs when a concurrent writer takes the predicted id. Every
+     * other test here commits unopposed, so the prediction is exact, {@code verifySnapshotId}
+     * returns early and {@link WatermarkSpec#snapshotCorrectionSql} never executes — leaving the
+     * subtlest write in the feature unexercised, and silently so, since the verify step logs its
+     * failures rather than throwing.
      *
      * <p>The lost race is reproduced by inserting a batch with a deliberately stale predicted id
-     * (the value an earlier batch legitimately holds) and then running the repair, which is the
-     * state a losing transaction actually commits in. The three rows discriminate between the
-     * rowid scoping and both simpler predicates that look adequate:
-     * <ul>
-     *   <li>{@code WHERE min_commit_snapshot_id IS NULL} would sweep up the stray row belonging to
-     *       a concurrent queue's in-flight batch on the same table.</li>
-     *   <li>{@code WHERE min_commit_snapshot_id = predicted} would clobber the earlier batch's
-     *       rows, which correctly hold exactly that id.</li>
-     * </ul>
+     * (the value an earlier batch legitimately holds) and then running the correction, which is the
+     * state a losing transaction actually commits in.
+     *
+     * <p>What the three rows discriminate is that the correction is an APPEND scoped by batch id,
+     * so it must leave every pre-existing row exactly as it was — including a concurrent queue's
+     * unstamped in-flight row on the same table, which an {@code IS NULL} predicate would have
+     * swept up, and the earlier batch's rows, which hold precisely the stale id the loser predicted
+     * and which a {@code = predicted} predicate would have clobbered.
      */
     @Test
-    void repairStampsOnlyTheRowsOfTheBatchThatLostTheRace() throws Exception {
+    void correctionIsAppendedAndTouchesNothingThatWasAlreadyThere() throws Exception {
         // An earlier batch commits unopposed: its rows hold the exact snapshot it committed as.
         List<String> first = writeSingleFile("r1.parquet", "king");
         new DuckLakePostIngestionTask(result(first, computeRowsFor(first)), CATALOG, "facts", "main",
@@ -350,27 +353,86 @@ class DuckLakeWatermarkPostIngestionTest {
         // The losing batch: it predicted firstSnapshot, which was already taken by the time it
         // committed, so its rows land carrying an id that belongs to someone else.
         List<String> second = writeSingleFile("r2.parquet", "pierce");
+        String batchId = "batch-of-the-loser";
         try (Connection conn = ConnectionPool.getConnection()) {
             ConnectionPool.executeBatchInTxn(conn, new String[]{
-                    SPEC.insertSql(CATALOG, "main", computeRowsFor(second), firstSnapshot)});
+                    SPEC_WITH_BATCH_ID.insertSql(CATALOG, "main", computeRowsFor(second), firstSnapshot, batchId)});
         }
         long secondSnapshot = maxSnapshot();
         assertTrue(secondSnapshot > firstSnapshot,
                 "the losing batch must commit after the id it predicted, got " + secondSnapshot + " <= " + firstSnapshot);
 
-        // The repair, as DuckLakePostIngestionTask's verify step issues it.
+        // The correction, as DuckLakePostIngestionTask's verify step issues it.
         try (Connection conn = ConnectionPool.getConnection()) {
-            ConnectionPool.execute(conn, SPEC.updateSnapshotIdSql(CATALOG, "main", secondSnapshot));
+            ConnectionPool.execute(conn,
+                    SPEC_WITH_BATCH_ID.snapshotCorrectionSql(CATALOG, "main", batchId, secondSnapshot));
         }
 
         try (Connection conn = ConnectionPool.getConnection()) {
             assertEquals(
-                    List.of("king=" + firstSnapshot, "pierce=" + secondSnapshot, "stray=null"),
+                    List.of("king=" + firstSnapshot, "pierce=" + firstSnapshot, "stray=null", "null=" + secondSnapshot),
                     collect(conn, ("""
-                            SELECT county || '=' || coalesce(min_commit_snapshot_id::VARCHAR, 'null') AS r
-                            FROM %s.main.ingest_watermark ORDER BY county""").formatted(CATALOG)),
-                    "the repair must tighten only the losing batch's rows");
+                            SELECT coalesce(county, 'null') || '=' || coalesce(min_commit_snapshot_id::VARCHAR, 'null') AS r
+                            FROM %s.main.ingest_watermark ORDER BY county NULLS LAST, min_commit_snapshot_id""").formatted(CATALOG)),
+                    "the correction must be a new row, leaving the loser's own row and everyone else's untouched");
+
+            // The reader rule: the exact snapshot of a batch is max(snapshot_id) over its batch id.
+            assertEquals(List.of(String.valueOf(secondSnapshot)),
+                    collect(conn, ("SELECT max(min_commit_snapshot_id)::VARCHAR AS r FROM %s.main.ingest_watermark "
+                            + "WHERE batch_id = '%s'").formatted(CATALOG, batchId)),
+                    "max(snapshot_id) over the batch id must give the snapshot it really committed in");
+
+            // And the correction carries no aggregates, so it cannot disturb an existing sum.
+            assertEquals(List.of("9"),
+                    collect(conn, "SELECT sum(row_count)::VARCHAR AS r FROM %s.main.ingest_watermark".formatted(CATALOG)),
+                    "a sparse correction row must leave sum(row_count) alone: 1 (king) + 1 (pierce) + 7 (stray)");
         }
+    }
+
+    /**
+     * The reason the correction needs a batch id at all: two batches in the same group can
+     * aggregate identically, so without one a correction is indistinguishable from a second batch.
+     * This pins the three candidate reader rules against a case that has both — a corrected batch
+     * and a same-aggregate neighbour — where the true row count is 2.
+     */
+    @Test
+    void onlyTheBatchIdRuleCountsACorrectedAndADuplicateBatchCorrectly() throws Exception {
+        List<String> a = writeSingleFile("d1.parquet", "same");
+        List<String> b = writeSingleFile("d2.parquet", "same");
+        try (Connection conn = ConnectionPool.getConnection()) {
+            // Two batches whose rows are identical in every value column, one of them corrected.
+            ConnectionPool.execute(conn, SPEC_WITH_BATCH_ID.insertSql(CATALOG, "main", computeRowsFor(a), 4, "b1"));
+            ConnectionPool.execute(conn, SPEC_WITH_BATCH_ID.snapshotCorrectionSql(CATALOG, "main", "b1", 7));
+            ConnectionPool.execute(conn, SPEC_WITH_BATCH_ID.insertSql(CATALOG, "main", computeRowsFor(b), 9, "b2"));
+
+            assertEquals(List.of("2|9"), collect(conn, ("""
+                    SELECT sum(row_count)::VARCHAR || '|' || max(snapshot_id)::VARCHAR AS r FROM (
+                        SELECT batch_id, any_value(row_count) AS row_count,
+                               max(min_commit_snapshot_id) AS snapshot_id
+                        FROM %s.main.ingest_watermark WHERE batch_id IS NOT NULL GROUP BY batch_id)""")
+                    .formatted(CATALOG)),
+                    "latest snapshot per batch id: 2 rows ingested, newest snapshot 9");
+
+            assertEquals(List.of("1"), collect(conn, ("""
+                    SELECT sum(row_count)::VARCHAR AS r FROM (
+                        SELECT county, state, min_ts, max_ts, row_count
+                        FROM %s.main.ingest_watermark WHERE row_count IS NOT NULL
+                        GROUP BY county, state, min_ts, max_ts, row_count)""").formatted(CATALOG)),
+                    "grouping by the value columns instead merges the two batches into one: wrong");
+
+            assertEquals(List.of("2"), collect(conn,
+                    "SELECT sum(row_count)::VARCHAR AS r FROM %s.main.ingest_watermark".formatted(CATALOG)),
+                    "and a raw sum stays right only because the correction row is sparse");
+        }
+    }
+
+    /** Without a batch id column there is nothing to attach a correction to, so it is refused. */
+    @Test
+    void correctionIsRefusedWithoutABatchIdColumn() {
+        var e = assertThrows(IllegalStateException.class,
+                () -> SPEC.snapshotCorrectionSql(CATALOG, "main", "b1", 7));
+        assertTrue(e.getMessage().contains(WatermarkSpec.BATCH_ID_COLUMN_KEY),
+                "the error should name the missing key, got: " + e.getMessage());
     }
 
     private long maxSnapshot() throws Exception {

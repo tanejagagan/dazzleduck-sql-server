@@ -31,7 +31,19 @@ import java.util.stream.Collectors;
  *       BOUND on the DuckLake snapshot the batch committed in, written by the same INSERT as the
  *       rest of the row. The true snapshot is this value or higher, never lower — see
  *       {@link DuckLakePostIngestionTask} for why. Consumers must join with {@code >=}.</li>
+ *   <li>{@code watermark_batch_id_column} — OPTIONAL; receives an id unique to the batch, shared by
+ *       every group row of it. Configuring it is what lets the exact snapshot be recorded when the
+ *       predicted one is taken by a competing writer: the correction is a second row for the same
+ *       batch id, never an update of the first (see {@link #snapshotCorrectionSql}). Without it the
+ *       snapshot column simply stays the lower bound it is specified as.</li>
  * </ul>
+ *
+ * <p><strong>Reading the snapshot column when a batch id is configured:</strong> the table is
+ * append-only and a batch may hold more than one row for its snapshot, so the exact snapshot of a
+ * batch is {@code max(snapshot_id)} over its batch id. A correction row carries ONLY the batch id
+ * and the snapshot — group columns and aggregates are NULL — so existing aggregate queries stay
+ * correct: {@code sum(row_count)} and {@code max(max_ts)} skip NULLs, and only a reader that wants
+ * the exact snapshot needs the per-batch rule.
  *
  * <p>A group whose timestamps are all NULL still produces a row: NULL min and max, with the real
  * row count. Only a genuinely empty batch is skipped.
@@ -51,7 +63,7 @@ import java.util.stream.Collectors;
  */
 public record WatermarkSpec(String table, String timestampColumn, List<String> groupColumns,
                             String minTimestampColumn, String maxTimestampColumn, String rowCountColumn,
-                            String snapshotIdColumn) {
+                            String snapshotIdColumn, String batchIdColumn) {
 
     public static final String TABLE_KEY = "watermark_table";
     public static final String TIMESTAMP_COLUMN_KEY = "watermark_timestamp_column";
@@ -60,9 +72,11 @@ public record WatermarkSpec(String table, String timestampColumn, List<String> g
     public static final String MAX_TIMESTAMP_COLUMN_KEY = "watermark_max_timestamp_column";
     public static final String ROW_COUNT_COLUMN_KEY = "watermark_row_count_column";
     public static final String SNAPSHOT_ID_COLUMN_KEY = "watermark_snapshot_id_column";
+    public static final String BATCH_ID_COLUMN_KEY = "watermark_batch_id_column";
 
     private static final List<String> KNOWN_KEYS = List.of(TABLE_KEY, TIMESTAMP_COLUMN_KEY, GROUP_COLUMNS_KEY,
-            MIN_TIMESTAMP_COLUMN_KEY, MAX_TIMESTAMP_COLUMN_KEY, ROW_COUNT_COLUMN_KEY, SNAPSHOT_ID_COLUMN_KEY);
+            MIN_TIMESTAMP_COLUMN_KEY, MAX_TIMESTAMP_COLUMN_KEY, ROW_COUNT_COLUMN_KEY, SNAPSHOT_ID_COLUMN_KEY,
+            BATCH_ID_COLUMN_KEY);
 
     public WatermarkSpec {
         requireNonBlank(table, TABLE_KEY);
@@ -73,6 +87,22 @@ public record WatermarkSpec(String table, String timestampColumn, List<String> g
         requireNonBlank(maxTimestampColumn, MAX_TIMESTAMP_COLUMN_KEY);
         requireNonBlank(rowCountColumn, ROW_COUNT_COLUMN_KEY);
         requireNonBlank(snapshotIdColumn, SNAPSHOT_ID_COLUMN_KEY);
+        // Optional, unlike every column above: absent is the documented default — the snapshot
+        // column then stays a lower bound — so blank normalises to absent rather than failing.
+        batchIdColumn = isBlank(batchIdColumn) ? null : batchIdColumn.trim();
+    }
+
+    /** A spec with no batch id column, so no snapshot correction — the lower bound stands. */
+    public WatermarkSpec(String table, String timestampColumn, List<String> groupColumns,
+                         String minTimestampColumn, String maxTimestampColumn, String rowCountColumn,
+                         String snapshotIdColumn) {
+        this(table, timestampColumn, groupColumns, minTimestampColumn, maxTimestampColumn, rowCountColumn,
+                snapshotIdColumn, null);
+    }
+
+    /** Whether the exact snapshot can be recorded, which needs a batch id to attach it to. */
+    public boolean recordsExactSnapshot() {
+        return batchIdColumn != null;
     }
 
     /**
@@ -109,7 +139,7 @@ public record WatermarkSpec(String table, String timestampColumn, List<String> g
             return new WatermarkSpec(table.trim(), timestampColumn.trim(),
                     parseGroupColumns(parameters.get(GROUP_COLUMNS_KEY)),
                     minTimestampColumn.trim(), maxTimestampColumn.trim(), rowCountColumn.trim(),
-                    snapshotIdColumn.trim());
+                    snapshotIdColumn.trim(), parameters.get(BATCH_ID_COLUMN_KEY));
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException("Queue '%s': %s".formatted(queueName, e.getMessage()), e);
         }
@@ -196,46 +226,66 @@ public record WatermarkSpec(String table, String timestampColumn, List<String> g
      * same value and enforces it with a primary key on {@code ducklake_snapshot} — so a commit that
      * succeeds unopposed carries exactly this id. It is a prediction only in the sense that a
      * competing writer can take the id first, in which case DuckLake's internal retry commits us
-     * one higher; {@code DuckLakePostIngestionTask} verifies the committed id afterwards and
-     * repairs the rows on the rare occasion they disagree.
+     * one higher; {@code DuckLakePostIngestionTask} appends a correction afterwards on the rare
+     * occasion they disagree, which is why {@code batchId} is written here — it is what the
+     * correction attaches to.
      */
-    public String insertSql(String catalog, String schema, List<List<String>> rows, long snapshotId) {
+    public String insertSql(String catalog, String schema, List<List<String>> rows, long snapshotId, String batchId) {
         String columnList = groupColumns.stream().map(HeaderUtils::quoteIdentifier).collect(Collectors.joining(", "));
         columnList = (columnList.isEmpty() ? "" : columnList + ", ") + HeaderUtils.quoteIdentifier(minTimestampColumn);
         columnList += ", " + HeaderUtils.quoteIdentifier(maxTimestampColumn)
                 + ", " + HeaderUtils.quoteIdentifier(rowCountColumn);
         columnList += ", " + HeaderUtils.quoteIdentifier(snapshotIdColumn);
         String suffix = ", " + snapshotId;
+        if (batchIdColumn != null && batchId != null) {
+            columnList += ", " + HeaderUtils.quoteIdentifier(batchIdColumn);
+            suffix += ", " + literal(batchId);
+        }
+        String valueSuffix = suffix;
         String values = rows.stream()
-                .map(row -> row.stream().map(WatermarkSpec::literal).collect(Collectors.joining(", ", "(", suffix + ")")))
+                .map(row -> row.stream().map(WatermarkSpec::literal).collect(Collectors.joining(", ", "(", valueSuffix + ")")))
                 .collect(Collectors.joining(", "));
         return "INSERT INTO %s.%s.%s (%s) VALUES %s".formatted(
                 HeaderUtils.quoteIdentifier(catalog), HeaderUtils.quoteIdentifier(schema),
                 HeaderUtils.quoteIdentifier(table), columnList, values);
     }
 
-    /**
-     * Renders the post-commit UPDATE stamping {@link #snapshotIdColumn} onto exactly the rows this
-     * batch inserted.
-     *
-     * <p>The rows are identified by DuckLake's stable {@code rowid}, read back from
-     * {@code ducklake_table_insertions} for the one snapshot the batch committed as. The two
-     * obvious alternatives are both wrong: watermark rows carry no key, so matching on values
-     * cannot distinguish two batches that aggregate identically, and {@code snapshot_id IS NULL}
-     * would stamp rows belonging to a concurrent queue's in-flight batch on the same table.
-     *
-     * <p>The id cannot be written by {@link #insertSql} instead: DuckLake only assigns a snapshot
-     * id at COMMIT, so inside the ingest transaction it does not yet exist.
-     */
-    public String updateSnapshotIdSql(String catalog, String schema, long snapshotId) {
-        return "UPDATE %s.%s.%s SET %s = %d WHERE rowid IN (SELECT rowid FROM ducklake_table_insertions('%s', '%s', '%s', %d, %d))"
-                .formatted(HeaderUtils.quoteIdentifier(catalog), HeaderUtils.quoteIdentifier(schema),
-                        HeaderUtils.quoteIdentifier(table), HeaderUtils.quoteIdentifier(snapshotIdColumn), snapshotId,
-                        escapeLiteral(catalog), escapeLiteral(schema), escapeLiteral(table), snapshotId, snapshotId);
+    /** The rows without a batch id, so without a correction available later. */
+    public String insertSql(String catalog, String schema, List<List<String>> rows, long snapshotId) {
+        return insertSql(catalog, schema, rows, snapshotId, null);
     }
 
-    private static String escapeLiteral(String value) {
-        return value.replace("'", "''");
+    /**
+     * Renders the post-commit APPEND recording the exact snapshot for a batch whose predicted id
+     * was taken by a competing writer. One row, carrying only {@link #batchIdColumn} and
+     * {@link #snapshotIdColumn} — every other column is left NULL.
+     *
+     * <p>This replaces an earlier {@code UPDATE} that stamped the id onto the batch's rows in
+     * place, identifying them by DuckLake's {@code rowid} from {@code ducklake_table_insertions}.
+     * Appending is better on three counts: the table stays append-only, so nothing on the ingestion
+     * path issues a row-level write that DuckLake could keep in the catalog as inlined data; one
+     * row is written instead of rewriting the batch's rows; and it does not depend on {@code rowid}
+     * stability or on reading the insertions back.
+     *
+     * <p>The id cannot be written by {@link #insertSql} instead: DuckLake only assigns a snapshot id
+     * at COMMIT, so inside the ingest transaction it does not yet exist.
+     *
+     * <p>A reader therefore takes {@code max(snapshot_id)} over a batch id. That is exact rather
+     * than a heuristic: the committed id is always {@code >=} the predicted one, so a correction can
+     * only ever raise the value, and at most one correction is written per batch.
+     *
+     * @throws IllegalStateException when no batch id column is configured, since the row would have
+     *         nothing to attach it to
+     */
+    public String snapshotCorrectionSql(String catalog, String schema, String batchId, long snapshotId) {
+        if (batchIdColumn == null) {
+            throw new IllegalStateException(
+                    "watermark configuration: '%s' is required to record an exact snapshot".formatted(BATCH_ID_COLUMN_KEY));
+        }
+        return "INSERT INTO %s.%s.%s (%s, %s) VALUES (%s, %d)".formatted(
+                HeaderUtils.quoteIdentifier(catalog), HeaderUtils.quoteIdentifier(schema),
+                HeaderUtils.quoteIdentifier(table), HeaderUtils.quoteIdentifier(batchIdColumn),
+                HeaderUtils.quoteIdentifier(snapshotIdColumn), literal(batchId), snapshotId);
     }
 
     /** Group columns plus the three aggregates: MIN timestamp, MAX timestamp, row count. */

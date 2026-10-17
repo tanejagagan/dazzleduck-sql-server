@@ -82,6 +82,71 @@ class WatermarkSpecTest {
                 "q", "cat", "main", "t", Map.of(WatermarkSpec.TABLE_KEY, "wm"), null));
     }
 
+    // ------------------------------------------------------- batch id and corrections
+
+    @Test
+    void batchIdColumnIsOptionalAndBlankMeansAbsent() {
+        Map<String, String> base = Map.of(
+                WatermarkSpec.TABLE_KEY, "wm",
+                WatermarkSpec.TIMESTAMP_COLUMN_KEY, "ts",
+                WatermarkSpec.MIN_TIMESTAMP_COLUMN_KEY, "min_ts",
+                WatermarkSpec.MAX_TIMESTAMP_COLUMN_KEY, "max_ts",
+                WatermarkSpec.ROW_COUNT_COLUMN_KEY, "row_count",
+                WatermarkSpec.SNAPSHOT_ID_COLUMN_KEY, "snap");
+        // A watermark table configured before this existed keeps working, with no correction.
+        WatermarkSpec without = WatermarkSpec.fromParameters("q", base);
+        assertNull(without.batchIdColumn());
+        assertFalse(without.recordsExactSnapshot());
+
+        Map<String, String> blank = new java.util.HashMap<>(base);
+        blank.put(WatermarkSpec.BATCH_ID_COLUMN_KEY, "   ");
+        assertNull(WatermarkSpec.fromParameters("q", blank).batchIdColumn(),
+                "blank must normalise to absent rather than failing: absent is the documented default");
+
+        Map<String, String> set = new java.util.HashMap<>(base);
+        set.put(WatermarkSpec.BATCH_ID_COLUMN_KEY, " batch_id ");
+        WatermarkSpec with = WatermarkSpec.fromParameters("q", set);
+        assertEquals("batch_id", with.batchIdColumn());
+        assertTrue(with.recordsExactSnapshot());
+    }
+
+    @Test
+    void insertSqlCarriesTheBatchIdOnlyWhenBothColumnAndValueArePresent() {
+        WatermarkSpec with = new WatermarkSpec("wm", "ts", List.of("county"), "min_ts", "max_ts", "row_count",
+                "snap", "batch_id");
+        assertEquals("INSERT INTO \"cat\".\"main\".\"wm\""
+                        + " (\"county\", \"min_ts\", \"max_ts\", \"row_count\", \"snap\", \"batch_id\") "
+                        + "VALUES ('king', '1', '9', '2', 7, 'b-1')",
+                with.insertSql("cat", "main", List.of(List.of("king", "1", "9", "2")), 7, "b-1"));
+
+        WatermarkSpec without = new WatermarkSpec("wm", "ts", List.of("county"), "min_ts", "max_ts", "row_count", "snap");
+        assertFalse(without.insertSql("cat", "main", List.of(List.of("king", "1", "9", "2")), 7, "b-1")
+                        .contains("b-1"),
+                "a batch id cannot be written to a table that has no column for it");
+    }
+
+    /**
+     * The correction is an INSERT of one sparse row, not an UPDATE: only the batch id and the
+     * snapshot are set, so every aggregate column stays NULL and existing consumer queries
+     * (sum of row counts, max of timestamps) are unaffected by it.
+     */
+    @Test
+    void snapshotCorrectionIsASparseInsertKeyedByBatchId() {
+        WatermarkSpec spec = new WatermarkSpec("ingest-watermark", "ts", List.of("county"), "min_ts", "max_ts",
+                "row_count", "min_commit_snapshot_id", "batch id");
+        String sql = spec.snapshotCorrectionSql("cat", "main", "b'1", 11);
+        assertEquals("INSERT INTO \"cat\".\"main\".\"ingest-watermark\" (\"batch id\", \"min_commit_snapshot_id\") "
+                + "VALUES ('b''1', 11)", sql);
+        assertFalse(sql.contains("UPDATE"), "the correction must never be an in-place update");
+    }
+
+    @Test
+    void correctionWithoutABatchIdColumnIsRefusedRatherThanGuessed() {
+        WatermarkSpec spec = new WatermarkSpec("wm", "ts", List.of(), "min_ts", "max_ts", "row_count", "snap");
+        var e = assertThrows(IllegalStateException.class, () -> spec.snapshotCorrectionSql("cat", "main", "b1", 3));
+        assertTrue(e.getMessage().contains(WatermarkSpec.BATCH_ID_COLUMN_KEY), e.getMessage());
+    }
+
     // ------------------------------------------------------------------ computation
 
     private String relationOver(Connection conn, String values, String path) throws Exception {
