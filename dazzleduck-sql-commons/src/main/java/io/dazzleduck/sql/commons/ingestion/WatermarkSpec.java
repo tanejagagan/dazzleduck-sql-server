@@ -4,6 +4,9 @@ import io.dazzleduck.sql.commons.util.HeaderUtils;
 
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -196,25 +199,47 @@ public record WatermarkSpec(String table, String timestampColumn, List<String> g
                 .formatted(selectPrefix, aggregates, relationSql, groupBy);
     }
 
+    /** DuckDB's JDBC type name for {@code TIMESTAMPTZ}. */
+    private static final String TIMESTAMP_TZ_TYPE = "TIMESTAMP WITH TIME ZONE";
+
+    /** UTC text DuckDB parses back as the same instant (always with seconds; microsecond precision). */
+    private static final DateTimeFormatter UTC_TEXT = DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss.SSSSSS'+00'");
+
     /**
-     * Executes {@link #aggregationSql} and returns the rows as DuckDB-rendered strings
-     * (group values in declared order, MIN timestamp last; NULL stays null). String values
-     * round-trip through DuckDB's implicit VARCHAR cast on INSERT.
+     * Executes {@link #aggregationSql} and returns the rows as strings (group values in declared
+     * order, then MIN, MAX and the row count; NULL stays null). String values round-trip through
+     * DuckDB's implicit VARCHAR cast on INSERT.
+     *
+     * <p>A {@code TIMESTAMP WITH TIME ZONE} value is rendered in UTC with a {@code +00} offset, never
+     * through {@code getString}: the driver renders it via {@code java.time} in the JVM's zone and drops
+     * zero seconds ({@code 12:00+09:00}), a form DuckDB cannot parse. In UTC the text means the same
+     * thing to either column type: a {@code TIMESTAMPTZ} watermark column gets the exact instant, and a
+     * {@code TIMESTAMP} column, which drops the offset, gets the UTC clock time. So neither depends on the
+     * JVM's or DuckDB's time zone.
      */
     public List<List<String>> computeRows(Connection connection, String relationSql) throws SQLException {
         List<List<String>> rows = new ArrayList<>();
         int columns = valueColumnCount();
         try (var statement = connection.createStatement();
              var resultSet = statement.executeQuery(aggregationSql(relationSql))) {
+            var metaData = resultSet.getMetaData();
+            boolean[] timestampTz = new boolean[columns + 1];
+            for (int i = 1; i <= columns; i++) {
+                timestampTz[i] = TIMESTAMP_TZ_TYPE.equalsIgnoreCase(metaData.getColumnTypeName(i));
+            }
             while (resultSet.next()) {
                 List<String> row = new ArrayList<>(columns);
                 for (int i = 1; i <= columns; i++) {
-                    row.add(resultSet.getString(i));
+                    row.add(timestampTz[i] ? utcText(resultSet.getObject(i, OffsetDateTime.class)) : resultSet.getString(i));
                 }
                 rows.add(row);
             }
         }
         return rows;
+    }
+
+    private static String utcText(OffsetDateTime value) {
+        return value == null ? null : value.withOffsetSameInstant(ZoneOffset.UTC).format(UTC_TEXT);
     }
 
     /**

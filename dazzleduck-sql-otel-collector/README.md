@@ -254,12 +254,39 @@ and its export ack returned rather than the call being cut off mid-RPC.
 
 All schemas flatten the OTLP 3-level hierarchy (Resource → Scope → Record). Resource and scope fields are promoted to top-level columns. Queues with `extract_claims = true` additionally get a trailing `claims` map column (see [JWT Claims Column](#jwt-claims-column)); the tables below show the base schemas.
 
+### Timestamps
+
+Every top-level timestamp column is written as `Timestamp(ms, UTC)`: OTLP times are instants (nanoseconds since the
+Unix epoch), written at millisecond precision and marked as UTC. The one nested time, `time_ms` inside a span's
+`events`, is still an `Int64` count of epoch milliseconds; convert it with `to_timestamp(time_ms / 1000)` or
+`make_timestamptz(time_ms * 1000)`. DuckDB reads them as `TIMESTAMP WITH TIME ZONE` (`TIMESTAMPTZ`), so
+`timestamp >= now() - INTERVAL 1 DAY` compares instants directly and is pushed down to the scan.
+
+- **Calendar parts follow DuckDB's time zone.** Writing the data does not depend on it, but DuckDB turns an instant
+  into calendar parts in the session's time zone, so transformations like `CAST(timestamp AS DATE)`, partition
+  expressions and DuckLake time partitions do. By default the collector leaves DuckDB's zone alone: it is the
+  process's zone, normally UTC in a container. If the process may run in another zone and a transformation or
+  partition derives dates or hours, either set `time_zone = "UTC"` (the server then runs `SET GLOBAL TimeZone` when
+  it starts, which affects every DuckDB user in the JVM) or write the zone into the expression, e.g.
+  `CAST(timezone('UTC', timestamp) AS DATE)`. A `SET TimeZone` in `ingestion.connection_settings` or the startup
+  script does not work: a plain `SET` only changes the singleton connection, not the pooled connections that write
+  the data.
+- **Readers:** a bare literal such as `'2026-10-18 00:00:00'` is read in the reader's session time zone; write an
+  offset (`'2026-10-18 00:00:00+00'`) or run the session in UTC.
+- **Existing DuckLake tables:** DuckLake registers a file only if its column types match the table's, so a target table
+  whose timestamp columns are `TIMESTAMP` rejects the new files. Create those columns as `TIMESTAMPTZ`. Do not convert an existing column with `ALTER COLUMN … TYPE TIMESTAMPTZ`: old values would then be
+  converted in each reader's time zone, and files still in flight with `TIMESTAMP` are rejected. Use a new table, or
+  copy the data with `timezone('UTC', ts)`.
+- **Watermark tables:** create the watermark's MIN and MAX columns as `TIMESTAMPTZ`, the same type as the source
+  column. The MIN and MAX are written in UTC, so a `TIMESTAMPTZ` column gets the exact instants whatever the JVM's or
+  DuckDB's time zone. An existing `TIMESTAMP` watermark column keeps working: it stores the UTC clock time, as before.
+
 ### Logs
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `timestamp` | Timestamp(ms) | |
-| `observed_timestamp` | Timestamp(ms) | |
+| `timestamp` | Timestamp(ms, UTC) | |
+| `observed_timestamp` | Timestamp(ms, UTC) | |
 | `severity_number` | Int32 | |
 | `severity_text` | Utf8 | |
 | `body` | Utf8 | |
@@ -283,8 +310,8 @@ All schemas flatten the OTLP 3-level hierarchy (Resource → Scope → Record). 
 | `parent_span_id` | Utf8 | |
 | `name` | Utf8 | |
 | `kind` | Utf8 | INTERNAL / SERVER / CLIENT / PRODUCER / CONSUMER |
-| `start_time_ms` | Timestamp(ms) | |
-| `end_time_ms` | Timestamp(ms) | |
+| `start_time_ms` | Timestamp(ms, UTC) | |
+| `end_time_ms` | Timestamp(ms, UTC) | |
 | `duration_ms` | Int64 | |
 | `status_code` | Utf8 | |
 | `status_message` | Utf8 | |
@@ -292,7 +319,7 @@ All schemas flatten the OTLP 3-level hierarchy (Resource → Scope → Record). 
 | `resource_attributes` | Map(Utf8, Utf8) | |
 | `scope_name` | Utf8 | |
 | `scope_version` | Utf8 | |
-| `events` | List(Struct(name, time_ms, attributes, attributes_int … attributes_json)) | |
+| `events` | List(Struct(name, time_ms, attributes, attributes_int … attributes_json)) | `time_ms` is Int64 epoch millis |
 | `links` | List(Struct(trace_id, span_id, attributes, attributes_int … attributes_json)) | |
 | `attributes_int` … `attributes_json` | typed maps | see [Typed attributes](#typed-attributes) |
 | `resource_attributes_int` … `resource_attributes_json` | typed maps | |
@@ -307,8 +334,8 @@ Wide-table design — all metric types (GAUGE, SUM, HISTOGRAM, EXPONENTIAL_HISTO
 | `description` | Utf8 | NULL unless `metrics.write_description = true` |
 | `unit` | Utf8 | |
 | `metric_type` | Utf8 | GAUGE / SUM / HISTOGRAM / etc. |
-| `start_time_ms` | Timestamp(ms) | |
-| `time_ms` | Timestamp(ms) | |
+| `start_time_ms` | Timestamp(ms, UTC) | |
+| `time_ms` | Timestamp(ms, UTC) | |
 | `attributes` | Map(Utf8, Utf8) | |
 | `resource_attributes` | Map(Utf8, Utf8) | |
 | `scope_name` | Utf8 | |
@@ -448,8 +475,8 @@ otel_collector {
                 # additional_parameters {   # optional per-batch watermark row, committed
                 #     watermark_table                = "ingest_watermark"   # with the file registration
                 #     watermark_timestamp_column     = "timestamp"
-                #     watermark_min_timestamp_column = "min_timestamp"
-                #     watermark_max_timestamp_column = "max_timestamp"
+                #     watermark_min_timestamp_column = "min_timestamp"   # TIMESTAMPTZ, like the source (TIMESTAMP stores UTC clock time)
+                #     watermark_max_timestamp_column = "max_timestamp"   # TIMESTAMPTZ, like the source
                 #     watermark_row_count_column     = "row_count"
                 #     watermark_snapshot_id_column   = "min_commit_snapshot_id"   # required; BIGINT, lower bound on the commit snapshot
                 #     watermark_group_columns        = "county,state"      # optional
