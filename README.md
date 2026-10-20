@@ -713,6 +713,37 @@ recovered at any time by reading `begin_snapshot` from `ducklake_data_file` for 
 Never predict this id yourself without the verification step: a lost race commits silently, with
 no error.
 
+### Data inlining must be off
+
+DuckLake can keep a small write (ten rows or fewer by default) in the catalog database instead of
+writing a Parquet file, until `ducklake_flush_inlined_data` runs. The watermark table is written with
+`INSERT`, one row per batch, so with inlining on its rows would pile up in the catalog database.
+Target tables are unaffected: their files are registered, and inlining only applies to inserts.
+
+So when any queue configures a watermark table, startup checks each watermark table and **fails
+unless inlining is disabled for it**:
+
+- its catalog must be attached with `DATA_INLINING_ROW_LIMIT 0`. Leaving the parameter out fails too,
+  because the default limit is 10:
+
+  ```sql
+  ATTACH 'ducklake:catalog.ducklake' AS lake (DATA_PATH 'data/', DATA_INLINING_ROW_LIMIT 0);
+  ```
+
+- an option stored with `set_option` takes precedence over the `ATTACH` parameter, the most specific
+  scope winning: the table's own, else its schema's, else the catalog's. The one that applies to the
+  watermark table must not be above 0. Options on other tables and schemas are not checked.
+
+The error lists every problem with its fix, for example:
+
+```
+catalog 'lake': ATTACH parameter DATA_INLINING_ROW_LIMIT 10. Set it to 0
+catalog 'lake', watermark table 'main.ingest_watermark': the catalog option data_inlining_row_limit = 10 takes precedence over the ATTACH parameter. CALL "lake".set_option('data_inlining_row_limit', 0, schema => 'main', table_name => 'ingest_watermark')
+```
+
+The suggested `set_option` is on the watermark table itself, so it overrides the wider scopes without
+changing any other table. With no watermark configured, nothing is checked.
+
 ## Publishing
 
 Tagged releases (`v*`) publish all modules to Maven Central via the GitHub Actions release
