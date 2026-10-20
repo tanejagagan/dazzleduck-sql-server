@@ -421,6 +421,51 @@ grants from an external endpoint: the authorizer sends a GET with the caller's b
 expects a JSON response listing authorized tables/functions and row filters. Responses are
 cached for five minutes.
 
+### Session variables (`x-dd-variables`)
+
+The `x-dd-variables` claim works in every access mode. It is a JSON object of string key/values,
+applied to the per-request DuckDB connection as `SET VARIABLE` and readable in SQL and in injected
+row filters via `getvariable('name')`:
+
+```
+x-dd-variables = {"tenant_id":"acme","region":"us-east"}
+```
+
+So a filter can reference the value as data instead of a baked-in literal, e.g. an `x-dd-access`
+entry of `["table","orders","*","tenant_id = getvariable('tenant_id')"]`.
+
+- **Signed token only.** It is intentionally not a recognized request header, so a client cannot
+  override it per request.
+- **Values are quoted JSON strings.** A bare number or boolean (`{"n":42}`) is rejected with a hint
+  to quote it, since all variables are applied as `VARCHAR` literals; cast for numeric or temporal
+  comparisons (`getvariable('n')::INT`).
+- **Names** must match `[A-Za-z_][A-Za-z0-9_]*` and are rendered as quoted identifiers, so a
+  reserved word such as `table` works.
+- **Limits:** values may not contain control characters, are capped at 4096 characters, and at
+  most 64 variables may be sent. A malformed claim fails the request.
+- **The claim value is JSON text**, i.e. a claim whose value is a string. A token minted with
+  `x-dd-variables` as a nested JSON object is rejected at parse time, because claims are read as
+  strings.
+
+**Trust model — the login service owns the policy.** "Signed token only" means the value cannot be
+overridden per request on an already-issued token. It does **not** mean the query server chose the
+value. The value is decided at token issuance, and deciding it is the login service's job:
+
+1. A client *requests* variables (a Flight connection property / call header, or the `claims` map
+   in a `POST /v1/login` body).
+2. `HttpCredentialValidator` forwards every `jwt_token.claims.generate.headers` entry —
+   `x-dd-variables` included — to the configured `login_url` as the `claims` map.
+3. The login service decides what to set, override, or reject, and signs only what it approves. A
+   production one assigns variables from the authenticated identity (e.g. a fixed tenant per user).
+
+The bundled `LoginService` is a **demo**: it signs the requested claims as given, with no policy.
+Do not run it in production. Likewise, when the Flight server mints tokens itself
+(`jwt_token.generation = true` with no `login_url`), `AdvanceJWTTokenAuthenticator` copies the
+connection headers into the token unfiltered — also a development mode.
+
+`SessionVariables.validate(...)` on the query server is a defence-in-depth hook (allowed names,
+value constraints), not the primary control; it is an unimplemented placeholder today.
+
 ## SSL / TLS Configuration
 
 By default, all HTTP clients in DazzleDuck enforce strict certificate and hostname validation
@@ -561,6 +606,54 @@ so a missing or malformed view fails fast. Because queue state refreshes when th
 catalog's schema version changes (which includes view DDL), altering the view updates the
 transformation at runtime — no config change or restart needed. The dynamic SQLite provider
 supports the same pair via its `view_name` / `input_table` registry columns.
+
+### Ingestion variables
+
+A query's session variables come from the caller's token (see
+[Session variables](#session-variables-x-dd-variables)); the ingestion path has no caller at write
+time, so an ingestion queue declares its own in `ingestion_queue_table_mapping`. They are applied as
+`SET VARIABLE` on the connection that writes the queue's batches, so a `transformation` (and a
+`partition_expression`) reads them with `getvariable('name')`:
+
+```hocon
+ingestion_queue_table_mapping = [{
+    ingestion_queue = "log"
+    catalog = "loglake", schema = "main", table = "log"
+    transformation = "SELECT *, getvariable('env') AS env FROM __this"
+
+    variables { env = "prod", retention_days = "30" }   # static, read once at startup
+    variables_view              = "loglake.main.v_log_vars"  # key/value relation, reloaded
+    variables_key_column        = "key"                      # default
+    variables_value_column      = "value"                    # default
+    variables_expiration_column = "expires_at"               # optional
+}]
+```
+
+- **Reload.** The relation is read at startup and again on every `queue_config_refresh_delay_ms` —
+  the copy of that key inside the `ingestion_task_factory_provider` block, which is what the handler
+  reads (default 2 minutes); the dynamic provider uses `config_load_interval_ms` instead. It is the
+  same tick that re-derives a view-based transformation, so a value changes without restarting the
+  server. Rows are data, not schema, so the reload does not wait for a DuckLake schema change.
+- **One queue per relation.** Every row is applied, and a key that is not a usable variable name
+  fails the queue instead of being skipped. To keep several queues' variables in one table, give
+  each queue a view selecting its own rows.
+- **Precedence.** Where both sources define a name, the relation wins (the file holds the defaults).
+- **Types.** All values are `VARCHAR`; cast for other types (`getvariable('retention_days')::INT`).
+- **Expiry.** With `variables_expiration_column` configured, a row whose expiration has passed is
+  treated as absent — the variable is no longer set, so the transformation reads the file's value
+  for that name or `NULL`. A `NULL` expiration never expires. The comparison is made by DuckDB
+  against its own `now()`, and takes effect on the refresh that follows it.
+- **Validation.** Names and values go through the same validation and escaping as the JWT claim
+  (`SqlVariables`, shared with `SessionVariables`).
+
+A dynamic queue gets them the same way, from its SQLite registry row: the `variables_view`,
+`variables_key_column`, `variables_value_column` and `variables_expiration_column` columns name the
+relation (static pairs are config-file only). The registry stores only the relation's
+`catalog.schema.table` path, so changing a value is a write to that relation — no `schema_version`
+bump. The relation may be a table in the registry file itself, which the startup script must
+`ATTACH` on the ingestion connection, since the registry loader's own attachment is private.
+A SQLite column arrives as `VARCHAR`, so an expiration is cast for the comparison; text that will
+not cast is an error, not a row that never expires.
 
 ### Watermarks
 
