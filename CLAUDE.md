@@ -88,6 +88,7 @@ JWT auth is always on for versioned HTTP endpoints (`http.authentication` no lon
 
 - Arrow memory error → missing JVM flags above.
 - Bearer token invalid → cached from previous instance; change password to force reissue.
+- Port in use → a leftover server or test JVM holds 59307 (Flight) or 8081 (HTTP); `lsof -i :8081` finds it.
 - Extension not found → `INSTALL arrow FROM community; LOAD arrow;` in startup script.
 
 ## Markdown Rules (IMPORTANT)
