@@ -239,7 +239,7 @@
 },
 {
   "name":"org.duckdb.DuckDBTableFunctionWrapper",
-  "methods":[{"name":"executeBind","parameterTypes":["java.nio.ByteBuffer"] }, {"name":"executeFunction","parameterTypes":["java.nio.ByteBuffer","java.nio.ByteBuffer"] }, {"name":"executeGlobalInit","parameterTypes":["java.nio.ByteBuffer"] }, {"name":"executeLocalInit","parameterTypes":["java.nio.ByteBuffer"] }]
+  "methods":[{"name":"closeTableFunctionState","parameterTypes":["java.lang.Object"] }, {"name":"executeBind","parameterTypes":["java.nio.ByteBuffer"] }, {"name":"executeFunction","parameterTypes":["java.nio.ByteBuffer","java.nio.ByteBuffer"] }, {"name":"executeGlobalInit","parameterTypes":["java.nio.ByteBuffer"] }, {"name":"executeLocalInit","parameterTypes":["java.nio.ByteBuffer"] }]
 },
 {
   "name":"org.duckdb.DuckDBTime"
