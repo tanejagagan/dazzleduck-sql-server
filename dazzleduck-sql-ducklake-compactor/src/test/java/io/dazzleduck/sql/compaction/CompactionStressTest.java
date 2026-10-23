@@ -62,9 +62,10 @@ import static org.junit.jupiter.api.Assertions.*;
  *       must be named {@code ducklake.duckdb_extension}: DuckDB derives the entry point from it.</li>
  * </ul>
  *
- * <p>The stock extension (DuckDB v1.5.5) fails this test: it lacks duckdb/ducklake#1482, so two
- * concurrent deletes on one data file leave it with two active delete files, and deleted rows come
- * back. Run it against the patched build ({@code v1.5.5-dazzleduck.3} or later has macOS builds).
+ * <p>The stock extension (DuckDB v1.5.5 and v1.5.6) fails this test: it lacks duckdb/ducklake#1482,
+ * so two concurrent deletes on one data file leave it with two active delete files, and deleted
+ * rows come back. Run it against the patched build ({@code v1.5.6-dazzleduck.1} or later, which
+ * has macOS builds).
  */
 @Tag("stress")
 class CompactionStressTest {
