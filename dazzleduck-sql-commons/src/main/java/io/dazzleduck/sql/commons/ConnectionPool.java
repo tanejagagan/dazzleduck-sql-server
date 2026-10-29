@@ -87,7 +87,8 @@ public enum ConnectionPool {
      * {@code threads}. Overrides the same key in {@code duckdb.properties}. Must be called before the
      * first connection is taken, typically at startup from the service's own configuration.
      *
-     * @throws IllegalStateException if the instance already exists, where the value would be ignored
+     * @throws IllegalStateException if the instance already exists, where the value would be ignored,
+     *         or its creation already failed
      */
     public static synchronized void setProperty(String key, String value) {
         setProperties(Map.of(requireKey(key), requireValue(key, value)));
@@ -97,7 +98,8 @@ public enum ConnectionPool {
      * Sets several DuckDB configuration options at once, as {@link #setProperty} does for one. Every
      * entry is checked before any is applied, so a bad one leaves none set.
      *
-     * @throws IllegalStateException if the instance already exists, where the values would be ignored
+     * @throws IllegalStateException if the instance already exists, where the values would be ignored,
+     *         or its creation already failed
      */
     public static synchronized void setProperties(Map<String, String> properties) {
         if (properties == null) throw new IllegalArgumentException("DuckDB properties are null");
