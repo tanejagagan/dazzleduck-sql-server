@@ -24,10 +24,12 @@ import java.util.Properties;
  * {@code reserve} covers everything else outside the heap (default 512 MiB). Raise the pod limit or
  * the heap and the budget follows; nothing has to be kept in step by hand.
  *
- * <p>Precedence: a {@code memory_limit} in {@code duckdb.properties} wins, and a startup script's
- * {@code SET memory_limit} later overrides either. {@code -Ddazzleduck.duckdb.auto_memory_limit=false}
- * turns the computation off (DuckDB's own default applies), and
- * {@code -Ddazzleduck.duckdb.memory_reserve_mib=N} changes the reserve.
+ * <p>Precedence: a {@code memory_limit} set with {@link ConnectionPool#setProperty} or in
+ * {@code duckdb.properties} wins, and a startup script's {@code SET memory_limit} later overrides
+ * either. The reserve and the switch are properties the same way --
+ * {@code dazzleduck.duckdb.memory_reserve_mib} (default 512) and
+ * {@code dazzleduck.duckdb.auto_memory_limit=false} (DuckDB's own default applies) -- falling back to
+ * system properties of the same names.
  */
 final class DuckDBMemoryLimit {
 
@@ -42,12 +44,19 @@ final class DuckDBMemoryLimit {
 
     private DuckDBMemoryLimit() {}
 
-    /** Sets {@code memory_limit} in {@code properties} unless it is configured or the default is turned off. */
+    /**
+     * Sets {@code memory_limit} in {@code properties} unless it is configured or the default is turned
+     * off. The reserve and the switch are read from {@code properties} (then the system properties) and
+     * removed from it, since DuckDB rejects an option it does not know.
+     */
     static void applyDefault(Properties properties) {
+        String autoValue = (String) properties.remove(AUTO_PROPERTY);
+        String reserveValue = (String) properties.remove(RESERVE_PROPERTY);
         if (properties.containsKey(MEMORY_LIMIT)) {
             return;
         }
-        if (!Boolean.parseBoolean(System.getProperty(AUTO_PROPERTY, "true"))) {
+        if (autoValue == null) autoValue = System.getProperty(AUTO_PROPERTY, "true");
+        if (!Boolean.parseBoolean(autoValue.trim())) {
             return;
         }
         long total = totalMemoryBytes();
@@ -58,17 +67,30 @@ final class DuckDBMemoryLimit {
                     total, maxHeap);
             return;
         }
-        long reserveMib = Long.getLong(RESERVE_PROPERTY, DEFAULT_RESERVE_MIB);
-        long limitMib = computeLimitMib(total, maxHeap, reserveMib);
+        long reserve = parseReserve(reserveValue != null ? reserveValue : System.getProperty(RESERVE_PROPERTY));
+        long limitMib = computeLimitMib(total, maxHeap, reserve);
         if (limitMib == MIN_LIMIT_MIB) {
             logger.warn("DuckDB memory_limit floored at {} MiB: {} MiB total - {} MiB heap - {} MiB reserve"
                             + " leaves less; the process is undersized for its heap",
-                    MIN_LIMIT_MIB, total >> 20, maxHeap >> 20, reserveMib);
+                    MIN_LIMIT_MIB, total >> 20, maxHeap >> 20, reserve);
         } else {
             logger.info("DuckDB memory_limit {} MiB = {} MiB total - {} MiB heap - {} MiB reserve",
-                    limitMib, total >> 20, maxHeap >> 20, reserveMib);
+                    limitMib, total >> 20, maxHeap >> 20, reserve);
         }
         properties.setProperty(MEMORY_LIMIT, limitMib + "MiB");
+    }
+
+    /** The reserve in MiB from a property value, or the default when unset. */
+    private static long parseReserve(String value) {
+        if (value == null || value.isBlank()) return DEFAULT_RESERVE_MIB;
+        long reserve;
+        try {
+            reserve = Long.parseLong(value.trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(RESERVE_PROPERTY + " must be a whole number of MiB, got '" + value + "'");
+        }
+        if (reserve < 0) throw new IllegalArgumentException(RESERVE_PROPERTY + " must be >= 0 MiB, got " + reserve);
+        return reserve;
     }
 
     /** {@code total - maxHeap - reserve} in MiB, never below {@link #MIN_LIMIT_MIB}. */

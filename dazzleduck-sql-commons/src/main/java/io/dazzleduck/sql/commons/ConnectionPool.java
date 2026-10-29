@@ -33,8 +33,10 @@ public enum ConnectionPool {
     INSTANCE;
 
     private static final String DUCKDB_PROPERTY_FILENAME = "duckdb.properties";
-    private final DuckDBConnection connection;
 
+    /** Properties given through {@link #setProperty}, applied over {@code duckdb.properties}. */
+    private static final Properties overrides = new Properties();
+    private static boolean created;
 
     static {
         try {
@@ -44,14 +46,66 @@ public enum ConnectionPool {
         }
     }
 
-    ConnectionPool() {
+    /**
+     * The process's DuckDB instance, created on the first connection rather than with the enum, so
+     * {@link #setProperty} can still reach it: any static member of this class initializes the enum.
+     */
+    private static final class Singleton {
+        static final DuckDBConnection CONNECTION = create();
+    }
+
+    /**
+     * Sets a property for the DuckDB instance; must be called before the first connection is taken,
+     * typically from a service's own configuration at startup. Overrides the same key in
+     * {@code duckdb.properties}. Two keys are DazzleDuck's own and are not passed to DuckDB:
+     * {@code dazzleduck.duckdb.memory_reserve_mib} and {@code dazzleduck.duckdb.auto_memory_limit}
+     * (see {@link DuckDBMemoryLimit}); every other key is a DuckDB option such as
+     * {@code memory_limit} or {@code threads}.
+     *
+     * @throws IllegalStateException if the instance already exists, where the value would be ignored
+     */
+    public static synchronized void setProperty(String key, String value) {
+        setProperties(Map.of(requireKey(key), requireValue(key, value)));
+    }
+
+    /**
+     * Sets several properties at once, as {@link #setProperty} does for one. Every entry is checked
+     * before any is applied, so a bad one leaves none set.
+     *
+     * @throws IllegalStateException if the instance already exists, where the values would be ignored
+     */
+    public static synchronized void setProperties(Map<String, String> properties) {
+        if (properties == null) throw new IllegalArgumentException("DuckDB properties are null");
+        for (Map.Entry<String, String> e : properties.entrySet()) {
+            requireValue(requireKey(e.getKey()), e.getValue());
+        }
+        if (created) {
+            throw new IllegalStateException("DuckDB properties " + properties.keySet() + " must be set before"
+                    + " the first connection is taken; the instance already exists");
+        }
+        overrides.putAll(properties);
+    }
+
+    private static String requireKey(String key) {
+        if (key == null || key.isBlank()) throw new IllegalArgumentException("DuckDB property key is blank");
+        return key;
+    }
+
+    private static String requireValue(String key, String value) {
+        if (value == null) throw new IllegalArgumentException("DuckDB property '" + key + "' has no value");
+        return value;
+    }
+
+    private static synchronized DuckDBConnection create() {
+        created = true;
         try {
             final Properties properties = loadProperties();
+            properties.putAll(overrides);
             if (!properties.containsKey(DuckDBDriver.JDBC_STREAM_RESULTS)) {
                 properties.setProperty(DuckDBDriver.JDBC_STREAM_RESULTS, String.valueOf(true));
             }
             DuckDBMemoryLimit.applyDefault(properties);
-            this.connection = (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:", properties);
+            return (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:", properties);
         } catch (SQLException e) {
             throw new RuntimeException(e);
         }
@@ -529,7 +583,7 @@ public enum ConnectionPool {
 
     private DuckDBConnection getConnectionInternal() {
         try {
-            return (DuckDBConnection) connection.duplicate();
+            return (DuckDBConnection) Singleton.CONNECTION.duplicate();
         } catch (SQLException e ){
             throw new RuntimeException("Error creating connection", e);
         }
@@ -550,14 +604,14 @@ public enum ConnectionPool {
         // The singleton connection is process-wide, so several servers starting in the
         // same JVM run their startup scripts against it at once. A DuckDB connection is
         // not safe for concurrent statement execution, so serialise on it here.
-        synchronized (INSTANCE.connection) {
+        synchronized (Singleton.CONNECTION) {
             for (int i = 0; i < statements.length; i++) {
                 String sql = statements[i];
                 // A fresh statement per SQL: reusing one across the script lets a failure
                 // in an earlier statement surface against a later one, which reports the
                 // opaque "unsuccessful or closed pending query result" instead of the
                 // actual error.
-                try (Statement statement = INSTANCE.connection.createStatement()) {
+                try (Statement statement = Singleton.CONNECTION.createStatement()) {
                     statement.execute(sql);
                 } catch (SQLException e) {
                     // Name the statement by position and leading keyword, never by its text: startup

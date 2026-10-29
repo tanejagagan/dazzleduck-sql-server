@@ -86,4 +86,56 @@ class DuckDBMemoryLimitTest {
             assertEquals("1.0 GiB", rs.getString(1));
         }
     }
+
+    @Test
+    void propertiesWinOverSystemPropertiesAndAreNotPassedToDuckDb() {
+        // the reserve and the switch as properties (ConnectionPool.setProperty / duckdb.properties)
+        System.setProperty(DuckDBMemoryLimit.RESERVE_PROPERTY, "1024");
+        System.setProperty(DuckDBMemoryLimit.AUTO_PROPERTY, "false");
+        Properties p = new Properties();
+        p.setProperty(DuckDBMemoryLimit.AUTO_PROPERTY, "true");
+        p.setProperty(DuckDBMemoryLimit.RESERVE_PROPERTY, "0");
+        DuckDBMemoryLimit.applyDefault(p);
+        long mib = Long.parseLong(p.getProperty("memory_limit").replace("MiB", ""));
+        long total = ((com.sun.management.OperatingSystemMXBean)
+                java.lang.management.ManagementFactory.getOperatingSystemMXBean()).getTotalMemorySize();
+        assertEquals(DuckDBMemoryLimit.computeLimitMib(total, Runtime.getRuntime().maxMemory(), 0), mib);
+        // DuckDB rejects an unknown option, so DazzleDuck's own keys are removed
+        assertFalse(p.containsKey(DuckDBMemoryLimit.AUTO_PROPERTY));
+        assertFalse(p.containsKey(DuckDBMemoryLimit.RESERVE_PROPERTY));
+
+        Properties off = new Properties();
+        off.setProperty(DuckDBMemoryLimit.AUTO_PROPERTY, "false");
+        System.clearProperty(DuckDBMemoryLimit.AUTO_PROPERTY);
+        DuckDBMemoryLimit.applyDefault(off);
+        assertNull(off.getProperty("memory_limit"));
+    }
+
+    @Test
+    void badReserveIsRejectedNotIgnored() {
+        Properties negative = new Properties();
+        negative.setProperty(DuckDBMemoryLimit.RESERVE_PROPERTY, "-5");
+        assertThrows(IllegalArgumentException.class, () -> DuckDBMemoryLimit.applyDefault(negative));
+        System.setProperty(DuckDBMemoryLimit.RESERVE_PROPERTY, "lots");
+        assertThrows(IllegalArgumentException.class, () -> DuckDBMemoryLimit.applyDefault(new Properties()));
+    }
+
+    @Test
+    void propertiesAfterTheInstanceExistsAreRefused() {
+        // the instance is created on the first connection; a later property would silently do nothing
+        try (var conn = ConnectionPool.getConnection()) {
+            assertNotNull(conn);
+        } catch (java.sql.SQLException e) {
+            throw new RuntimeException(e);
+        }
+        assertThrows(IllegalStateException.class, () -> ConnectionPool.setProperty("threads", "2"));
+        assertThrows(IllegalStateException.class,
+                () -> ConnectionPool.setProperty(DuckDBMemoryLimit.RESERVE_PROPERTY, "256"));
+        assertThrows(IllegalStateException.class,
+                () -> ConnectionPool.setProperties(java.util.Map.of("threads", "2", "memory_limit", "1GiB")));
+        assertThrows(IllegalArgumentException.class, () -> ConnectionPool.setProperty(" ", "x"));
+        java.util.Map<String, String> withNull = new java.util.HashMap<>();
+        withNull.put("threads", null);
+        assertThrows(IllegalArgumentException.class, () -> ConnectionPool.setProperties(withNull));
+    }
 }
