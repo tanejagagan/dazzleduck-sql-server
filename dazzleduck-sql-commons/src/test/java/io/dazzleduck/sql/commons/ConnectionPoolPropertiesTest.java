@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.reflect.Field;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.util.HashMap;
@@ -16,8 +17,10 @@ class ConnectionPoolPropertiesTest {
     @Test
     void propertiesSetBeforeTheFirstConnectionReachDuckDb() throws Exception {
         // The instance is per class, and other tests in this JVM have likely created it already, so
-        // this runs against a fresh copy of ConnectionPool that has not.
-        Class<?> pool = new FreshConnectionPoolLoader().loadClass(ConnectionPool.class.getName());
+        // this runs against a fresh copy of ConnectionPool that has not. The copy has its own
+        // settings and its own in-memory instance, so the shared one is untouched.
+        FreshConnectionPoolLoader loader = new FreshConnectionPoolLoader();
+        Class<?> pool = loader.loadClass(ConnectionPool.class.getName());
         pool.getMethod("setProperty", String.class, String.class).invoke(null, "memory_limit", "1234MiB");
         pool.getMethod("setProperties", Map.class).invoke(null, Map.of("threads", "3"));
         try (Connection conn = (Connection) pool.getMethod("getConnection").invoke(null);
@@ -26,6 +29,18 @@ class ConnectionPoolPropertiesTest {
             assertTrue(rs.next());
             assertEquals("1.2 GiB", rs.getString(1));
             assertEquals(3, rs.getInt(2));
+        } finally {
+            // Close the copy's instance, which would otherwise stay open for the rest of the JVM.
+            Field singleton = loader.loadClass(ConnectionPool.class.getName() + "$Singleton")
+                    .getDeclaredField("CONNECTION");
+            singleton.setAccessible(true);
+            ((Connection) singleton.get(null)).close();
+        }
+        // ...and the shared instance other tests use did not get the copy's settings.
+        try (Connection shared = ConnectionPool.getConnection();
+             ResultSet rs = shared.createStatement().executeQuery("SELECT current_setting('memory_limit')")) {
+            assertTrue(rs.next());
+            assertNotEquals("1.2 GiB", rs.getString(1), "the shared instance picked up the copy's memory_limit");
         }
     }
 
