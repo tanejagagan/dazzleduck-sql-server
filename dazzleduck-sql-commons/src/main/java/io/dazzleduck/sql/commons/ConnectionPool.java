@@ -37,6 +37,8 @@ public enum ConnectionPool {
     /** Properties given through {@link #setProperty} / {@link #setProperties}, applied over {@code duckdb.properties}. */
     private static final Properties overrides = new Properties();
     private static boolean created;
+    /** Why creating the instance failed, or null; read only under the class lock. */
+    private static Exception creationFailure;
 
     static {
         try {
@@ -49,9 +51,35 @@ public enum ConnectionPool {
     /**
      * The process's DuckDB instance, created on the first connection rather than with the enum, so
      * {@link #setProperty} can still reach it: any static member of this class initializes the enum.
+     *
+     * <p>A failed creation (e.g. an option DuckDB does not recognize) is kept and rethrown by every
+     * call as an {@link IllegalStateException} carrying DuckDB's message. Left to escape the class
+     * initializer it would be an {@link ExceptionInInitializerError} on the first call -- an Error,
+     * which callers catching exceptions miss -- and a bare "Could not initialize class" on every one
+     * after. The failure is permanent: the instance is created once.
      */
     private static final class Singleton {
-        static final DuckDBConnection CONNECTION = create();
+        private static final DuckDBConnection CONNECTION;
+        private static final Exception FAILURE;
+
+        static {
+            DuckDBConnection connection = null;
+            Exception failure = null;
+            try {
+                connection = create();
+            } catch (SQLException | RuntimeException e) {
+                failure = e;
+            }
+            CONNECTION = connection;
+            FAILURE = failure;
+        }
+
+        static DuckDBConnection get() {
+            if (FAILURE != null) {
+                throw new IllegalStateException("DuckDB instance creation failed: " + FAILURE.getMessage(), FAILURE);
+            }
+            return CONNECTION;
+        }
     }
 
     /**
@@ -76,6 +104,10 @@ public enum ConnectionPool {
         for (Map.Entry<String, String> e : properties.entrySet()) {
             requireValue(requireKey(e.getKey()), e.getValue());
         }
+        if (creationFailure != null) {
+            throw new IllegalStateException("DuckDB properties " + properties.keySet() + " cannot be set: creating"
+                    + " the DuckDB instance already failed: " + creationFailure.getMessage(), creationFailure);
+        }
         if (created) {
             throw new IllegalStateException("DuckDB properties " + properties.keySet() + " must be set before"
                     + " the first connection is taken; the instance already exists");
@@ -93,7 +125,7 @@ public enum ConnectionPool {
         return value;
     }
 
-    private static synchronized DuckDBConnection create() {
+    private static synchronized DuckDBConnection create() throws SQLException {
         created = true;
         try {
             final Properties properties = loadProperties();
@@ -102,8 +134,9 @@ public enum ConnectionPool {
                 properties.setProperty(DuckDBDriver.JDBC_STREAM_RESULTS, String.valueOf(true));
             }
             return (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:", properties);
-        } catch (SQLException e) {
-            throw new RuntimeException(e);
+        } catch (SQLException | RuntimeException e) {
+            creationFailure = e;
+            throw e;
         }
     }
 
@@ -579,7 +612,7 @@ public enum ConnectionPool {
 
     private DuckDBConnection getConnectionInternal() {
         try {
-            return (DuckDBConnection) Singleton.CONNECTION.duplicate();
+            return (DuckDBConnection) Singleton.get().duplicate();
         } catch (SQLException e ){
             throw new RuntimeException("Error creating connection", e);
         }
@@ -600,14 +633,14 @@ public enum ConnectionPool {
         // The singleton connection is process-wide, so several servers starting in the
         // same JVM run their startup scripts against it at once. A DuckDB connection is
         // not safe for concurrent statement execution, so serialise on it here.
-        synchronized (Singleton.CONNECTION) {
+        synchronized (Singleton.get()) {
             for (int i = 0; i < statements.length; i++) {
                 String sql = statements[i];
                 // A fresh statement per SQL: reusing one across the script lets a failure
                 // in an earlier statement surface against a later one, which reports the
                 // opaque "unsuccessful or closed pending query result" instead of the
                 // actual error.
-                try (Statement statement = Singleton.CONNECTION.createStatement()) {
+                try (Statement statement = Singleton.get().createStatement()) {
                     statement.execute(sql);
                 } catch (SQLException e) {
                     // Name the statement by position and leading keyword, never by its text: startup

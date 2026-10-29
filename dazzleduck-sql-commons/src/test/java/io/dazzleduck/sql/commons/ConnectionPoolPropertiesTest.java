@@ -4,7 +4,8 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.util.HashMap;
@@ -31,10 +32,10 @@ class ConnectionPoolPropertiesTest {
             assertEquals(3, rs.getInt(2));
         } finally {
             // Close the copy's instance, which would otherwise stay open for the rest of the JVM.
-            Field singleton = loader.loadClass(ConnectionPool.class.getName() + "$Singleton")
-                    .getDeclaredField("CONNECTION");
-            singleton.setAccessible(true);
-            ((Connection) singleton.get(null)).close();
+            Method instance = loader.loadClass(ConnectionPool.class.getName() + "$Singleton")
+                    .getDeclaredMethod("get");
+            instance.setAccessible(true);
+            ((Connection) instance.invoke(null)).close();
         }
         // ...and the shared instance other tests use did not get the copy's settings.
         try (Connection shared = ConnectionPool.getConnection();
@@ -42,6 +43,41 @@ class ConnectionPoolPropertiesTest {
             assertTrue(rs.next());
             assertNotEquals("1.2 GiB", rs.getString(1), "the shared instance picked up the copy's memory_limit");
         }
+    }
+
+    @Test
+    void aFailedCreationIsReportedClearlyOnEveryCall() throws Exception {
+        // A misspelled option fails the instance's creation. Every call must say so as an exception
+        // with DuckDB's message -- not an ExceptionInInitializerError once and a bare
+        // "Could not initialize class" after -- and a setter must not claim the instance exists.
+        Class<?> pool = new FreshConnectionPoolLoader().loadClass(ConnectionPool.class.getName());
+        pool.getMethod("setProperty", String.class, String.class).invoke(null, "memory_limt", "1GiB");
+        for (int call = 0; call < 2; call++) {
+            Throwable t = thrown(() -> pool.getMethod("getConnection").invoke(null));
+            assertInstanceOf(IllegalStateException.class, t, "call " + call);
+            assertTrue(t.getMessage().startsWith("DuckDB instance creation failed"), t.getMessage());
+            assertTrue(t.getMessage().contains("memory_limt"), t.getMessage());
+        }
+        Throwable t = thrown(() -> pool.getMethod("setProperty", String.class, String.class)
+                .invoke(null, "memory_limit", "1GiB"));
+        assertInstanceOf(IllegalStateException.class, t);
+        assertTrue(t.getMessage().contains("already failed"), t.getMessage());
+    }
+
+    /** What a reflective call threw, unwrapped from its InvocationTargetException. */
+    private static Throwable thrown(ReflectiveCall call) {
+        try {
+            call.run();
+        } catch (InvocationTargetException e) {
+            return e.getCause();
+        } catch (Exception e) {
+            return e;
+        }
+        return fail("expected the call to throw");
+    }
+
+    private interface ReflectiveCall {
+        void run() throws Exception;
     }
 
     @Test
