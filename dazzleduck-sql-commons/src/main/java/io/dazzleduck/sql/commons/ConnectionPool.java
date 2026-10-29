@@ -50,6 +50,7 @@ public enum ConnectionPool {
             if (!properties.containsKey(DuckDBDriver.JDBC_STREAM_RESULTS)) {
                 properties.setProperty(DuckDBDriver.JDBC_STREAM_RESULTS, String.valueOf(true));
             }
+            DuckDBMemoryLimit.applyDefault(properties);
             this.connection = (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:", properties);
         } catch (SQLException e) {
             throw new RuntimeException(e);
