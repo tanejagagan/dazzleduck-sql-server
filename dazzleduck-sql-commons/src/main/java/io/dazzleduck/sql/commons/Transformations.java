@@ -648,13 +648,17 @@ public class Transformations {
      * Comprehensive table reference collector for security-critical access control.
      *
      * <p>Unlike {@link #getAllTablesOrPathsFromSelect}, this method walks the <em>entire</em>
-     * query AST — FROM clauses, JOIN conditions, CTE bodies, UNION/INTERSECT/EXCEPT branches,
-     * and expression-level subqueries (IN, EXISTS, scalar) in WHERE, HAVING, SELECT list,
-     * QUALIFY, GROUP BY, and ORDER BY — so that no table reference can be hidden from
-     * access control checks.
+     * query AST -- FROM clauses, CTE bodies (with DuckDB's CTE scoping), set-operation branches,
+     * and EVERY other field of each SELECT, FROM node and expression (not an allow-list), so a
+     * subquery anywhere -- WHERE, select list, a window frame, a join condition, a table
+     * function's arguments -- is seen. A query or FROM node met anywhere else fails closed.
      *
-     * <p>Do NOT use this method for partition pruning or split planning; those callers
-     * intentionally see only FROM-clause tables.
+     * <p>Every table function is reported: with its constant path(s), or, when its path argument
+     * is not entirely constant, with {@link #NON_CONSTANT_PATH}, which no path grant matches. Row
+     * generators (range, unnest, ..) included: a catalog table macro can shadow one by name.
+     *
+     * <p>The split planners also use it, because only it reports the real table inside a filter
+     * CTE's body; they require exactly one entry and reject {@link #NON_CONSTANT_PATH}.
      */
     public static List<CatalogSchemaTable> collectAllTableReferences(JsonNode statement,
                                                                       String catalogName,
@@ -680,26 +684,8 @@ public class Transformations {
         if (statement == null || statement instanceof NullNode) return;
         String type = statement.get(FIELD_TYPE).asText();
         if (NODE_TYPE_SELECT_NODE.equals(type)) {
-            // Build the set of CTE names visible in this SELECT scope. A CTE body sees the enclosing
-            // scope and the CTEs declared before it, but NOT itself: in
-            // `WITH t AS (SELECT * FROM t)` the inner `t` is the real table t (DuckDB binds it so),
-            // and treating it as a CTE reference would hide that table from authorization. A WITH
-            // RECURSIVE self-reference is the exception; its body is a RECURSIVE_CTE_NODE, which
-            // adds its own name below.
-            Set<String> localCteNames = new HashSet<>(visibleCteNames);
-            JsonNode cteMap = statement.get("cte_map");
-            if (cteMap != null) {
-                JsonNode map = cteMap.get("map");
-                if (map != null && map.isArray()) {
-                    for (JsonNode entry : map) {
-                        // Walk each CTE body so hidden tables inside them are captured
-                        collectAllTableRefsFromStatement(
-                                entry.get("value").get("query").get("node"),
-                                catalogName, schemaName, collector, new HashSet<>(localCteNames));
-                        localCteNames.add(entry.get("key").asText());
-                    }
-                }
-            }
+            Set<String> localCteNames = collectAllTableRefsFromCteBodies(statement, catalogName, schemaName,
+                    collector, visibleCteNames);
             // FROM clause — skip references that resolve to local CTEs
             JsonNode fromTable = statement.get(FIELD_FROM_TABLE);
             if (fromTable != null && !(fromTable instanceof NullNode)) {
@@ -708,21 +694,19 @@ public class Transformations {
             // Expression fields (WHERE, HAVING, SELECT list, etc.)
             collectAllTableRefsFromExpressionFields(statement, catalogName, schemaName, collector, localCteNames);
         } else if (NODE_TYPE_SET_OPERATION_NODE.equals(type)) {
-            collectAllTableRefsFromStatement(statement.get(FIELD_LEFT), catalogName, schemaName, collector, visibleCteNames);
-            collectAllTableRefsFromStatement(statement.get(FIELD_RIGHT), catalogName, schemaName, collector, visibleCteNames);
-            collectAllTableRefsFromModifiers(statement.get(FIELD_MODIFIERS), catalogName, schemaName, collector, visibleCteNames);
-        } else if (NODE_TYPE_RECURSIVE_CTE_NODE.equals(type)) {
-            // WITH RECURSIVE body: recurse into both arms. Keep the CTE's own name visible so the
-            // recursive self-reference is treated as a CTE reference, not a hidden base table.
-            Set<String> localCteNames = visibleCteNames;
-            JsonNode cteName = statement.get(FIELD_CTE_NAME);
-            if (cteName != null) {
-                localCteNames = new HashSet<>(visibleCteNames);
-                localCteNames.add(cteName.asText());
-            }
+            // `WITH x AS (…) SELECT … UNION SELECT …` hangs the WITH on the set operation itself.
+            Set<String> localCteNames = collectAllTableRefsFromCteBodies(statement, catalogName, schemaName,
+                    collector, visibleCteNames);
             collectAllTableRefsFromStatement(statement.get(FIELD_LEFT), catalogName, schemaName, collector, localCteNames);
             collectAllTableRefsFromStatement(statement.get(FIELD_RIGHT), catalogName, schemaName, collector, localCteNames);
-            collectAllTableRefsFromModifiers(statement.get(FIELD_MODIFIERS), catalogName, schemaName, collector, localCteNames);
+            collectAllTableRefsFromExpression(statement.get(FIELD_MODIFIERS), catalogName, schemaName, collector, localCteNames);
+        } else if (NODE_TYPE_RECURSIVE_CTE_NODE.equals(type)) {
+            Set<String> localCteNames = collectAllTableRefsFromCteBodies(statement, catalogName, schemaName,
+                    collector, visibleCteNames);
+            collectAllTableRefsFromStatement(statement.get(FIELD_LEFT), catalogName, schemaName, collector, localCteNames);
+            collectAllTableRefsFromStatement(statement.get(FIELD_RIGHT), catalogName, schemaName, collector,
+                    recursiveArmScope(statement, localCteNames));
+            collectAllTableRefsFromExpression(statement.get(FIELD_MODIFIERS), catalogName, schemaName, collector, localCteNames);
         } else {
             // Fail closed: an unrecognized query node type must abort authorization rather than
             // silently hide the tables it contains (which would let them bypass the access check).
@@ -732,22 +716,65 @@ public class Transformations {
         }
     }
 
-    /** Walks ORDER BY / LIMIT / OFFSET modifiers for table references inside their subqueries. */
-    private static void collectAllTableRefsFromModifiers(JsonNode modifiers, String catalogName,
-                                                         String schemaName,
-                                                         List<CatalogSchemaTable> collector,
-                                                         Set<String> cteNames) {
-        if (modifiers == null || !modifiers.isArray()) return;
-        for (JsonNode modifier : modifiers) {
-            JsonNode orders = modifier.get(FIELD_ORDERS);
-            if (orders != null && orders.isArray()) {
-                for (JsonNode order : orders) {
-                    collectAllTableRefsFromExpression(order.get(FIELD_EXPRESSION), catalogName, schemaName, collector, cteNames);
-                }
-            }
-            collectAllTableRefsFromExpression(modifier.get(FIELD_LIMIT), catalogName, schemaName, collector, cteNames);
-            collectAllTableRefsFromExpression(modifier.get(FIELD_OFFSET), catalogName, schemaName, collector, cteNames);
+    /**
+     * The scope of a WITH RECURSIVE CTE's recursive (right) arm: {@code scope} plus the CTE's own
+     * name, which DuckDB binds to the CTE there and ONLY there; in the anchor (left) arm the same
+     * name is the base table. A USING KEY CTE's arm can also read its recurring table as
+     * {@code recurring.<name>}.
+     */
+    private static Set<String> recursiveArmScope(JsonNode recursiveCte, Set<String> scope) {
+        String cteName = asText(recursiveCte, FIELD_CTE_NAME);
+        if (cteName == null || cteName.isEmpty()) return scope;
+        CteScope arm = CteScope.copyOf(scope);
+        arm.add(cteName);
+        JsonNode keys = recursiveCte.get("key_targets");
+        if (keys != null && keys.isArray() && !keys.isEmpty()) {
+            arm.recurring.add(cteName);
         }
+        return arm;
+    }
+
+    /**
+     * A scope of CTE names that also carries the USING KEY recurring tables reachable as
+     * {@code recurring.<name>}. Those live in their own set, never as a string beside the CTE names:
+     * a quoted CTE may be named anything, {@code "recurring.secrets"} included, and must not be able
+     * to stand in for one.
+     */
+    private static final class CteScope extends HashSet<String> {
+        final Set<String> recurring = new HashSet<>();
+
+        /** A copy of {@code scope}, keeping its recurring tables when it has any. */
+        static CteScope copyOf(Set<String> scope) {
+            CteScope copy = new CteScope();
+            copy.addAll(scope);
+            if (scope instanceof CteScope s) copy.recurring.addAll(s.recurring);
+            return copy;
+        }
+    }
+
+    /**
+     * Collects the table references in {@code statement}'s own WITH bodies and returns the CTE names
+     * visible beneath it. A CTE body sees the enclosing scope and the CTEs declared before it, but NOT
+     * itself: in {@code WITH t AS (SELECT * FROM t)} the inner {@code t} is the real table t (DuckDB
+     * binds it so), and treating it as a CTE reference would hide that table from authorization. A
+     * WITH RECURSIVE self-reference is the exception; its body is a RECURSIVE_CTE_NODE, which adds its
+     * own name.
+     */
+    private static Set<String> collectAllTableRefsFromCteBodies(JsonNode statement, String catalogName,
+                                                                String schemaName,
+                                                                List<CatalogSchemaTable> collector,
+                                                                Set<String> visibleCteNames) {
+        Set<String> localCteNames = CteScope.copyOf(visibleCteNames);
+        JsonNode cteMap = statement.get(FIELD_CTE_MAP);
+        JsonNode map = cteMap == null ? null : cteMap.get(FIELD_MAP);
+        if (map != null && map.isArray()) {
+            for (JsonNode entry : map) {
+                collectAllTableRefsFromStatement(entry.get(FIELD_VALUE).get(FIELD_QUERY).get(FIELD_NODE),
+                        catalogName, schemaName, collector, CteScope.copyOf(localCteNames));
+                localCteNames.add(entry.get(FIELD_KEY).asText());
+            }
+        }
+        return localCteNames;
     }
 
     private static void collectAllTableRefsFromFromNode(JsonNode fromNode, String catalogName,
@@ -759,7 +786,7 @@ public class Transformations {
         switch (type) {
             case NODE_TYPE_BASE_TABLE -> {
                 String tableName = fromNode.get(FIELD_TABLE_NAME).asText();
-                if (cteNames.contains(tableName)) return; // CTE reference — body already walked
+                if (isCteReference(fromNode, cteNames)) return; // CTE reference — body already walked
                 var schemaFromQuery = fromNode.get(FIELD_SCHEMA_NAME).asText();
                 var catalogFromQuery = fromNode.get(FIELD_CATALOG_NAME).asText();
                 var s = schemaFromQuery == null || schemaFromQuery.isEmpty() ? schemaName : schemaFromQuery;
@@ -770,14 +797,24 @@ public class Transformations {
                 var function = fromNode.get(FIELD_FUNCTION);
                 var functionName = function.get(FIELD_FUNCTION_NAME).asText();
                 var functionChildren = function.get(FIELD_CHILDREN);
-                if (functionChildren != null && functionChildren.isArray() && !functionChildren.isEmpty()) {
-                    extractPathsFromTableFunctionChild(functionChildren.get(0), functionName, collector);
+                boolean allConstant = functionChildren != null && functionChildren.isArray()
+                        && !functionChildren.isEmpty()
+                        && extractPathsFromTableFunctionChild(functionChildren.get(0), functionName, collector);
+                if (!allConstant) {
+                    // A path that is not (entirely) a constant -- read_parquet((SELECT ..)),
+                    // read_parquet(['/allowed/a', '/secret/' || 'b']), getvariable(..) -- cannot be
+                    // checked, so it is reported as a path no path grant matches: a table grant
+                    // refuses it, a function grant decides by name, a path grant refuses it.
+                    // Generators (range, unnest, ..) too, by design: a catalog table macro of the
+                    // same name shadows the built-in and reads whatever its body reads, so the name
+                    // alone cannot make a table function data-free.
+                    collector.add(new CatalogSchemaTable(null, null, NON_CONSTANT_PATH,
+                            TableType.TABLE_FUNCTION, functionName));
                 }
             }
             case NODE_TYPE_JOIN -> {
                 collectAllTableRefsFromFromNode(fromNode.get(FIELD_LEFT), catalogName, schemaName, collector, cteNames);
                 collectAllTableRefsFromFromNode(fromNode.get(FIELD_RIGHT), catalogName, schemaName, collector, cteNames);
-                collectAllTableRefsFromExpression(fromNode.get("condition"), catalogName, schemaName, collector, cteNames);
             }
             case NODE_TYPE_SUBQUERY -> {
                 collectAllTableRefsFromStatement(
@@ -785,34 +822,87 @@ public class Transformations {
             }
             case NODE_TYPE_PIVOT -> {
                 // PIVOT / UNPIVOT: the scanned relation is under `source`; recurse into it so the
-                // pivoted table is seen by the access check. Aggregate expressions may hold subqueries.
+                // pivoted table is seen by the access check.
                 collectAllTableRefsFromFromNode(fromNode.get(FIELD_SOURCE), catalogName, schemaName, collector, cteNames);
-                collectAllTableRefsFromExpression(fromNode.get(FIELD_AGGREGATES), catalogName, schemaName, collector, cteNames);
             }
-            case NODE_TYPE_EXPRESSION_LIST -> {
-                // VALUES list: each value expression may embed a subquery over a base table.
-                collectAllTableRefsFromExpression(fromNode.get(FIELD_VALUES), catalogName, schemaName, collector, cteNames);
-            }
-            case NODE_TYPE_EMPTY -> {
-                // FROM-less SELECT (e.g. SELECT 1): no relation to enumerate.
+            case NODE_TYPE_EXPRESSION_LIST, NODE_TYPE_EMPTY -> {
+                // VALUES list / FROM-less SELECT: no relation of its own; VALUES expressions are
+                // walked below with every other field.
             }
             default -> throw new IllegalStateException(
                     "collectAllTableReferences: unsupported FROM node type '" + type + "'; refusing to "
                             + "authorize a query whose tables cannot all be enumerated");
         }
+        // Every other field of the FROM node, not an allow-list: a subquery can sit in a table
+        // function's arguments (range(0, (SELECT ..)), unnest((SELECT ..)), named parameters), a
+        // join condition, an AT (VERSION => ..) clause, pivot aggregates or a VALUES row, and a
+        // missed one is a read the access check never sees.
+        forEachFieldExcept(fromNode, FROM_RELATION_FIELDS,
+                v -> collectAllTableRefsFromExpression(v, catalogName, schemaName, collector, cteNames));
     }
 
+    /**
+     * A table function's path when its path argument is not entirely constant. It matches no path
+     * grant (no grant names this prefix), and reads plainly in an error message.
+     */
+    public static final String NON_CONSTANT_PATH = "<non-constant table function argument>";
+
+    /** The fields of a SELECT that hold its relation and WITH, walked by the caller. */
+    private static final Set<String> SELECT_RELATION_FIELDS = Set.of(FIELD_FROM_TABLE, FIELD_CTE_MAP);
+
+    /** The field of a subquery expression that holds its statement, walked by the caller. */
+    private static final Set<String> SUBQUERY_EXPRESSION_FIELDS = Set.of(FIELD_SUBQUERY);
+
+    /** The fields of a FROM node that hold another FROM node or statement, walked by the caller. */
+    private static final Set<String> FROM_RELATION_FIELDS = Set.of(FIELD_LEFT, FIELD_RIGHT, FIELD_SUBQUERY, FIELD_SOURCE);
+
+    /** Query and FROM node types: only the statement/FROM dispatchers may walk into one. */
+    private static final Set<String> RELATION_NODE_TYPES = Set.of(
+            NODE_TYPE_SELECT_NODE, NODE_TYPE_SET_OPERATION_NODE, NODE_TYPE_RECURSIVE_CTE_NODE, "CTE_NODE",
+            NODE_TYPE_BASE_TABLE, NODE_TYPE_TABLE_FUNCTION, NODE_TYPE_JOIN, NODE_TYPE_SUBQUERY,
+            NODE_TYPE_PIVOT, NODE_TYPE_EXPRESSION_LIST);
+
+    /**
+     * Fails closed when the generic expression walk meets a query or FROM node. Those are reached
+     * only through a subquery expression (which hands them to the dispatcher) or the relation fields
+     * the dispatchers walk themselves; one anywhere else -- a form DuckDB adds later -- would be
+     * descended into as if it were an expression, and its tables neither authorized nor filtered.
+     * Expressions carry a {@code class}; query and FROM nodes do not.
+     */
+    private static void requireNotARelation(JsonNode node, String who) {
+        if (node.has(FIELD_CLASS)) return;
+        JsonNode type = node.get(FIELD_TYPE);
+        if (type != null && type.isTextual() && RELATION_NODE_TYPES.contains(type.asText())) {
+            throw new IllegalStateException(who + ": a " + type.asText() + " node outside a subquery"
+                    + " expression; refusing to run rather than miss the tables it reads");
+        }
+    }
+
+    /**
+     * Visits every field of {@code node} but those in {@code skip}. The collector and the injector
+     * both walk SELECT and FROM nodes with this and the same skip sets: a field walked by one and
+     * skipped by the other would be a read that is authorized but not filtered, or the reverse.
+     */
+    private static void forEachFieldExcept(JsonNode node, Set<String> skip, java.util.function.Consumer<JsonNode> visit) {
+        var fields = node.fields();
+        while (fields.hasNext()) {
+            var field = fields.next();
+            if (!skip.contains(field.getKey())) visit.accept(field.getValue());
+        }
+    }
+
+    /**
+     * Every field of a SELECT except its FROM and WITH (walked by the caller): select list, WHERE,
+     * GROUP BY, HAVING, QUALIFY, modifiers, and any field DuckDB adds later. All of them, not an
+     * allow-list, so a subquery anywhere — a {@code * REPLACE}, a window's default or frame, an
+     * aggregate's ORDER BY, a {@code DISTINCT ON} target — is still seen.
+     */
     private static void collectAllTableRefsFromExpressionFields(JsonNode selectNode, String catalogName,
                                                                   String schemaName,
                                                                   List<CatalogSchemaTable> collector,
                                                                   Set<String> cteNames) {
-        collectAllTableRefsFromExpression(selectNode.get(FIELD_WHERE_CLAUSE), catalogName, schemaName, collector, cteNames);
-        collectAllTableRefsFromExpression(selectNode.get("having"), catalogName, schemaName, collector, cteNames);
-        collectAllTableRefsFromExpression(selectNode.get("qualify"), catalogName, schemaName, collector, cteNames);
-        collectAllTableRefsFromExpression(selectNode.get("select_list"), catalogName, schemaName, collector, cteNames);
-        collectAllTableRefsFromExpression(selectNode.get("group_expressions"), catalogName, schemaName, collector, cteNames);
-        // ORDER BY / LIMIT / OFFSET live under modifiers[], not a top-level "order_bys" field.
-        collectAllTableRefsFromModifiers(selectNode.get(FIELD_MODIFIERS), catalogName, schemaName, collector, cteNames);
+        forEachFieldExcept(selectNode, SELECT_RELATION_FIELDS,
+                v -> collectAllTableRefsFromExpression(v, catalogName, schemaName, collector, cteNames));
     }
 
     private static void collectAllTableRefsFromExpression(JsonNode expr, String catalogName,
@@ -827,8 +917,10 @@ public class Transformations {
             return;
         }
         if (!expr.isObject()) return;
+        requireNotARelation(expr, "collectAllTableReferences");
         JsonNode classNode = expr.get(FIELD_CLASS);
-        if (classNode != null && SUBQUERY_CLASS.equals(classNode.asText())) {
+        boolean subquery = classNode != null && SUBQUERY_CLASS.equals(classNode.asText());
+        if (subquery) {
             JsonNode subqueryContent = expr.get(FIELD_SUBQUERY);
             if (subqueryContent != null) {
                 JsonNode innerNode = subqueryContent.get(FIELD_NODE);
@@ -836,18 +928,10 @@ public class Transformations {
                     collectAllTableRefsFromStatement(innerNode, catalogName, schemaName, collector, cteNames);
                 }
             }
-            collectAllTableRefsFromExpression(expr.get(FIELD_CHILD), catalogName, schemaName, collector, cteNames);
-            return;
         }
-        collectAllTableRefsFromExpression(expr.get(FIELD_LEFT), catalogName, schemaName, collector, cteNames);
-        collectAllTableRefsFromExpression(expr.get(FIELD_RIGHT), catalogName, schemaName, collector, cteNames);
-        collectAllTableRefsFromExpression(expr.get(FIELD_CHILDREN), catalogName, schemaName, collector, cteNames);
-        collectAllTableRefsFromExpression(expr.get(FIELD_CHILD), catalogName, schemaName, collector, cteNames);
-        collectAllTableRefsFromExpression(expr.get(FIELD_FILTER), catalogName, schemaName, collector, cteNames);
-        collectAllTableRefsFromExpression(expr.get(FIELD_WHEN_EXPR), catalogName, schemaName, collector, cteNames);
-        collectAllTableRefsFromExpression(expr.get(FIELD_THEN_EXPR), catalogName, schemaName, collector, cteNames);
-        collectAllTableRefsFromExpression(expr.get(FIELD_ELSE_EXPR), catalogName, schemaName, collector, cteNames);
-        collectAllTableRefsFromExpression(expr.get(FIELD_CASE_CHECKS), catalogName, schemaName, collector, cteNames);
+        // Every other field, not an allow-list: see collectAllTableRefsFromExpressionFields.
+        forEachFieldExcept(expr, subquery ? SUBQUERY_EXPRESSION_FIELDS : Set.of(),
+                v -> collectAllTableRefsFromExpression(v, catalogName, schemaName, collector, cteNames));
     }
 
     public static JsonNode getFirstStatementNode(JsonNode jsonNode) {
@@ -945,6 +1029,61 @@ public class Transformations {
     }
 
     /**
+     * True if the BASE_TABLE {@code fromRef} binds to one of {@code cteNames}. Only an unqualified
+     * name can: DuckDB resolves {@code main.t} or {@code db.main.t} to the catalog even when a CTE
+     * named {@code t} is in scope. Matching on the bare name alone let
+     * {@code WITH t AS (SELECT 1) SELECT * FROM main.t} read the real {@code t} with no filter CTE.
+     * Case-insensitive, as DuckDB binds {@code FROM T} to a CTE named {@code t}.
+     */
+    private static boolean isCteReference(JsonNode fromRef, Set<String> cteNames) {
+        String schema = asText(fromRef, FIELD_SCHEMA_NAME);
+        String catalog = asText(fromRef, FIELD_CATALOG_NAME);
+        String name = asText(fromRef, FIELD_TABLE_NAME);
+        if (name == null) return false;
+        if (catalog != null && !catalog.isEmpty()) return false;
+        if (schema != null && !schema.isEmpty()) {
+            // `recurring.r` inside r's own USING KEY recursive arm is the recurring table, a CTE.
+            return sameIdentifier(schema, RECURRING_SCHEMA)
+                    && cteNames instanceof CteScope scope && containsIdentifier(scope.recurring, name);
+        }
+        return containsIdentifier(cteNames, name);
+    }
+
+    /** The schema DuckDB resolves a USING KEY CTE's recurring table under, in its recursive arm. */
+    private static final String RECURRING_SCHEMA = "recurring";
+
+    /**
+     * Whether two identifiers name the same thing to DuckDB, which folds ASCII letters only: Java's
+     * {@link String#equalsIgnoreCase} also folds e.g. U+017F to {@code s}, which would take
+     * {@code "orderſ"} for {@code orders} while DuckDB binds them apart.
+     */
+    public static boolean sameIdentifier(String a, String b) {
+        if (a == null || b == null || a.length() != b.length()) return false;
+        for (int i = 0; i < a.length(); i++) {
+            if (asciiLower(a.charAt(i)) != asciiLower(b.charAt(i))) return false;
+        }
+        return true;
+    }
+
+    /** {@code name} with ASCII letters lower-cased and everything else unchanged, as DuckDB folds it. */
+    public static String foldIdentifier(String name) {
+        StringBuilder out = new StringBuilder(name.length());
+        for (int i = 0; i < name.length(); i++) out.append(asciiLower(name.charAt(i)));
+        return out.toString();
+    }
+
+    private static char asciiLower(char c) {
+        return c >= 'A' && c <= 'Z' ? (char) (c + ('a' - 'A')) : c;
+    }
+
+    private static boolean containsIdentifier(Set<String> names, String name) {
+        for (String n : names) {
+            if (sameIdentifier(n, name)) return true;
+        }
+        return false;
+    }
+
+    /**
      * True if {@code fromRef} can resolve to a CTE declared in {@code selectNode}'s WITH clause.
      * A schema- or catalog-qualified reference ({@code s3.fv}) always resolves to the catalog and
      * can never hit a CTE, so it returns false regardless of CTE names.
@@ -967,7 +1106,7 @@ public class Transformations {
             JsonNode key = entry.get("key");
             // Case-insensitive: a CTE named FV shadows view fv in DuckDB, so an exact match here
             // would miss the shadow and inline the view over a reference that resolves to the CTE.
-            if (key != null && name.equalsIgnoreCase(key.asText())) return true;
+            if (key != null && sameIdentifier(name, key.asText())) return true;
         }
         return false;
     }
@@ -1231,7 +1370,7 @@ public class Transformations {
 
     private static boolean cteKeyExists(ArrayNode map, String name) {
         for (JsonNode entry : map) {
-            if (name.equalsIgnoreCase(asText(entry, FIELD_KEY))) return true;
+            if (sameIdentifier(name, asText(entry, FIELD_KEY))) return true;
         }
         return false;
     }
@@ -1282,7 +1421,7 @@ public class Transformations {
         if (node.isObject()) {
             ObjectNode obj = (ObjectNode) node;
             if (NODE_TYPE_BASE_TABLE.equals(asText(obj, FIELD_TYPE))
-                    && table.equalsIgnoreCase(asText(obj, FIELD_TABLE_NAME))) {
+                    && sameIdentifier(table, asText(obj, FIELD_TABLE_NAME))) {
                 n++;
                 if (rename != null) obj.put(FIELD_TABLE_NAME, rename);
             }
@@ -1359,7 +1498,7 @@ public class Transformations {
         if (fromRef == null
                 || view.table == null
                 || !NODE_TYPE_BASE_TABLE.equals(asText(fromRef, FIELD_TYPE))
-                || !view.table.equalsIgnoreCase(asText(fromRef, FIELD_TABLE_NAME))) return false;
+                || !sameIdentifier(view.table, asText(fromRef, FIELD_TABLE_NAME))) return false;
         return qualifierMatches(view.schema, asText(fromRef, FIELD_SCHEMA_NAME))
                 && qualifierMatches(view.catalog, asText(fromRef, FIELD_CATALOG_NAME));
     }
@@ -1369,7 +1508,7 @@ public class Transformations {
         boolean expectedEmpty = expected == null || expected.isEmpty();
         boolean actualEmpty = actual == null || actual.isEmpty();
         if (expectedEmpty != actualEmpty) return false;
-        return expectedEmpty || expected.equalsIgnoreCase(actual);
+        return expectedEmpty || sameIdentifier(expected, actual);
     }
 
     /**
@@ -1428,10 +1567,12 @@ public class Transformations {
      * comparison in the prune must fold case, or a consumer spelling {@code "total tokens"} against a
      * view column {@code "Total Tokens"} binds at execution but reads as unused here, and the pruned
      * body then fails to bind. Folding also only errs conservative on the join side: a fold collision
-     * over-counts a qualifier, which keeps a join, never drops one.
+     * over-counts a qualifier, which keeps a join, never drops one. The fold is DuckDB's own
+     * (ASCII letters only, {@link #foldIdentifier}), the one the authorizer matches with: Java's
+     * Unicode lowercasing would also merge names DuckDB keeps apart.
      */
     private static String foldCase(String identifier) {
-        return identifier == null ? null : identifier.toLowerCase(java.util.Locale.ROOT);
+        return identifier == null ? null : foldIdentifier(identifier);
     }
 
     /** Deep-walk the outer query collecting COLUMN_REF name parts (case-folded) and STAR presence. */
@@ -2241,8 +2382,13 @@ public class Transformations {
     /**
      * Extracts paths from a table function child node.
      * Handles both direct constant values and nested list_value functions.
+     *
+     * @return whether EVERY path the argument names was a constant (and so is now in
+     *         {@code collector}); false as soon as one element is computed -- {@code '/a/' || 'b'},
+     *         a cast, getvariable(..), a subquery -- since that element was not collected and its
+     *         path is unknown until DuckDB runs it
      */
-    private static void extractPathsFromTableFunctionChild(JsonNode child, String functionName, List<CatalogSchemaTable> collector) {
+    private static boolean extractPathsFromTableFunctionChild(JsonNode child, String functionName, List<CatalogSchemaTable> collector) {
         JsonNode classNode = child.get(FIELD_CLASS);
         if (classNode != null && FUNCTION_CLASS.equals(classNode.asText())) {
             // Child is a function (e.g., list_value)
@@ -2250,21 +2396,28 @@ public class Transformations {
             if (functionNameNode != null && "list_value".equals(functionNameNode.asText())) {
                 // Extract all paths from list_value children
                 JsonNode listChildren = child.get(FIELD_CHILDREN);
+                boolean allConstant = true;
                 if (listChildren != null && listChildren.isArray()) {
                     for (JsonNode listChild : listChildren) {
                         String path = extractConstantValue(listChild);
                         if (path != null) {
                             collector.add(new CatalogSchemaTable(null, null, path, TableType.TABLE_FUNCTION, functionName));
+                        } else {
+                            allConstant = false;
                         }
                     }
                 }
+                return allConstant;
             }
+            return false;
         } else {
             // Direct constant value
             String path = extractConstantValue(child);
             if (path != null) {
                 collector.add(new CatalogSchemaTable(null, null, path, TableType.TABLE_FUNCTION, functionName));
+                return true;
             }
+            return false;
         }
     }
 
@@ -2804,7 +2957,10 @@ public class Transformations {
                                             String defaultCatalog, String defaultSchema) {
         Map<String, JsonNode> resolved = new LinkedHashMap<>();
         for (Map.Entry<String, JsonNode> e : tableFilters.entrySet()) {
-            String key = qualifiedTableName(e.getKey(), defaultCatalog, defaultSchema);
+            // Folded as DuckDB folds identifiers (quoted ones included): every reference to the
+            // table shares one filter CTE, keyed the same way, so its filter must not depend on how
+            // the first reference happened to spell the name.
+            String key = foldIdentifier(qualifiedTableName(e.getKey(), defaultCatalog, defaultSchema));
             JsonNode previous = resolved.put(key, e.getValue());
             if (previous != null && !previous.equals(e.getValue())) {
                 throw new IllegalArgumentException(
@@ -2848,20 +3004,77 @@ public class Transformations {
      */
     private record CteInjection(Map<String, ObjectNode> tablesToWrap,
                                 Map<List<String>, String> cteKeyByTable,
-                                Set<String> reservedCteNames) {
+                                Set<String> reservedCteNames,
+                                String defaultCatalog, String defaultSchema) {
 
-        /** The CTE name for {@code table}, generating and registering one on first sight. */
+        /**
+         * The filter-CTE name for the table {@code reference} reads, generating and registering one
+         * on first sight. One CTE per RESOLVED table (unqualified parts filled from the connection's
+         * defaults, as DuckDB binds them; case folded as DuckDB folds) and AT clause: {@code orders}
+         * and {@code main.orders} are one table and must share one filter -- a volatile filter kept
+         * materialized gives every reference one row set only if they share it -- while a
+         * time-travel read of another version needs its own body, since DuckDB ignores AT on a CTE
+         * reference.
+         *
+         * <p>The body is a copy of the reference with its AT clause (which must sit on the table)
+         * and WITHOUT its sample or column aliases: a TABLESAMPLE stays on each reference, so a
+         * reference the query did not sample is not sampled through a shared body, and column
+         * aliases ({@code orders AS o(a, b, c)}) stay on the reference too -- in the body they
+         * would rename the columns the grant filter binds to, for every reference.
+         */
         String cteKeyFor(List<String> table, ObjectNode reference) {
-            String existing = cteKeyByTable.get(table);
+            JsonNode at = reference.get(FIELD_AT_CLAUSE);
+            // Keyed on the clause's meaning, not its text: query_location differs between two
+            // identical AT (VERSION => 3) clauses, which must still share one CTE.
+            String atKey = at == null || at.isNull() ? "" : withoutQueryLocations(at).toString();
+            List<String> key = List.of(
+                    foldIdentifier(table.get(0).isEmpty() ? nullToEmpty(defaultCatalog) : table.get(0)),
+                    foldIdentifier(table.get(1).isEmpty() ? nullToEmpty(defaultSchema) : table.get(1)),
+                    foldIdentifier(table.get(2)),
+                    atKey);
+            String existing = cteKeyByTable.get(key);
             if (existing != null) {
                 return existing;
             }
             String cteKey = freshCteKey(buildCteKey(table.get(2), table.get(1), table.get(0)), reservedCteNames);
             reservedCteNames.add(cteKey);
-            cteKeyByTable.put(table, cteKey);
-            tablesToWrap.put(cteKey, (ObjectNode) reference.deepCopy());
+            cteKeyByTable.put(key, cteKey);
+            ObjectNode body = reference.deepCopy();
+            body.putNull(FIELD_SAMPLE);
+            body.putArray(FIELD_COLUMN_NAME_ALIAS);
+            tablesToWrap.put(cteKey, body);
             return cteKey;
         }
+    }
+
+    private static final String FIELD_AT_CLAUSE = "at_clause";
+    private static final String FIELD_SAMPLE = "sample";
+    private static final String FIELD_COLUMN_NAME_ALIAS = "column_name_alias";
+
+    /** A copy of {@code node} with every {@code query_location} field removed, at any depth. */
+    private static JsonNode withoutQueryLocations(JsonNode node) {
+        JsonNode copy = node.deepCopy();
+        stripQueryLocations(copy);
+        return copy;
+    }
+
+    private static void stripQueryLocations(JsonNode node) {
+        if (node instanceof ObjectNode object) object.remove(FIELD_QUERY_LOCATION);
+        for (JsonNode child : node) stripQueryLocations(child);
+    }
+
+    private static String nullToEmpty(String s) {
+        return s == null ? "" : s;
+    }
+
+    /** Whether a subquery expression appears anywhere under {@code node}. */
+    private static boolean containsSubquery(JsonNode node) {
+        if (node == null || node.isNull()) return false;
+        if (node.isObject() && SUBQUERY_CLASS.equals(asText(node, FIELD_CLASS))) return true;
+        for (JsonNode child : node) {
+            if (containsSubquery(child)) return true;
+        }
+        return false;
     }
 
     /** Every CTE name declared anywhere under {@code node}, at any nesting depth. */
@@ -2884,6 +3097,18 @@ public class Transformations {
         }
     }
 
+    /** Every BASE_TABLE name referenced anywhere under {@code node}, CTE references included. */
+    private static void collectBaseTableNames(JsonNode node, Set<String> into) {
+        if (node == null || node.isNull()) return;
+        if (node.isObject() && NODE_TYPE_BASE_TABLE.equals(asText(node, FIELD_TYPE))) {
+            String table = asText(node, FIELD_TABLE_NAME);
+            if (table != null) into.add(table);
+        }
+        for (JsonNode child : node) {
+            collectBaseTableNames(child, into);
+        }
+    }
+
     private static JsonNode injectFilterCtes(JsonNode query, Function<String, JsonNode> filterForTable,
                                              String defaultCatalog, String defaultSchema) {
         var result = query.deepCopy();
@@ -2893,13 +3118,17 @@ public class Transformations {
         // (top-level or nested) — collecting every real base table and rewriting each reference to
         // its filter-CTE name. CTE bodies are handled inside the dispatcher so nesting at any depth
         // is filtered uniformly.
-        // Generated names must avoid every CTE name the query already declares, at any depth.
-        // The per-scope visible set cannot serve: a CTE body has its own name removed from it (a
-        // same-named reference there is the real table), so a body would regenerate the name of the
-        // CTE enclosing it and reference itself. Collected once, up front.
+        // Generated names must avoid every CTE name the query already declares, at any depth, and
+        // every table name it reads. The per-scope visible set cannot serve: a CTE's own name is
+        // not visible in its body, so a body would regenerate the name of the CTE enclosing it and
+        // reference itself. And a generated name equal to a real table's (a table named ___orders
+        // beside orders) would capture that table's own filter-CTE body, `SELECT * FROM ___orders`,
+        // which then reads the other table's filtered rows. Collected once, up front.
         Set<String> reservedCteNames = new HashSet<>();
         collectDeclaredCteNames(statementNode, reservedCteNames);
-        var injection = new CteInjection(new LinkedHashMap<>(), new LinkedHashMap<>(), reservedCteNames);
+        collectBaseTableNames(statementNode, reservedCteNames);
+        var injection = new CteInjection(new LinkedHashMap<>(), new LinkedHashMap<>(), reservedCteNames,
+                defaultCatalog, defaultSchema);
         renameBaseTablesInStatementNode(statementNode, new HashSet<>(), injection);
 
         Map<String, ObjectNode> tablesToWrap = injection.tablesToWrap();
@@ -2907,7 +3136,8 @@ public class Transformations {
             ArrayNode newMap = JsonNodeFactory.instance.arrayNode();
             for (Map.Entry<String, ObjectNode> e : tablesToWrap.entrySet()) {
                 String qualifiedLookupKey = buildQualifiedLookupKey(e.getValue(), defaultCatalog, defaultSchema);
-                newMap.add(buildFilterCteEntry(e.getKey(), e.getValue(), filterForTable.apply(qualifiedLookupKey)));
+                newMap.add(buildFilterCteEntry(e.getKey(), e.getValue(),
+                        filterForTable.apply(foldIdentifier(qualifiedLookupKey))));
             }
             JsonNode existingMap = statementNode.get(FIELD_CTE_MAP).get(FIELD_MAP);
             if (existingMap != null && existingMap.isArray()) {
@@ -2926,10 +3156,12 @@ public class Transformations {
      * to them are treated as CTE references, not base tables) and injects the filter into each CTE
      * body. Returns {@code visibleCteNames} augmented with the names declared here.
      *
-     * <p>Each CTE body is walked with its OWN name removed from the visible set: a non-recursive CTE
-     * cannot reference itself, so a same-named reference inside the body is the real base table and
-     * MUST be filtered. A recursive CTE body ({@code RECURSIVE_CTE_NODE}) re-adds its own name for the
-     * self-reference in {@link #renameBaseTablesInStatementNode}.
+     * <p>Each CTE body sees the enclosing scope plus the CTEs declared BEFORE it in this WITH; its
+     * own name is added only after its body. So a same-named reference inside a top-level body is
+     * the real base table and MUST be filtered, while one inside a nested body still binds a
+     * same-named OUTER CTE, as DuckDB does. A recursive CTE ({@code RECURSIVE_CTE_NODE}) adds its
+     * own name for its recursive arm only, in {@link #renameBaseTablesInStatementNode}: its anchor
+     * arm reads the base table.
      */
     private static Set<String> walkNestedCtes(ObjectNode node, Set<String> visibleCteNames,
                                               CteInjection injection) {
@@ -2938,16 +3170,18 @@ public class Transformations {
         JsonNode mapArray = cteMapNode.get(FIELD_MAP);
         if (mapArray == null || !mapArray.isArray() || mapArray.isEmpty()) return visibleCteNames;
 
-        Set<String> withDeclared = new HashSet<>(visibleCteNames);
-        for (JsonNode entry : mapArray) {
-            withDeclared.add(entry.get(FIELD_KEY).asText());
-        }
+        // Each body sees the enclosing scope and the CTEs declared BEFORE it, in or out of WITH
+        // RECURSIVE: DuckDB binds a name declared later in the same WITH to the base table. Its own
+        // name is not added until after its body, but an OUTER CTE of the same name stays visible:
+        // DuckDB binds `WITH o AS (..) .. (WITH o AS (SELECT .. FROM o) ..)`'s inner `o` to the
+        // outer CTE (the collector does the same), so it must not be wrapped as a base table.
+        Set<String> withDeclared = CteScope.copyOf(visibleCteNames);
         for (JsonNode entry : mapArray) {
             String cteName = entry.get(FIELD_KEY).asText();
-            Set<String> namesVisibleInBody = new HashSet<>(withDeclared);
-            namesVisibleInBody.remove(cteName);
+            Set<String> namesVisibleInBody = CteScope.copyOf(withDeclared);
             ObjectNode cteBody = (ObjectNode) entry.get(FIELD_VALUE).get(FIELD_QUERY).get(FIELD_NODE);
             renameBaseTablesInStatementNode(cteBody, namesVisibleInBody, injection);
+            withDeclared.add(cteName);
         }
         return withDeclared;
     }
@@ -2971,45 +3205,18 @@ public class Transformations {
                 Set<String> visible = walkNestedCtes(statementNode, visibleCteNames, injection);
                 renameBaseTablesInStatementNode((ObjectNode) statementNode.get(FIELD_LEFT), visible, injection);
                 renameBaseTablesInStatementNode((ObjectNode) statementNode.get(FIELD_RIGHT), visible, injection);
-                walkModifiersForSubqueries(statementNode.get(FIELD_MODIFIERS), visible, injection);
+                walkExpressionsForSubqueries(statementNode.get(FIELD_MODIFIERS), visible, injection);
             }
             case NODE_TYPE_RECURSIVE_CTE_NODE -> {
                 Set<String> visible = walkNestedCtes(statementNode, visibleCteNames, injection);
-                // The recursive self-reference (FROM r inside the CTE body) is a CTE reference, not a
-                // base table; keep the CTE's own name visible so it is not wrapped as a phantom table.
-                JsonNode cteName = statementNode.get(FIELD_CTE_NAME);
-                if (cteName != null) {
-                    visible = new HashSet<>(visible);
-                    visible.add(cteName.asText());
-                }
                 renameBaseTablesInStatementNode((ObjectNode) statementNode.get(FIELD_LEFT), visible, injection);
-                renameBaseTablesInStatementNode((ObjectNode) statementNode.get(FIELD_RIGHT), visible, injection);
-                walkModifiersForSubqueries(statementNode.get(FIELD_MODIFIERS), visible, injection);
+                renameBaseTablesInStatementNode((ObjectNode) statementNode.get(FIELD_RIGHT),
+                        recursiveArmScope(statementNode, visible), injection);
+                walkExpressionsForSubqueries(statementNode.get(FIELD_MODIFIERS), visible, injection);
             }
             default -> throw new IllegalStateException(
                     "injectFilterCtes: unsupported query node type '" + type + "'; refusing to run to "
                             + "avoid producing an unfiltered (RLS-bypassing) query");
-        }
-    }
-
-    /**
-     * Walks the result modifiers of a SELECT or set-operation node (ORDER BY, LIMIT, OFFSET) for
-     * subqueries, so a base table referenced only inside e.g. {@code ORDER BY (SELECT ... FROM t)}
-     * is still filtered. DuckDB serializes these under {@code modifiers[]} (ORDER BY expressions live
-     * in {@code orders[].expression}), NOT a top-level {@code order_bys} field.
-     */
-    private static void walkModifiersForSubqueries(JsonNode modifiers, Set<String> visibleCteNames,
-                                                    CteInjection injection) {
-        if (modifiers == null || !modifiers.isArray()) return;
-        for (JsonNode modifier : modifiers) {
-            JsonNode orders = modifier.get(FIELD_ORDERS);
-            if (orders != null && orders.isArray()) {
-                for (JsonNode order : orders) {
-                    walkExpressionsForSubqueries(order.get(FIELD_EXPRESSION), visibleCteNames, injection);
-                }
-            }
-            walkExpressionsForSubqueries(modifier.get(FIELD_LIMIT), visibleCteNames, injection);
-            walkExpressionsForSubqueries(modifier.get(FIELD_OFFSET), visibleCteNames, injection);
         }
     }
 
@@ -3029,13 +3236,11 @@ public class Transformations {
      */
     private static void walkExpressionFieldsInSelect(ObjectNode selectNode, Set<String> userCteNames,
                                                        CteInjection injection) {
-        walkExpressionsForSubqueries(selectNode.get(FIELD_WHERE_CLAUSE), userCteNames, injection);
-        walkExpressionsForSubqueries(selectNode.get("having"), userCteNames, injection);
-        walkExpressionsForSubqueries(selectNode.get("qualify"), userCteNames, injection);
-        walkExpressionsForSubqueries(selectNode.get("select_list"), userCteNames, injection);
-        walkExpressionsForSubqueries(selectNode.get("group_expressions"), userCteNames, injection);
-        // ORDER BY / LIMIT / OFFSET live under modifiers[], not a top-level "order_bys" field.
-        walkModifiersForSubqueries(selectNode.get(FIELD_MODIFIERS), userCteNames, injection);
+        // Every field but FROM and WITH (walked by the caller), not an allow-list: a subquery in a
+        // `* REPLACE`, a window's default or frame, an aggregate's ORDER BY or a DISTINCT ON target
+        // reads the table as surely as one in the WHERE.
+        forEachFieldExcept(selectNode, SELECT_RELATION_FIELDS,
+                v -> walkExpressionsForSubqueries(v, userCteNames, injection));
     }
 
     /**
@@ -3054,11 +3259,12 @@ public class Transformations {
         }
 
         if (!expr.isObject()) return;
+        requireNotARelation(expr, "injectFilterCtes");
 
         JsonNode classNode = expr.get(FIELD_CLASS);
-        if (classNode != null && SUBQUERY_CLASS.equals(classNode.asText())) {
+        boolean subquery = classNode != null && SUBQUERY_CLASS.equals(classNode.asText());
+        if (subquery) {
             // Expression-level subquery: IN (SELECT ...), EXISTS (...), scalar (SELECT ...)
-            // renameBaseTablesInStatementNode already walks expression fields via renameBaseTablesInSelect
             JsonNode subqueryContent = expr.get(FIELD_SUBQUERY);
             if (subqueryContent != null) {
                 ObjectNode innerNode = (ObjectNode) subqueryContent.get(FIELD_NODE);
@@ -3066,22 +3272,12 @@ public class Transformations {
                     renameBaseTablesInStatementNode(innerNode, userCteNames, injection);
                 }
             }
-            // Walk the `child` field (the expression on the left side of IN/ANY/ALL)
-            walkExpressionsForSubqueries(expr.get(FIELD_CHILD), userCteNames, injection);
-            return;
         }
-
-        // Recurse into known expression child fields for all other expression types
-        walkExpressionsForSubqueries(expr.get(FIELD_LEFT), userCteNames, injection);
-        walkExpressionsForSubqueries(expr.get(FIELD_RIGHT), userCteNames, injection);
-        walkExpressionsForSubqueries(expr.get(FIELD_CHILDREN), userCteNames, injection);
-        walkExpressionsForSubqueries(expr.get(FIELD_CHILD), userCteNames, injection);
-        walkExpressionsForSubqueries(expr.get(FIELD_FILTER), userCteNames, injection);
-        // CASE WHEN THEN ELSE
-        walkExpressionsForSubqueries(expr.get(FIELD_WHEN_EXPR), userCteNames, injection);
-        walkExpressionsForSubqueries(expr.get(FIELD_THEN_EXPR), userCteNames, injection);
-        walkExpressionsForSubqueries(expr.get(FIELD_ELSE_EXPR), userCteNames, injection);
-        walkExpressionsForSubqueries(expr.get(FIELD_CASE_CHECKS), userCteNames, injection);
+        // Every other field, not an allow-list of expression children: the subquery can sit under
+        // any of them (window default_expr / partitions / orders, aggregate order_bys, BETWEEN's
+        // input / lower / upper, STAR replace_list, …), and a missed one is an unfiltered read.
+        forEachFieldExcept(expr, subquery ? SUBQUERY_EXPRESSION_FIELDS : Set.of(),
+                v -> walkExpressionsForSubqueries(v, userCteNames, injection));
     }
 
     private static void renameBaseTablesInFromNode(JsonNode fromNode, Set<String> userCteNames,
@@ -3091,9 +3287,17 @@ public class Transformations {
         switch (type) {
             case NODE_TYPE_BASE_TABLE -> {
                 String tableName = fromNode.get(FIELD_TABLE_NAME).asText();
-                if (userCteNames.contains(tableName)) return; // CTE reference — skip
+                if (isCteReference(fromNode, userCteNames)) return; // CTE reference — skip
                 String schema = fromNode.has(FIELD_SCHEMA_NAME) ? fromNode.get(FIELD_SCHEMA_NAME).asText() : "";
                 String catalog = fromNode.has(FIELD_CATALOG_NAME) ? fromNode.get(FIELD_CATALOG_NAME).asText() : "";
+                if (containsSubquery(fromNode.get(FIELD_AT_CLAUSE))) {
+                    // The AT clause moves into the filter CTE's body (DuckDB ignores it on a CTE
+                    // reference), and a subquery there would be the one read in the query left
+                    // unfiltered: AT (VERSION => (SELECT .. FROM <the table>)) reads every row.
+                    throw new IllegalStateException("injectFilterCtes: a subquery in an AT clause on '"
+                            + tableName + "' cannot be filtered; refusing to run to avoid producing an"
+                            + " unfiltered (RLS-bypassing) query");
+                }
                 String cteKey = injection.cteKeyFor(List.of(catalog, schema, tableName), (ObjectNode) fromNode);
                 ObjectNode mutable = (ObjectNode) fromNode;
                 String existingAlias = mutable.has(FIELD_ALIAS) ? mutable.get(FIELD_ALIAS).asText() : "";
@@ -3103,12 +3307,13 @@ public class Transformations {
                 mutable.put(FIELD_TABLE_NAME, cteKey);
                 mutable.put(FIELD_SCHEMA_NAME, "");
                 mutable.put(FIELD_CATALOG_NAME, "");
+                // The AT clause now lives in the body; on the CTE reference DuckDB would ignore it.
+                // A sample stays here (see cteKeyFor).
+                if (mutable.has(FIELD_AT_CLAUSE)) mutable.putNull(FIELD_AT_CLAUSE);
             }
             case NODE_TYPE_JOIN -> {
                 renameBaseTablesInFromNode(fromNode.get(FIELD_LEFT), userCteNames, injection);
                 renameBaseTablesInFromNode(fromNode.get(FIELD_RIGHT), userCteNames, injection);
-                // Walk the join condition for subqueries (rare but possible)
-                walkExpressionsForSubqueries(fromNode.get("condition"), userCteNames, injection);
             }
             case NODE_TYPE_SUBQUERY -> {
                 // The derived-table body may be a SELECT, a set operation, or a recursive CTE;
@@ -3118,21 +3323,26 @@ public class Transformations {
             }
             case NODE_TYPE_PIVOT -> {
                 // PIVOT / UNPIVOT: the scanned relation is under `source`; recurse into it so the
-                // pivoted base table is filtered. Aggregate expressions may hold subqueries.
+                // pivoted base table is filtered.
                 renameBaseTablesInFromNode(fromNode.get(FIELD_SOURCE), userCteNames, injection);
-                walkExpressionsForSubqueries(fromNode.get(FIELD_AGGREGATES), userCteNames, injection);
             }
-            case NODE_TYPE_EXPRESSION_LIST -> {
-                // VALUES list: each value expression may embed a subquery over a base table.
-                walkExpressionsForSubqueries(fromNode.get(FIELD_VALUES), userCteNames, injection);
+            case NODE_TYPE_EXPRESSION_LIST, NODE_TYPE_EMPTY -> {
+                // VALUES list / FROM-less SELECT: no relation of its own; VALUES expressions are
+                // walked below with every other field.
             }
-            case NODE_TYPE_EMPTY -> {
-                // FROM-less SELECT (e.g. SELECT 1): no relation to filter.
-            }
+            // TABLE_FUNCTION stays refused, a name-based "data-free" generator included: a table
+            // macro in the catalog named range / unnest / generate_series shadows the built-in --
+            // even unqualified -- and reads whatever its body reads, which a filter CTE cannot wrap.
+            // The collector reports every table function, so a table grant refuses one before here.
             default -> throw new IllegalStateException(
                     "injectFilterCtes: unsupported FROM node type '" + type + "'; refusing to run to "
                             + "avoid producing an unfiltered (RLS-bypassing) query");
         }
+        // Every other field (join condition, table-function arguments, AT clause, pivot
+        // aggregates, VALUES rows, ...), as the collector walks them: a subquery in any of them is
+        // a read that must be filtered.
+        forEachFieldExcept(fromNode, FROM_RELATION_FIELDS,
+                v -> walkExpressionsForSubqueries(v, userCteNames, injection));
     }
 
     /**
@@ -3160,12 +3370,13 @@ public class Transformations {
      * stream); reusing a generated one would point two different tables at one CTE.
      */
     private static String freshCteKey(String base, Set<String> reserved) {
-        if (reserved == null || !reserved.contains(base)) {
+        if (reserved == null || !containsIdentifier(reserved, base)) {
             return base;
         }
         String candidate = base;
         int suffix = 0;
-        while (reserved.contains(candidate)) {
+        // Case-insensitively: a declared ___ORDERS is the same CTE name to DuckDB as ___orders.
+        while (containsIdentifier(reserved, candidate)) {
             candidate = base + "_" + (++suffix);
         }
         return candidate;

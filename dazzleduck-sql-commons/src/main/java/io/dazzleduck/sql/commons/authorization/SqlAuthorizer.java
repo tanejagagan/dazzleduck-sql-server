@@ -15,7 +15,6 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -131,7 +130,7 @@ public interface SqlAuthorizer {
             for (JsonNode entry : map) {
                 JsonNode key = entry.get(ExpressionConstants.FIELD_KEY);
                 if (key != null && !key.isNull()) {
-                    inScope.add(key.asText().toLowerCase(Locale.ROOT));
+                    inScope.add(Transformations.foldIdentifier(key.asText()));
                 }
             }
         }
@@ -149,7 +148,15 @@ public interface SqlAuthorizer {
                 if (name == null || name.isNull()) {
                     return null;
                 }
-                return inScope.contains(name.asText().toLowerCase(Locale.ROOT)) ? null : from;
+                // Column aliases (orders AS o(a, b, c)) rename the columns the filter names, so a
+                // copy on this SELECT would not bind; the filter CTE alone carries it.
+                if (!from.path("column_name_alias").isEmpty()) {
+                    return null;
+                }
+                // A qualified name is always the table, even under a same-named CTE.
+                boolean qualified = !from.path(ExpressionConstants.FIELD_SCHEMA_NAME).asText("").isEmpty()
+                        || !from.path(ExpressionConstants.FIELD_CATALOG_NAME).asText("").isEmpty();
+                return !qualified && inScope.contains(Transformations.foldIdentifier(name.asText())) ? null : from;
             }
             case ExpressionConstants.NODE_TYPE_SUBQUERY -> {
                 JsonNode subquery = from.get(ExpressionConstants.FIELD_SUBQUERY);
@@ -218,12 +225,122 @@ public interface SqlAuthorizer {
      * there is no such SELECT the filter has nowhere to go, and the old code then returned
      * {@code null} — which the caller dereferenced into a NullPointerException rather than
      * refusing. The query is refused instead.
+     *
+     * <p>The filter must also bind to the table function's OWN columns, so two shapes the helper
+     * accepts are refused here:
+     * <ul>
+     *   <li>a SELECT over a CTE (a BASE_TABLE reference -- a path or function grant reads no real
+     *       table): the CTE defines its columns, so
+     *       {@code WITH x AS (SELECT * REPLACE ('abc' AS tenant_id) FROM read_parquet(..))} makes a
+     *       {@code tenant_id = 'abc'} filter pass every row;</li>
+     *   <li>a positional UNION: its column names come from the user-written left arm, so the
+     *       filter's column can name a different column of the file. Only UNION BY NAME -- the shape
+     *       the clients and planner generate -- keeps the file's column names;</li>
+     *   <li>a union arm that reads a table function but does not project its columns unchanged:
+     *       {@code SELECT * REPLACE ('k2' AS key) FROM read_parquet(..)}, a column list, or column
+     *       aliases on the function all let the filter's column be the user's;</li>
+     *   <li>more than one table-function read: the filter lands on ONE SELECT, so a second read --
+     *       in a scalar subquery, a WHERE, a join -- would run unfiltered.</li>
+     * </ul>
+     * A filter that is the constant {@code true} has nothing to bypass, so only the placement
+     * itself is required then.
      */
-    static void requireFilterablePlacement(JsonNode query) throws UnauthorizedException {
-        if (Transformations.getSelectForTableFunction(Transformations.getFirstStatementNode(query)) == null) {
+    static void requireFilterablePlacement(JsonNode query, JsonNode filter) throws UnauthorizedException {
+        JsonNode statement = Transformations.getFirstStatementNode(query);
+        JsonNode select = Transformations.getSelectForTableFunction(statement);
+        if (select == null) {
             throw new UnauthorizedException(
                     "This query shape cannot have a path or function grant's filter applied to it");
         }
+        if (isTrueConstant(filter)) {
+            return;
+        }
+        if (countTableFunctions(statement) != 1) {
+            throw new UnauthorizedException(
+                    "A path or function grant's filter applies to one table-function read; this query has several");
+        }
+        JsonNode from = select.get(ExpressionConstants.FIELD_FROM_TABLE);
+        String fromType = from == null ? null : from.path(ExpressionConstants.FIELD_TYPE).asText(null);
+        if (ExpressionConstants.NODE_TYPE_BASE_TABLE.equals(fromType)) {
+            throw new UnauthorizedException(
+                    "A path or function grant's filter cannot be applied over a CTE, which defines its own columns");
+        }
+        if (ExpressionConstants.NODE_TYPE_SUBQUERY.equals(fromType)) {
+            JsonNode inner = from.path(ExpressionConstants.FIELD_SUBQUERY).path(ExpressionConstants.FIELD_NODE);
+            if (ExpressionConstants.NODE_TYPE_SET_OPERATION_NODE.equals(inner.path(ExpressionConstants.FIELD_TYPE).asText(null))) {
+                if (!"UNION_BY_NAME".equals(inner.path("setop_type").asText(null))) {
+                    throw new UnauthorizedException(
+                            "A path or function grant's filter needs UNION BY NAME, so it binds to the file's own columns");
+                }
+                requireArmsProjectTheFunctionUnchanged(inner);
+            }
+        }
+    }
+
+    /**
+     * Every arm of the union that reads the table function must be {@code SELECT * FROM fn(..)}:
+     * a bare star (no REPLACE / EXCLUDE / RENAME / COLUMNS) over the function itself, with no column
+     * aliases on it. Arms that read no table function (the typed empty VALUES arm) add only rows
+     * the user wrote, which the filter still sees.
+     */
+    private static void requireArmsProjectTheFunctionUnchanged(JsonNode node) throws UnauthorizedException {
+        String type = node.path(ExpressionConstants.FIELD_TYPE).asText("");
+        if (ExpressionConstants.NODE_TYPE_SET_OPERATION_NODE.equals(type)) {
+            requireArmsProjectTheFunctionUnchanged(node.path(ExpressionConstants.FIELD_LEFT));
+            requireArmsProjectTheFunctionUnchanged(node.path(ExpressionConstants.FIELD_RIGHT));
+            return;
+        }
+        if (countTableFunctions(node) == 0) {
+            return;
+        }
+        JsonNode from = node.path(ExpressionConstants.FIELD_FROM_TABLE);
+        JsonNode selectList = node.path("select_list");
+        boolean overTheFunction = ExpressionConstants.NODE_TYPE_SELECT_NODE.equals(type)
+                && ExpressionConstants.NODE_TYPE_TABLE_FUNCTION.equals(from.path(ExpressionConstants.FIELD_TYPE).asText(""))
+                && from.path("column_name_alias").isEmpty();
+        boolean bareStar = selectList.isArray() && selectList.size() == 1 && isBareStar(selectList.get(0));
+        if (!overTheFunction || !bareStar) {
+            throw new UnauthorizedException("A path or function grant's filter needs the table function's"
+                    + " columns unchanged: its union arm must be SELECT * FROM the function, with no"
+                    + " REPLACE, EXCLUDE, column list or column aliases");
+        }
+    }
+
+    private static boolean isBareStar(JsonNode expr) {
+        return "STAR".equals(expr.path(ExpressionConstants.FIELD_CLASS).asText(""))
+                && expr.path("exclude_list").isEmpty()
+                && expr.path("replace_list").isEmpty()
+                && expr.path("rename_list").isEmpty()
+                && expr.path("qualified_exclude_list").isEmpty()
+                && !expr.path("columns").asBoolean(false)
+                && (expr.path("expr").isMissingNode() || expr.path("expr").isNull());
+    }
+
+    /** TABLE_FUNCTION FROM nodes anywhere under {@code node}. */
+    private static int countTableFunctions(JsonNode node) {
+        if (node == null || node.isNull() || node.isMissingNode()) return 0;
+        int n = node.isObject() && !node.has(ExpressionConstants.FIELD_CLASS)
+                && ExpressionConstants.NODE_TYPE_TABLE_FUNCTION.equals(node.path(ExpressionConstants.FIELD_TYPE).asText(""))
+                ? 1 : 0;
+        for (JsonNode child : node) n += countTableFunctions(child);
+        return n;
+    }
+
+    /**
+     * Whether {@code filter} is the constant TRUE, i.e. a grant with no row filter. DuckDB parses
+     * the literal {@code true} as {@code CAST('t' AS BOOLEAN)}, so that form counts too.
+     */
+    private static boolean isTrueConstant(JsonNode filter) {
+        if (filter == null) return false;
+        JsonNode node = filter;
+        if ("CAST".equals(node.path(ExpressionConstants.FIELD_CLASS).asText(""))
+                && "BOOLEAN".equals(node.path("cast_type").path("id").asText(""))) {
+            node = node.path(ExpressionConstants.FIELD_CHILD);
+        }
+        if (!"CONSTANT".equals(node.path(ExpressionConstants.FIELD_CLASS).asText(""))) return false;
+        JsonNode value = node.path("value").path("value");
+        return value.isBoolean() ? value.asBoolean()
+                : value.isTextual() && (value.asText().equalsIgnoreCase("t") || value.asText().equalsIgnoreCase("true"));
     }
 
     static JsonNode addFilterToTableFunction(JsonNode query, JsonNode toAdd) {
@@ -340,6 +457,15 @@ public interface SqlAuthorizer {
     boolean hasWriteAccess(String user, String ingestionQueue, Map<String, String> verifiedClaims);
 
     static boolean hasAccessToPath(String authorizedPath, String queriedPath) {
+        if (queriedPath == null || Transformations.NON_CONSTANT_PATH.equals(queriedPath)) {
+            // Not a path at all (a computed argument): no grant covers it, a grant of "/" included.
+            return false;
+        }
+        for (String segment : queriedPath.split("/")) {
+            // The segments are compared as written, so a "." or ".." would let
+            // "/allowed/../secret/x.parquet" match the "/allowed" prefix and read outside it.
+            if (segment.equals("..") || segment.equals(".")) return false;
+        }
         var authorizedSplits = authorizedPath.split("/");
         var queriedSplits = queriedPath.split("/");
         if (queriedSplits.length < authorizedSplits.length) {
@@ -403,27 +529,34 @@ public interface SqlAuthorizer {
             && java.util.Objects.equals(authorized.catalog(), queried.catalog());
     }
 
-    /**
-     * Returns a copy of {@code tree} with the catalog and schema names set on the
-     * FROM table, but only when the FROM clause is a BASE_TABLE. For TABLE_FUNCTION queries the
-     * original tree is returned unchanged.
-     */
     /** Whether {@code fromTable} (a BASE_TABLE node) names a CTE declared by {@code statement}. */
     private static boolean namesATopLevelCte(JsonNode statement, ObjectNode fromTable) {
         JsonNode name = fromTable.get(ExpressionConstants.FIELD_TABLE_NAME);
         if (name == null || name.isNull()) return false;
+        // A schema- or catalog-qualified name is never a CTE reference (as isCteReference): leaving
+        // `main.orders` unqualified under a CTE named orders would let a redirect target resolve it
+        // against its own default catalog rather than the one authorized.
+        for (String part : new String[]{ExpressionConstants.FIELD_SCHEMA_NAME, ExpressionConstants.FIELD_CATALOG_NAME}) {
+            JsonNode qualifier = fromTable.get(part);
+            if (qualifier != null && !qualifier.isNull() && !qualifier.asText().isEmpty()) return false;
+        }
         JsonNode cteMap = statement.get(ExpressionConstants.FIELD_CTE_MAP);
         JsonNode map = cteMap == null ? null : cteMap.get(ExpressionConstants.FIELD_MAP);
         if (map == null || !map.isArray()) return false;
         for (JsonNode entry : map) {
             JsonNode key = entry.get(ExpressionConstants.FIELD_KEY);
-            if (key != null && !key.isNull() && key.asText().equalsIgnoreCase(name.asText())) {
+            if (key != null && !key.isNull() && Transformations.sameIdentifier(key.asText(), name.asText())) {
                 return true;
             }
         }
         return false;
     }
 
+    /**
+     * Returns a copy of {@code tree} with the catalog and schema names set on the
+     * FROM table, but only when the FROM clause is a BASE_TABLE. For TABLE_FUNCTION queries the
+     * original tree is returned unchanged.
+     */
     static JsonNode withUpdatedDatabaseSchema(JsonNode tree, String database, String schema) {
         var copy = tree.deepCopy();
         Function<JsonNode, JsonNode> identity = t -> t;
