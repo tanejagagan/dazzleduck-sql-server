@@ -2763,12 +2763,16 @@ public class Transformations {
      * <p>Example — given filter {@code tenant_id = 'abc'}:
      * <pre>SELECT * FROM a JOIN b ON a.id = b.id</pre>
      * becomes:
-     * <pre>WITH ___a AS (SELECT * FROM a WHERE tenant_id = 'abc'),
-     *      ___b AS (SELECT * FROM b WHERE tenant_id = 'abc')
+     * <pre>WITH ___a AS NOT MATERIALIZED (SELECT * FROM a WHERE tenant_id = 'abc'),
+     *      ___b AS NOT MATERIALIZED (SELECT * FROM b WHERE tenant_id = 'abc')
      * SELECT * FROM ___a a JOIN ___b b ON a.id = b.id</pre>
      *
      * <p>Existing user-defined CTEs are not wrapped at the reference site; instead the
      * filter is injected into their bodies, so they automatically see filtered data.
+     *
+     * <p>Every reference to one table shares its filter CTE, so the CTEs are NOT MATERIALIZED: a
+     * query that names a table twice would otherwise buffer {@code SELECT *} of every row the
+     * grant allows before any of the query's own projections or predicates apply.
      */
     public static JsonNode injectFilterCtes(JsonNode query, JsonNode filter) {
         // One filter for every table, so no table name is ever looked up and the resolution
@@ -3218,12 +3222,87 @@ public class Transformations {
         ObjectNode cteValue = f.objectNode();
         cteValue.putArray("aliases");
         cteValue.set("query", queryWrapper);
-        cteValue.put("materialized", "CTE_MATERIALIZE_DEFAULT");
+        // Inline at every reference. DuckDB materializes a CTE referenced more than once, and
+        // every reference to this table in the query reads this one CTE -- a SELECT * of every
+        // row the grant allows, which then has to fit in memory before the query's own column
+        // and row filters reach it. Inlined, each reference is a plain filtered scan that gets
+        // projection, filter and partition pushdown. Inlining evaluates the filter once per
+        // reference, which returns the same rows to each as long as the filter is deterministic:
+        // a grant filter that samples (random() < 0.1) would give a self-join two different row
+        // sets, so a volatile filter keeps DuckDB's default.
+        cteValue.put("materialized", isVolatile(filter) ? "CTE_MATERIALIZE_DEFAULT" : "CTE_MATERIALIZE_NEVER");
         cteValue.putArray("key_targets");
 
         ObjectNode entry = f.objectNode();
         entry.put("key", cteKey);
         entry.set("value", cteValue);
         return entry;
+    }
+
+    /** Whether a BASE_TABLE or TABLE_FUNCTION relation appears anywhere under {@code node}. */
+    private static boolean readsData(JsonNode node) {
+        if (node == null || node.isNull()) return false;
+        if (node.isObject() && !node.has(FIELD_CLASS)) {
+            String type = asText(node, FIELD_TYPE);
+            if (NODE_TYPE_BASE_TABLE.equals(type) || NODE_TYPE_TABLE_FUNCTION.equals(type)) return true;
+        }
+        for (JsonNode child : node) {
+            if (readsData(child)) return true;
+        }
+        return false;
+    }
+
+    /** Qualifiers DuckDB itself puts on built-in calls: not evidence of a user macro. */
+    private static final Set<String> DEFAULT_FUNCTION_SCHEMAS = Set.of("", "main", "pg_catalog");
+    private static final Set<String> DEFAULT_FUNCTION_CATALOGS = Set.of("", "system");
+
+    /** DuckDB's volatile scalar functions: a new value per call, so per row and per evaluation. */
+    private static final Set<String> VOLATILE_FUNCTIONS = Set.of(
+            "random", "gen_random_uuid", "uuid", "uuidv4", "uuidv7", "nextval", "setseed");
+
+    /**
+     * Whether {@code expr} may give a different answer each time it is evaluated, so inlining it at
+     * every reference could give each reference different rows. Conservative: a volatile built-in,
+     * a call qualified with a NON-default schema or catalog (a macro such as
+     * {@code sampling.my_sample()} can wrap random()), or ANY subquery -- a subquery can be
+     * nondeterministic without a volatile call (LIMIT without ORDER BY, any_value / first over an
+     * unordered input, USING SAMPLE), and an aggregate can only reach a WHERE filter through one.
+     *
+     * <p>The default namespaces do not count as qualification: DuckDB's parser itself writes list
+     * and struct literals as {@code main.list_value} / {@code main.struct_pack}, and built-ins live
+     * in {@code system.main} and {@code pg_catalog}, so flagging those would keep ordinary filters
+     * such as {@code tenant_id = ANY(['a', 'b'])} materialized. A user macro in {@code main}, like an
+     * unqualified one, cannot be told from a built-in here, so a grant filter must not hide
+     * randomness behind one.
+     */
+    static boolean isVolatile(JsonNode expr) {
+        if (expr == null || expr.isNull()) return false;
+        if (expr.isObject() && SUBQUERY_CLASS.equals(asText(expr, FIELD_CLASS)) && readsData(expr)) {
+            // A subquery over a table or table function. One that reads nothing -- DuckDB parses
+            // `x = ANY(['a', 'b'])` as a FROM-less subquery over unnest(..) -- is walked like any
+            // other expression below.
+            return true;
+        }
+        if (expr.isObject() && FUNCTION_CLASS.equals(asText(expr, FIELD_CLASS))) {
+            String name = asText(expr, FIELD_FUNCTION_NAME);
+            if (name != null && VOLATILE_FUNCTIONS.contains(name.toLowerCase(java.util.Locale.ROOT))) {
+                return true;
+            }
+            // A function call's own qualifier fields, "schema" and "catalog".
+            String schema = asText(expr, "schema");
+            String catalog = asText(expr, "catalog");
+            if (!DEFAULT_FUNCTION_SCHEMAS.contains(schema == null ? "" : schema.toLowerCase(java.util.Locale.ROOT))
+                    || !DEFAULT_FUNCTION_CATALOGS.contains(catalog == null ? "" : catalog.toLowerCase(java.util.Locale.ROOT))) {
+                return true;
+            }
+        }
+        if (expr.isObject()) {
+            JsonNode sample = expr.get("sample");
+            if (sample != null && !sample.isNull()) return true;
+        }
+        for (JsonNode child : expr) {
+            if (isVolatile(child)) return true;
+        }
+        return false;
     }
 }

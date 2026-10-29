@@ -177,6 +177,64 @@ public class TransformationsInjectFilterTest {
         assertEquals(2, ids.size());
     }
 
+    @Test
+    void sharedFilterCte_isInlinedNotMaterialized() throws SQLException, JsonProcessingException {
+        // Two references to one table read one filter CTE. Left to DuckDB's default it is
+        // materialized -- every allowed row, every column, buffered before either reference's own
+        // projection or predicate applies. It must be inlined: a scan per reference, no CTE.
+        String sql = "WITH big AS (SELECT id FROM orders WHERE amount > 150) "
+                + "SELECT (SELECT count(*) FROM orders) AS n, (SELECT count(*) FROM big) AS n_big";
+        JsonNode tree = Transformations.parseToTree(conn, sql);
+        JsonNode result = Transformations.injectFilterCtes(tree, filter("tenant_id = 'abc'"));
+        JsonNode cteMap = result.get("statements").get(0).get("node").get("cte_map").get("map");
+        assertEquals("CTE_MATERIALIZE_NEVER", cteMap.get(0).get("value").get("materialized").asText());
+
+        String out = Transformations.parseToSql(conn, result);
+        assertTrue(out.contains("___orders AS NOT MATERIALIZED"), out);
+
+        StringBuilder plan = new StringBuilder();
+        try (ResultSet rs = conn.createStatement().executeQuery("EXPLAIN " + out)) {
+            while (rs.next()) plan.append(rs.getString(2)).append('\n');
+        }
+        assertFalse(plan.toString().contains("CTE_SCAN"), plan.toString());
+
+        try (ResultSet rs = conn.createStatement().executeQuery(out)) {
+            assertTrue(rs.next());
+            assertEquals(2, rs.getLong(1));
+            assertEquals(1, rs.getLong(2));
+        }
+    }
+
+    @Test
+    void volatileFilter_keepsTheDefaultSoEveryReferenceSeesOneRowSet() throws SQLException, JsonProcessingException {
+        // Inlined, a sampling filter would be drawn once per reference: a self-join of the grant
+        // would pair two different samples. A volatile filter keeps DuckDB's default.
+        String sql = "SELECT count(*) FROM orders a JOIN orders b USING (id)";
+        JsonNode tree = Transformations.parseToTree(conn, sql);
+        JsonNode sampled = Transformations.injectFilterCtes(tree, filter("tenant_id = 'abc' AND random() < 2"));
+        assertEquals("CTE_MATERIALIZE_DEFAULT", sampled.get("statements").get(0).get("node")
+                .get("cte_map").get("map").get(0).get("value").get("materialized").asText());
+        // A deterministic filter is still inlined.
+        JsonNode fixed = Transformations.injectFilterCtes(tree, filter("tenant_id = 'abc' AND amount < 2000"));
+        assertEquals("CTE_MATERIALIZE_NEVER", fixed.get("statements").get(0).get("node")
+                .get("cte_map").get("map").get(0).get("value").get("materialized").asText());
+        assertTrue(Transformations.isVolatile(filter("tenant_id = gen_random_uuid()::VARCHAR")));
+        assertFalse(Transformations.isVolatile(filter("tenant_id = 'abc' AND now() > TIMESTAMPTZ '2020-01-01'")));
+        // a sampled subquery, and a qualified call (a macro can hide random() behind one)
+        assertTrue(Transformations.isVolatile(filter("tenant_id IN (SELECT tenant_id FROM orders USING SAMPLE 50%)")));
+        assertTrue(Transformations.isVolatile(filter("sampling.pick(tenant_id) = 'abc'")));
+        // ...but not the default namespaces: the parser writes list/struct literals as
+        // main.list_value / main.struct_pack, and built-ins live in system.main and pg_catalog
+        assertFalse(Transformations.isVolatile(filter("tenant_id = ANY(['abc', 'def'])")));
+        assertFalse(Transformations.isVolatile(filter("{'k': tenant_id}.k = 'abc'")));
+        assertFalse(Transformations.isVolatile(filter("system.main.lower(tenant_id) = 'abc'")));
+        // any subquery: LIMIT without ORDER BY (or any_value over an unordered input) can pick a
+        // different row at each reference, with no volatile call in sight
+        assertTrue(Transformations.isVolatile(filter("tenant_id IN (SELECT tenant_id FROM orders LIMIT 1)")));
+        assertTrue(Transformations.isVolatile(filter("tenant_id IN (SELECT tenant_id FROM orders WHERE amount > 0)")));
+        assertFalse(Transformations.isVolatile(filter("tenant_id IN ('abc', 'def') AND amount BETWEEN 0 AND 500")));
+    }
+
     // --- WHERE subquery (IN, EXISTS, scalar) — security gap fixed ---
 
     @Test
